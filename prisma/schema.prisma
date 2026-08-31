@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id           String         @id @default(cuid())
+  shareToken   String         @unique @default(cuid())
+  name         String
+  client       String
+  clientType   String         @default("diaspora") // diaspora, local, company
+  location     String
+  budget       Float
+  startDate    DateTime
+  targetDate   DateTime
+  status       String         @default("active") // active, completed, on_hold
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  phases       Phase[]
+  workers      Worker[]
+  deliveries   Delivery[]
+  consumptions Consumption[]
+  photos       SitePhoto[]
+  alerts       Alert[]
+  attendances  Attendance[]
+  transactions Transaction[]
+  recaps       Recap[]
+  auditEvents  AuditEvent[]
+  escrowWallet EscrowWallet?
+  milestones   Milestone[]
+  variations   VariationOrder[]
+  photoComments PhotoComment[]
+  zones        SiteZone[]
+  notifications Notification[]
+}
+
+model Phase {
+  id              String        @id @default(cuid())
+  projectId       String
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name            String
+  order           Int
+  budget          Float
+  status          String        @default("pending") // pending, in_progress, done
+  progressManual  Int?          // manual override; falls back to tasks average
+  tasks           Task[]
+  photos          SitePhoto[]
+}
+
+model Task {
+  id        String   @id @default(cuid())
+  phaseId   String
+  phase     Phase    @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  title     String
+  status    String   @default("pending") // pending, in_progress, done, blocked
+  progress  Int      @default(0)
+  dueDate   DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Worker {
+  id          String       @id @default(cuid())
+  projectId   String
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  role        String // Fundi wa Mawe (Mason), Foreman, Mtumishi (Labourer)...
+  phone       String
+  pin         String? // 4-digit kiosk PIN (worker identity on shared site device)
+  dailyRate   Float
+  active      Boolean      @default(true)
+  attendances Attendance[]
+}
+
+model Attendance {
+  id        String   @id @default(cuid())
+  workerId  String
+  worker    Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  date      String // YYYY-MM-DD
+  checkIn   DateTime?
+  checkOut  DateTime?
+  status    String   @default("present") // present, absent, half_day, excused
+  method    String   @default("geofence") // geofence, ussd, app, kiosk_pin, qr_card, manager
+  wage      Float
+  paid      Boolean  @default(false)
+  synced    Boolean  @default(true)
+  // Workforce Trust: reported vs verified presence
+  verification String  @default("reported") // verified (worker/kiosk evidence), reported (manager says), exception (needs review)
+  evidence     String? // JSON array of evidence signals (gps, pin, qr, photo, supervisor)
+  exceptionReason String? // phone_damaged, battery_dead, network, forgot, new_worker, emergency, other
+  exceptionNote   String?
+  overrideLog String? // JSON array of {at, by, from, to, reason} — append-only, never erased
+  recordedBy  String? // who created this record (name/role)
+  createdAt DateTime @default(now())
+}
+
+model Material {
+  id           String        @id @default(cuid())
+  name         String
+  unit         String // bag, tonne, piece, roll, kg, metre
+  unitPrice    Float // indicative KES price
+  deliveries   Delivery[]
+  consumptions Consumption[]
+}
+
+model Delivery {
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  materialId    String
+  material      Material @relation(fields: [materialId], references: [id])
+  quantity      Float
+  unitCost      Float
+  totalCost     Float
+  supplier      String
+  date          DateTime
+  source        String   @default("manual") // manual, voice, photo, mpesa
+  rawTranscript String?
+  createdAt     DateTime @default(now())
+}
+
+model Consumption {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id])
+  quantity   Float
+  phaseName  String?
+  date       DateTime
+  note       String?
+  createdAt  DateTime @default(now())
+}
+
+model SitePhoto {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId     String?
+  phase       Phase?   @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+  zoneId      String?
+  url         String
+  caption     String?
+  analysis    String? // JSON string with VLM analysis
+  progressPct Int?
+  createdAt   DateTime @default(now())
+  comments    PhotoComment[]
+}
+
+model Alert {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type         String // anomaly, budget, safety, attendance, progress, info
+  severity     String   @default("info") // info, warning, critical
+  title        String
+  message      String
+  acknowledged Boolean  @default(false)
+  createdAt    DateTime @default(now())
+}
+
+model Transaction {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type      String // wage, material, transport, other
+  amount    Float
+  method    String   @default("mpesa") // mpesa, cash
+  reference String?
+  note      String?
+  date      DateTime
+  createdAt DateTime @default(now())
+}
+
+model Recap {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  day       Int
+  content   String // WhatsApp-style recap message
+  createdAt DateTime @default(now())
+}
+
+// ---------------- MjengoOS Trust & Money platform models ----------------
+
+// Bias-Free Ledger: chronological, append-only record of everything that happened
+model AuditEvent {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind      String // delivery, wage, attendance, milestone, variation, escrow, photo, comment, export, project, expense, share, auth...
+  actor     String // who did it
+  role      String // contractor, foreman, client, system, ai
+  summary   String // human-readable one-liner
+  meta      String? // JSON extra detail
+  createdAt DateTime @default(now())
+}
+
+// MjengoPay — milestone-based escrow (simulated money, real workflow)
+model EscrowWallet {
+  id        String   @id @default(cuid())
+  projectId String   @unique
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  balance   Float    @default(0) // KES held in escrow
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Milestone {
+  id               String    @id @default(cuid())
+  projectId        String
+  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId          String?
+  name             String
+  amount           Float // KES to release on completion
+  status           String    @default("locked") // locked, evidence_submitted, release_requested, approved, released, rejected
+  evidencePhotoIds String    @default("[]") // JSON array of SitePhoto ids (proof-of-work)
+  requestedAt      DateTime?
+  decidedAt        DateTime?
+  decidedBy        String? // client name who approved/rejected
+  decisionNote     String?
+  releasedAt       DateTime?
+  createdAt        DateTime  @default(now())
+}
+
+// Variation orders: plan changes that move the budget — client approves on web
+model VariationOrder {
+  id           String    @id @default(cuid())
+  projectId    String
+  project      Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId      String?
+  title        String
+  description  String
+  budgetImpact Float // + increase, - saving (KES)
+  status       String    @default("submitted") // submitted, approved, rejected
+  submittedBy  String?
+  decidedBy    String?
+  decisionNote String?
+  decidedAt    DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+// Contextual photo commenting — client pins a question on a site photo
+model PhotoComment {
+  id        String   @id @default(cuid())
+  photoId   String
+  photo     SitePhoto @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  author    String
+  role      String // client, contractor, foreman
+  message   String
+  resolved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+// Interactive site map zones (schematic coords over a plan image, 0-100 %)
+model SiteZone {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String // e.g. Master Bedroom, Kitchen, Foundation zone
+  x         Float // percent from left
+  y         Float // percent from top
+  w         Float // percent width
+  h         Float // percent height
+  createdAt DateTime @default(now())
+}
+
+// Notification center (in-app) + WhatsApp delivery log stub
+model Notification {
+  id          String   @id @default(cuid())
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind        String // recap, milestone, variation, anomaly, comment, attendance, share, system
+  title       String
+  body        String
+  channel     String   @default("in_app") // in_app, whatsapp, sms, push (whatsapp/sms = delivery log stub)
+  recipient   String? // e.g. client name/phone
+  read        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+// Authentication (NextAuth.js v4 credentials + JWT sessions)
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("contractor") // contractor, client, admin
+  projectId    String? // the client user's project (client-role login boots that project)
+  createdAt    DateTime @default(now())
+}
