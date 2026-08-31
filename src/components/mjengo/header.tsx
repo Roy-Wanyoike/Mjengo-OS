@@ -3,18 +3,22 @@
 import { useMemo, useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { useSession, signOut } from 'next-auth/react'
+import { toast } from 'sonner'
 import { useMjengo } from '@/hooks/use-mjengo'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { ProjectSwitcher } from '@/components/mjengo/project-switcher'
 import {
   Wifi, CloudOff, HardHat, RefreshCw, CheckCheck, Share2, Bell, LogOut,
   LayoutDashboard, ListChecks, Boxes, Users, Sparkles, Wallet, ScrollText,
   Flag, FileDiff, MessageSquare, TriangleAlert, BellRing,
   Landmark, PackageSearch, Radar, Phone,
+  Truck, Package, UserCheck, ClipboardCheck, FileText, ReceiptText, TrendingUp, Newspaper, ShieldAlert,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import type { Notification } from '@prisma/client'
 import type { TabKey } from '@/components/mjengo/app'
 import { formatKES } from '@/lib/format'
@@ -33,17 +37,52 @@ const TABS: Array<{ key: TabKey; label: string; icon: React.ComponentType<{ clas
   { key: 'ussd', label: 'USSD', icon: Phone },
 ]
 
-/** Icon per notification kind (falls back to a bell). */
-function NotificationKindIcon({ kind }: { kind: string }) {
-  const cls = 'w-4 h-4 shrink-0'
-  switch (kind) {
-    case 'milestone': return <Flag className={`${cls} text-amber-600`} aria-hidden />
-    case 'variation': return <FileDiff className={`${cls} text-amber-600`} aria-hidden />
-    case 'comment': return <MessageSquare className={`${cls} text-stone-500`} aria-hidden />
-    case 'anomaly': return <TriangleAlert className={`${cls} text-red-600`} aria-hidden />
-    case 'recap': return <BellRing className={`${cls} text-emerald-600`} aria-hidden />
-    default: return <Bell className={`${cls} text-stone-400`} aria-hidden />
-  }
+/** Icon + label per notification kind (falls back to a bell). */
+const NOTIFICATION_KINDS: Record<string, { label: string; Icon: LucideIcon; tint: string }> = {
+  milestone: { label: 'Milestone', Icon: Flag, tint: 'text-amber-600' },
+  variation: { label: 'Variation', Icon: FileDiff, tint: 'text-amber-600' },
+  comment: { label: 'Comment', Icon: MessageSquare, tint: 'text-stone-500' },
+  anomaly: { label: 'Anomaly', Icon: TriangleAlert, tint: 'text-red-600' },
+  recap: { label: 'Recap', Icon: BellRing, tint: 'text-emerald-600' },
+  attendance: { label: 'Attendance', Icon: UserCheck, tint: 'text-stone-500' },
+  share: { label: 'Share link', Icon: Share2, tint: 'text-stone-500' },
+  system: { label: 'System', Icon: Bell, tint: 'text-stone-400' },
+  'approval.requested': { label: 'Approval', Icon: ClipboardCheck, tint: 'text-amber-600' },
+  'approval.decided': { label: 'Approval', Icon: ClipboardCheck, tint: 'text-amber-600' },
+  'quote.received': { label: 'Quote', Icon: FileText, tint: 'text-stone-500' },
+  'order.sent': { label: 'Order', Icon: Package, tint: 'text-stone-500' },
+  'order.confirmed': { label: 'Order', Icon: Package, tint: 'text-stone-500' },
+  'delivery.dispatched': { label: 'Delivery', Icon: Truck, tint: 'text-stone-500' },
+  'delivery.discrepancy': { label: 'Delivery', Icon: TriangleAlert, tint: 'text-red-600' },
+  'invoice.submitted': { label: 'Invoice', Icon: ReceiptText, tint: 'text-amber-600' },
+  'invoice.decided': { label: 'Invoice', Icon: ReceiptText, tint: 'text-amber-600' },
+  'invoice.disputed': { label: 'Invoice', Icon: TriangleAlert, tint: 'text-red-600' },
+  'invoice.paid': { label: 'Invoice', Icon: ReceiptText, tint: 'text-emerald-600' },
+  'land': { label: 'Land', Icon: Landmark, tint: 'text-stone-500' },
+  'price.alert': { label: 'Price', Icon: TrendingUp, tint: 'text-amber-600' },
+  'digest.weekly': { label: 'Digest', Icon: Newspaper, tint: 'text-stone-500' },
+  'risk.flagged': { label: 'Risk', Icon: ShieldAlert, tint: 'text-red-600' },
+}
+
+function kindMeta(kind: string) {
+  return NOTIFICATION_KINDS[kind] ?? { label: 'Notice', Icon: Bell, tint: 'text-stone-400' }
+}
+
+/** Filter groups for the notification center (unknown kinds fall into "Site"). */
+const KIND_GROUPS: Array<{ key: string; label: string; kinds: string[] }> = [
+  { key: 'all', label: 'All', kinds: [] },
+  { key: 'approvals', label: 'Approvals', kinds: ['approval.requested', 'approval.decided'] },
+  { key: 'orders', label: 'Orders', kinds: ['order.sent', 'order.confirmed', 'quote.received'] },
+  { key: 'deliveries', label: 'Deliveries', kinds: ['delivery.dispatched', 'delivery.discrepancy'] },
+  { key: 'invoices', label: 'Invoices', kinds: ['invoice.submitted', 'invoice.decided', 'invoice.disputed', 'invoice.paid'] },
+  { key: 'intel', label: 'Risk & prices', kinds: ['price.alert', 'digest.weekly', 'risk.flagged'] },
+  { key: 'money', label: 'Money', kinds: ['milestone', 'variation'] },
+  { key: 'site', label: 'Site', kinds: ['recap', 'comment', 'attendance', 'anomaly', 'share', 'system'] },
+]
+
+function groupOf(kind: string): string {
+  const g = KIND_GROUPS.find((x) => x.key !== 'all' && x.kinds.includes(kind))
+  return g?.key ?? 'site'
 }
 
 /** Signed-in identity chip + sign out (hidden for share-token clients — they never log in). */
@@ -106,15 +145,25 @@ const SCROLLBAR = '[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-
 
 /**
  * Notification center bell — works for the owner and for a client on their
- * share link (notification.read / readAll are client-allowlisted).
+ * share link. Signed-in users mark read via POST /api/notifications (a client
+ * convenience route — see that file for the reasoning); share-link clients
+ * and offline sessions fall back to the client-allowlisted
+ * notification.read / readAll actions.
  */
 function NotificationBell() {
-  const { data, dispatch, actionBusy, notificationsSeenAt } = useMjengo()
+  const { data, dispatch, actionBusy, notificationsSeenAt, online } = useMjengo()
+  const { data: session } = useSession()
   const [open, setOpen] = useState(false)
+  const [filter, setFilter] = useState('all')
+  const [marking, setMarking] = useState(false)
 
   const notifications = data?.notifications ?? []
   const unread = useMemo(() => notifications.filter((n) => !n.read), [notifications])
-  const latest = notifications.slice(0, 15)
+  const filtered = useMemo(
+    () => (filter === 'all' ? notifications : notifications.filter((n) => groupOf(n.kind) === filter)),
+    [notifications, filter],
+  )
+  const busy = marking || actionBusy !== null
 
   function markSeen() {
     if (Date.now() - (notificationsSeenAt ?? 0) > 2000) {
@@ -122,15 +171,50 @@ function NotificationBell() {
     }
   }
 
+  async function markRead(ids: string[] | 'all') {
+    const projectId = data?.project.id
+    if (!projectId || busy) return
+    if (session?.user && online) {
+      // Signed-in + online: the dedicated mark-read route refreshes the store
+      // via load() afterwards.
+      setMarking(true)
+      try {
+        const res = await fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId, ids }),
+        })
+        if (res.ok) {
+          await useMjengo.getState().load()
+        } else {
+          const json = await res.json().catch(() => null)
+          toast.error(json?.error ?? 'Could not mark notifications read')
+        }
+      } catch {
+        toast.error('Network error — try again when back online')
+      } finally {
+        setMarking(false)
+      }
+      return
+    }
+    // Share-link clients (no session) and offline users: the allowlisted
+    // legacy actions — they route through /api/share and queue when offline.
+    if (ids === 'all') {
+      void dispatch('notification.readAll', {}, 'Mark all notifications read')
+    } else {
+      void dispatch('notification.read', { id: ids[0] }, 'Mark notification read')
+    }
+  }
+
   return (
-    <Popover
+    <Sheet
       open={open}
       onOpenChange={(v) => {
         setOpen(v)
         if (v) markSeen()
       }}
     >
-      <PopoverTrigger asChild>
+      <SheetTrigger asChild>
         <Button
           size="sm"
           variant="outline"
@@ -148,66 +232,100 @@ function NotificationBell() {
             </span>
           )}
         </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-[22rem] p-0 border-stone-200">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100">
-          <p className="text-sm font-semibold text-stone-900">Notifications</p>
-          <span className="text-[11px] text-stone-400">
-            {unread.length > 0 ? `${unread.length} unread` : 'All caught up'}
-          </span>
+      </SheetTrigger>
+      <SheetContent side="right" className="sm:max-w-md w-full p-0 gap-0">
+        <SheetHeader className="p-4 pb-3 border-b border-stone-100">
+          <SheetTitle className="text-base text-stone-900">Notifications</SheetTitle>
+          <SheetDescription className="text-xs text-stone-400">
+            {unread.length > 0 ? `${unread.length} unread` : 'All caught up'} · {data?.project.name ?? 'project'}
+          </SheetDescription>
+        </SheetHeader>
+
+        <div
+          className="px-3 py-2.5 border-b border-stone-100 flex flex-wrap gap-1.5"
+          role="group"
+          aria-label="Filter notifications by kind"
+        >
+          {KIND_GROUPS.map((g) => {
+            const count = g.key === 'all' ? notifications.length : notifications.filter((n) => groupOf(n.kind) === g.key).length
+            return (
+              <button
+                key={g.key}
+                type="button"
+                onClick={() => setFilter(g.key)}
+                aria-pressed={filter === g.key}
+                className={`min-h-8 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                  filter === g.key
+                    ? 'bg-stone-900 text-stone-50'
+                    : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                }`}
+              >
+                {g.label}
+                {count > 0 && <span className="ml-1 text-[10px] font-normal opacity-70">{count}</span>}
+              </button>
+            )
+          })}
         </div>
-        {latest.length === 0 ? (
-          <div className="px-4 py-8 text-center" role="status">
+
+        {filtered.length === 0 ? (
+          <div className="px-4 py-10 text-center flex-1" role="status">
             <Bell className="w-6 h-6 text-stone-300 mx-auto" aria-hidden />
-            <p className="mt-2 text-sm text-stone-500">Nothing yet — recaps, decisions and comments land here.</p>
+            <p className="mt-2 text-sm text-stone-500">Nothing needs you right now.</p>
+            <p className="mt-1 text-xs text-stone-400">Decisions, deliveries and price alerts land here.</p>
           </div>
         ) : (
-          <ul className={`max-h-96 overflow-y-auto ${SCROLLBAR}`} aria-label="Recent notifications">
-            {latest.map((n: Notification) => (
-              <li key={n.id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!n.read) void dispatch('notification.read', { id: n.id }, 'Mark notification read')
-                  }}
-                  aria-label={n.read ? n.title : `${n.title} — mark as read`}
-                  className={`w-full text-left flex items-start gap-2.5 px-4 py-3 border-b border-stone-100 last:border-b-0 min-h-11 transition-colors ${
-                    n.read ? 'hover:bg-stone-50' : 'bg-amber-50/60 hover:bg-amber-50'
-                  }`}
-                >
-                  <span className="mt-0.5 relative shrink-0">
-                    <NotificationKindIcon kind={n.kind} />
-                    {!n.read && (
-                      <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500" aria-label="Unread" />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className={`block text-sm leading-snug ${n.read ? 'text-stone-600' : 'font-medium text-stone-900'}`}>{n.title}</span>
-                    <span className="block text-xs text-stone-400 mt-0.5 truncate" title={n.body}>{n.body}</span>
-                    <span className="block text-[11px] text-stone-400 mt-0.5">
-                      {formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
+          <ul className={`flex-1 min-h-0 max-h-[64vh] overflow-y-auto ${SCROLLBAR}`} aria-label="Notifications">
+            {filtered.map((n: Notification) => {
+              const meta = kindMeta(n.kind)
+              return (
+                <li key={n.id}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      if (!n.read) void markRead([n.id])
+                    }}
+                    aria-label={n.read ? n.title : `${n.title} — mark as read`}
+                    className={`w-full text-left flex items-start gap-2.5 px-4 py-3 border-b border-stone-100 last:border-b-0 min-h-11 transition-colors ${
+                      n.read ? 'hover:bg-stone-50' : 'bg-amber-50/60 hover:bg-amber-50'
+                    }`}
+                  >
+                    <span className="mt-0.5 relative shrink-0">
+                      <meta.Icon className={`w-4 h-4 ${meta.tint}`} aria-hidden />
+                      {!n.read && (
+                        <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500" aria-label="Unread" />
+                      )}
                     </span>
-                  </span>
-                </button>
-              </li>
-            ))}
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[10px] font-semibold uppercase tracking-wide text-stone-400">{meta.label}</span>
+                      <span className={`block text-sm leading-snug ${n.read ? 'text-stone-600' : 'font-medium text-stone-900'}`}>{n.title}</span>
+                      <span className="block text-xs text-stone-500 mt-0.5 line-clamp-2" title={n.body}>{n.body}</span>
+                      <span className="block text-[11px] text-stone-400 mt-0.5">
+                        {formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
           </ul>
         )}
+
         {unread.length > 0 && (
-          <div className="p-2 border-t border-stone-100">
+          <SheetFooter className="border-t border-stone-100 p-2">
             <Button
               variant="ghost"
               size="sm"
               className="w-full min-h-11 gap-1.5 text-stone-600 hover:text-stone-900"
-              disabled={actionBusy !== null}
-              onClick={() => void dispatch('notification.readAll', {}, 'Mark all notifications read')}
+              disabled={busy}
+              onClick={() => void markRead('all')}
             >
               <CheckCheck className="w-4 h-4" aria-hidden /> Mark all read
             </Button>
-          </div>
+          </SheetFooter>
         )}
-      </PopoverContent>
-    </Popover>
+      </SheetContent>
+    </Sheet>
   )
 }
 
