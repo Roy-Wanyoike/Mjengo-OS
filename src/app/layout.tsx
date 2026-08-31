@@ -19,6 +19,10 @@ export const metadata: Metadata = {
   description:
     "Offline-first construction site OS for Kenya. AI photo progress tracking, Swahili voice-to-invoice, anomaly detection, fundi attendance & M-Pesa-ready wage payments.",
   keywords: ["MjengoOS", "construction", "Kenya", "fundi", "offline-first", "AI", "site management"],
+  manifest: "/manifest.webmanifest",
+  icons: {
+    apple: "/icons/apple-touch-icon.png",
+  },
 };
 
 export const viewport: Viewport = {
@@ -37,6 +41,15 @@ export default function RootLayout({
       >
         <AuthSessionProvider>{children}</AuthSessionProvider>
         <Toaster richColors position="top-center" />
+        {/* Service-worker registration (PWA). /api/* is never cached — see
+            public/sw.js. Registered on window load so it never competes with
+            first paint, and guarded so non-SW browsers skip it. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/sw.js').catch(function(e){console.warn('SW registration skipped:',e)})})}",
+          }}
+        />
       </body>
     </html>
   );
