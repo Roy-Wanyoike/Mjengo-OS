@@ -10,12 +10,51 @@ import type { LandParcel, ParcelDocument, TitleSearch, ParcelAssignment } from '
 
 // ---- domain enums (string-valued, matching prisma/schema.prisma comments) ----
 
-export type ParcelStatus = 'searching' | 'verified' | 'flagged'
-export type ParcelDocumentKind = 'title_deed' | 'search_cert' | 'survey_map' | 'other'
-export type TitleSearchStatus = 'requested' | 'received' | 'reviewed'
-export type TranscriptionMatch = 'pending' | 'consistent' | 'mismatch'
+export const PARCEL_STATUSES = ['searching', 'verified', 'flagged'] as const
+export const PARCEL_DOCUMENT_KINDS = ['title_deed', 'search_cert', 'survey_map', 'other'] as const
+export const TITLE_SEARCH_STATUSES = ['requested', 'received', 'reviewed'] as const
+export const TRANSCRIPTION_MATCHES = ['pending', 'consistent', 'mismatch'] as const
+
+export type ParcelStatus = (typeof PARCEL_STATUSES)[number]
+export type ParcelDocumentKind = (typeof PARCEL_DOCUMENT_KINDS)[number]
+export type TitleSearchStatus = (typeof TITLE_SEARCH_STATUSES)[number]
+export type TranscriptionMatch = (typeof TRANSCRIPTION_MATCHES)[number]
 export type AssignmentRole = 'surveyor' | 'advocate' | 'engineer' | 'qty_surveyor'
 export type AssignmentStatus = 'active' | 'completed' | 'withdrawn'
+
+// ---- display labels (shared by the service validation errors and the UI) ----
+
+export const PARCEL_STATUS_LABELS: Record<ParcelStatus, string> = {
+  searching: 'Searching',
+  verified: 'Verified',
+  flagged: 'Flagged',
+}
+
+export const DOC_KIND_LABELS: Record<ParcelDocumentKind, string> = {
+  title_deed: 'Title deed',
+  search_cert: 'Official search certificate',
+  survey_map: 'Survey map',
+  other: 'Document',
+}
+
+export const SEARCH_STATUS_LABELS: Record<TitleSearchStatus, string> = {
+  requested: 'Requested',
+  received: 'Received',
+  reviewed: 'Reviewed',
+}
+
+export const MATCH_LABELS: Record<TranscriptionMatch, string> = {
+  pending: 'Check pending',
+  consistent: 'Consistent',
+  mismatch: 'Mismatch — review required',
+}
+
+export const ASSIGNMENT_ROLE_LABELS: Record<string, string> = {
+  surveyor: 'Licensed surveyor',
+  advocate: 'Advocate',
+  engineer: 'Engineer',
+  qty_surveyor: 'Quantity surveyor',
+}
 
 // ---- slice shapes ----
 

@@ -1,4 +1,4 @@
-// Land & Property actions — parcel lifecycle + title-search evidence flow.
+// MjengoOS Land & Property actions — parcel lifecycle + title-search evidence flow.
 // Dispatched from lib/mjengo.ts applyAction(), which auto-writes the
 // AuditEvent for every success — never log manually here.
 //
@@ -8,9 +8,21 @@
 //    verified".
 //  - transcriptionMatch mismatch is an anomaly flag for human review, never an
 //    accusation.
-//  - Clients are read-only on land data.
+//  - Clients are read-only on land data (enforced in /api/actions + the store;
+//    see src/modules/land/policy.ts for the matrix).
 //
-// STUB (F-1): every action throws until agent 2-a lands the module.
+// Thin controller, fat service: this dispatcher only routes + validates the
+// action shape; every rule lives in src/modules/land/service.ts.
+
+import {
+  createParcel,
+  updateParcel,
+  setParcelStatus,
+  attachParcelDocument,
+  requestTitleSearch,
+  receiveTitleSearch,
+  reviewTitleSearch,
+} from '@/modules/land/service'
 
 export const LAND_ACTIONS = [
   'parcel.create', // { plotNumber, county, town?, lat?, lng?, approxArea?, tenureType? }
@@ -19,12 +31,28 @@ export const LAND_ACTIONS = [
   'parcelDoc.attach', // { parcelId, kind: 'title_deed'|'search_cert'|'survey_map'|'other', fileName, storageKey, extractedText?, issuedOn? }
   'search.request', // { parcelId, searchRef? } — registry title search requested
   'search.receive', // { id, resultSummary } — registry result recorded; auto consistency check vs deed transcription
-  'search.review', // { id, note? } — human reviewed the received result / mismatch
+  'search.review', // { id, decision: 'accept'|'flag', note? } — human reviewed the received result / mismatch
 ] as const
 
-// ---------------- dispatcher (stub) ----------------
+// ---------------- dispatcher ----------------
 
-export async function applyLandAction(type: string, _payload: any, _projectId: string): Promise<any> {
-  // Phase-2 (agent 2-a) implements the switch over LAND_ACTIONS here.
-  throw new Error(`Not implemented yet — landing with phase 2 (land action: ${type})`)
+export async function applyLandAction(type: string, payload: any, projectId: string): Promise<any> {
+  switch (type) {
+    case 'parcel.create':
+      return createParcel(projectId, payload ?? {})
+    case 'parcel.update':
+      return updateParcel(projectId, payload ?? {})
+    case 'parcel.setStatus':
+      return setParcelStatus(projectId, payload ?? {})
+    case 'parcelDoc.attach':
+      return attachParcelDocument(projectId, payload ?? {})
+    case 'search.request':
+      return requestTitleSearch(projectId, payload ?? {})
+    case 'search.receive':
+      return receiveTitleSearch(projectId, payload ?? {})
+    case 'search.review':
+      return reviewTitleSearch(projectId, payload ?? {})
+    default:
+      throw new Error(`Unknown land action: ${type}`)
+  }
 }
