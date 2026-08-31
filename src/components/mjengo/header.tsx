@@ -13,6 +13,7 @@ import {
   Wifi, CloudOff, HardHat, RefreshCw, CheckCheck, Share2, Bell, LogOut,
   LayoutDashboard, ListChecks, Boxes, Users, Sparkles, Wallet, ScrollText,
   Flag, FileDiff, MessageSquare, TriangleAlert, BellRing,
+  Landmark, PackageSearch, Radar, Phone,
 } from 'lucide-react'
 import type { Notification } from '@prisma/client'
 import type { TabKey } from '@/components/mjengo/app'
@@ -22,10 +23,14 @@ const TABS: Array<{ key: TabKey; label: string; icon: React.ComponentType<{ clas
   { key: 'overview', label: 'Overview', icon: LayoutDashboard },
   { key: 'site', label: 'Site Plan', icon: ListChecks },
   { key: 'materials', label: 'Materials', icon: Boxes },
+  { key: 'finder', label: 'Finder', icon: PackageSearch },
   { key: 'fundis', label: 'Fundis', icon: Users },
   { key: 'money', label: 'Money', icon: Wallet },
+  { key: 'land', label: 'Land', icon: Landmark },
   { key: 'evidence', label: 'Evidence', icon: ScrollText },
+  { key: 'intel', label: 'Intel', icon: Radar },
   { key: 'copilot', label: 'AI Copilot', icon: Sparkles },
+  { key: 'ussd', label: 'USSD', icon: Phone },
 ]
 
 /** Icon per notification kind (falls back to a bell). */

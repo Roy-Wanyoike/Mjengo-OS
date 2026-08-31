@@ -33,6 +33,7 @@ export function extractJson(text: string): any {
 export async function visionMessage(prompt: string, base64: string, mime = 'image/jpeg') {
   const zai = await ZAI.create()
   const completion = await zai.chat.completions.createVision({
+    model: 'glm-5v-turbo',
     messages: [
       {
         role: 'user',

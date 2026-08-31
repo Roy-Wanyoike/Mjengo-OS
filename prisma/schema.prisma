@@ -36,6 +36,15 @@ model Project {
   photoComments PhotoComment[]
   zones        SiteZone[]
   notifications Notification[]
+  // v2 domain slices (land, supply, invoices, intel)
+  landParcels      LandParcel[]
+  materialRequests MaterialRequest[]
+  approvalRules    ApprovalRule[]
+  approvals        Approval[]
+  purchaseOrders   PurchaseOrder[]
+  invoices         Invoice[]
+  riskAssessments  RiskAssessment[]
+  intelDigests     IntelDigest[]
 }
 
 model Phase {
@@ -278,12 +287,14 @@ model Notification {
   id          String   @id @default(cuid())
   projectId   String?
   project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  kind        String // recap, milestone, variation, anomaly, comment, attendance, share, system
+  kind        String // recap, milestone, variation, anomaly, comment, attendance, share, system, approval.requested, delivery.discrepancy, invoice.submitted, price.alert...
   title       String
   body        String
   channel     String   @default("in_app") // in_app, whatsapp, sms, push (whatsapp/sms = delivery log stub)
   recipient   String? // e.g. client name/phone
+  audienceRole String? // role the notification targets (client, contractor, supervisor, finance...)
   read        Boolean  @default(false)
+  readAt      DateTime? // when the target read it (analytics / digest)
   createdAt   DateTime @default(now())
 }
 
@@ -296,4 +307,376 @@ model User {
   role         String   @default("contractor") // contractor, client, admin
   projectId    String? // the client user's project (client-role login boots that project)
   createdAt    DateTime @default(now())
+}
+
+// ---------------- MjengoOS v2 — Land & Property (module: land) ----------------
+
+// A land parcel tied to a project. Status is honest: SEARCHING while the title
+// search is in flight, VERIFIED when documents + registry agree, FLAGGED when
+// an anomaly needs human review. MjengoOS records evidence — it never claims
+// government verification.
+model LandParcel {
+  id          String            @id @default(cuid())
+  projectId   String
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  plotNumber  String // e.g. "LR No. 2090/1234"
+  county      String
+  town        String?
+  lat         Float?
+  lng         Float?
+  approxArea  String? // e.g. "0.25 ha", "50x100 ft"
+  tenureType  String? // freehold, leasehold
+  status      String            @default("searching") // searching, verified, flagged
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  documents   ParcelDocument[]
+  searches    TitleSearch[]
+  assignments ParcelAssignment[]
+}
+
+// Document attached to a parcel (title deed, search cert, survey map…).
+// extractedText is the transcription used for the consistency check.
+model ParcelDocument {
+  id            String     @id @default(cuid())
+  parcelId      String
+  parcel        LandParcel @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+  kind          String // title_deed, search_cert, survey_map, other
+  fileName      String
+  storageKey    String // /uploads/... or /documents/... path
+  extractedText String? // transcription (used for transcription-vs-registry match)
+  issuedOn      DateTime?
+  createdAt     DateTime   @default(now())
+}
+
+// Registry title search against a parcel. transcriptionMatch compares the
+// document transcription to the registry result summary — MISMATCH is an
+// anomaly flag for review, never an accusation.
+model TitleSearch {
+  id                 String     @id @default(cuid())
+  parcelId           String
+  parcel             LandParcel @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+  searchRef          String // registry search reference
+  resultSummary      String? // what the registry returned
+  transcriptionMatch String     @default("pending") // pending, consistent, mismatch
+  status             String     @default("requested") // requested, received, reviewed
+  requestedAt        DateTime   @default(now())
+  receivedAt         DateTime?
+  reviewedAt         DateTime?
+  createdAt          DateTime   @default(now())
+}
+
+// ---------------- MjengoOS v2 — Professionals directory (module: professionals) ----------------
+
+// Global directory of built-environment professionals. verificationState is a
+// ladder (0 unrecorded → 6 platform-trusted) computed from recorded credential
+// checks + platform history — never a government certification claim.
+model Professional {
+  id                String             @id @default(cuid())
+  name              String
+  category          String // surveyor, advocate, engineer, qty_surveyor, architect
+  organisation      String?
+  phone             String?
+  email             String?
+  county            String?
+  licenceNumber     String?
+  licenceBody       String? // LSK, EBK, BORAQS, other
+  verificationState Int                @default(0) // 0-6 honest ladder
+  reliabilityScore  Int                @default(50) // 0-100 from platform history
+  notes             String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  credentialChecks  CredentialCheck[]
+  assignments       ParcelAssignment[]
+}
+
+// One recorded credential check on a professional (who checked, how, what they
+// found). Findings are honest observations — "licence expired — renewal pending".
+model CredentialCheck {
+  id            String      @id @default(cuid())
+  professionalId String
+  professional  Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  checkedBy     String // name of the person recording the check
+  method        String // document_review, reference_call, registry_lookup
+  finding       String
+  recordedAt    DateTime    @default(now())
+}
+
+// Assignment of a professional to a parcel for a project.
+model ParcelAssignment {
+  id            String      @id @default(cuid())
+  parcelId      String
+  parcel        LandParcel  @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+  professionalId String
+  professional  Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  role          String // surveyor, advocate, engineer, qty_surveyor
+  status        String      @default("active") // active, completed, withdrawn
+  note          String?
+  createdAt     DateTime    @default(now())
+}
+
+// ---------------- MjengoOS v2 — Supply & procurement / Finder (module: supply) ----------------
+
+// Supplier in the procurement network. verificationState is a ladder
+// (unverified → registered → identity/business/location/transaction verified →
+// trusted) based on platform activity — never conflated with government
+// certification.
+model Supplier {
+  id                String         @id @default(cuid())
+  businessName      String
+  county            String
+  town              String?
+  lat               Float?
+  lng               Float?
+  phone             String?
+  email             String?
+  warehouseLocation String?
+  deliveryZones     String         @default("") // CSV of zones/counties served
+  deliveryFeeBase   Float          @default(0) // KES base delivery fee
+  freeDeliveryOver  Float? // free delivery above this order value (KES)
+  minimumOrder      Float          @default(0) // minimum order value (KES)
+  verificationState Int            @default(0) // 0-5 ladder
+  reliabilityScore  Int            @default(50) // 0-100 from transaction history
+  responseHours     Int            @default(24) // average quote response time
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  catalogItems      CatalogItem[]
+  quotes            Quote[]
+  purchaseOrders    PurchaseOrder[]
+  invoices          Invoice[]
+}
+
+// One catalog item a supplier sells (name/unit/price/stock/min order).
+model CatalogItem {
+  id          String   @id @default(cuid())
+  supplierId  String
+  supplier    Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  name        String
+  unit        String // bag, length, tonne, roll, sheet
+  unitPrice   Float // KES
+  stockQty    Float   @default(0)
+  minOrderQty Float   @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Purchase/material request — the "don't immediately charge the wallet" step.
+// Status ladder: draft → submitted → approved/rejected → converted (to a PO).
+model MaterialRequest {
+  id              String                 @id @default(cuid())
+  projectId       String
+  project         Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requestCode     String // e.g. MR-1042
+  requestedByRole String // supervisor, contractor, client, procurement, finance
+  requestedByName String
+  notes           String?
+  status          String                 @default("draft") // draft, submitted, approved, rejected, converted
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  lines           MaterialRequestLine[]
+  quotes          Quote[]
+  orders          PurchaseOrder[]
+}
+
+model MaterialRequestLine {
+  id           String          @id @default(cuid())
+  requestId    String
+  request      MaterialRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  materialName String
+  unit         String
+  qty          Float
+}
+
+// Project-configurable approval policy (Finder spec §11): the FIRST active rule
+// whose amount band contains the total decides which role approves.
+model ApprovalRule {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  minAmount    Float    @default(0) // KES lower bound (inclusive)
+  maxAmount    Float? // KES upper bound (inclusive); null = no ceiling
+  approverRole String // supervisor, contractor, client, finance
+  priority     Int      @default(0) // lower = evaluated first
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// A concrete approval decision (pending/approved/rejected) on any entity.
+// entityType/entityId are plain strings by design — no FK; the trail is audited
+// via the Bias-Free Ledger (AuditEvent) like every action.
+model Approval {
+  id           String    @id @default(cuid())
+  projectId    String
+  project      Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  entityType   String // material_request, purchase_order, invoice
+  entityId     String // id of the entity (no FK — audited via ledger)
+  approverRole String // supervisor, contractor, client, finance
+  approverName String
+  decision     String    @default("pending") // pending, approved, rejected
+  note         String?
+  decidedAt    DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+// A supplier quote against a material request — inputs to the landed-cost
+// engine (product + delivery + transport + fees = total landed).
+model Quote {
+  id           String          @id @default(cuid())
+  requestId    String
+  request      MaterialRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  supplierId   String
+  supplier     Supplier        @relation(fields: [supplierId], references: [id])
+  unitPrice    Float // KES — primary line unit price (single-line compare)
+  deliveryFee  Float           @default(0)
+  transportFee Float           @default(0)
+  fees         Float           @default(0)
+  totalLanded  Float // KES — full landed cost for the requested quantities
+  deliveryEta  String? // e.g. "2 days", "same day"
+  stockOk      Boolean         @default(true)
+  status       String          @default("requested") // requested, received, declined
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+}
+
+// Purchase order — approved request + selected supplier.
+model PurchaseOrder {
+  id            String            @id @default(cuid())
+  orderCode     String // e.g. PO-2026-000012
+  projectId     String
+  project       Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requestId     String?
+  request       MaterialRequest?  @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  supplierId    String
+  supplier      Supplier          @relation(fields: [supplierId], references: [id])
+  subtotal      Float
+  deliveryFee   Float             @default(0)
+  total         Float
+  status        String            @default("draft") // draft, pending_approval, approved, sent, confirmed, delivering, delivered, closed, cancelled
+  paymentSource String            @default("client") // client, contractor, project_wallet, finance
+  createdByRole String // who placed the order
+  note          String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  lines         PurchaseOrderLine[]
+  deliveries    OrderDelivery[]
+  invoices      Invoice[]
+}
+
+model PurchaseOrderLine {
+  id            String              @id @default(cuid())
+  orderId       String
+  order         PurchaseOrder       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  name          String
+  unit          String
+  qty           Float
+  unitPrice     Float
+  lineTotal     Float
+  deliveryLines OrderDeliveryLine[]
+}
+
+// Physical delivery against a PO (ground truth). Named OrderDelivery because
+// the materials-domain Delivery (stock intake) already exists.
+model OrderDelivery {
+  id           String              @id @default(cuid())
+  orderId      String
+  order        PurchaseOrder       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status       String              @default("dispatched") // dispatched, received, discrepancy
+  dispatchedAt DateTime?
+  receivedAt   DateTime?
+  receivedBy   String? // who confirmed receipt on the ground
+  note         String?
+  photoCount   Int                 @default(0) // evidence photos attached
+  gpsLat       Float?
+  gpsLng       Float?
+  createdAt    DateTime            @default(now())
+  lines        OrderDeliveryLine[]
+}
+
+// Per-line physical count: ordered vs received → discrepancy records.
+model OrderDeliveryLine {
+  id          String           @id @default(cuid())
+  deliveryId  String
+  delivery    OrderDelivery    @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  orderLineId String
+  orderLine   PurchaseOrderLine @relation(fields: [orderLineId], references: [id], onDelete: Cascade)
+  qtyOrdered  Float
+  qtyReceived Float
+}
+
+// ---------------- MjengoOS v2 — Invoices (module: invoices) ----------------
+
+// Supplier invoice lifecycle: draft → submitted → approved/rejected/disputed →
+// paid. Payment recording (2-d) writes the Transaction ledger entry.
+model Invoice {
+  id               String          @id @default(cuid())
+  invoiceCode      String // e.g. INV-2026-000031
+  projectId        String
+  project          Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  orderId          String?
+  order            PurchaseOrder?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  supplierId       String?
+  supplier         Supplier?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  status           String          @default("draft") // draft, submitted, approved, rejected, paid, disputed
+  subtotal         Float           @default(0)
+  tax              Float           @default(0)
+  total            Float           @default(0)
+  dueDate          DateTime?
+  issuedAt         DateTime?
+  submittedAt      DateTime?
+  decidedAt        DateTime?
+  decidedBy        String? // who approved/rejected/disputed
+  paidAt           DateTime?
+  paidByRole       String? // client, contractor, finance
+  paymentMethod    String? // mpesa, bank, card, wallet, cash
+  paymentReference String? // e.g. MPESA-8HKT4Q2A
+  createdBy        String? // supplier / system name
+  note             String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  lines            InvoiceLine[]
+}
+
+model InvoiceLine {
+  id        String  @id @default(cuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  name      String
+  qty       Float
+  unitPrice Float
+  lineTotal Float
+}
+
+// ---------------- MjengoOS v2 — Intel (module: intel) ----------------
+
+// Deterministic risk assessment for a project (recomputed by the 2-e rule
+// engine). findings is a JSON string array of rule hits.
+model RiskAssessment {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  computedAt   DateTime @default(now())
+  overallScore Int      @default(0) // 0-100 (higher = more attention needed)
+  findings     String   @default("[]") // JSON array of rule hits
+  ruleVersion  String   @default("v1")
+}
+
+// Weekly project digest. items is a JSON string array.
+model IntelDigest {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  weekStart String // ISO date (Monday) of the digest week
+  summary   String
+  items     String   @default("[]") // JSON array of digest items
+  createdAt DateTime @default(now())
+}
+
+// Regional price intelligence point (materialName + region trend input).
+model PricePoint {
+  id           String   @id @default(cuid())
+  materialName String // e.g. "Cement 50kg", "Steel bar Y12"
+  region       String // Nairobi, Kiambu, Machakos
+  unitPrice    Float // KES
+  recordedAt   DateTime @default(now())
+  source       String   @default("seed") // order, manual, seed
 }

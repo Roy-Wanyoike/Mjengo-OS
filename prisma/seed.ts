@@ -1,4 +1,9 @@
 import { PrismaClient } from '@prisma/client'
+import { seedProfessionals } from './seed-extras/professionals'
+import { seedLand } from './seed-extras/land'
+import { seedSupply } from './seed-extras/supply'
+import { seedInvoices } from './seed-extras/invoices'
+import { seedIntel } from './seed-extras/intel'
 
 const db = new PrismaClient()
 
@@ -67,7 +72,7 @@ async function main() {
   })
 
   // ---------- Phases & tasks ----------
-  const phaseDefs = [
+  const phaseDefs: Array<{ name: string; budget: number; status: string; progressManual: number; tasks: Array<[string, string, number]> }> = [
     { name: 'Site Prep & Foundation', budget: 900000, status: 'done', progressManual: 100, tasks: [
       ['Site clearing & setting out', 'done', 100],
       ['Excavation of foundation trenches', 'done', 100],
@@ -121,7 +126,7 @@ async function main() {
   }
 
   // ---------- Workers (fundis) ----------
-  const workerDefs = [
+  const workerDefs: Array<[string, string, string, number]> = [
     ['Mwangi Kariuki', 'Foreman (Mkuu wa Site)', '0722456781', 2000],
     ['Otieno Odhiambo', 'Fundi wa Mawe (Mason)', '0733112233', 1500],
     ['Kevin Mutiso', 'Fundi wa Chuma (Steel Fixer)', '0714556677', 1400],
@@ -215,7 +220,7 @@ async function main() {
   }
 
   // ---------- Materials (GLOBAL catalog — shared across projects) ----------
-  const materialDefs = [
+  const materialDefs: Array<[string, string, number]> = [
     ['Cement (32.5N)', 'bag', 780],
     ['Ballast', 'tonne', 2800],
     ['Sand', 'tonne', 1800],
@@ -401,7 +406,7 @@ async function main() {
   }
 
   // 4 fundis
-  const p2Workers = [
+  const p2Workers: Array<[string, string, string, number]> = [
     ['Joseph Kimani', 'Foreman (Mkuu wa Site)', '0722001100', 1500],
     ['Peter Otieno', 'Fundi wa Mawe (Mason)', '0733445566', 1200],
     ['Brian Mwangi', 'Mtumishi (Labourer)', '0714778899', 800],
@@ -572,7 +577,7 @@ async function main() {
   }
 
   // 3 fundis (historical crew)
-  const p3Workers = [
+  const p3Workers: Array<[string, string, string, number]> = [
     ['Mwakideu Chengo', 'Fundi wa Mawe (Mason)', '0721556677', 1300],
     ['Athman Salim', 'Mtumishi (Labourer)', '0733889900', 700],
     ['Neema Mwakembe', 'Fundi wa Malazi (Finisher)', '0791772200', 1100],
@@ -672,6 +677,18 @@ async function main() {
       createdAt: daysAgo(60, 18),
     },
   })
+
+  // ------------------------------------------------------------------------
+  // v2 domain seeds (F-1) — registered here; each is ALSO runnable standalone
+  // (bun prisma/seed-extras/<file>.ts) for partial re-seeds. Order matters:
+  // professionals → land (assignments reference the directory) → supply →
+  // invoices (references POs) → intel (notifications last).
+  // ------------------------------------------------------------------------
+  await seedProfessionals(db)
+  await seedLand(db)
+  await seedSupply(db)
+  await seedInvoices(db)
+  await seedIntel(db)
 
   console.log('Seed complete:', {
     projects: [project.id, p2.id, p3.id],

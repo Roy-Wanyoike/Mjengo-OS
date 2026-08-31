@@ -11,6 +11,10 @@ import { FundisTab } from '@/components/mjengo/fundis-tab'
 import { MoneyTab } from '@/components/mjengo/money-tab'
 import { EvidenceTab } from '@/components/mjengo/evidence-tab'
 import { CopilotTab } from '@/components/mjengo/copilot-tab'
+import { LandTab } from '@/components/mjengo/land-tab'
+import { FinderTab } from '@/components/mjengo/finder-tab'
+import { IntelTab } from '@/components/mjengo/intel-tab'
+import { UssdTab } from '@/components/mjengo/ussd-tab'
 import { WelcomeScreen } from '@/components/mjengo/welcome-screen'
 import { CreateProjectDialog, type CreateProjectPayload } from '@/components/mjengo/create-project-dialog'
 import { ShareDialog } from '@/components/mjengo/share-dialog'
@@ -22,7 +26,9 @@ import { CloudOff, RefreshCw, HardHat, Link2Off } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 
-export type TabKey = 'overview' | 'site' | 'materials' | 'fundis' | 'money' | 'evidence' | 'copilot'
+export type TabKey =
+  | 'overview' | 'site' | 'materials' | 'finder' | 'fundis' | 'money'
+  | 'land' | 'evidence' | 'intel' | 'copilot' | 'ussd'
 
 function BootSkeleton() {
   return (
@@ -254,10 +260,14 @@ export function MjengoApp() {
         {activeTab === 'overview' && <OverviewTab onOpenCopilot={() => setTab('copilot')} />}
         {activeTab === 'site' && <SitePlanTab />}
         {activeTab === 'materials' && <MaterialsTab />}
+        {activeTab === 'finder' && <FinderTab />}
         {activeTab === 'fundis' && <FundisTab />}
         {activeTab === 'money' && <MoneyTab />}
+        {activeTab === 'land' && <LandTab />}
         {activeTab === 'evidence' && <EvidenceTab />}
+        {activeTab === 'intel' && <IntelTab />}
         {activeTab === 'copilot' && <CopilotTab />}
+        {activeTab === 'ussd' && <UssdTab />}
       </main>
 
       <footer className="mt-auto bg-stone-950 text-stone-400 pb-[env(safe-area-inset-bottom)]">

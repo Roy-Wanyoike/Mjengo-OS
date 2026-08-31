@@ -39,7 +39,7 @@ Max 4 alerts, ordered by severity. Only flag genuine discrepancies — do not in
       summary: string
     }
 
-    const created = []
+    const created: Awaited<ReturnType<typeof db.alert.create>>[] = []
     for (const a of (result.alerts ?? []).slice(0, 4)) {
       const alert = await db.alert.create({
         data: {

@@ -3,6 +3,21 @@ import { logAudit, summarizeAction, kindForAction } from '@/lib/audit'
 import { TRUST_ACTIONS, applyTrustAction } from '@/lib/actions/trust'
 import { MONEY_ACTIONS, applyMoneyAction } from '@/lib/actions/money'
 import { EVIDENCE_ACTIONS, applyEvidenceAction } from '@/lib/actions/evidence'
+import { LAND_ACTIONS, applyLandAction } from '@/lib/actions/land'
+import { PROFESSIONALS_ACTIONS, applyProfessionalsAction } from '@/lib/actions/professionals'
+import { SUPPLY_ACTIONS, applySupplyAction } from '@/lib/actions/supply'
+import { INVOICE_ACTIONS, applyInvoiceAction } from '@/lib/actions/invoices'
+import { INTEL_ACTIONS, applyIntelAction } from '@/lib/actions/intel'
+import { loadLandSlice } from '@/modules/land/repository'
+import { loadProfessionalsSlice } from '@/modules/professionals/repository'
+import { loadSupplySlice } from '@/modules/supply/repository'
+import { loadInvoicesSlice } from '@/modules/invoices/repository'
+import { loadIntelSlice } from '@/modules/intel/repository'
+import type { LandSlice } from '@/modules/land/types'
+import type { ProfessionalsSlice } from '@/modules/professionals/types'
+import type { SupplySlice } from '@/modules/supply/types'
+import type { InvoicesSlice } from '@/modules/invoices/types'
+import type { IntelSlice } from '@/modules/intel/types'
 import type {
   Alert, Attendance, AuditEvent, Consumption, Delivery, EscrowWallet, Material, Milestone, Notification, Phase, PhotoComment, Project, Recap, SitePhoto, SiteZone, Task, Transaction, VariationOrder, Worker,
 } from '@prisma/client'
@@ -71,6 +86,12 @@ export interface ProjectPayload {
   notifications: Notification[]
   auditEvents: AuditEvent[]
   photoComments: PhotoComment[]
+  // v2 domain slices (land / professionals / supply / invoices / intel)
+  land: LandSlice
+  professionals: ProfessionalsSlice
+  supply: SupplySlice
+  invoices: InvoicesSlice
+  intel: IntelSlice
 }
 
 export interface ProjectListItem {
@@ -259,6 +280,15 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
   const wagesUnpaid = allAttendances.filter((a) => !a.paid).reduce((s, a) => s + a.wage, 0)
   const plannedSpendPct = Math.round((dayCount / totalDays) * 100)
 
+  // v2 domain slices (land / professionals / supply / invoices / intel)
+  const [land, professionals, supply, invoices, intel] = await Promise.all([
+    loadLandSlice(project.id),
+    loadProfessionalsSlice(project.id),
+    loadSupplySlice(project.id),
+    loadInvoicesSlice(project.id),
+    loadIntelSlice(project.id),
+  ])
+
   // Workforce Trust: reported vs verified presence (today)
   const todayRows = allAttendances.filter((a) => a.date === today && a.status !== 'absent' && a.status !== 'excused')
   const fundisVerified = todayRows.filter((a) => a.verification === 'verified').length
@@ -314,6 +344,11 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
     notifications,
     auditEvents,
     photoComments,
+    land,
+    professionals,
+    supply,
+    invoices,
+    intel,
   }
 }
 
@@ -342,6 +377,11 @@ export type ActionType =
   | (typeof TRUST_ACTIONS)[number]
   | (typeof MONEY_ACTIONS)[number]
   | (typeof EVIDENCE_ACTIONS)[number]
+  | (typeof LAND_ACTIONS)[number]
+  | (typeof PROFESSIONALS_ACTIONS)[number]
+  | (typeof SUPPLY_ACTIONS)[number]
+  | (typeof INVOICE_ACTIONS)[number]
+  | (typeof INTEL_ACTIONS)[number]
 
 export async function applyAction(type: ActionType, payload: any, projectIdArg?: string): Promise<any> {
   // Project resolution: explicit projectId arg > payload.projectId > first project
@@ -357,6 +397,16 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
     result = await applyMoneyAction(type, cleanPayload, projectId)
   } else if ((EVIDENCE_ACTIONS as readonly string[]).includes(type)) {
     result = await applyEvidenceAction(type, cleanPayload, projectId)
+  } else if ((LAND_ACTIONS as readonly string[]).includes(type)) {
+    result = await applyLandAction(type, cleanPayload, projectId)
+  } else if ((PROFESSIONALS_ACTIONS as readonly string[]).includes(type)) {
+    result = await applyProfessionalsAction(type, cleanPayload, projectId)
+  } else if ((SUPPLY_ACTIONS as readonly string[]).includes(type)) {
+    result = await applySupplyAction(type, cleanPayload, projectId)
+  } else if ((INVOICE_ACTIONS as readonly string[]).includes(type)) {
+    result = await applyInvoiceAction(type, cleanPayload, projectId)
+  } else if ((INTEL_ACTIONS as readonly string[]).includes(type)) {
+    result = await applyIntelAction(type, cleanPayload, projectId)
   } else {
     result = await applyCoreAction(type, cleanPayload, projectId)
   }

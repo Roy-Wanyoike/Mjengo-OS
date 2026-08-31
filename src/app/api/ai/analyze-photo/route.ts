@@ -71,7 +71,7 @@ Be conservative and evidence-based. If uncertain, lower the confidence.`
     }
     if (phaseId) matchedPhase = phases.find((p) => p.id === phaseId) ?? matchedPhase
 
-    let data = null
+    let data: Awaited<ReturnType<typeof getProjectPayload>> = null
     let appliedPhotoId: string | null = null
     if (apply) {
       const result = await applyAction('photo.apply', {
