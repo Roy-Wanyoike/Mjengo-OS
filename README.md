@@ -36,16 +36,22 @@ variations, comment on photos, read notifications).
 | **Overview** | KPIs, budget burn-down vs plan, phases, **Digital-twin time-lapse** (scrub Day 1 → today), **interactive site map** (clickable zones → photos), alerts, daily recap (also queued as WhatsApp-style notification), photo evidence with **contextual comment threads** |
 | **Site Plan** | Phases → tasks, progress sliders, add phase, delete task |
 | **Materials** | Inventory, delivery log (voice or manual), consumption ledger, add material, CSV export |
+| **Finder** | **Procurement network**: Find Materials Near This Site (landed-cost engine — product + delivery + transport, weighted ranking: Best overall vs cheapest unit), purchase requests w/ **approval-rules engine** (role bands, auto-approve within limit, server-side role checks), quotes comparison, PO lifecycle w/ delivery verification (per-line counts, GPS — ordered 50 / received 48 = flagged for review), procurement dashboard (required/purchased/committed/remaining + BOQ-lite), supplier invoices w/ **client decision queue**, **3-way match** (PO↔invoice↔delivery — mismatches warn before payment, humans decide), payments → Transaction ledger, printable invoices |
 | **Fundis** | **Workforce Trust**: 🟢 verified vs 🟡 reported vs 🟠 exception attendance evidence levels, daily muster roll, exceptions with reasons, append-only override history, **payroll gated on verification** (blocked → review or force), labour summary + 30-day verification-rate ring, kiosk PINs, check-in methods (geofence/USSD/kiosk QR), CSV export |
 | **Money** | **MjengoPay escrow** (simulated money, real workflow): wallet top-ups, milestones with **proof-of-work photo gates**, request → client approval → release (moves escrow → ledger), **variation orders** that shift the budget only after client approval |
+| **Land** | **Physical ground truth**: parcels + title-deed documents (transcriptions), registry-search requests w/ **deterministic consistency check** (CONSISTENT/MISMATCH), review gate, parcel timelines, **Property Passport** (print) — honest: searches are recorded, not registry-confirmed. Plus the **professionals directory** (LSK/EBK/BORAQS licence chips, 7-step verification ladder from recorded credential checks — never registry claims, parcel assignments) |
 | **Evidence** | **Bias-Free Ledger** — append-only audit of every action (who/what/when, filterable), anomaly feed with acknowledge, **one-click PDF reports** (jsPDF) |
+| **Intel** | **Deterministic intelligence**: 5 risk rules (budget/schedule/procurement/prices/attendance → weighted score), weekly digest, regional price trends (sparklines, 30d deltas, manual recording), **supplier reliability from actual transaction history** (no anonymous ratings), procurement cover suggestions |
 | **AI Copilot** | Vision photo analysis (phase, PPE, material counts vs invoice), Swahili voice-to-invoice, anomaly scan — per project (site team only) |
+| **USSD** | `*384#` **muster-line simulation** — feature-phone flow (menu → PIN → present/absent) dispatching real attendance records; offline path shows the device-queue state |
 
 **Offline-first:** connectivity toggle simulates the field; actions queue in a local
-outbox and sync per-project on reconnect (QA-verified to the shilling).
+outbox and sync per-project on reconnect (QA-verified to the shilling). **PWA:**
+installable manifest + service worker — `/api/*` is never cached (network-only:
+no stale money or evidence, ever).
 
-**Notifications:** bell center (in-app) with WhatsApp-channel delivery log for recaps,
-milestone requests, variations and client comments.
+**Notifications:** full bell center (kind filters, mark-read, per-project scope) for
+approvals, orders, deliveries, discrepancies, invoices, risk and milestones.
 
 ## Run it on your laptop
 
