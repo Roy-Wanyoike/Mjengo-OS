@@ -5,8 +5,11 @@
 //
 //   contractor@mjengo.os / mjengo2026  → Site Manager (contractor, full owner app)
 //   client@mjengo.os     / mjengo2026  → Amina (Client)   (client role, boots "Nyumba Yangu")
-//   admin@mjengo.os      / admin2026   → Mjengo Admin     (admin, full owner app)
+//   admin@mjengo.os      / admin2026   → Mjengo Admin     (admin, full owner app + flags)
 //   finance@mjengo.os    / mjengo2026  → Fatuma (Finance) (finance role, F-MONEY — wallet/payment queue)
+//   supervisor@mjengo.os / mjengo2026  → Wanjiru (Site Supervisor) (W1-PERM role nav)
+//   procurement@mjengo.os / mjengo2026 → Otieno (Procurement)       (W1-PERM role nav)
+//   qs@mjengo.os         / mjengo2026  → Kariuki (QS)               (W1-PERM role nav)
 
 import { PrismaClient } from '@prisma/client'
 import { randomBytes, scryptSync } from 'node:crypto'
@@ -53,6 +56,27 @@ async function main() {
         passwordHash: hashPassword('mjengo2026'),
         name: 'Fatuma (Finance)',
         role: 'finance',
+        projectId: null,
+      },
+      {
+        email: 'supervisor@mjengo.os',
+        passwordHash: hashPassword('mjengo2026'),
+        name: 'Wanjiru (Site Supervisor)',
+        role: 'supervisor',
+        projectId: null,
+      },
+      {
+        email: 'procurement@mjengo.os',
+        passwordHash: hashPassword('mjengo2026'),
+        name: 'Otieno (Procurement)',
+        role: 'procurement',
+        projectId: null,
+      },
+      {
+        email: 'qs@mjengo.os',
+        passwordHash: hashPassword('mjengo2026'),
+        name: 'Kariuki (QS)',
+        role: 'qs',
         projectId: null,
       },
     ],

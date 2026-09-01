@@ -16,9 +16,13 @@ interface DemoAccount {
 }
 
 const DEMO_ACCOUNTS: DemoAccount[] = [
-  { email: 'contractor@mjengo.os', password: 'mjengo2026', label: 'Contractor', hint: 'Site Manager — full site app' },
-  { email: 'client@mjengo.os', password: 'mjengo2026', label: 'Client', hint: 'Amina — Nyumba Yangu build' },
-  { email: 'admin@mjengo.os', password: 'admin2026', label: 'Admin', hint: 'Mjengo Admin — everything' },
+  { email: 'contractor@mjengo.os', password: 'mjengo2026', label: 'Contractor', hint: 'Site Manager — full site app (all tabs)' },
+  { email: 'client@mjengo.os', password: 'mjengo2026', label: 'Client', hint: 'Amina — Nyumba Yangu client view' },
+  { email: 'admin@mjengo.os', password: 'admin2026', label: 'Admin', hint: 'Mjengo Admin — everything + feature flags' },
+  { email: 'finance@mjengo.os', password: 'mjengo2026', label: 'Finance', hint: 'Fatuma — Money/Finder/Evidence, lands on Money' },
+  { email: 'supervisor@mjengo.os', password: 'mjengo2026', label: 'Supervisor', hint: 'Wanjiru — site tabs + Copilot/USSD, no Money/Land/Intel' },
+  { email: 'procurement@mjengo.os', password: 'mjengo2026', label: 'Procurement', hint: 'Otieno — Finder/Materials/Evidence, lands on Finder' },
+  { email: 'qs@mjengo.os', password: 'mjengo2026', label: 'QS', hint: 'Kariuki — Site Plan/Materials/Finder/Evidence, lands on Materials' },
 ]
 
 /**
@@ -48,7 +52,16 @@ export function LoginScreen() {
         redirect: false,
       })
       if (res?.error) {
-        setError('Wrong email or password — try a demo account below')
+        // next-auth v4 returns the generic "CredentialsSignin" code for a wrong
+        // email/password, but real messages thrown by authorize() (W1-SEC's
+        // lockout: "Too many attempts — locked for 15 min. Try again later.")
+        // arrive verbatim in res.error — surface those honestly instead of
+        // masking them as a wrong password.
+        setError(
+          res.error === 'CredentialsSignin' || !res.error.trim()
+            ? 'Wrong email or password — try a demo account below'
+            : res.error,
+        )
         setBusy(false)
         return
       }
@@ -61,7 +74,7 @@ export function LoginScreen() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-stone-100 p-4 sm:p-6">
+    <div className="min-h-screen flex flex-col items-center justify-start sm:justify-center bg-stone-100 p-4 sm:p-6 overflow-y-auto">
       <main className="w-full max-w-md" aria-label="Sign in to MjengoOS">
         <Card className="border-stone-200 shadow-lg">
           <CardContent className="p-6 sm:p-8">
@@ -137,12 +150,19 @@ export function LoginScreen() {
             </form>
 
             <div className="mt-6 border-t border-stone-200 pt-4">
-              <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">Demo accounts</p>
-              <div className="space-y-2">
+              <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">
+                Demo accounts <span className="normal-case font-normal">· one per role</span>
+              </p>
+              <div
+                className="space-y-2 max-h-72 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full"
+                role="list"
+                aria-label="Demo accounts by role"
+              >
                 {DEMO_ACCOUNTS.map((acc) => (
                   <button
                     key={acc.email}
                     type="button"
+                    role="listitem"
                     disabled={busy}
                     onClick={() => {
                       setEmail(acc.email)

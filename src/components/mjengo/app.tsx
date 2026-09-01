@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useMjengo } from '@/hooks/use-mjengo'
 import { Header } from '@/components/mjengo/header'
@@ -20,20 +20,17 @@ import { CreateProjectDialog, type CreateProjectPayload } from '@/components/mje
 import { ShareDialog } from '@/components/mjengo/share-dialog'
 import { DiasporaBanner } from '@/components/mjengo/diaspora-banner'
 import { LoginScreen } from '@/components/auth/login-screen'
+import { MobileBottomNav } from '@/components/mjengo/nav/mobile-bottom-nav'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Card, CardContent } from '@/components/ui/card'
-import { CloudOff, RefreshCw, HardHat, Link2Off } from 'lucide-react'
+import { CloudOff, RefreshCw, HardHat, Link2Off, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
+import { usePermissions, tabsForRole, landingForRole } from '@/lib/permissions'
 
 export type TabKey =
   | 'overview' | 'site' | 'materials' | 'finder' | 'fundis' | 'money'
   | 'land' | 'evidence' | 'intel' | 'copilot' | 'ussd'
-
-const TABS_SET: readonly string[] = [
-  'overview', 'site', 'materials', 'finder', 'fundis', 'money',
-  'land', 'evidence', 'intel', 'copilot', 'ussd',
-]
 
 function BootSkeleton() {
   return (
@@ -64,12 +61,22 @@ export function MjengoApp() {
     shareToken, shareError, bootFromShare, clientRole,
   } = useMjengo()
   const { data: session, status } = useSession()
+  const { role: sessionRole, knownRole, tabs: roleTabs } = usePermissions()
   const [tab, setTab] = useState<TabKey>('overview')
   const [createOpen, setCreateOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [origin, setOrigin] = useState('')
   const [shareBooting, setShareBooting] = useState(false)
+
+  // ---------------- Surface + permission-derived tab visibility (W1-PERM) ----------------
+  // The client surface (share link or logged-in client) keeps its existing
+  // tab set regardless of session; owner roles are filtered by permissions.ts
+  // (fail closed for unknown roles → Overview only).
+  const isShareClient = viewMode === 'client' && Boolean(shareToken)
+  // Client surface = share-link client (no login) OR a logged-in client-role user
+  const isClientSurface = viewMode === 'client' && (Boolean(shareToken) || clientRole)
+  const surfaceTabs: readonly TabKey[] = isClientSurface ? tabsForRole('client') : roleTabs
 
   // Boot: while signed OUT, a ?share=<token> link (or a previously used token)
   // opens the public client "Virtual Site Visit" with NO login. Signed-in users
@@ -119,6 +126,21 @@ export function MjengoApp() {
     }
   }, [status, session])
 
+  // ---------------- Role landing tab (W1-PERM, spec §75 role dashboards) ----------------
+  // On login or role change, land on the role's landing tab: finance → Money,
+  // procurement → Finder, qs → Materials, everyone else → Overview (the
+  // contractor's behavior is unchanged). Unknown roles fail closed to
+  // Overview. The client surface boots 'overview' via the effect above.
+  const landedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (status !== 'authenticated' || !session?.user?.email) return
+    const role = String(session.user.role ?? 'contractor')
+    if (landedFor.current === role) return
+    landedFor.current = role
+    if (role === 'client') return
+    setTab(landingForRole(role))
+  }, [status, session])
+
   useEffect(() => {
     setOrigin(window.location.origin)
   }, [])
@@ -143,16 +165,17 @@ export function MjengoApp() {
 
   // ---------------- Cross-component tab navigation (F-INSIGHT, spec §80) ----------------
   // Global-search result clicks dispatch 'mjengo:tab' (detail: { tab }) from
-  // anywhere in the tree; the app owner switches tabs here. Unknown tabs are
-  // ignored rather than guessed.
+  // anywhere in the tree; the app owner switches tabs here. Unknown tabs —
+  // or tabs the current role cannot see (W1-PERM, fail closed) — are ignored
+  // rather than guessed.
   useEffect(() => {
     const onTab = (e: Event) => {
       const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab
-      if (tab && (TABS_SET as readonly string[]).includes(tab)) setTab(tab as TabKey)
+      if (tab && surfaceTabs.includes(tab as TabKey)) setTab(tab as TabKey)
     }
     window.addEventListener('mjengo:tab', onTab)
     return () => window.removeEventListener('mjengo:tab', onTab)
-  }, [])
+  }, [surfaceTabs])
 
   async function handleCreateProject(payload: CreateProjectPayload): Promise<boolean> {
     setCreating(true)
@@ -182,9 +205,8 @@ export function MjengoApp() {
     void load()
   }
 
-  const isShareClient = viewMode === 'client' && Boolean(shareToken)
-  // Client surface = share-link client (no login) OR a logged-in client-role user
-  const isClientSurface = viewMode === 'client' && (Boolean(shareToken) || clientRole)
+  // (isShareClient / isClientSurface / surfaceTabs are derived near the top,
+  //  before the effects that depend on them — see “Surface + permission-derived”.)
 
   // Dead share link — full-screen card, no access to any project data
   if (shareError) {
@@ -261,8 +283,16 @@ export function MjengoApp() {
 
   const projectShareToken = data.project.shareToken
   const shareUrl = projectShareToken ? `${origin || ''}/?share=${projectShareToken}` : null
-  // Clients never see the AI Copilot tab; guard against a stale tab key too
-  const activeTab: TabKey = isClientSurface && tab === 'copilot' ? 'overview' : tab
+  // Stale/disallowed tab keys snap to the surface landing tab: clients never
+  // see the AI Copilot tab; role changes land on the role's landing tab
+  // (W1-PERM — unknown roles fail closed to Overview).
+  const activeTab: TabKey = surfaceTabs.includes(tab)
+    ? tab
+    : isClientSurface ? 'overview' : landingForRole(sessionRole)
+
+  // Honest fail-closed notice for roles the platform does not know (spec §56:
+  // never silently pretend the role is fine).
+  const showUnknownRoleNotice = !isClientSurface && Boolean(sessionRole) && !knownRole
 
   return (
     <div className="min-h-screen flex flex-col bg-stone-100">
@@ -272,6 +302,18 @@ export function MjengoApp() {
         onCreateProject={() => setCreateOpen(true)}
         onShare={() => setShareOpen(true)}
       />
+
+      {showUnknownRoleNotice && (
+        <div
+          className="bg-amber-100 text-amber-950 px-4 py-2.5 flex items-center justify-center gap-2 text-sm font-medium border-b border-amber-200"
+          role="alert"
+        >
+          <TriangleAlert className="w-4 h-4 shrink-0" aria-hidden />
+          <span className="text-center">
+            Unknown role “{sessionRole}” — showing a safe, minimal view (Overview only). Ask an admin to fix your account role.
+          </span>
+        </div>
+      )}
 
       {viewMode === 'client' && (
         isClientSurface ? (
@@ -306,7 +348,17 @@ export function MjengoApp() {
         {activeTab === 'ussd' && <UssdTab />}
       </main>
 
-      <footer className="mt-auto bg-stone-950 text-stone-400 pb-[env(safe-area-inset-bottom)]">
+      {/* Mobile owner navigation — fixed bottom bar, hidden on md+ where the
+          header's desktop tab strip takes over (W1-PERM, Doc B §53/§54). */}
+      {!isClientSurface && <MobileBottomNav tab={activeTab} onTabChange={setTab} />}
+
+      <footer
+        className={`mt-auto bg-stone-950 text-stone-400 ${
+          isClientSurface
+            ? 'pb-[env(safe-area-inset-bottom)]'
+            : 'pb-[calc(env(safe-area-inset-bottom)+5rem)] md:pb-[env(safe-area-inset-bottom)]'
+        }`}
+      >
         {isClientSurface ? (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
             <div className="flex items-center gap-2">
