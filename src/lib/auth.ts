@@ -6,6 +6,12 @@ import { getToken } from 'next-auth/jwt'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { db } from '@/lib/db'
+import {
+  checkLoginLockout,
+  clearLoginFailures,
+  clientIpFromHeaders,
+  recordLoginFailure,
+} from '@/lib/rate-limit'
 
 /** Shape carried on the session (JWT → session callback). */
 export interface MjengoSessionUser {
@@ -65,12 +71,51 @@ export const authOptions: NextAuthOptions = {
         email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' },
       },
-      async authorize(credentials) {
+      /**
+       * Credentials sign-in with brute-force lockout (W1-SEC, Doc A §52):
+       * 5 failures for the same (email + source IP) within 15 min → the
+       * account+IP pair is locked for 15 min — even a CORRECT password is
+       * rejected during the window. Tracking is in-process (see
+       * rate-limit.ts for the single-instance honesty note).
+       *
+       * Lockouts are surfaced CredentialsSignin-style: authorize THROWS with
+       * a clear message, which next-auth v4 encodes as the `error` param on
+       * the sign-in response — the client signIn() call resolves with
+       * { error: "Too many attempts — locked for 15 min" } instead of the
+       * generic CredentialsSignin code.
+       *
+       * authorize's second arg (v4) is { query, body, headers, method } —
+       * headers is the request's Headers instance, so x-forwarded-for is
+       * available for the lockout key.
+       */
+      async authorize(credentials, req) {
         const email = credentials?.email?.trim().toLowerCase()
         const password = credentials?.password ?? ''
         if (!email || !password) return null
+
+        const ip = clientIpFromHeaders(req?.headers)
+
+        const lock = checkLoginLockout(email, ip)
+        if (lock.locked) {
+          // Checked BEFORE the user lookup: a locked source learns nothing
+          // about whether the account or password is valid.
+          const mins = Math.max(1, Math.ceil(lock.msLeft / 60000))
+          throw new Error(`Too many attempts — locked for ${mins} min. Try again later.`)
+        }
+
         const user = await db.user.findUnique({ where: { email } })
-        if (!user || !verifyPassword(password, user.passwordHash)) return null
+        if (!user || !verifyPassword(password, user.passwordHash)) {
+          const failure = recordLoginFailure(email, ip)
+          if (failure.locked) {
+            // This failure tripped the 5th strike — say so immediately.
+            const mins = Math.max(1, Math.ceil(failure.msLeft / 60000))
+            throw new Error(`Too many attempts — locked for ${mins} min. Try again later.`)
+          }
+          return null
+        }
+
+        // Success resets the failure counter completely.
+        clearLoginFailures(email, ip)
         return {
           id: user.id,
           email: user.email,

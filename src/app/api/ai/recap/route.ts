@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { withGuard } from '@/lib/guard'
 import { runDailyRecap } from '@/modules/jobs/handlers'
+import { enforceAiRoutePolicy } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -14,18 +14,23 @@ export const maxDuration = 120
  * notification policy lands the notification-center row as channel 'in_app'
  * with deliveryStatus 'logged' — nothing is sent on WhatsApp until a real
  * provider is wired (the old row claimed channel 'whatsapp' with no delivery).
+ *
+ * W1-SEC: gated (session + site-team role allowlist + 10 req/min/user +
+ * validated projectId). Clients consume recaps through their pinned project
+ * surface — they cannot generate them for arbitrary projects from here.
+ * The no-JSON legacy body contract is preserved (allowEmptyBody → default
+ * project).
  */
-export const POST = withGuard(async (req: NextRequest) => {
+export const POST = async (req: NextRequest): Promise<NextResponse> => {
+  const gate = await enforceAiRoutePolicy(req, {
+    bucket: 'ai:recap',
+    fields: [{ name: 'projectId', type: 'string' }],
+    allowEmptyBody: true,
+  })
+  if (!gate.ok) return gate.response
+
   try {
-    // Body is optional here (legacy clients POST with no JSON) — read projectId if present
-    let projectId: string | undefined
-    try {
-      const body = await req.json()
-      projectId = body?.projectId
-    } catch { /* empty body — fall back to first project */ }
-
-    const recap = await runDailyRecap(projectId)
-
+    const recap = await runDailyRecap(gate.projectId)
     return NextResponse.json({
       ok: true,
       recap: { id: recap.recapId, projectId: recap.projectId, day: recap.day, content: recap.content },
@@ -34,4 +39,4 @@ export const POST = withGuard(async (req: NextRequest) => {
     console.error('[api/ai/recap]', e)
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Recap generation failed' }, { status: 500 })
   }
-})
+}
