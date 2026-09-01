@@ -42,6 +42,21 @@ export function SearchSection() {
   const [searching, setSearching] = useState(false)
 
   const suppliers = data?.supply.suppliers ?? []
+  const pricePoints = data?.intel.pricePoints ?? []
+
+  // Price history for the searched material (spec §30): intel PricePoints
+  // matching the query either way (name contains query or query contains name).
+  const priceHistory = useMemo(() => {
+    const q = material.trim().toLowerCase()
+    if (!q) return []
+    return pricePoints
+      .filter((p) => {
+        const n = p.materialName.toLowerCase()
+        return n.includes(q) || q.includes(n)
+      })
+      .map((p) => ({ unitPrice: p.unitPrice, region: p.region, recordedAt: p.recordedAt }))
+      .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime())
+  }, [pricePoints, material])
 
   // Datalist of catalog names (unique) for quick picking
   const catalogNames = useMemo(() => {
@@ -201,7 +216,7 @@ export function SearchSection() {
                   : 'No matches — widen the search'}
                 {rows.length > 0 && ` · cheapest unit ${formatKes(Math.min(...rows.map((r) => r.unitPrice)))}`}
               </p>
-              <SearchResultsTable rows={rows} siteLabel={site.label} busy={busy} onAddToOrder={addToOrder} />
+              <SearchResultsTable rows={rows} siteLabel={site.label} busy={busy} onAddToOrder={addToOrder} priceHistory={priceHistory} />
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-stone-300 p-6 text-center">

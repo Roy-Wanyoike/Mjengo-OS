@@ -5,11 +5,18 @@
 // lucide icons, tabular numbers (money-tab / invoices-bits conventions).
 
 import { Badge } from '@/components/ui/badge'
-import { Gauge, Star, Truck, PackageX, PackageCheck, PackageMinus } from 'lucide-react'
-import { formatKES } from '@/lib/format'
+import { Gauge, Star, Truck, PackageX, PackageCheck, PackageMinus, LineChart } from 'lucide-react'
+import { formatKES, dateShort } from '@/lib/format'
 import type { CompareRow, EtaTier, StockState } from '@/modules/supply/types'
 
 export const formatKes = formatKES
+
+/** One regional price observation for the searched material (intel PricePoint). */
+export interface PricePointLite {
+  unitPrice: number
+  region: string
+  recordedAt: string | Date
+}
 
 export function fmtQty(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1)
@@ -62,6 +69,27 @@ export function RatingBadge({ score }: { score: number }) {
   return (
     <Badge className={`border-0 gap-1 hover:opacity-90 ${tone}`} title="Supplier reliability from delivery accuracy, on-time history, price consistency and disputes (platform transactions)">
       <Star className="h-3 w-3" aria-hidden /> {score}/100
+    </Badge>
+  )
+}
+
+/** Price-history chip (spec §30): regional PricePoint observations for the
+ *  searched material — last price + region, full list on hover/focus. */
+export function PriceHistoryBadge({ points }: { points: PricePointLite[] }) {
+  if (!points.length) return null
+  const last = points[0]
+  const avg = points.reduce((s, p) => s + p.unitPrice, 0) / points.length
+  const detail = points
+    .slice(0, 6)
+    .map((p) => `${p.region}: ${formatKes(p.unitPrice)} (${dateShort(p.recordedAt)})`)
+    .join('\n')
+  return (
+    <Badge
+      variant="outline"
+      className="gap-1 text-[10px] font-medium text-stone-500"
+      title={`${points.length} regional price point(s) · avg ${formatKes(avg)}\n${detail}`}
+    >
+      <LineChart className="h-3 w-3" aria-hidden /> {points.length} price point{points.length === 1 ? '' : 's'} · last {formatKes(last.unitPrice)} ({last.region})
     </Badge>
   )
 }

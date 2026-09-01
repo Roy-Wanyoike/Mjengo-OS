@@ -13,16 +13,18 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ChevronDown, ChevronRight, MapPin, Plus, Scale, Trophy, Tag, AlertTriangle } from 'lucide-react'
 import type { CompareRow } from '@/modules/supply/types'
-import { EtaBadge, RatingBadge, ScoreBar, StockBadge, fmtKm, fmtQty, formatKes } from './bits'
+import { EtaBadge, RatingBadge, ScoreBar, StockBadge, fmtKm, fmtQty, formatKes, PriceHistoryBadge, type PricePointLite } from './bits'
 
 interface ResultsTableProps {
   rows: CompareRow[]
   siteLabel: string
   busy: boolean
   onAddToOrder: (row: CompareRow) => void
+  /** Regional intel price observations matching the searched material (spec §30 price history). */
+  priceHistory?: PricePointLite[]
 }
 
-export function SearchResultsTable({ rows, siteLabel, busy, onAddToOrder }: ResultsTableProps) {
+export function SearchResultsTable({ rows, siteLabel, busy, onAddToOrder, priceHistory }: ResultsTableProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
 
   if (!rows.length) {
@@ -43,6 +45,7 @@ export function SearchResultsTable({ rows, siteLabel, busy, onAddToOrder }: Resu
 
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
       {best && (
         <p className="text-xs text-stone-500">
           {sameRow ? (
@@ -58,6 +61,8 @@ export function SearchResultsTable({ rows, siteLabel, busy, onAddToOrder }: Resu
           )}
         </p>
       )}
+      <PriceHistoryBadge points={priceHistory ?? []} />
+      </div>
 
       <div className="overflow-x-auto rounded-md border border-stone-200">
         <table className="w-full min-w-[760px] text-sm">
@@ -134,6 +139,21 @@ function FragmentRow({
             <span className="block text-[11px] text-stone-400">
               {row.county}{row.town ? ` · ${row.town}` : ''} · {row.itemName}
             </span>
+            {(row.category || row.brand) && (
+              <span className="flex flex-wrap items-center gap-1 pt-0.5">
+                {row.category && (
+                  <Badge variant="outline" className="text-[9px] font-normal text-stone-500" title="Catalog category (spec §29)">
+                    {row.category}
+                  </Badge>
+                )}
+                {row.brand && (
+                  <Badge variant="outline" className="text-[9px] font-normal text-stone-500" title="Brand (spec §29)">
+                    {row.brand}
+                  </Badge>
+                )}
+                {row.specification && <span className="text-[10px] text-stone-400">{row.specification}</span>}
+              </span>
+            )}
           </div>
         </td>
         <td className="whitespace-nowrap px-2 py-3 tabular-nums text-stone-700">{fmtKm(row.distanceKm)}</td>

@@ -65,7 +65,7 @@ export function materialMatches(itemName: string, query: string): boolean {
 
 /** Best-matching catalog item for a supplier — cheapest among fuzzy matches. */
 export function bestCatalogMatch(
-  items: Array<{ id: string; name: string; unit: string; unitPrice: number; stockQty: number; minOrderQty: number }>,
+  items: Array<{ id: string; name: string; unit: string; unitPrice: number; stockQty: number; minOrderQty: number; category?: string | null; brand?: string | null; specification?: string | null }>,
   query: string,
 ) {
   const matches = items.filter((i) => materialMatches(i.name, query))
@@ -135,6 +135,9 @@ export function rankSuppliers(
       town: c.town ?? null,
       itemName: c.item.name,
       unit: c.item.unit,
+      category: c.item.category ?? null,
+      brand: c.item.brand ?? null,
+      specification: c.item.specification ?? null,
       unitPrice: c.item.unitPrice,
       qty,
       productCost,
@@ -199,7 +202,7 @@ export function toCandidates(
     minimumOrder: number
     reliabilityScore: number
     responseHours: number
-    catalogItems: Array<{ id: string; name: string; unit: string; unitPrice: number; stockQty: number; minOrderQty: number }>
+    catalogItems: Array<{ id: string; name: string; unit: string; unitPrice: number; stockQty: number; minOrderQty: number; category?: string | null; brand?: string | null; specification?: string | null }>
   }>,
   materialName: string,
 ): CompareCandidate[] {

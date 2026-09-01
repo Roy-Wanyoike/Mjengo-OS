@@ -21,6 +21,7 @@ import { useFinderLink } from './requests/finder-link'
 import { fmtQty, formatKes } from './requests/bits'
 import { PriceAlertChip } from './dashboard/price-alert-chip'
 import { RulesCard } from './dashboard/rules-card'
+import { BoqCard } from './dashboard/boq-card'
 
 export function DashboardSection() {
   const { data, viewMode } = useMjengo()
@@ -159,6 +160,10 @@ export function DashboardSection() {
               )
             })}
           </div>
+
+          {/* BOQ entities (spec §28) — versioned estimates, approve → generate MR.
+              The DERIVED required-vs-purchased view ("BOQ-lite") stays below. */}
+          <BoqCard canManage={isSiteTeam} />
 
           {/* BOQ-lite table */}
           <div className="space-y-2">

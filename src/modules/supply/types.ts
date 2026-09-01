@@ -12,11 +12,11 @@
 
 import type {
   Supplier, CatalogItem, MaterialRequest, MaterialRequestLine,
-  ApprovalRule, Approval, Quote, PurchaseOrder, PurchaseOrderLine,
+  ApprovalRule, Approval, Quote, QuoteLine, PurchaseOrder, PurchaseOrderLine,
   OrderDelivery, OrderDeliveryLine,
 } from '@prisma/client'
 
-export type { ApprovalRule, Approval, Quote, PurchaseOrder, PurchaseOrderLine, OrderDelivery, OrderDeliveryLine } from '@prisma/client'
+export type { ApprovalRule, Approval, Quote, QuoteLine, PurchaseOrder, PurchaseOrderLine, OrderDelivery, OrderDeliveryLine } from '@prisma/client'
 
 // ---- domain enums ----
 
@@ -45,6 +45,8 @@ export interface RequestWithLines extends MaterialRequest {
 export interface QuoteDetail extends Quote {
   supplierName: string
   requestCode: string
+  /** Per-line bid detail (spec §32) — present when the quote was received multi-line. */
+  lines?: QuoteLine[]
 }
 
 export interface DeliveryWithLines extends OrderDelivery {
@@ -66,6 +68,8 @@ export interface SupplySlice {
   approvals: Approval[]
   quotes: QuoteDetail[]
   orders: OrderWithDetail[]
+  /** SavedSupplier ids for THIS project (spec §30 "save supplier") — directory sorts them first. */
+  savedSupplierIds: string[]
 }
 
 export const EMPTY_SUPPLY_SLICE: SupplySlice = {
@@ -75,6 +79,7 @@ export const EMPTY_SUPPLY_SLICE: SupplySlice = {
   approvals: [],
   quotes: [],
   orders: [],
+  savedSupplierIds: [],
 }
 
 // ---- PURE landed-cost engine contract (compare.ts — shared client/server) ----
@@ -109,6 +114,10 @@ export interface CompareCandidate {
     unitPrice: number
     stockQty: number
     minOrderQty: number
+    /** Catalog listing metadata (spec §29 Product/Brand/Specification) — display-only. */
+    category?: string | null
+    brand?: string | null
+    specification?: string | null
   }
 }
 
@@ -132,6 +141,10 @@ export interface CompareRow {
   town: string | null
   itemName: string
   unit: string
+  /** Catalog listing metadata (spec §29) — shown in search rows when present. */
+  category: string | null
+  brand: string | null
+  specification: string | null
   unitPrice: number
   qty: number
   productCost: number

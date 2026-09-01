@@ -11,10 +11,11 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Boxes, Truck, PackageMinus, Mic, Camera, Hand, Phone, Plus, PackageSearch, Download } from 'lucide-react'
+import { Boxes, Truck, PackageMinus, Mic, Camera, Hand, Phone, Plus, PackageSearch, Download, Warehouse, AlertTriangle, ArrowLeftRight, Flame, ClipboardList } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, dateShort } from '@/lib/format'
 import { downloadCSV, materialsLedgerCSV, projectFilePrefix } from '@/components/mjengo/export-utils'
+import type { InventoryItemRow, StockMovementType } from '@/modules/inventory/types'
 
 function SourceBadge({ source }: { source: string }) {
   if (source === 'voice') return <Badge className="gap-1 bg-violet-100 text-violet-800 border-0 hover:bg-violet-100"><Mic className="w-3 h-3" aria-hidden /> voice</Badge>
@@ -141,6 +142,10 @@ export function MaterialsTab() {
           </CardContent>
         </Card>
       </section>
+
+      {/* Site Store (spec §35) — storekeeper dashboard from the append-only
+          StockMovement ledger; closing stock is derived, never stored. */}
+      <SiteStoreCard />
 
       {/* Inventory */}
       <Card className="border-stone-200 shadow-sm">
@@ -366,5 +371,376 @@ export function MaterialsTab() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+// ---------------- Site Store (spec §35) ----------------
+
+const MOVEMENT_TYPES: Array<{ value: string; label: string }> = [
+  { value: 'opening', label: 'Opening stock' },
+  { value: 'received', label: 'Received' },
+  { value: 'consumed', label: 'Consumed' },
+  { value: 'transfer', label: 'Transfer' },
+  { value: 'return', label: 'Return to supplier' },
+  { value: 'damage', label: 'Damage/loss' },
+  { value: 'adjust', label: 'Adjustment (count)' },
+]
+
+const MOVEMENT_BADGES: Record<string, string> = {
+  opening: 'bg-stone-100 text-stone-600',
+  received: 'bg-emerald-100 text-emerald-800',
+  consumed: 'bg-sky-100 text-sky-800',
+  transferred_in: 'bg-violet-100 text-violet-800',
+  transferred_out: 'bg-violet-100 text-violet-800',
+  returned: 'bg-amber-100 text-amber-900',
+  damaged: 'bg-orange-100 text-orange-800',
+  adjusted: 'bg-teal-100 text-teal-800',
+}
+
+function MovementBadge({ type }: { type: StockMovementType | string }) {
+  return (
+    <Badge className={`border-0 text-[10px] hover:opacity-90 ${MOVEMENT_BADGES[type] ?? 'bg-stone-100 text-stone-600'}`}>
+      {type.replace('_', ' ')}
+    </Badge>
+  )
+}
+
+/** Low stock = closing ≤ 10% of everything that ever came in (opening + received + returns). */
+function isLowStock(item: InventoryItemRow): boolean {
+  const inflow = item.openingQty + item.receivedQty + item.returnedQty
+  return inflow > 0 && item.closingQty <= inflow * 0.1
+}
+
+function SiteStoreCard() {
+  const { data, dispatch, online, outbox, viewMode, actionBusy } = useMjengo()
+  const [movementOpen, setMovementOpen] = useState(false)
+  const [mType, setMType] = useState('received')
+  const [mItem, setMItem] = useState('')
+  const [mName, setMName] = useState('')
+  const [mUnit, setMUnit] = useState('')
+  const [mLocation, setMLocation] = useState('Site Store')
+  const [mQty, setMQty] = useState('')
+  const [mCost, setMCost] = useState('')
+  const [mRef, setMRef] = useState('')
+  const [mNote, setMNote] = useState('')
+  const [mTo, setMTo] = useState('')
+  const busy = actionBusy !== null
+
+  if (!data) return null
+  const isClient = viewMode === 'client'
+  const items = data.inventory.items
+  const movements = data.inventory.movements
+  const suppliers = data.supply.suppliers
+  const incoming = data.supply.orders.filter((o) => o.status === 'delivering')
+  const consumedTotal = items.reduce((s, i) => s + i.consumedQty, 0)
+  const damagedTotal = items.reduce((s, i) => s + i.damagedQty, 0)
+  const transfersTotal = movements.filter((m) => m.type === 'transferred_out').length
+  const lowCount = items.filter(isLowStock).length
+  const offlineNote = `Saved on-device — queued (${outbox.length})`
+
+  const lastMovementByItem = new Map<string, { reference: string | null; createdAt: string; type: string }>()
+  for (const m of movements) {
+    if (!lastMovementByItem.has(m.inventoryItemId)) {
+      lastMovementByItem.set(m.inventoryItemId, { reference: m.reference, createdAt: m.createdAt, type: m.type })
+    }
+  }
+
+  const supplierName = (id: string | null) => suppliers.find((s) => s.id === id)?.businessName ?? '—'
+
+  const isNewLine = mType === 'opening' || mType === 'received'
+  const selectedItem = items.find((i) => i.id === mItem)
+
+  function openMovementDialog() {
+    setMType('received')
+    setMItem(items[0]?.id ?? '')
+    setMName(''); setMUnit(''); setMLocation('Site Store')
+    setMQty(''); setMCost(''); setMRef(''); setMNote(''); setMTo('')
+    setMovementOpen(true)
+  }
+
+  async function recordMovement() {
+    const qty = Number(mQty)
+    if (!(qty > 0)) { toast.error('Quantity must be greater than zero'); return }
+    if (isNewLine && !mName.trim()) { toast.error('Material name is required for a new stock line'); return }
+    if (!isNewLine && !selectedItem) { toast.error('Pick a stock line to move'); return }
+    if (mType === 'transfer' && !mTo.trim()) { toast.error('A destination location is required for a transfer'); return }
+
+    let payload: Record<string, unknown> = { qty }
+    let label = ''
+    // Action names (INVENTORY_ACTIONS): 'opening' UI label → inventory.open
+    let action: 'inventory.open' | 'inventory.receive' | 'inventory.consume' | 'inventory.transfer' | 'inventory.return' | 'inventory.damage' | 'inventory.adjust'
+    switch (mType) {
+      case 'opening':
+        action = 'inventory.open'
+        payload = { ...payload, materialName: mName.trim(), unit: mUnit.trim() || 'unit', location: mLocation.trim() || 'Site Store', unitCost: Number(mCost) > 0 ? Number(mCost) : undefined, note: mNote.trim() || undefined }
+        label = `Opening stock: ${qty} ${mUnit.trim() || 'unit'} ${mName.trim()}`
+        break
+      case 'received':
+        action = 'inventory.receive'
+        payload = { ...payload, materialName: mName.trim(), unit: mUnit.trim() || 'unit', location: mLocation.trim() || 'Site Store', unitCost: Number(mCost) > 0 ? Number(mCost) : undefined, reference: mRef.trim() || undefined, note: mNote.trim() || undefined }
+        label = `Received ${qty} ${mUnit.trim() || 'unit'} ${mName.trim()}`
+        break
+      case 'consumed':
+        action = 'inventory.consume'
+        payload = { ...payload, inventoryItemId: selectedItem?.id, reference: mRef.trim() || undefined, note: mNote.trim() || undefined }
+        label = `Consumed ${qty} ${selectedItem?.unit} ${selectedItem?.materialName}`
+        break
+      case 'transfer':
+        action = 'inventory.transfer'
+        payload = { ...payload, inventoryItemId: selectedItem?.id, toLocation: mTo.trim(), note: mNote.trim() || undefined }
+        label = `Transferred ${qty} ${selectedItem?.unit} ${selectedItem?.materialName} → ${mTo.trim()}`
+        break
+      case 'return':
+        action = 'inventory.return'
+        payload = { ...payload, inventoryItemId: selectedItem?.id, note: mNote.trim() || undefined }
+        label = `Returned ${qty} ${selectedItem?.unit} ${selectedItem?.materialName}`
+        break
+      case 'damage':
+        action = 'inventory.damage'
+        payload = { ...payload, inventoryItemId: selectedItem?.id, damageNote: mNote.trim() || 'damaged on site' }
+        label = `Damaged ${qty} ${selectedItem?.unit} ${selectedItem?.materialName}`
+        break
+      default: // adjust
+        action = 'inventory.adjust'
+        payload = { ...payload, inventoryItemId: selectedItem?.id, reason: mNote.trim() || 'count correction' }
+        label = `Adjusted ${qty} ${selectedItem?.unit} ${selectedItem?.materialName}`
+        break
+    }
+
+    const ok = await dispatch(action, payload, label)
+    if (ok) {
+      toast.success(online ? `${label} — Site Store ledger updated` : offlineNote)
+      setMovementOpen(false)
+    } else {
+      toast.error('Could not record the movement — check the quantity against closing stock')
+    }
+  }
+
+  const tiles: Array<{ label: string; value: string; icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; hint: string; warn?: boolean }> = [
+    { label: 'Stock lines', value: String(items.length), icon: Warehouse, hint: 'InventoryItem lines (material × location) with derived closing qty' },
+    { label: 'Low stock', value: String(lowCount), icon: AlertTriangle, hint: 'Closing ≤ 10% of everything that ever came in', warn: true },
+    { label: 'Incoming', value: String(incoming.length), icon: Truck, hint: 'Purchase orders currently in transit (delivering)', warn: incoming.length > 0 },
+    { label: 'Consumed', value: consumedTotal ? consumedTotal.toLocaleString() : '0', icon: PackageMinus, hint: 'Total consumed quantity across all lines' },
+    { label: 'Damaged', value: damagedTotal ? damagedTotal.toLocaleString() : '0', icon: Flame, hint: 'Damage/loss write-offs (rain, breakage, theft-observed)', warn: damagedTotal > 0 },
+    { label: 'Transfers', value: String(transfersTotal), icon: ArrowLeftRight, hint: 'Stock transfers between locations (e.g. Site Store → Slab store)' },
+  ]
+
+  return (
+    <Card className="border-stone-200 shadow-sm">
+      <CardHeader className="flex flex-row items-start justify-between space-y-0">
+        <div className="space-y-1.5">
+          <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
+            <ClipboardList className="h-5 w-5 text-amber-600" aria-hidden /> Site Store
+          </CardTitle>
+          <CardDescription>
+            Storekeeper ledger (spec §33/§35): closing stock is derived from the append-only movement history — never
+            stored, never edited. Deliveries received through Finder post here automatically.
+          </CardDescription>
+        </div>
+        {!isClient && (
+          <Button size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={openMovementDialog} aria-label="Record a stock movement">
+            <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Record movement</span>
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {/* tiles */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {tiles.map((tile) => {
+            const Icon = tile.icon
+            return (
+              <div key={tile.label} className={`rounded-lg border p-3 ${tile.warn && Number(tile.value) > 0 ? 'border-orange-200 bg-orange-50/70' : 'border-stone-200 bg-stone-50/60'}`}>
+                <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-stone-500">
+                  <Icon className="h-3.5 w-3.5" aria-hidden /> {tile.label}
+                </p>
+                <p className="pt-1 text-xl font-bold tabular-nums text-stone-900">{tile.value}</p>
+                <p className="pt-0.5 text-[10px] leading-snug text-stone-500">{tile.hint}</p>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* stock table */}
+        {items.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-stone-300 p-6 text-center text-xs text-stone-500">
+            No stock lines yet — receive a delivery through Finder (Requests → dispatch → receive) or record an opening
+            stock movement here. Nothing is invented.
+          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-md border border-stone-200">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Material</TableHead>
+                  <TableHead className="text-right">Closing qty</TableHead>
+                  <TableHead>Unit</TableHead>
+                  <TableHead>Location</TableHead>
+                  <TableHead>Supplier</TableHead>
+                  <TableHead>Last movement ref</TableHead>
+                  <TableHead className="text-right">Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((item) => {
+                  const low = isLowStock(item)
+                  const last = lastMovementByItem.get(item.id)
+                  return (
+                    <TableRow key={item.id} className={low ? 'bg-amber-50/50' : undefined}>
+                      <TableCell className="font-medium text-stone-800">
+                        {item.materialName}
+                        {low && <Badge className="ml-2 bg-amber-100 text-amber-800 border-0 text-[10px] hover:bg-amber-100">low stock</Badge>}
+                      </TableCell>
+                      <TableCell className={`text-right font-semibold tabular-nums ${low ? 'text-amber-700' : 'text-stone-800'}`}>{item.closingQty.toLocaleString()}</TableCell>
+                      <TableCell className="text-stone-600">{item.unit}</TableCell>
+                      <TableCell className="text-stone-600">{item.location}</TableCell>
+                      <TableCell className="text-stone-600">{supplierName(item.supplierId)}</TableCell>
+                      <TableCell className="text-stone-600">
+                        {last ? (
+                          <span className="flex items-center gap-1.5">
+                            <MovementBadge type={last.type} />
+                            {last.reference ? <span className="font-mono text-xs text-stone-500">{last.reference}</span> : <span className="text-xs text-stone-400">—</span>}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-stone-400">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right text-xs text-stone-500">{dateShort(item.updatedAt)}</TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {/* recent movements */}
+        <div>
+          <p className="pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-stone-400">Recent movements — last 12</p>
+          {movements.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-stone-300 p-4 text-center text-xs text-stone-500">
+              No movements recorded yet.
+            </p>
+          ) : (
+            <div className="max-h-72 space-y-1.5 overflow-y-auto pr-2 -mr-2">
+              {movements.slice(0, 12).map((m) => (
+                <div key={m.id} className="flex items-center justify-between gap-3 border-b border-stone-100 pb-1.5 text-sm">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <MovementBadge type={m.type} />
+                    <span className="truncate font-medium text-stone-800">
+                      {m.quantity.toLocaleString()} {m.unit} {m.materialName}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 text-xs text-stone-400">
+                    {m.reference && <span className="font-mono">{m.reference}</span>}
+                    <span title={m.note ?? undefined}>{m.recordedBy}</span>
+                    <span>{dateShort(m.createdAt)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardContent>
+
+      {/* ---- record movement dialog ---- */}
+      <Dialog open={movementOpen} onOpenChange={setMovementOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-stone-900">Record stock movement</DialogTitle>
+            <DialogDescription>
+              Append to the Site Store ledger (spec §33). Closing stock is always the derived sum — corrections are new
+              movements, never edits.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-1">
+            <div className="space-y-2">
+              <Label>Movement type</Label>
+              <Select value={mType} onValueChange={(v) => setMType(v)}>
+                <SelectTrigger aria-label="Movement type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {MOVEMENT_TYPES.map((t) => (
+                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {isNewLine ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2 col-span-2">
+                  <Label htmlFor="ss-material">Material (creates or tops up the stock line)</Label>
+                  <Input id="ss-material" value={mName} onChange={(e) => setMName(e.target.value)} placeholder="e.g. Cement 50kg (32.5N)" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ss-unit">Unit</Label>
+                  <Input id="ss-unit" value={mUnit} onChange={(e) => setMUnit(e.target.value)} placeholder="bag" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ss-loc">Location</Label>
+                  <Input id="ss-loc" value={mLocation} onChange={(e) => setMLocation(e.target.value)} placeholder="Site Store" />
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label>Stock line</Label>
+                <Select value={mItem} onValueChange={setMItem}>
+                  <SelectTrigger aria-label="Stock line"><SelectValue placeholder="Choose a stock line" /></SelectTrigger>
+                  <SelectContent>
+                    {items.map((i) => (
+                      <SelectItem key={i.id} value={i.id}>
+                        {i.materialName} — {i.location} (closing {i.closingQty} {i.unit})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="ss-qty">Quantity {mType === 'adjust' ? '(± as recorded)' : ''}</Label>
+                <Input id="ss-qty" type="number" min="0.5" step="0.5" value={mQty} onChange={(e) => setMQty(e.target.value)} />
+              </div>
+              {isNewLine && (
+                <div className="space-y-2">
+                  <Label htmlFor="ss-cost">Unit cost (KSh)</Label>
+                  <Input id="ss-cost" type="number" min="0" value={mCost} onChange={(e) => setMCost(e.target.value)} placeholder="optional" />
+                </div>
+              )}
+            </div>
+
+            {mType === 'transfer' && (
+              <div className="space-y-2">
+                <Label htmlFor="ss-to">To location</Label>
+                <Input id="ss-to" value={mTo} onChange={(e) => setMTo(e.target.value)} placeholder="e.g. Slab store" />
+              </div>
+            )}
+            {mType === 'consumed' && (
+              <div className="space-y-2">
+                <Label htmlFor="ss-ref">Reference (e.g. phase or work order)</Label>
+                <Input id="ss-ref" value={mRef} onChange={(e) => setMRef(e.target.value)} placeholder="optional" />
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="ss-note">
+                {mType === 'damage' ? 'Damage note' : mType === 'adjust' ? 'Reason' : 'Note'}
+              </Label>
+              <Input id="ss-note" value={mNote} onChange={(e) => setMNote(e.target.value)} placeholder={mType === 'damage' ? 'e.g. 4 bags set by rain' : 'optional'} />
+            </div>
+            {selectedItem && !isNewLine && (
+              <p className="text-[11px] text-stone-400">
+                {selectedItem.materialName} @ {selectedItem.location} — closing {selectedItem.closingQty} {selectedItem.unit}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMovementOpen(false)}>Cancel</Button>
+            <Button onClick={() => void recordMovement()} disabled={busy} className="bg-amber-600 hover:bg-amber-700 text-white gap-1">
+              <Plus className="w-4 h-4" aria-hidden /> Record movement
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
   )
 }

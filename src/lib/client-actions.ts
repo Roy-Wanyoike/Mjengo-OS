@@ -20,4 +20,8 @@ export const CLIENT_ACTIONS: readonly ActionType[] = [
   // invoice.decide / invoice.pay). Share-link clients stay on the route allowlist.
   'payment.decide',
   'payment.pay',
+  // Client-band material requests (F-PROCURE): the approval engine routes
+  // >KSh 50k requests to the client — client-role sessions can approve/reject
+  // them (request.decide is role-checked server-side against the PENDING row).
+  'request.decide',
 ]

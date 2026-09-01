@@ -603,31 +603,66 @@ export async function requestQuotes(projectId: string, payload: Record<string, u
 }
 
 /**
- * `quote.receive` { id, unitPrice, deliveryFee?, transportFee?, fees?, deliveryEta?, stockOk? }
- * → RECEIVED. DOCUMENTED v1 CHOICE: a quote is per-request — totalLanded =
- * unitPrice × FIRST line's qty + deliveryFee + transportFee + fees (the
- * primary line is the compare basis; full per-line detail waits for real
- * supplier responses).
+ * `quote.receive` { id, unitPrice, deliveryFee?, transportFee?, fees?,
+ * deliveryEta?, stockOk?, validUntil?, terms?, lines? } → RECEIVED.
+ *
+ * v2 (F-PROCURE, spec §32): when `lines` is supplied (one row per REQUEST
+ * line, positional — qty fixed from the request, only unitPrice is the
+ * supplier's), per-line QuoteLine rows are stored and
+ * totalLanded = Σ(qty × price) + deliveryFee + transportFee + fees.
+ * Without `lines` the DOCUMENTED v1 CHOICE stands: a quote is per-request —
+ * totalLanded = unitPrice × FIRST line's qty + delivery + transport + fees.
+ * validUntil/terms ride the Quote row (also editable later via quote.update).
  */
 export async function receiveQuote(projectId: string, payload: Record<string, unknown>) {
   const quote = await getQuoteOrThrow(payload.id, projectId)
   if (quote.status !== 'requested') throw new Error(`Quote is already ${quote.status.toUpperCase()}`)
-  const unitPrice = posNumber(payload.unitPrice)
-  if (unitPrice === null) throw new Error('Quoted unit price must be greater than zero')
   const deliveryFee = moneyNumber(payload.deliveryFee) ?? 0
   const transportFee = moneyNumber(payload.transportFee) ?? 0
   const fees = moneyNumber(payload.fees) ?? 0
-  const firstLine = quote.request.lines[0]
-  if (!firstLine) throw new Error('The request has no lines to quote against')
-  const totalLanded = Math.round((unitPrice * firstLine.qty + deliveryFee + transportFee + fees) * 100) / 100
   const deliveryEta = str(payload.deliveryEta)
   const stockOk = payload.stockOk === undefined ? true : Boolean(payload.stockOk)
+  const validUntil = payload.validUntil ? new Date(String(payload.validUntil)) : undefined
+  const terms = str(payload.terms) ?? undefined
+
+  const rawLines = Array.isArray(payload.lines) ? payload.lines : []
+
+  let unitPrice: number
+  let totalLanded: number
+  if (rawLines.length) {
+    // Multi-line bid: one price per REQUEST line (positional, qty from request)
+    const requestLines = quote.request.lines
+    if (rawLines.length !== requestLines.length) {
+      throw new Error(`This request has ${requestLines.length} line(s) — price every one (${rawLines.length} given)`)
+    }
+    const priced: Array<{ name: string; unit: string; qty: number; unitPrice: number }> = []
+    for (let i = 0; i < requestLines.length; i++) {
+      const rec = (rawLines[i] ?? {}) as Record<string, unknown>
+      const price = posNumber(rec.unitPrice)
+      if (price === null) throw new Error(`Line "${requestLines[i].materialName}": quoted unit price must be greater than zero`)
+      priced.push({ name: requestLines[i].materialName, unit: requestLines[i].unit, qty: requestLines[i].qty, unitPrice: price })
+    }
+    unitPrice = priced[0].unitPrice // header price = primary (first) line — compare-basis
+    totalLanded = Math.round(
+      priced.reduce((s, l) => s + l.qty * l.unitPrice, 0) * 100 + (deliveryFee + transportFee + fees) * 100,
+    ) / 100
+    await db.quoteLine.deleteMany({ where: { quoteId: quote.id } })
+    await db.quoteLine.createMany({
+      data: priced.map((l) => ({ quoteId: quote.id, name: l.name, unit: l.unit, qty: l.qty, unitPrice: l.unitPrice, lineTotal: Math.round(l.qty * l.unitPrice * 100) / 100 })),
+    })
+  } else {
+    unitPrice = posNumber(payload.unitPrice) ?? -1
+    if (unitPrice <= 0) throw new Error('Quoted unit price must be greater than zero')
+    const firstLine = quote.request.lines[0]
+    if (!firstLine) throw new Error('The request has no lines to quote against')
+    totalLanded = Math.round((unitPrice * firstLine.qty + deliveryFee + transportFee + fees) * 100) / 100
+  }
 
   const updated = await db.quote.update({
     where: { id: quote.id },
-    data: { unitPrice, deliveryFee, transportFee, fees, totalLanded, deliveryEta, stockOk, status: 'received' },
+    data: { unitPrice, deliveryFee, transportFee, fees, totalLanded, deliveryEta, stockOk, validUntil, terms, status: 'received' },
   })
-  return { id: updated.id, totalLanded }
+  return { id: updated.id, totalLanded, lineCount: rawLines.length || undefined }
 }
 
 /** `quote.decline` { id, reason? } — supplier declined (reason rides the audit). */
@@ -853,13 +888,24 @@ export async function closeOrder(projectId: string, payload: Record<string, unkn
 // ---------------- delivery verification (Finder §13 — ground truth) ----------------
 
 /**
- * `delivery.receive` { deliveryId, lines: [{ orderLineId, qtyReceived }], note?,
- * gpsLat?, gpsLng?, photoCount? } — per-line physical counts + evidence.
+ * `delivery.receive` { deliveryId, lines: [{ orderLineId, qtyReceived,
+ * qtyRejected?, damageNote?, condition? }], note?, gpsLat?, gpsLng?,
+ * photoCount? } — per-line physical counts + inspection + evidence.
  * ANY qtyReceived < qtyOrdered → OrderDelivery 'discrepancy' ("Ordered X ·
  * Received Y — N missing, flagged for review") + client & contractor
  * notifications. Documented: the order still completes (DELIVERED) — the flag
  * rides the delivery row for review, matching seeded PO-2026-000009; payment
  * release stays gated by the invoices module's 3-way match.
+ *
+ * INVENTORY INTEGRATION (spec §28/§33/§34 — F-PROCURE): the same receive also
+ * posts the store ledger — per line, net received = qtyReceived − qtyRejected
+ * becomes a 'received' StockMovement (InventoryItem upsert keyed material +
+ * unit + location 'Site Store', supplier from the PO, reference = orderCode);
+ * the rejected quantity becomes 'damaged' when the line was inspected
+ * damaged/with a damage note, else 'returned'. recordedBy = the receiver.
+ * CatalogItem.stockQty is clamped = max(0, stockQty − qtyOrdered) for the
+ * line's catalog item (supplier + name match; skipped silently when the
+ * supplier's catalog has no such item — some POs price off quotes).
  * TODO(photos): photoCount is an integer count for v1 — real photo attach
  * lands with object storage (roadmap A-5).
  */
@@ -877,15 +923,42 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
   const rawLines = Array.isArray(payload.lines) ? payload.lines : []
   if (!rawLines.length) throw new Error('Per-line received quantities are required — count what physically arrived')
 
-  // Validate every line input against the PO lines
-  const received: Array<{ orderLineId: string; qtyOrdered: number; qtyReceived: number }> = []
+  // Validate every line input against the PO lines (counts + inspection)
+  const received: Array<{
+    orderLineId: string
+    orderLineName: string
+    unit: string
+    unitPrice: number
+    qtyOrdered: number
+    qtyReceived: number
+    qtyRejected: number
+    damageNote: string | null
+    condition: string
+  }> = []
   for (const item of rawLines) {
     const rec = (item ?? {}) as Record<string, unknown>
     const orderLine = delivery.order.lines.find((l) => l.id === String(rec.orderLineId))
     if (!orderLine) throw new Error('One or more lines do not belong to this purchase order')
     const qtyReceived = moneyNumber(rec.qtyReceived)
     if (qtyReceived === null) throw new Error(`Line "${orderLine.name}": received quantity must be zero or more`)
-    received.push({ orderLineId: orderLine.id, qtyOrdered: orderLine.qty, qtyReceived })
+    const qtyRejected = moneyNumber(rec.qtyRejected) ?? 0
+    if (qtyRejected < 0) throw new Error(`Line "${orderLine.name}": rejected quantity must be zero or more`)
+    if (qtyReceived - qtyRejected < 0) {
+      throw new Error(`Line "${orderLine.name}": rejected (${qtyRejected}) cannot exceed what arrived (${qtyReceived})`)
+    }
+    const conditionRaw = str(rec.condition) ?? 'ok'
+    const condition = ['ok', 'damaged', 'partial'].includes(conditionRaw) ? conditionRaw : 'ok'
+    received.push({
+      orderLineId: orderLine.id,
+      orderLineName: orderLine.name,
+      unit: orderLine.unit,
+      unitPrice: orderLine.unitPrice,
+      qtyOrdered: orderLine.qty,
+      qtyReceived,
+      qtyRejected,
+      damageNote: str(rec.damageNote),
+      condition,
+    })
   }
 
   const note = str(payload.note)
@@ -902,8 +975,19 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
       orderLineId: r.orderLineId,
       qtyOrdered: r.qtyOrdered,
       qtyReceived: r.qtyReceived,
+      qtyRejected: r.qtyRejected,
+      damageNote: r.damageNote,
+      condition: r.condition,
     })),
   })
+
+  // ---- Site Store posting (spec §33/§34): movements + catalog stock clamp ----
+  const inventoryResult = await postDeliveryToInventory(
+    projectId,
+    { supplierId: delivery.order.supplierId, orderCode: delivery.order.orderCode },
+    received,
+    receivedBy,
+  )
 
   const short = received.filter((r) => r.qtyReceived < r.qtyOrdered)
   const orderCode = delivery.order.orderCode
@@ -914,7 +998,8 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
     // Physical ground truth ≠ paperwork — flagged for review, never an accusation
     const first = short[0]
     const missing = Math.round((first.qtyOrdered - first.qtyReceived) * 100) / 100
-    const autoSummary = `Ordered ${first.qtyOrdered} · Received ${first.qtyReceived} — ${missing} missing, flagged for review`
+    const rejectedTotal = received.reduce((s, r) => s + r.qtyRejected, 0)
+    const autoSummary = `Ordered ${first.qtyOrdered} · Received ${first.qtyReceived} — ${missing} missing, flagged for review${rejectedTotal > 0 ? ` · ${Math.round(rejectedTotal * 100) / 100} rejected on inspection` : ''}`
     const fullNote =
       note
         ? `${autoSummary} — ${note}`
@@ -939,7 +1024,7 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
     const body = `${orderCode} (${supplierName}): ${autoSummary}. Photos: ${photoCount}. Reconcile with the supplier before releasing payment.`
     await notify(projectId, 'delivery.discrepancy', `Delivery discrepancy: ${orderCode}`, body, 'client', null)
     await notify(projectId, 'delivery.discrepancy', `Delivery discrepancy: ${orderCode}`, body, 'contractor', null)
-    return { id: delivery.id, orderId: delivery.order.id, status: 'discrepancy', shortLines: short.length }
+    return { id: delivery.id, orderId: delivery.order.id, status: 'discrepancy', shortLines: short.length, inventory: inventoryResult }
   }
 
   await db.orderDelivery.update({
@@ -955,7 +1040,95 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
     'contractor',
     null,
   )
-  return { id: delivery.id, orderId: delivery.order.id, status: 'received', shortLines: 0 }
+  return { id: delivery.id, orderId: delivery.order.id, status: 'received', shortLines: 0, inventory: inventoryResult }
+}
+
+/**
+ * Post delivery lines into the Site Store ledger (spec §33/§34):
+ *   · net = qtyReceived − qtyRejected → StockMovement 'received'
+ *     (InventoryItem upsert keyed material+unit+location 'Site Store',
+ *      supplier from the PO, reference = the PO code)
+ *   · qtyRejected → 'damaged' when condition==='damaged' or a damageNote is
+ *     present, else 'returned'
+ *   · CatalogItem.stockQty clamped to max(0, stock − qtyOrdered) for the
+ *     supplier's matching item (name exact, then fuzzy; silent skip on no match)
+ * Returns a plain summary for the audit trail + toasts.
+ */
+async function postDeliveryToInventory(
+  projectId: string,
+  order: { supplierId: string; orderCode: string },
+  lines: Array<{
+    orderLineName: string
+    unit: string
+    unitPrice: number
+    qtyOrdered: number
+    qtyReceived: number
+    qtyRejected: number
+    damageNote: string | null
+    condition: string
+  }>,
+  recordedBy: string,
+) {
+  const movements: Array<{ materialName: string; type: string; quantity: number }> = []
+  const catalogClamped: string[] = []
+
+  for (const line of lines) {
+    // 1) Site Store stock line (upsert keyed project+material+location)
+    const item = await db.inventoryItem.upsert({
+      where: { projectId_materialName_location: { projectId, materialName: line.orderLineName, location: 'Site Store' } },
+      update: { unit: line.unit, supplierId: order.supplierId },
+      create: { projectId, materialName: line.orderLineName, unit: line.unit, location: 'Site Store', supplierId: order.supplierId },
+    })
+
+    // 2) net received → 'received' movement (unitCost from the PO line)
+    const net = Math.round((line.qtyReceived - line.qtyRejected) * 100) / 100
+    if (net > 0) {
+      await db.stockMovement.create({
+        data: {
+          projectId,
+          inventoryItemId: item.id,
+          type: 'received',
+          quantity: net,
+          unitCost: line.unitPrice,
+          reference: order.orderCode,
+          note: line.condition !== 'ok' || line.damageNote ? `Inspected ${line.condition}${line.damageNote ? ` — ${line.damageNote}` : ''}` : null,
+          recordedBy,
+        },
+      })
+      movements.push({ materialName: line.orderLineName, type: 'received', quantity: net })
+    }
+
+    // 3) rejected qty → 'damaged' or 'returned' movement
+    if (line.qtyRejected > 0) {
+      const rejectedType = line.condition === 'damaged' || line.damageNote ? 'damaged' : 'returned'
+      await db.stockMovement.create({
+        data: {
+          projectId,
+          inventoryItemId: item.id,
+          type: rejectedType,
+          quantity: line.qtyRejected,
+          unitCost: null,
+          reference: order.orderCode,
+          note: line.damageNote ?? `Rejected on inspection (${line.condition})`,
+          recordedBy,
+        },
+      })
+      movements.push({ materialName: line.orderLineName, type: rejectedType, quantity: line.qtyRejected })
+    }
+
+    // 4) clamp the supplier's catalog stock for the ordered quantity (silent skip)
+    const catalogItems = await db.catalogItem.findMany({ where: { supplierId: order.supplierId } })
+    const hit = catalogItems.find((c) => c.name === line.orderLineName) ?? catalogItems.find((c) => materialMatches(c.name, line.orderLineName))
+    if (hit) {
+      await db.catalogItem.update({
+        where: { id: hit.id },
+        data: { stockQty: Math.max(0, Math.round((hit.stockQty - line.qtyOrdered) * 100) / 100) },
+      })
+      catalogClamped.push(hit.name)
+    }
+  }
+
+  return { movementsPosted: movements.length, movements, catalogClamped }
 }
 
 /** `delivery.dispatch` { deliveryId, note? } — update dispatch info while DISPATCHED. */

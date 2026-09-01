@@ -27,7 +27,7 @@ import { roleLabel } from './requests/bits'
 import type { RequestWithLines } from '@/modules/supply/types'
 
 export function RequestsSection() {
-  const { data, dispatch, viewMode, actionBusy, online, outbox } = useMjengo()
+  const { data, dispatch, viewMode, actionBusy, online, outbox, clientRole, shareToken } = useMjengo()
   const { data: session } = useSession()
   const { requestPrefill, requestDialogOpen, requestDialogNonce, openRequestDialog, clearRequestDialog } = useFinderLink()
   const [orderTarget, setOrderTarget] = useState<RequestWithLines | null>(null)
@@ -36,6 +36,10 @@ export function RequestsSection() {
   const busy = actionBusy !== null
 
   const isSiteTeam = viewMode === 'owner'
+  // Client-role sessions (logged in, no share link) may DECIDE the requests
+  // routed to them (client band) — request.decide is in CLIENT_ACTIONS and
+  // role-checked server-side. Management (submit/PO/quotes) stays site-team.
+  const canDecide = isSiteTeam || (viewMode === 'client' && clientRole && !shareToken)
   const suppliers = data?.supply.suppliers ?? []
   const requests = data?.supply.requests ?? []
   const approvals = data?.supply.approvals ?? []
@@ -149,6 +153,7 @@ export function RequestsSection() {
                     rules={rules}
                     suppliers={suppliers}
                     canManage={isSiteTeam}
+                    canDecide={canDecide}
                     onDecide={onDecide}
                     onCreateOrder={setOrderTarget}
                   />

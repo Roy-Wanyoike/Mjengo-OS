@@ -51,7 +51,7 @@ export const SUPPLY_ACTIONS = [
   'request.submit', // { id } — enters the approval engine (§11 bands, est from quotes/catalog)
   'request.decide', // { id, decision: 'approve'|'reject', note? } — actor role must match a PENDING approval
   'quote.request', // { requestId, supplierIds: string[] } — ask suppliers to quote
-  'quote.receive', // { id, unitPrice, deliveryFee?, transportFee?, fees?, deliveryEta?, stockOk? } — landed-cost inputs
+  'quote.receive', // { id, unitPrice, deliveryFee?, transportFee?, fees?, deliveryEta?, stockOk?, validUntil?, terms?, lines?: [{ unitPrice }] } — landed-cost inputs (multi-line when the request has >1 line)
   'quote.decline', // { id, reason? } — supplier declined
   'order.create', // { requestId, supplierId, quoteId?, paymentSource?, note? } — from an APPROVED request; PO-YYYY-000NNN
   'order.update', // { id, note? } — note edits (v1 orders are born approved)
@@ -61,7 +61,7 @@ export const SUPPLY_ACTIONS = [
   'order.dispatch', // { orderId } — dispatch creates an OrderDelivery (DISPATCHED)
   'order.cancel', // { id, reason } — cancel with reason (from SENT/CONFIRMED)
   'order.close', // { id, note? } — close after verified delivery (from DELIVERED)
-  'delivery.receive', // { deliveryId, lines: [{ orderLineId, qtyReceived }], note?, photoCount?, gpsLat?, gpsLng? } — per-line counts → discrepancy
+  'delivery.receive', // { deliveryId, lines: [{ orderLineId, qtyReceived, qtyRejected?, damageNote?, condition? }], note?, photoCount?, gpsLat?, gpsLng? } — per-line counts + inspection → discrepancy + Site Store movements
   'delivery.dispatch', // { deliveryId, note? } — update dispatch info
   'rule.upsert', // { id?, minAmount, maxAmount?, approverRole, priority?, active? } — approval policy (§11)
   'rule.delete', // { id } — remove an approval rule

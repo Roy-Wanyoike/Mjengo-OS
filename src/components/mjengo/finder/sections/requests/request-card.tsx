@@ -20,13 +20,15 @@ import type { Approval, ApprovalRule, RequestWithLines, SupplierWithCatalog } fr
 import { ApprovalPill, RequestStatusBadge, RequestStatusLadder, fmtQty, formatKes, roleLabel } from './bits'
 
 export function RequestCard({
-  request, approvals, rules, suppliers, canManage, onDecide, onCreateOrder,
+  request, approvals, rules, suppliers, canManage, canDecide, onDecide, onCreateOrder,
 }: {
   request: RequestWithLines
   approvals: Approval[]
   rules: ApprovalRule[]
   suppliers: SupplierWithCatalog[]
   canManage: boolean
+  /** Client-role sessions decide client-band approvals too (F-PROCURE). */
+  canDecide?: boolean
   onDecide: (request: RequestWithLines, decision: 'approve' | 'reject') => Promise<void>
   onCreateOrder: (request: RequestWithLines) => void
 }) {
@@ -44,6 +46,7 @@ export function RequestCard({
     request.quotes.map((q) => ({ status: q.status, totalLanded: q.totalLanded })),
   )
   const sessionRole = session?.user?.role ?? null
+  const decider = canDecide ?? canManage
   const mine = chain.find((a) => a.decision === 'pending' && a.approverRole === sessionRole)
   const waitingFor = chain.filter((a) => a.decision === 'pending').map((a) => roleLabel(a.approverRole))
   const requiredRoles = requiredApproverRoles(rules, estimate.total)
@@ -140,7 +143,7 @@ export function RequestCard({
                     role={a.approverRole}
                     decision={a.decision}
                     note={a.note}
-                    isMine={canManage && a.approverRole === sessionRole}
+                    isMine={decider && a.approverRole === sessionRole}
                     onDecide={(decision) => void onDecide(request, decision)}
                   />
                 </li>
@@ -149,7 +152,7 @@ export function RequestCard({
           )}
           {request.status === 'submitted' && (
             <p className="text-[11px] text-stone-500">
-              {mine && canManage
+              {mine && decider
                 ? `You are signed in as ${roleLabel(sessionRole ?? '')} — this decision is yours.`
                 : waitingFor.length
                   ? `Waiting for ${waitingFor.join(' and ')} approval — only that role can decide (server-enforced).`
