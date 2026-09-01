@@ -5,6 +5,12 @@ import { persist } from 'zustand/middleware'
 import { toast } from 'sonner'
 import type { ProjectPayload, ProjectListItem, ActionType } from '@/lib/mjengo'
 
+/** Per-item sync lifecycle (spec §40): pending → syncing → synced | failed | conflict. */
+export type OutboxSyncStatus = 'pending' | 'syncing' | 'synced' | 'failed' | 'conflict'
+
+/** Which side of a conflict the deterministic rule leaves in charge (spec §41). */
+export type ConflictRule = 'server-wins' | 'human-decides'
+
 export interface OutboxItem {
   id: string
   type: ActionType
@@ -12,7 +18,29 @@ export interface OutboxItem {
   label: string
   createdAt: number
   projectId?: string | null
+  /** v2 (spec §40/§41): the item's full sync lifecycle. Old persisted items are migrated to 'pending'. */
+  syncStatus: OutboxSyncStatus
+  /** How many drain attempts returned a hard failure for this item (manual retry only — no auto-retry loops). */
+  retryCount: number
+  /** Server's explanation when the drain hit a conflict — kept until (and after) resolution. */
+  conflictReason?: string
+  conflictRule?: ConflictRule
+  conflictAt?: number
+  /** Last hard failure message (syncStatus 'failed'). */
+  lastError?: string
+  syncedAt?: number
+  /** Set when a human resolved a conflict: server version kept, local version applied, or the item dropped. */
+  resolution?: 'keep-server' | 'keep-mine-applied' | 'discarded'
 }
+
+/** One synced/resolved outbox item, retained (bounded) so nothing is silently lost (§52). */
+export type SyncHistoryItem = OutboxItem
+
+/** Per-item result contract of POST /api/sync (mirror of the route's SyncItemResult). */
+export type SyncItemResult =
+  | { id: string; ok: true }
+  | { id: string; ok: false; error: string }
+  | { id: string; ok: false; conflict: true; reason: string; rule: ConflictRule }
 
 /** Body for POST /api/projects (matches CreateProjectPayload from the dialog). */
 export interface CreateProjectInput {
@@ -53,6 +81,8 @@ interface MjengoState {
   online: boolean
   syncing: boolean
   outbox: OutboxItem[]
+  /** Synced + conflict-resolved items, retained (capped) as history for inspection. */
+  syncHistory: SyncHistoryItem[]
   lastSyncAt: number | null
   /** Low-data mode (spec §74) — persisted so it survives reloads. */
   dataMode: DataMode
@@ -68,12 +98,30 @@ interface MjengoState {
   dispatch: (type: ActionType, payload: any, label: string) => Promise<boolean>
 
   applyLocal: (type: ActionType, payload: any) => void
-  syncNow: () => Promise<{ synced: number; failed: number } | undefined>
+  syncNow: () => Promise<{ synced: number; failed: number; conflicts: number } | undefined>
+  /** Items the server refused with a conflict — derived from the outbox (spec §41). */
+  getConflicts: () => OutboxItem[]
+  /** Resolve a conflict: keep the server version, or force-apply the local one (financial rows: the server always wins). */
+  resolveConflict: (id: string, choice: 'keep-server' | 'keep-mine') => Promise<boolean>
+  /** Re-queue every failed item for ONE manual drain attempt (no auto-retry loops). */
+  retryAll: () => void
 }
 
 function uid() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
+
+/** Normalise a possibly-stale persisted outbox item to the v2 shape (migration-safe). */
+function normalizeOutboxItem(item: OutboxItem): OutboxItem {
+  return {
+    ...item,
+    syncStatus: item.syncStatus ?? 'pending',
+    retryCount: typeof item.retryCount === 'number' ? item.retryCount : 0,
+  }
+}
+
+/** Retention cap for the synced/resolved history — the live queue is never pruned. */
+const SYNC_HISTORY_CAP = 50
 
 /** Client-side optimistic reducer — mirrors the on-device SQLite write for queued actions. */
 function reduceLocal(data: ProjectPayload, type: string,
@@ -388,6 +436,7 @@ export const useMjengo = create<MjengoState>()(
       online: true,
       syncing: false,
       outbox: [],
+      syncHistory: [],
       lastSyncAt: null,
       dataMode: 'normal',
 
@@ -526,13 +575,17 @@ export const useMjengo = create<MjengoState>()(
 
       setOnline: (v) => {
         const wasOnline = get().online
-        const hadQueued = get().outbox.length > 0
+        const pendingCount = get().outbox.filter((o) => (o.syncStatus ?? 'pending') === 'pending').length
+        const conflictCount = get().outbox.filter((o) => o.syncStatus === 'conflict').length
         set({ online: v })
         if (v && !wasOnline) {
-          if (hadQueued) {
+          if (pendingCount > 0) {
             // Real reconnection (or ending a simulated-offline run): drain the queue.
             toast.success('Back online — syncing queued actions')
             void get().syncNow()
+          } else if (conflictCount > 0) {
+            // Nothing queued, but unresolved conflicts still need a human decision (§41).
+            toast.info(`Back online — ${conflictCount} sync conflict${conflictCount > 1 ? 's' : ''} still need${conflictCount > 1 ? '' : 's'} your decision`)
           } else {
             toast.success('Back online')
           }
@@ -616,7 +669,7 @@ export const useMjengo = create<MjengoState>()(
             // connection, server unreachable): mirror the simulated-offline
             // branch — optimistic local write + queue for sync — so a field
             // user never silently loses an action.
-            const item: OutboxItem = { id: uid(), type, payload, label, createdAt: Date.now(), projectId: projectId ?? null }
+            const item: OutboxItem = { id: uid(), type, payload, label, createdAt: Date.now(), projectId: projectId ?? null, syncStatus: 'pending', retryCount: 0 }
             const data = get().data
             if (data) set({ data: reduceLocal(data, type, payload) })
             set({ outbox: [...get().outbox, item] })
@@ -626,7 +679,7 @@ export const useMjengo = create<MjengoState>()(
           }
         }
         // Offline: optimistic local write + queue for sync
-        const item: OutboxItem = { id: uid(), type, payload, label, createdAt: Date.now(), projectId: projectId ?? null }
+        const item: OutboxItem = { id: uid(), type, payload, label, createdAt: Date.now(), projectId: projectId ?? null, syncStatus: 'pending', retryCount: 0 }
         const data = get().data
         if (data) set({ data: reduceLocal(data, type, payload) })
         set({ outbox: [...get().outbox, item] })
@@ -638,41 +691,181 @@ export const useMjengo = create<MjengoState>()(
         if (data) set({ data: reduceLocal(data, type, payload) })
       },
 
+      getConflicts: () => get().outbox.filter((o) => o.syncStatus === 'conflict'),
+
+      /**
+       * Drain loop (spec §40): flush every PENDING item through POST /api/sync.
+       * Per-item outcomes mark the lifecycle: synced | failed | conflict.
+       *   · synced + resolved items move into `syncHistory` (retained, capped — never silently lost)
+       *   · failed items stay queued with retryCount + lastError — ONE manual retryAll(), no auto loops
+       *   · conflict items stay with the server's reason + rule until a human resolves them (§41)
+       * A network-level failure re-queues items as pending (nothing is ever dropped).
+       */
       syncNow: async () => {
-        const { outbox } = get()
-        if (!outbox.length || get().syncing) { set({ lastSyncAt: Date.now() }); return }
+        if (get().syncing) return
+        const queue = get().outbox.filter((o) => (o.syncStatus ?? 'pending') === 'pending')
+        if (!queue.length) { set({ lastSyncAt: Date.now() }); return }
+        const sentIds = new Set(queue.map((q) => q.id))
+        set({
+          syncing: true,
+          outbox: get().outbox.map((o) => (sentIds.has(o.id) ? { ...o, syncStatus: 'syncing' as const } : o)),
+        })
+        try {
+          const res = await fetch('/api/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              actions: queue.map(({ id, type, payload, projectId }) => ({ id, type, payload, projectId })),
+            }),
+          })
+          const json = await res.json()
+          if (json?.ok) {
+            const results = (json.results ?? []) as SyncItemResult[]
+            const byId = new Map(results.map((r) => [r.id, r]))
+            let synced = 0, failed = 0, conflicts = 0
+            const marked = get().outbox.map((o) => {
+              const r = byId.get(o.id)
+              if (!r) return o // not part of this drain
+              if (r.ok) { synced += 1; return { ...o, syncStatus: 'synced' as const, syncedAt: Date.now(), lastError: undefined } }
+              if ('conflict' in r) {
+                conflicts += 1
+                return { ...o, syncStatus: 'conflict' as const, conflictReason: r.reason, conflictRule: r.rule, conflictAt: Date.now() }
+              }
+              failed += 1
+              return { ...o, syncStatus: 'failed' as const, lastError: r.error, retryCount: (o.retryCount ?? 0) + 1 }
+            })
+            // Retain: live queue keeps pending/syncing/failed/conflict; synced items → history (capped).
+            const live = marked.filter((o) => o.syncStatus !== 'synced')
+            const finished = marked.filter((o) => o.syncStatus === 'synced')
+            set({
+              outbox: live,
+              syncHistory: [...get().syncHistory, ...finished].slice(-SYNC_HISTORY_CAP),
+              data: json.data ?? get().data,
+              projects: (json.projects ?? get().projects) as ProjectListItem[],
+              lastSyncAt: Date.now(),
+            })
+            if (conflicts > 0) {
+              toast.warning(
+                `Synced ${synced} of ${results.length} — ${conflicts} conflict${conflicts > 1 ? 's' : ''} need${conflicts > 1 ? '' : 's'} your decision (server data differs)`,
+              )
+            } else if (failed > 0) {
+              toast.error(`Synced ${synced}, ${failed} failed — retry them from the sync controls`)
+            } else if (synced > 0) {
+              toast.success(`Synced ${synced} action${synced > 1 ? 's' : ''}`)
+            }
+            return { synced, failed, conflicts }
+          }
+          // Server-level rejection: items stay queued exactly as they were.
+          set({ outbox: get().outbox.map((o) => (o.syncStatus === 'syncing' ? { ...o, syncStatus: 'pending' as const } : o)) })
+        } catch (e) {
+          console.error('sync failed', e)
+          // Network failure mid-drain: nothing applied client-side — re-queue, never drop.
+          set({ outbox: get().outbox.map((o) => (o.syncStatus === 'syncing' ? { ...o, syncStatus: 'pending' as const } : o)) })
+        } finally {
+          set({ syncing: false })
+        }
+      },
+
+      /**
+       * Human conflict resolution (spec §41):
+       *  · 'keep-server'   — the server version stands; the optimistic local write is
+       *                      discarded by reloading server truth; the item is retained
+       *                      in history with the reason.
+       *  · 'keep-mine'     — re-submitted with force:true. The server applies the local
+       *                      version for human-decides conflicts; for financial rows
+       *                      (rule 'server-wins') it refuses honestly and the item
+       *                      STAYS a conflict — money is never silently overwritten.
+       */
+      resolveConflict: async (id, choice) => {
+        const item = get().outbox.find((o) => o.id === id)
+        if (!item || item.syncStatus !== 'conflict') {
+          toast.error('That item is not an unresolved conflict')
+          return false
+        }
+        if (choice === 'keep-server') {
+          const resolved: OutboxItem = { ...item, syncStatus: 'synced', syncedAt: Date.now(), resolution: 'keep-server' }
+          set({
+            outbox: get().outbox.filter((o) => o.id !== id),
+            syncHistory: [...get().syncHistory, resolved].slice(-SYNC_HISTORY_CAP),
+          })
+          // Reload server truth so the local optimistic write is visibly undone.
+          await get().load()
+          toast.success(`Kept the server version — "${item.label}" discarded (reason kept in sync history)`)
+          return true
+        }
+        // keep-mine: force one honest re-apply of the local version.
+        if (get().syncing) { toast.info('A sync is running — try again in a moment'); return false }
         set({ syncing: true })
         try {
           const res = await fetch('/api/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              actions: outbox.map(({ id, type, payload, projectId }) => ({ id, type, payload, projectId })),
+              actions: [{ id: item.id, type: item.type, payload: item.payload, projectId: item.projectId, force: true }],
             }),
           })
           const json = await res.json()
-          if (json.ok) {
-            const failedIds = new Set((json.results ?? []).filter((r: { ok: boolean }) => !r.ok).map((r: { id: string }) => r.id))
+          const r = (json?.results ?? [])[0] as SyncItemResult | undefined
+          if (json?.ok && r?.ok) {
+            const resolved: OutboxItem = { ...item, syncStatus: 'synced', syncedAt: Date.now(), resolution: 'keep-mine-applied' }
             set({
-              outbox: outbox.filter((o) => failedIds.has(o.id)),
+              outbox: get().outbox.filter((o) => o.id !== id),
+              syncHistory: [...get().syncHistory, resolved].slice(-SYNC_HISTORY_CAP),
               data: json.data ?? get().data,
               projects: (json.projects ?? get().projects) as ProjectListItem[],
               lastSyncAt: Date.now(),
             })
-            return json as { synced: number; failed: number }
+            toast.success(`Your version was applied — "${item.label}"`)
+            return true
           }
-        } catch (e) {
-          console.error('sync failed', e)
+          if (json?.ok && r && 'conflict' in r) {
+            // Deterministic refusal (financial rows: server always wins). Stays a conflict.
+            set({ outbox: get().outbox.map((o) => (o.id === id ? { ...o, conflictReason: r.reason } : o)) })
+            toast.error(`Server refused: ${r.reason}`)
+            return false
+          }
+          const msg = r && 'error' in r ? r.error : (json?.error ?? 'Could not apply your version')
+          toast.error(msg)
+          return false
+        } catch {
+          toast.error('Network error — resolve again when online')
+          return false
         } finally {
           set({ syncing: false })
         }
       },
+
+      /** One manual retry pass for hard-failed items — no auto-retry loops. */
+      retryAll: () => {
+        const failed = get().outbox.filter((o) => o.syncStatus === 'failed')
+        if (!failed.length) { toast.info('Nothing failed is waiting to retry'); return }
+        set({ outbox: get().outbox.map((o) => (o.syncStatus === 'failed' ? { ...o, syncStatus: 'pending' as const } : o)) })
+        toast.success(`Retrying ${failed.length} failed action${failed.length > 1 ? 's' : ''} — one attempt, no loops`)
+        void get().syncNow()
+      },
     }),
     {
       name: 'mjengo-os-store',
+      version: 1,
+      // v0 → v1: outbox items gain the §40 lifecycle fields; old items become
+      // 'pending' so a pre-upgrade queue still drains exactly as before.
+      migrate: (persisted: unknown) => {
+        const s = (persisted ?? {}) as Partial<MjengoState> & { outbox?: OutboxItem[] }
+        return {
+          ...s,
+          outbox: (s.outbox ?? []).map(normalizeOutboxItem),
+          syncHistory: (s.syncHistory ?? []).map(normalizeOutboxItem),
+        } as MjengoState
+      },
+      onRehydrateStorage: () => (state) => {
+        // Belt-and-braces: any stale shape is normalised after rehydration.
+        if (state?.outbox) state.outbox = state.outbox.map(normalizeOutboxItem)
+        if (state?.syncHistory) state.syncHistory = state.syncHistory.map(normalizeOutboxItem)
+      },
       partialize: (s) => ({
         online: s.online,
         outbox: s.outbox,
+        syncHistory: s.syncHistory,
         data: s.data,
         lastSyncAt: s.lastSyncAt,
         activeProjectId: s.activeProjectId,
@@ -682,3 +875,15 @@ export const useMjengo = create<MjengoState>()(
     },
   ),
 )
+
+/**
+ * Dev/debug console hook (W1-SYNC): `window.__MJENGO_DEBUG__()` returns the live
+ * store state plus a derived `conflicts` array (outbox items awaiting a §41
+ * decision) — for console verification of the sync/conflict lifecycle.
+ */
+if (typeof window !== 'undefined') {
+  ;(window as unknown as Record<string, unknown>).__MJENGO_DEBUG__ = () => {
+    const s = useMjengo.getState()
+    return { ...s, conflicts: s.outbox.filter((o) => o.syncStatus === 'conflict') }
+  }
+}

@@ -4,16 +4,32 @@ import path from 'path'
 import { db } from '@/lib/db'
 import { extractJson, visionMessage } from '@/lib/ai'
 import { applyAction, getProjectPayload } from '@/lib/mjengo'
-import { withGuard } from '@/lib/guard'
+import { enforceAiRoutePolicy } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
-export const POST = withGuard(async (req: NextRequest) => {
+export const POST = async (req: NextRequest): Promise<NextResponse> => {
+  // W1-SEC gate: session → role allowlist (contractor/admin/supervisor) →
+  // 10 req/min/user → body shape (projectId must exist when supplied).
+  const gate = await enforceAiRoutePolicy(req, {
+    bucket: 'ai:analyze-photo',
+    fields: [
+      { name: 'dataUrl', type: 'string' },
+      { name: 'url', type: 'string' },
+      { name: 'photoId', type: 'string' },
+      { name: 'phaseId', type: 'string' },
+      { name: 'apply', type: 'boolean' },
+      { name: 'projectId', type: 'string' },
+    ],
+  })
+  if (!gate.ok) return gate.response
+
   try {
-    const { dataUrl, url, photoId, phaseId, apply, projectId } = (await req.json()) as {
-      dataUrl?: string; url?: string; photoId?: string; phaseId?: string; apply?: boolean; projectId?: string
+    const { dataUrl, url, photoId, phaseId, apply } = gate.body as {
+      dataUrl?: string; url?: string; photoId?: string; phaseId?: string; apply?: boolean
     }
+    const projectId = gate.projectId
 
     // Resolve image bytes: direct data URL or a public site photo
     let base64 = ''
@@ -99,4 +115,4 @@ Be conservative and evidence-based. If uncertain, lower the confidence.`
     console.error('[api/ai/analyze-photo]', e)
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Photo analysis failed' }, { status: 500 })
   }
-})
+}

@@ -13,30 +13,17 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { ProjectSwitcher } from '@/components/mjengo/project-switcher'
 import {
   Wifi, CloudOff, HardHat, RefreshCw, CheckCheck, Share2, Bell, LogOut,
-  LayoutDashboard, ListChecks, Boxes, Users, Sparkles, Wallet, ScrollText,
-  Flag, FileDiff, MessageSquare, TriangleAlert, BellRing,
-  Landmark, PackageSearch, Radar, Phone,
-  Truck, Package, UserCheck, ClipboardCheck, FileText, ReceiptText, TrendingUp, Newspaper, ShieldAlert,
+  Landmark, FileDiff, MessageSquare, TriangleAlert, BellRing,
+  Flag, Truck, Package, UserCheck, ClipboardCheck, FileText, ReceiptText, TrendingUp, Newspaper, ShieldAlert,
   Search, ChevronDown, Settings, Check, Loader2, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { Notification } from '@prisma/client'
 import type { TabKey } from '@/components/mjengo/app'
 import { formatKES } from '@/lib/format'
-
-const TABS: Array<{ key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { key: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { key: 'site', label: 'Site Plan', icon: ListChecks },
-  { key: 'materials', label: 'Materials', icon: Boxes },
-  { key: 'finder', label: 'Finder', icon: PackageSearch },
-  { key: 'fundis', label: 'Fundis', icon: Users },
-  { key: 'money', label: 'Money', icon: Wallet },
-  { key: 'land', label: 'Land', icon: Landmark },
-  { key: 'evidence', label: 'Evidence', icon: ScrollText },
-  { key: 'intel', label: 'Intel', icon: Radar },
-  { key: 'copilot', label: 'AI Copilot', icon: Sparkles },
-  { key: 'ussd', label: 'USSD', icon: Phone },
-]
+import { usePermissions, tabsForRole } from '@/lib/permissions'
+import { metaForAll } from '@/components/mjengo/nav/tab-meta'
+import { useTablistKeyboard } from '@/components/mjengo/nav/use-tablist'
 
 /** Icon + label per notification kind (falls back to a bell). */
 const NOTIFICATION_KINDS: Record<string, { label: string; Icon: LucideIcon; tint: string }> = {
@@ -432,10 +419,11 @@ const FLAG_ROWS: Array<{ key: string; label: string }> = [
  */
 function FlagsPopover() {
   const { data: session } = useSession()
+  const { can } = usePermissions()
   const data = useMjengo((s) => s.data)
   const [busy, setBusy] = useState<string | null>(null)
 
-  if (session?.user?.role !== 'admin') return null
+  if (!session?.user?.email || !can('flags.manage')) return null
   const flags = (data?.intel as { flags?: Record<string, boolean> } | undefined)?.flags ?? {}
 
   async function toggle(key: string, enabled: boolean) {
@@ -775,11 +763,17 @@ export function Header({
     data, projects, activeProjectId, switchProject, viewMode, shareToken, clientRole,
     online, setOnline, outbox, syncing, syncNow, lastSyncAt,
   } = useMjengo()
+  const { tabs: roleTabs } = usePermissions()
+  const { listRef, onKeyDown } = useTablistKeyboard<HTMLElement>()
   const summary = data?.summary
   // Client surface: a real client on a share link (no login) OR a logged-in
-  // client-role user — owner controls hidden, read-mostly header
+  // client-role user — owner controls hidden, read-mostly header.
+  // Share-link visitors have no session, so the client tab set is applied
+  // explicitly (permissions would otherwise fail closed to Overview only).
   const isShareClient = viewMode === 'client' && (Boolean(shareToken) || clientRole)
-  const tabs = isShareClient ? TABS.filter((t) => t.key !== 'copilot') : TABS
+  // W1-PERM: role-filtered tab strip (src/lib/permissions.ts mirrors guard.ts).
+  // Client surface keeps its existing set (all tabs except AI Copilot).
+  const tabs = isShareClient ? metaForAll(tabsForRole('client')) : metaForAll(roleTabs)
   return (
     <header className="bg-stone-950 text-stone-100 sticky top-0 z-40 shadow-lg">
       <div className="h-1 bg-amber-500" aria-hidden />
@@ -899,23 +893,35 @@ export function Header({
           </div>
         </div>
 
-        {/* Tab navigation */}
-        <nav className="flex items-center gap-1 overflow-x-auto -mx-1 px-1 pb-2" aria-label="Main navigation">
-          {tabs.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => onTabChange(key)}
-              aria-current={tab === key ? 'page' : undefined}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
-                tab === key
-                  ? 'bg-amber-500 text-stone-950'
-                  : 'text-stone-400 hover:text-stone-100 hover:bg-stone-800'
-              }`}
-            >
-              <Icon className="w-4 h-4" aria-hidden />
-              {label}
-            </button>
-          ))}
+        {/* Tab navigation — desktop top strip (W1-PERM: role-filtered via
+            permissions.ts; on mobile the bottom bar in nav/mobile-bottom-nav.tsx
+            takes over for the owner app — the client surface keeps this strip). */}
+        <nav
+          ref={listRef}
+          onKeyDown={onKeyDown}
+          aria-label="Main navigation"
+          className={`${isShareClient ? 'flex' : 'hidden md:flex'} items-center gap-1 overflow-x-auto -mx-1 px-1 pb-2`}
+        >
+          {tabs.map(({ key, label, icon: Icon }) => {
+            const active = tab === key
+            return (
+              <button
+                key={key}
+                role="tab"
+                aria-selected={active}
+                tabIndex={active ? 0 : -1}
+                onClick={() => onTabChange(key)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 min-h-9 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
+                  active
+                    ? 'bg-amber-500 text-stone-950'
+                    : 'text-stone-400 hover:text-stone-100 hover:bg-stone-800'
+                }`}
+              >
+                <Icon className="w-4 h-4" aria-hidden />
+                {label}
+              </button>
+            )
+          })}
         </nav>
       </div>
     </header>

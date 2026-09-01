@@ -82,6 +82,18 @@ model Task {
   dueDate   DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
+  // Task management v2 (Doc A §11) — priority, assignment, dependencies,
+  // blockers with a recorded reason, and the verification trail. All additive:
+  // existing rows default (priority 'normal', no assignee, no blocker, unverified).
+  priority       String    @default("normal") // low, normal, high, urgent
+  assignedToId   String?
+  assignedTo     Worker?   @relation("TaskAssignedWorker", fields: [assignedToId], references: [id], onDelete: SetNull)
+  blockedById    String?
+  blockedBy      Task?     @relation("TaskBlockedBy", fields: [blockedById], references: [id], onDelete: SetNull)
+  blockedBlocking Task[]   @relation("TaskBlockedBy") // tasks that list this one as their blocker
+  blockedReason  String? // why work stopped — required when a task is blocked
+  verifiedAt     DateTime? // when the completed work was verified
+  verifiedByName String? // who verified (name snapshot — honest + simple)
 }
 
 model Worker {
@@ -95,6 +107,9 @@ model Worker {
   dailyRate   Float
   active      Boolean      @default(true)
   attendances Attendance[]
+  // Task assignment inverse (Task v2, Doc A §11) — required opposite side of
+  // the "TaskAssignedWorker" relation. Additive; nothing else on Worker changes.
+  tasksAssigned Task[]     @relation("TaskAssignedWorker")
 }
 
 model Attendance {

@@ -46,7 +46,16 @@ export const PAYMENT_ROLES: readonly string[] = ['finance', 'admin', 'client']
 
 /** Every known staff/finance role (defensive: unknown roles still fail closed). */
 export const KNOWN_ROLES: readonly string[] = [
-  'contractor', 'client', 'admin', 'finance', 'supervisor',
+  'contractor', 'client', 'admin', 'finance', 'supervisor', 'procurement', 'qs',
+]
+
+/**
+ * Roles that operate the owner app (W1-PERM, spec §7 role matrix).
+ * Mirrored client-side by src/lib/permissions.ts OWNER_ROLES — keep in sync.
+ * `client` is intentionally absent: it boots the client surface, not the owner app.
+ */
+export const OWNER_ROLES: readonly string[] = [
+  'contractor', 'admin', 'supervisor', 'procurement', 'qs', 'finance',
 ]
 
 type GuardedHandler<C> = (
