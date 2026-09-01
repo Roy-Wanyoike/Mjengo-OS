@@ -220,13 +220,24 @@ export async function runReconciliation(projectId?: string | null): Promise<Reco
 
 export interface OverdueCheckResult {
   projectId: string
-  overdueTasks: Array<{ id: string; title: string; dueDate: string; phase: string }>
+  overdueTasks: Array<{ id: string; title: string; dueDate: string; phase: string; blocked: boolean }>
+  /** Overdue tasks that are also blocked (dependency/reason) — counted separately. */
+  blockedCount: number
   absentWorkers: Array<{ id: string; name: string }>
+  summary: string
+}
+
+/** A task counts as blocked when its status or recorded reason says so (Task v2, §11). */
+function isBlockedTaskRow(t: { status: string; blockedReason: string | null }): boolean {
+  return t.status === 'blocked' || Boolean(t.blockedReason)
 }
 
 /**
  * Overdue tasks + absent workers today → 'project.delayed' and
  * 'attendance.absent' events (each notifies the contractor via policy).
+ * Overdue = dueDate before today AND status != done (§11 escalation);
+ * blocked overdue tasks are counted separately in the message —
+ * "3 overdue (1 blocked)" — so escalation tells blocked from late.
  */
 export async function runOverdueCheck(projectId?: string | null): Promise<OverdueCheckResult> {
   const pid = await resolveProjectId(projectId)
@@ -238,7 +249,7 @@ export async function runOverdueCheck(projectId?: string | null): Promise<Overdu
       where: {
         phase: { projectId: pid },
         dueDate: { lt: startOfToday },
-        status: { in: ['pending', 'in_progress', 'blocked'] },
+        status: { not: 'done' },
       },
       include: { phase: true },
       orderBy: { dueDate: 'asc' },
@@ -248,6 +259,8 @@ export async function runOverdueCheck(projectId?: string | null): Promise<Overdu
     db.attendance.findMany({ where: { projectId: pid, date: today } }),
   ])
 
+  const blockedCount = overdueTasks.filter(isBlockedTaskRow).length
+
   const presentWorkerIds = new Set(todayAttendance.filter((a) => a.status !== 'absent').map((a) => a.workerId))
   const absentWorkers = workers
     .filter((w) => !presentWorkerIds.has(w.id))
@@ -256,7 +269,8 @@ export async function runOverdueCheck(projectId?: string | null): Promise<Overdu
   if (overdueTasks.length > 0) {
     await emit(pid, 'project.delayed', {
       count: overdueTasks.length,
-      detail: `Overdue: ${overdueTasks.slice(0, 5).map((t) => `${t.title} (was due ${t.dueDate?.toISOString().slice(0, 10) ?? '?'})`).join('; ')}${overdueTasks.length > 5 ? ` +${overdueTasks.length - 5} more` : ''}`,
+      blockedCount,
+      detail: `${overdueTasks.length} overdue (${blockedCount} blocked): ${overdueTasks.slice(0, 5).map((t) => `${t.title} (was due ${t.dueDate?.toISOString().slice(0, 10) ?? '?'}${isBlockedTaskRow(t) ? ' · blocked' : ''})`).join('; ')}${overdueTasks.length > 5 ? ` +${overdueTasks.length - 5} more` : ''}`,
       taskIds: overdueTasks.map((t) => t.id),
     })
   }
@@ -276,8 +290,11 @@ export async function runOverdueCheck(projectId?: string | null): Promise<Overdu
       title: t.title,
       dueDate: t.dueDate?.toISOString().slice(0, 10) ?? '',
       phase: t.phase.name,
+      blocked: isBlockedTaskRow(t),
     })),
+    blockedCount,
     absentWorkers,
+    summary: `${overdueTasks.length} overdue task(s) (${blockedCount} blocked), ${absentWorkers.length} absent worker(s)`,
   }
 }
 

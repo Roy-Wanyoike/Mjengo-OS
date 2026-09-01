@@ -377,6 +377,11 @@ export type ActionType =
   | 'task.create'
   | 'task.update'
   | 'task.delete'
+  | 'task.assign'
+  | 'task.block'
+  | 'task.unblock'
+  | 'task.verify'
+  | 'task.complete'
   | 'phase.update'
   | 'phase.create'
   | 'delivery.create'
@@ -557,30 +562,253 @@ async function payrollGate(
   return { blocked: false, unpaid, exceptions, total, names }
 }
 
+// ---------------- task v2 helpers (Doc A §11 — priority, assignment,
+// dependencies, blockers, verification) ----------------
+
+const TASK_PRIORITIES: readonly string[] = ['low', 'normal', 'high', 'urgent']
+
+/** Roles that may verify completed work (§11 verification workflow). */
+const TASK_VERIFY_ROLES: readonly string[] = ['contractor', 'admin', 'supervisor']
+
+/** Maximum blockedBy chain depth (cycle guard). */
+const TASK_DEPENDENCY_MAX_DEPTH = 5
+
+/** Load a task scoped to the project (via its phase) — honest miss error. */
+async function taskInProject(taskId: string, projectId: string) {
+  const task = await db.task.findUnique({ where: { id: taskId }, include: { phase: true } })
+  if (!task || task.phase.projectId !== projectId) throw new Error('Task not found in this project')
+  return task
+}
+
+/** Validate a priority; undefined/null normalizes to 'normal'. */
+function normalizePriority(p: unknown): string {
+  if (p === undefined || p === null || p === '') return 'normal'
+  if (typeof p !== 'string' || !TASK_PRIORITIES.includes(p)) {
+    throw new Error(`priority must be one of ${TASK_PRIORITIES.join(', ')} (got ${JSON.stringify(p)})`)
+  }
+  return p
+}
+
+/** An assignee must exist AND belong to this project (tenant scoping). */
+async function assertWorkerInProject(workerId: string, projectId: string) {
+  const worker = await db.worker.findUnique({ where: { id: workerId } })
+  if (!worker || worker.projectId !== projectId) throw new Error('Assignee not found in this project')
+  return worker
+}
+
+/** Parse a due date (ISO string | Date | null) — honest error on garbage. */
+function parseDueDate(v: unknown): Date | null {
+  if (v === null || v === undefined || v === '') return null
+  const d = v instanceof Date ? v : new Date(String(v))
+  if (Number.isNaN(d.getTime())) throw new Error(`dueDate is not a valid date (got ${JSON.stringify(v)})`)
+  return d
+}
+
+/**
+ * Dependency guard (§11): blockedById may not be the task itself, may not
+ * point at a task that is itself blocked, and the blockedBy chain may not
+ * loop back to the task or exceed TASK_DEPENDENCY_MAX_DEPTH levels. The walk
+ * is depth-capped, so a pre-existing cycle terminates — never hangs.
+ */
+async function assertDependencyOk(taskId: string | null, blockedById: string, projectId: string) {
+  const target = await taskInProject(blockedById, projectId)
+  if (taskId && blockedById === taskId) {
+    throw new Error('A task cannot depend on itself — pick a different blocker')
+  }
+  if (target.status === 'blocked' || target.blockedById) {
+    throw new Error(`Cannot depend on "${target.title}" — that task is itself blocked. Dependencies must point at unblocked work.`)
+  }
+  // Walk the blockedBy chain from the candidate (plain rows — only scalars needed)
+  let current: Task = target
+  for (let depth = 1; depth <= TASK_DEPENDENCY_MAX_DEPTH && current.blockedById; depth++) {
+    if (taskId && current.id === taskId) {
+      throw new Error('Dependency cycle rejected — this link would loop back to the task')
+    }
+    if (depth === TASK_DEPENDENCY_MAX_DEPTH) {
+      throw new Error(`Dependency chain too deep — at most ${TASK_DEPENDENCY_MAX_DEPTH} levels are allowed`)
+    }
+    const next = await db.task.findUnique({ where: { id: current.blockedById } })
+    if (!next) break
+    current = next
+  }
+}
+
 async function applyCoreAction(type: ActionType, payload: any, projectId: string): Promise<any> {
   switch (type) {
     case 'task.create': {
-      const { phaseId, title } = payload
+      const { phaseId, title, priority, assignedToId, dueDate, blockedById } = payload
       if (!phaseId || !title) throw new Error('phaseId and title required')
-      const task = await db.task.create({ data: { phaseId, title, status: 'pending', progress: 0 } })
+      if (typeof title !== 'string' || !title.trim()) throw new Error('title required')
+      // Phase must belong to the resolved project (tenant scoping)
+      const phase = await db.phase.findUnique({ where: { id: phaseId } })
+      if (!phase || phase.projectId !== projectId) throw new Error('Phase not found in this project')
+      const data: {
+        phaseId: string
+        title: string
+        status: string
+        progress: number
+        priority: string
+        dueDate: Date | null
+        assignedToId?: string
+        blockedById?: string
+      } = {
+        phaseId,
+        title: title.trim(),
+        status: 'pending',
+        progress: 0,
+        priority: normalizePriority(priority),
+        dueDate: parseDueDate(dueDate),
+      }
+      if (assignedToId) {
+        await assertWorkerInProject(String(assignedToId), projectId)
+        data.assignedToId = String(assignedToId)
+      }
+      if (blockedById) {
+        // A new task cannot participate in a cycle — still scope + freshness checks
+        await assertDependencyOk(null, String(blockedById), projectId)
+        data.blockedById = String(blockedById)
+      }
+      const task = await db.task.create({ data })
       return { id: task.id }
     }
 
     case 'task.update': {
-      const { id, status, progress } = payload
+      const { id, title, status, progress, priority, dueDate, assignedToId, blockedById } = payload
       if (!id) throw new Error('task id required')
+      const existing = await taskInProject(id, projectId)
       const data: Partial<Task> = {}
-      if (typeof status === 'string') data.status = status
+      if (title !== undefined) {
+        if (typeof title !== 'string' || !title.trim()) throw new Error('title cannot be empty')
+        data.title = title.trim()
+      }
+      if (priority !== undefined) data.priority = normalizePriority(priority)
+      if (dueDate !== undefined) data.dueDate = parseDueDate(dueDate)
+      if (assignedToId !== undefined) {
+        if (assignedToId === null || assignedToId === '') data.assignedToId = null
+        else {
+          await assertWorkerInProject(String(assignedToId), projectId)
+          data.assignedToId = String(assignedToId)
+        }
+      }
+      if (blockedById !== undefined) {
+        if (blockedById === null || blockedById === '') data.blockedById = null
+        else {
+          const depId = String(blockedById)
+          await assertDependencyOk(id, depId, projectId)
+          data.blockedById = depId
+        }
+      }
+      if (typeof status === 'string') {
+        if (status === 'blocked') {
+          throw new Error('Blocking needs a reason — use the block action (a reason is required)')
+        }
+        data.status = status
+        // Verification is a property of the COMPLETED work: reopening a task
+        // retires the badge (the verify action + audit rows keep the history).
+        if (status !== 'done') {
+          data.verifiedAt = null
+          data.verifiedByName = null
+        }
+      }
       if (typeof progress === 'number') {
         data.progress = Math.max(0, Math.min(100, Math.round(progress)))
         if (data.progress === 100) data.status = 'done'
         if (data.progress > 0 && data.status === undefined && status === undefined) {
-          const existing = await db.task.findUnique({ where: { id } })
-          if (existing && existing.status === 'pending') data.status = 'in_progress'
+          if (existing.status === 'pending') data.status = 'in_progress'
+        }
+        if (data.progress < 100) {
+          // completed work at <100% is no longer the verified state
+          data.verifiedAt = null
+          data.verifiedByName = null
         }
       }
       const task = await db.task.update({ where: { id }, data })
       return { id: task.id }
+    }
+
+    case 'task.assign': {
+      const { id, assignedToId } = payload
+      if (!id) throw new Error('task id required')
+      await taskInProject(id, projectId) // scoping + existence
+      let workerId: string | null = null
+      if (assignedToId !== null && assignedToId !== undefined && assignedToId !== '') {
+        workerId = String(assignedToId)
+        await assertWorkerInProject(workerId, projectId)
+      }
+      const task = await db.task.update({ where: { id }, data: { assignedToId: workerId } })
+      return { id: task.id, assignedToId: workerId }
+    }
+
+    case 'task.block': {
+      const { id, reason, blockedById } = payload
+      if (!id) throw new Error('task id required')
+      await taskInProject(id, projectId) // scoping + existence
+      if (typeof reason !== 'string' || !reason.trim()) {
+        throw new Error('A block reason is required — record why work stopped')
+      }
+      const data: Partial<Task> = { status: 'blocked', blockedReason: reason.trim().slice(0, 500) }
+      if (blockedById !== undefined && blockedById !== null && blockedById !== '') {
+        const depId = String(blockedById)
+        await assertDependencyOk(id, depId, projectId)
+        data.blockedById = depId
+      }
+      const task = await db.task.update({ where: { id }, data })
+      return { id: task.id }
+    }
+
+    case 'task.unblock': {
+      const { id } = payload
+      if (!id) throw new Error('task id required')
+      const existing = await taskInProject(id, projectId)
+      const data: Partial<Task> = { blockedReason: null, blockedById: null }
+      if (existing.status === 'blocked') {
+        // work resumes where it left off
+        data.status = existing.progress > 0 ? 'in_progress' : 'pending'
+      }
+      const task = await db.task.update({ where: { id }, data })
+      return { id: task.id }
+    }
+
+    case 'task.complete': {
+      const { id } = payload
+      if (!id) throw new Error('task id required')
+      const existing = await taskInProject(id, projectId)
+      if (existing.status === 'blocked' || existing.blockedReason) {
+        throw new Error(
+          `"${existing.title}" is blocked${existing.blockedReason ? `: ${existing.blockedReason}` : ''} — unblock it before completing`,
+        )
+      }
+      if (existing.blockedById) {
+        const blocker = await db.task.findUnique({ where: { id: existing.blockedById } })
+        if (blocker && blocker.status !== 'done') {
+          throw new Error(`Cannot complete "${existing.title}" — it depends on "${blocker.title}", which is not done yet`)
+        }
+      }
+      const task = await db.task.update({ where: { id }, data: { status: 'done', progress: 100 } })
+      return { id: task.id }
+    }
+
+    case 'task.verify': {
+      const { id } = payload
+      if (!id) throw new Error('task id required')
+      const existing = await taskInProject(id, projectId)
+      if (existing.status !== 'done') {
+        throw new Error(`Only completed work can be verified — "${existing.title}" is ${existing.status.replace('_', ' ')}`)
+      }
+      // Role gate (§11): contractor | admin | supervisor. Resolved from the
+      // signed-in session cookie (currentActor), NEVER the payload — the
+      // client/finance roles and share-link callers are refused honestly.
+      const actor = await currentActor()
+      if (!actor.role || !TASK_VERIFY_ROLES.includes(actor.role)) {
+        throw new Error(
+          `Only a contractor, admin or supervisor may verify work${actor.role ? ` — you are signed in as ${actor.role}` : ' — sign in first'}`,
+        )
+      }
+      const task = await db.task.update({
+        where: { id },
+        data: { verifiedAt: new Date(), verifiedByName: actor.name?.trim() || actor.role },
+      })
+      return { id: task.id, verifiedBy: task.verifiedByName }
     }
 
     case 'phase.update': {
