@@ -23,6 +23,10 @@ import type { NotifyOptions } from './types'
 /**
  * Emit an in-app notification for a project event. Call this from action
  * handlers — never write db.notification rows directly from feature code.
+ *
+ * deliveryStatus defaults to 'logged' — an honest in-app row exists; no
+ * external provider (WhatsApp/SMS/push) has actually been contacted. When a
+ * provider is wired, call markDelivered() with the real outcome.
  */
 export async function notify(
   projectId: string,
@@ -37,11 +41,32 @@ export async function notify(
       title,
       body,
       channel: typeof opts?.channel === 'string' && opts.channel ? opts.channel : 'in_app',
+      deliveryStatus: typeof opts?.deliveryStatus === 'string' && opts.deliveryStatus ? opts.deliveryStatus : 'logged',
       recipient: typeof opts?.recipient === 'string' ? opts.recipient : null,
       audienceRole: typeof opts?.audienceRole === 'string' ? opts.audienceRole : null,
     },
   })
   return { id: row.id }
+}
+
+/**
+ * Update a notification's delivery state — the seam for a future provider
+ * (WhatsApp/SMS/push) to report the real outcome. 'sent' stamps deliveredAt;
+ * any other status just records the state honestly.
+ */
+export async function markDelivered(
+  id: string,
+  status: 'logged' | 'sent' | 'failed',
+): Promise<{ id: string; deliveryStatus: string } | null> {
+  try {
+    const row = await db.notification.update({
+      where: { id },
+      data: { deliveryStatus: status, ...(status === 'sent' ? { deliveredAt: new Date() } : {}) },
+    })
+    return { id: row.id, deliveryStatus: row.deliveryStatus }
+  } catch {
+    return null // row gone (deleted project) — nothing to update
+  }
 }
 
 /**

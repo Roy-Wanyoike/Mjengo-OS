@@ -10,6 +10,7 @@ import { DigestSection } from '@/components/mjengo/intel/sections/digest-section
 import { PricesSection } from '@/components/mjengo/intel/sections/prices-section'
 import { ReliabilitySection } from '@/components/mjengo/intel/sections/reliability-section'
 import { SuggestionsSection } from '@/components/mjengo/intel/sections/suggestions-section'
+import { JobsSection } from '@/components/mjengo/intel/sections/jobs-section'
 
 export function IntelTab() {
   return (
@@ -19,6 +20,7 @@ export function IntelTab() {
       <PricesSection />
       <ReliabilitySection />
       <SuggestionsSection />
+      <JobsSection />
     </div>
   )
 }

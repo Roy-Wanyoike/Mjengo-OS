@@ -16,6 +16,8 @@ export type NotificationKind =
   | 'approval.requested' | 'approval.decided' | 'quote.received' | 'order.confirmed'
   | 'delivery.dispatched' | 'delivery.discrepancy' | 'invoice.submitted'
   | 'invoice.paid' | 'price.alert' | 'digest.weekly' | 'risk.flagged'
+  // v3 platform kinds (domain-event bus + background jobs, F-PLATFORM):
+  | 'project.delayed' | 'attendance.absent' | 'budget.alert' | 'ledger.reconciled'
 
 export type NotificationChannel = 'in_app' | 'whatsapp' | 'sms' | 'push'
 export type AudienceRole = 'client' | 'contractor' | 'supervisor' | 'finance' | 'all'
@@ -36,4 +38,9 @@ export interface NotifyOptions {
   audienceRole?: string
   recipient?: string
   channel?: string
+  /** Honest channel state — defaults to 'logged' (in-app row, nothing sent externally). */
+  deliveryStatus?: string
 }
+
+/** Delivery lifecycle of an external channel row (in-app 'logged' is terminal today). */
+export type DeliveryStatus = 'logged' | 'sent' | 'failed'

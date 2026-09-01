@@ -1,19 +1,76 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { db } from '@/lib/db'
 
 export interface AuditActor {
   name: string
-  role: string // contractor, foreman, client, system, ai
+  role: string // contractor, foreman, client, system, ai, finance, supervisor
 }
 
-/** Append-only Bias-Free Ledger entry. Never throws — auditing must not break actions. */
+/**
+ * Request context threaded into audit entries (spec §43): where the action
+ * came from and what entity it touched. All fields optional — callers
+ * persist what they honestly know.
+ */
+export interface AuditContext {
+  ip?: string
+  userAgent?: string
+  requestId?: string
+  entity?: string
+  entityId?: string
+  before?: unknown
+  after?: unknown
+}
+
+// ---------------- request-scoped audit context (F-PLATFORM §43) ----------------
+
+/**
+ * AsyncLocalStorage holding the CURRENT request's audit context. The actions
+ * route wraps applyAction in withAuditContext(...); applyAction's own
+ * logAudit call (lib/mjengo.ts — untouched) then picks the context up here.
+ * Correct across concurrent requests — no shared mutable module state.
+ */
+const auditContextStorage = new AsyncLocalStorage<AuditContext>()
+
+/** Run `fn` with an audit context — every logAudit inside it persists it. */
+export async function withAuditContext<T>(ctx: AuditContext, fn: () => Promise<T>): Promise<T> {
+  return auditContextStorage.run(ctx, fn)
+}
+
+/** The ambient audit context (undefined outside a withAuditContext run). */
+export function getAuditContext(): AuditContext | undefined {
+  return auditContextStorage.getStore()
+}
+
+function asString(v: unknown): string | undefined {
+  return typeof v === 'string' && v ? v : undefined
+}
+
+function asJson(v: unknown): string | undefined {
+  if (v === undefined || v === null) return undefined
+  try {
+    return JSON.stringify(v)
+  } catch {
+    return undefined
+  }
+}
+
+/** Append-only Bias-Free Ledger entry. Never throws — auditing must not break actions.
+ *
+ * ctx (optional, last param — backwards compatible): explicit per-call context,
+ * merged over the ambient withAuditContext() store. Persists the §43 fields
+ * ip/userAgent/requestId/entity/entityId/before/after when present.
+ */
 export async function logAudit(
   projectId: string,
   kind: string,
   actor: AuditActor,
   summary: string,
   meta?: Record<string, unknown>,
+  ctx?: AuditContext,
 ): Promise<void> {
   try {
+    const ambient = auditContextStorage.getStore() ?? {}
+    const merged: AuditContext = ctx ? { ...ambient, ...ctx } : ambient
     await db.auditEvent.create({
       data: {
         projectId,
@@ -22,6 +79,13 @@ export async function logAudit(
         role: actor.role,
         summary,
         meta: meta ? JSON.stringify(meta) : undefined,
+        entity: asString(merged.entity),
+        entityId: asString(merged.entityId),
+        before: asJson(merged.before),
+        after: asJson(merged.after),
+        ip: asString(merged.ip),
+        userAgent: asString(merged.userAgent),
+        requestId: asString(merged.requestId),
       },
     })
   } catch (e) {

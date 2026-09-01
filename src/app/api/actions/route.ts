@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/lib/mjengo'
 import { CLIENT_ACTIONS } from '@/lib/client-actions'
 import { getSessionFromReq, unauthorized, forbidden } from '@/lib/guard'
+import { kindForAction, withAuditContext } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,10 +16,25 @@ export const dynamic = 'force-dynamic'
  *    (same contract as POST /api/share, actor stamped from the link)
  * Session identity is stamped on the Bias-Free Ledger via __actor/__role.
  *
+ * Audit context (spec §43, F-PLATFORM): the request's IP (first
+ * x-forwarded-for value, 'unknown' when absent), user-agent and a requestId
+ * (incoming x-request-id or a fresh UUID) are threaded into applyAction via
+ * withAuditContext — the AsyncLocalStorage store lib/mjengo's logAudit call
+ * reads, WITHOUT touching lib/mjengo.ts itself.
+ *
  * Idempotency (spec §57): an optional `Idempotency-Key` header is persisted in
  * IdempotencyRecord (key, scope = action type, responseBody) — a repeated key
  * REPLAYS the stored response instead of re-applying the money movement.
  */
+
+function auditContextFor(req: NextRequest, type: ActionType, payload: any) {
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
+  const userAgent = req.headers.get('user-agent')?.slice(0, 300) || undefined
+  const requestId = req.headers.get('x-request-id')?.trim() || crypto.randomUUID()
+  const entityId = typeof payload?.id === 'string' && payload.id ? payload.id : undefined
+  return { ip, userAgent, requestId, entity: kindForAction(type), entityId }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -75,7 +91,13 @@ export async function POST(req: NextRequest) {
       actorPayload = { ...actorPayload, __actor: session.user.name, __role: session.user.role }
     }
 
-    const result = await applyAction(type, actorPayload, targetProjectId)
+    // Wrap in the request audit context (spec §43) — applyAction's own
+    // logAudit call (lib/mjengo.ts, untouched) picks ip/userAgent/requestId/
+    // entity up via the AsyncLocalStorage store in lib/audit.ts. Exactly ONE
+    // audit row per action; the entity hint comes from the payload id when
+    // the action targets a known row.
+    const auditCtx = auditContextFor(req, type, payload)
+    const result = await withAuditContext(auditCtx, () => applyAction(type, actorPayload, targetProjectId))
 
     // Persist the idempotency record AFTER a successful apply (spec §57).
     if (idempotencyKey) {
