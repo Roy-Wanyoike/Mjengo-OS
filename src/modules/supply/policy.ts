@@ -42,10 +42,27 @@ const SITE_TEAM: SupplyRole[] = ['contractor', 'supervisor', 'procurement', 'fin
 
 /** Role permission matrix (Finder §1 — initiator-broad, decisioner-narrow). */
 export function supplyCan(role: SupplyRole, action: SupplyAction): boolean {
-  // The share/client surface reads procurement data; every mutation is
-  // blocked upstream (client-actions allowlist) and read actions are open.
-  if (role === 'share_client' || role === 'client') {
+  // The share/client surface reads procurement data; every share-link mutation
+  // is blocked upstream (share-route allowlist) and read actions are open.
+  if (role === 'share_client') {
     return action === 'supply.view' || action === 'supply.compare'
+  }
+  // §24 client-direct ordering (backend wave): the client may ALSO raise
+  // their own material requests and place purchase orders directly. They
+  // still never run the rest of the loop (quotes, dispatch, receive,
+  // suppliers, rules stay site-team), and request.decide stays open for the
+  // CLIENT_ACTIONS band-approval seam — a client deciding OTHER people's
+  // requests the bands route to them. A client's OWN request can never be
+  // approved by them (service.decideApproval §24 guard + submitRequest
+  // ladder substitution) — creation is not self-approval.
+  if (role === 'client') {
+    return (
+      action === 'supply.view' ||
+      action === 'supply.compare' ||
+      action === 'request.create' ||
+      action === 'order.create' ||
+      action === 'request.decide'
+    )
   }
   if (!SITE_TEAM.includes(role)) return false
 

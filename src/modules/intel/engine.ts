@@ -238,6 +238,275 @@ export function computeRiskFindings(input: RiskInput): { findings: EngineFinding
   return { findings, overallScore }
 }
 
+// ---------------- anti-fraud attendance engine (spec §16, rules R6/R7) ----------------
+//
+// Doc A §16: track who checked a worker in, the method and every edit
+// (original → corrected value + reason). "Supervisor repeatedly checks in
+// workers who are absent" is the pattern to surface — flagged FOR REVIEW,
+// never auto-accusing anyone. These rules run from the anomaly scan job
+// (B4-INTEL) and write Alert rows; they are NOT part of computeRiskFindings
+// (which stays 5-rule so existing RiskAssessment history stays comparable).
+
+/** One attendance row as the fraud rules see it (last 14 days, worker name joined). */
+export interface AttendanceAuditRow {
+  date: string // YYYY-MM-DD (EAT calendar date, as stored)
+  status: string // present, absent, half_day, excused
+  workerId: string
+  workerName: string
+  recordedBy: string | null // who created the record (name/role)
+  isOverride: boolean // overrideLog is set (the record was edited after the fact)
+}
+
+/** Weekend history BEFORE the 14-day window — the site's idle baseline. */
+export interface WeekendBaseline {
+  rows: number // weekend attendance rows on record (older than the window)
+  present: number // of those, rows marked present
+}
+
+export interface AttendanceFraudInput {
+  now: Date
+  /** Attendance rows from the last 14 days (caller scopes the window). */
+  rows: AttendanceAuditRow[]
+  /** Weekend rows OLDER than the 14-day window, for the idle baseline. */
+  weekendBaseline: WeekendBaseline
+}
+
+/** ISO calendar weekday of a YYYY-MM-DD string (0=Sun … 6=Sat). */
+function isoWeekday(dateStr: string): number {
+  return new Date(`${dateStr}T00:00:00.000Z`).getUTCDay()
+}
+
+const OVERRIDE_MAX_COUNT = 5 // more than 5 overrides in 14 days → warning
+const OVERRIDE_MAX_RATIO = 0.3 // >30% of the recorder's records → warning (needs ≥4 records)
+const WEEKEND_MIN_HISTORY = 4 // weekend rows needed before "site normally idle" is claimed
+const WEEKEND_IDLE_RATE = 0.1 // <10% historical weekend present-rate = normally idle
+const WEEKEND_GHOST_DAYS = 2 // more than 2 weekend-present days in 14 days = outlier
+
+/**
+ * R6/R7 — attendance anti-fraud, deterministic:
+ *
+ * R6 attendance_override_pattern — per recorder (Attendance.recordedBy), rows
+ * from the last 14 days: overrides > 5, OR overrides > 30% of that recorder's
+ * records (with ≥4 records so 1-of-2 noise cannot fire) → warning with counts,
+ * recorder name and sample dates.
+ *
+ * R7 weekend_ghost_pattern — workers marked present on Sat/Sun more than 2×
+ * in the last 14 days, while the site is normally idle on weekends
+ * (historical weekend present-rate < 10%, from ≥4 prior weekend rows —
+ * with less history the baseline is unknown and the rule honestly skips).
+ * Info severity: a watch, not an accusation.
+ */
+export function computeAttendanceFraudFindings(input: AttendanceFraudInput): EngineFinding[] {
+  const { rows, weekendBaseline } = input
+  const findings: EngineFinding[] = []
+
+  // ---- R6 override abuse, grouped by who recorded the rows ----
+  const byRecorder = new Map<string, { records: number; overrides: number; dates: string[] }>()
+  for (const r of rows) {
+    const recorder = (r.recordedBy ?? '').trim()
+    if (!recorder) continue
+    const agg = byRecorder.get(recorder) ?? { records: 0, overrides: 0, dates: [] }
+    agg.records += 1
+    if (r.isOverride) {
+      agg.overrides += 1
+      agg.dates.push(r.date)
+    }
+    byRecorder.set(recorder, agg)
+  }
+  for (const [recorder, agg] of byRecorder) {
+    const ratio = agg.records > 0 ? agg.overrides / agg.records : 0
+    const overCount = agg.overrides > OVERRIDE_MAX_COUNT
+    const overRatio = agg.records >= 4 && ratio > OVERRIDE_MAX_RATIO
+    if (overCount || overRatio) {
+      const sample = agg.dates.slice(0, 5).join(', ') + (agg.dates.length > 5 ? ` +${agg.dates.length - 5} more` : '')
+      findings.push({
+        rule: 'attendance_override_pattern', severity: 'warning',
+        title: `${agg.overrides} attendance overrides by ${recorder} in 14 days`,
+        message: `${recorder} recorded ${agg.records} attendance rows in the last 14 days and ${agg.overrides} of them carry an override log (edited after the fact — original → corrected value + reason stored on each row). Override dates: ${sample}. Doc A §16 flags a recorder who repeatedly edits check-ins for review — this is a pattern to verify, not an accusation.`,
+        evidence: `${agg.overrides} of ${agg.records} rows by ${recorder} overridden · ${Math.round(ratio * 100)}% · sample ${agg.dates.slice(0, 3).join(', ') || '—'}`,
+        score: SEVERITY_WEIGHTS.warning,
+      })
+    }
+  }
+
+  // ---- R7 weekend ghost workers ----
+  if (weekendBaseline.rows >= WEEKEND_MIN_HISTORY) {
+    const idleRate = weekendBaseline.present / weekendBaseline.rows
+    if (idleRate < WEEKEND_IDLE_RATE) {
+      const perWorker = new Map<string, { name: string; dates: string[] }>()
+      for (const r of rows) {
+        const dow = isoWeekday(r.date)
+        if (dow !== 0 && dow !== 6) continue // Sat=6, Sun=0
+        if (r.status !== 'present') continue
+        const agg = perWorker.get(r.workerId) ?? { name: r.workerName, dates: [] }
+        agg.dates.push(r.date)
+        perWorker.set(r.workerId, agg)
+      }
+      const ghosts = Array.from(perWorker.entries())
+        .filter(([, agg]) => agg.dates.length > WEEKEND_GHOST_DAYS)
+        .map(([workerId, agg]) => ({ workerId, name: agg.name, dates: agg.dates }))
+      if (ghosts.length > 0) {
+        const list = ghosts.map((g) => `${g.name} (${g.dates.length}×: ${g.dates.slice(0, 3).join(', ')})`).join('; ')
+        findings.push({
+          rule: 'weekend_ghost_pattern', severity: 'info',
+          title: `${ghosts.length} worker(s) present on idle weekends`,
+          message: `This site is normally idle on weekends (${weekendBaseline.present} of ${weekendBaseline.rows} historical weekend rows present, under 10%), but in the last 14 days: ${list}. Weekend check-ins on an idle site are worth verifying — wages are paid per recorded day.`,
+          evidence: `${ghosts.length} worker(s) over ${WEEKEND_GHOST_DAYS} weekend-present days · baseline ${weekendBaseline.present}/${weekendBaseline.rows} weekend rows`,
+          score: SEVERITY_WEIGHTS.info,
+        })
+      }
+    }
+  }
+
+  return findings
+}
+
+// ---------------- cost control engine (spec §29, rules R8/R9) ----------------
+
+export type CostCategory = 'materials' | 'labour' | 'transport' | 'professional_fees' | 'other'
+
+/** BOQ-derived materials estimate (latest Boq version), Σ qty × estUnitPrice. */
+export interface BoqEstimate {
+  version: number
+  status: string
+  estTotal: number // KES, Σ BoqLine.qty × estUnitPrice
+}
+
+export interface CostVarianceInput {
+  /** Overall phase progress 0–100 (same basis as risk rule R1). */
+  progressPct: number
+  /** Σ Phase.budget — the budget source of truth (mirrors the wallet rollup). */
+  phaseBudgetTotal: number
+  /** Latest BOQ estimate if one exists (BoqLine.estUnitPrice is on file). */
+  boq: BoqEstimate | null
+  /** Spend grouped into the 5 §29 categories, from Transaction rows. */
+  spendByCategory: Record<CostCategory, number>
+}
+
+const CATEGORY_BUDGET_BASIS = {
+  materials: 'materials',
+  labour: 'non-materials allowance',
+  transport: 'non-materials allowance',
+  professional_fees: 'non-materials allowance',
+  other: 'non-materials allowance',
+} as const
+
+/**
+ * R8 — budget variance by category (§29 "budget overruns"), deterministic:
+ * a category spending > 110% of its budget slice → warning with category,
+ * spent, budget and pct — and an HONEST statement of the budget basis:
+ *
+ *  · materials: the latest BOQ estimate (Σ qty × estUnitPrice) when a BOQ is
+ *    on file — the one category the schema actually budgets. Without a BOQ,
+ *    the fallback slice is the phase budgets pro-rated by progress.
+ *  · labour / transport / professional_fees / other: NO per-category budget
+ *    exists anywhere in the schema — the honest comparison envelope is the
+ *    non-materials phase-budget allowance (Σ phases − BOQ materials) pro-rated
+ *    by phase progress, i.e. the expected non-materials spend to date. A single
+ *    category crossing 110% of that envelope has consumed the whole allowance.
+ *
+ * CostCategory grouping of Transaction rows (see the handler): type 'material'
+ * → materials, 'wage' → labour, 'transport' → transport, a costCode naming a
+ * professional service → professional_fees, everything else → other.
+ */
+export function computeCostVarianceFindings(input: CostVarianceInput): EngineFinding[] {
+  const { progressPct, phaseBudgetTotal, spendByCategory } = input
+  const findings: EngineFinding[] = []
+  if (phaseBudgetTotal <= 0) return findings
+
+  const boqEst = input.boq !== null && input.boq.estTotal > 0 ? input.boq : null
+  const progressFactor = Math.max(0, Math.min(100, progressPct)) / 100
+  const materialsBudget = boqEst ? boqEst.estTotal : phaseBudgetTotal * progressFactor
+  const nonMaterialsAllowance = boqEst
+    ? Math.max(0, phaseBudgetTotal - boqEst.estTotal) * progressFactor
+    : phaseBudgetTotal * progressFactor
+  const basisBoq = boqEst
+    ? `budget basis: BOQ v${boqEst.version} (${boqEst.status}) materials estimate ${kes(boqEst.estTotal)} (Σ BoqLine qty × estUnitPrice)`
+    : `budget basis: no BOQ on file — phase budgets ${kes(phaseBudgetTotal)} pro-rated by ${Math.round(progressPct)}% progress`
+
+  for (const category of Object.keys(spendByCategory) as CostCategory[]) {
+    const spent = spendByCategory[category] ?? 0
+    if (spent <= 0) continue
+    const budget = category === 'materials' ? materialsBudget : nonMaterialsAllowance
+    if (budget <= 0) continue
+    const pct = (spent / budget) * 100
+    if (pct > 110) {
+      const basis =
+        category === 'materials'
+          ? basisBoq
+          : boqEst
+            ? `budget basis: NO per-category budget exists in the schema — compared against the non-materials phase-budget allowance to date (Σ phases ${kes(phaseBudgetTotal)} − BOQ materials ${kes(boqEst.estTotal)}, pro-rated by ${Math.round(progressPct)}% progress)`
+            : `budget basis: NO per-category budget exists in the schema — compared against the phase budgets pro-rated by ${Math.round(progressPct)}% progress`
+      findings.push({
+        rule: 'budget_category_overrun', severity: 'warning',
+        title: `${category} spend at ${Math.round(pct)}% of its budget slice`,
+        message: `${category} spend is ${kes(spent)} against a budget slice of ${kes(budget)} — ${Math.round(pct)}%, above the 110% watch level. ${basis}. Review the transactions behind the number before acting.`,
+        evidence: `category ${category} · spent ${kes(spent)} · budget ${kes(budget)} · ${Math.round(pct)}% · ${CATEGORY_BUDGET_BASIS[category]}`,
+        score: SEVERITY_WEIGHTS.warning,
+      })
+    }
+  }
+  return findings
+}
+
+/** One purchase order as the duplicate rule sees it (lines = PO line names). */
+export interface DuplicateOrderRow {
+  orderCode: string
+  createdAt: Date
+  total: number // KES, PO.total
+  status: string
+  /** True when the order is terminal (delivered/closed) or a delivery was received. */
+  delivered: boolean
+  lines: Array<{ name: string; lineTotal: number }>
+}
+
+const DUPLICATE_MIN_TOTAL = 10_000 // both POs must exceed KES 10,000
+const DUPLICATE_WINDOW_DAYS = 7 // ordered within 7 days of each other
+const DUPLICATE_MAX_FINDINGS = 3 // cap so one noisy material cannot spam the alert feed
+
+/**
+ * R9 — duplicate purchase watch (§29), deterministic: two PurchaseOrders
+ * naming the SAME material (normalized line-name match, the same matcher the
+ * procurement cover check uses — PO lines carry the material names from the
+ * originating MaterialRequestLine), both over KES 10,000, created within 7
+ * days, and NOT both already delivered → info watch with both PO codes, the
+ * material and the dates. Info severity: double orders are often legitimate
+ * (top-ups, split deliveries) — this is a watch, humans decide.
+ */
+export function computeDuplicatePurchaseFindings(orders: DuplicateOrderRow[]): EngineFinding[] {
+  const eligible = orders.filter((o) => o.total > DUPLICATE_MIN_TOTAL)
+  const matchesMaterial = (a: string, b: string): boolean => {
+    const na = a.toLowerCase().replace(/\s+/g, ' ').trim()
+    const nb = b.toLowerCase().replace(/\s+/g, ' ').trim()
+    return na === nb || (na.length > 3 && nb.includes(na)) || (nb.length > 3 && na.includes(nb))
+  }
+  const findings: EngineFinding[] = []
+  const seen = new Set<string>()
+  for (let i = 0; i < eligible.length && findings.length < DUPLICATE_MAX_FINDINGS; i++) {
+    for (let j = i + 1; j < eligible.length && findings.length < DUPLICATE_MAX_FINDINGS; j++) {
+      const a = eligible[i]
+      const b = eligible[j]
+      const daysApart = Math.abs(a.createdAt.getTime() - b.createdAt.getTime()) / DAY_MS
+      if (daysApart > DUPLICATE_WINDOW_DAYS) continue
+      if (a.delivered && b.delivered) continue // both already delivered → not a live duplicate
+      const material = a.lines.find((la) => b.lines.some((lb) => matchesMaterial(la.name, lb.name)))
+      if (!material) continue
+      const key = [a.orderCode, b.orderCode].sort().join('+')
+      if (seen.has(key)) continue
+      seen.add(key)
+      const days = Math.round(daysApart * 10) / 10
+      findings.push({
+        rule: 'duplicate_purchase_watch', severity: 'info',
+        title: `Possible duplicate purchase — ${material.name}`,
+        message: `${a.orderCode} (${kes(a.total)}, ${a.createdAt.toISOString().slice(0, 10)}, ${a.status}) and ${b.orderCode} (${kes(b.total)}, ${b.createdAt.toISOString().slice(0, 10)}, ${b.status}) both order ${material.name}, ${days} day${days === 1 ? '' : 's'} apart, and at least one has not been delivered yet. Double orders are sometimes legitimate (top-up or split delivery) — confirm with procurement before acting (Doc A §29 duplicate purchases).`,
+        evidence: `${a.orderCode} + ${b.orderCode} · ${material.name} · ${days}d apart · both > ${kes(DUPLICATE_MIN_TOTAL)}`,
+        score: SEVERITY_WEIGHTS.info,
+      })
+    }
+  }
+  return findings
+}
+
 // ---------------- price trend engine ----------------
 
 export interface PricePointLike { materialName: string; region: string; unitPrice: number; recordedAt: Date; source: string }
