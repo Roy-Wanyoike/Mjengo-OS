@@ -299,7 +299,7 @@ export function MjengoApp() {
             </div>
             <div className="flex items-center gap-3 text-stone-500">
               <span>AI Copilot: Vision + Swahili ASR + LLM</span>
-              <span className="hidden sm:inline">M-Pesa ready</span>
+              <span className="hidden sm:inline">Payments: simulated rails, real workflow</span>
               <span>Nairobi, Kenya</span>
             </div>
           </div>

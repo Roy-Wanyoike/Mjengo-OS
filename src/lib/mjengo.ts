@@ -7,6 +7,10 @@ import { LAND_ACTIONS, applyLandAction } from '@/lib/actions/land'
 import { PROFESSIONALS_ACTIONS, applyProfessionalsAction } from '@/lib/actions/professionals'
 import { SUPPLY_ACTIONS, applySupplyAction } from '@/lib/actions/supply'
 import { INVOICE_ACTIONS, applyInvoiceAction } from '@/lib/actions/invoices'
+import { INVENTORY_ACTIONS, applyInventoryAction } from '@/lib/actions/inventory'
+import { loadInventorySlice, loadBoqSlice } from '@/modules/inventory/repository'
+import { loadFinanceSlice } from '@/modules/wallet/repository'
+import { WALLET_ACTIONS, applyWalletAction } from '@/lib/actions/wallet'
 import { INTEL_ACTIONS, applyIntelAction } from '@/lib/actions/intel'
 import { loadLandSlice } from '@/modules/land/repository'
 import { loadProfessionalsSlice } from '@/modules/professionals/repository'
@@ -18,6 +22,8 @@ import type { ProfessionalsSlice } from '@/modules/professionals/types'
 import type { SupplySlice } from '@/modules/supply/types'
 import type { InvoicesSlice } from '@/modules/invoices/types'
 import type { IntelSlice } from '@/modules/intel/types'
+import type { InventorySlice, BoqSlice } from '@/modules/inventory/types'
+import type { FinanceSlice } from '@/modules/wallet/types'
 import type {
   Alert, Attendance, AuditEvent, Consumption, Delivery, EscrowWallet, Material, Milestone, Notification, Phase, PhotoComment, Project, Recap, SitePhoto, SiteZone, Task, Transaction, VariationOrder, Worker,
 } from '@prisma/client'
@@ -92,6 +98,10 @@ export interface ProjectPayload {
   supply: SupplySlice
   invoices: InvoicesSlice
   intel: IntelSlice
+  // v3 domain slices (inventory + money core)
+  inventory: InventorySlice
+  boq: BoqSlice
+  finance: FinanceSlice
 }
 
 export interface ProjectListItem {
@@ -184,7 +194,7 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
     : await db.project.findFirst({ orderBy: { createdAt: 'asc' } })
   if (!project) return null
 
-  const [phases, workers, materials, deliveries, consumptions, photos, alerts, transactions, recaps, escrow, milestones, variations, zones, notifications, auditEvents, photoComments] =
+  const [phases, workers, materials, deliveries, consumptions, photos, alerts, transactions, recaps, escrow, milestones, variations, zones, notifications, auditEvents, photoComments, inventory, boq, finance] =
     await Promise.all([
       db.phase.findMany({ where: { projectId: project.id }, orderBy: { order: 'asc' }, include: { tasks: { orderBy: { createdAt: 'asc' } } } }),
       db.worker.findMany({ where: { projectId: project.id }, orderBy: { name: 'asc' }, include: { attendances: { orderBy: { date: 'desc' } } } }),
@@ -202,6 +212,9 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
       db.notification.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 60 }),
       db.auditEvent.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 120 }),
       db.photoComment.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' } }),
+      loadInventorySlice(project.id),
+      loadBoqSlice(project.id),
+      loadFinanceSlice(project.id),
     ])
 
   const today = todayStr()
@@ -349,6 +362,9 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
     supply,
     invoices,
     intel,
+    inventory,
+    boq,
+    finance,
   }
 }
 
@@ -382,6 +398,8 @@ export type ActionType =
   | (typeof SUPPLY_ACTIONS)[number]
   | (typeof INVOICE_ACTIONS)[number]
   | (typeof INTEL_ACTIONS)[number]
+  | (typeof INVENTORY_ACTIONS)[number]
+  | (typeof WALLET_ACTIONS)[number]
 
 export async function applyAction(type: ActionType, payload: any, projectIdArg?: string): Promise<any> {
   // Project resolution: explicit projectId arg > payload.projectId > first project
@@ -407,6 +425,10 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
     result = await applyInvoiceAction(type, cleanPayload, projectId)
   } else if ((INTEL_ACTIONS as readonly string[]).includes(type)) {
     result = await applyIntelAction(type, cleanPayload, projectId)
+  } else if ((INVENTORY_ACTIONS as readonly string[]).includes(type)) {
+    result = await applyInventoryAction(type, cleanPayload, projectId)
+  } else if ((WALLET_ACTIONS as readonly string[]).includes(type)) {
+    result = await applyWalletAction(type, cleanPayload, projectId)
   } else {
     result = await applyCoreAction(type, cleanPayload, projectId)
   }

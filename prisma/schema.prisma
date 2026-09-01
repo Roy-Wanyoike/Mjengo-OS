@@ -8,68 +8,80 @@ datasource db {
 }
 
 model Project {
-  id           String         @id @default(cuid())
-  shareToken   String         @unique @default(cuid())
-  name         String
-  client       String
-  clientType   String         @default("diaspora") // diaspora, local, company
-  location     String
-  budget       Float
-  startDate    DateTime
-  targetDate   DateTime
-  status       String         @default("active") // active, completed, on_hold
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-  phases       Phase[]
-  workers      Worker[]
-  deliveries   Delivery[]
-  consumptions Consumption[]
-  photos       SitePhoto[]
-  alerts       Alert[]
-  attendances  Attendance[]
-  transactions Transaction[]
-  recaps       Recap[]
-  auditEvents  AuditEvent[]
-  escrowWallet EscrowWallet?
-  milestones   Milestone[]
-  variations   VariationOrder[]
-  photoComments PhotoComment[]
-  zones        SiteZone[]
-  notifications Notification[]
+  id                 String              @id @default(cuid())
+  shareToken         String              @unique @default(cuid())
+  name               String
+  client             String
+  clientType         String              @default("diaspora") // diaspora, local, company
+  location           String
+  budget             Float
+  startDate          DateTime
+  targetDate         DateTime
+  status             String              @default("active") // active, completed, on_hold
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  phases             Phase[]
+  workers            Worker[]
+  deliveries         Delivery[]
+  consumptions       Consumption[]
+  photos             SitePhoto[]
+  alerts             Alert[]
+  attendances        Attendance[]
+  transactions       Transaction[]
+  recaps             Recap[]
+  auditEvents        AuditEvent[]
+  escrowWallet       EscrowWallet?
+  milestones         Milestone[]
+  variations         VariationOrder[]
+  photoComments      PhotoComment[]
+  zones              SiteZone[]
+  notifications      Notification[]
   // v2 domain slices (land, supply, invoices, intel)
-  landParcels      LandParcel[]
-  materialRequests MaterialRequest[]
-  approvalRules    ApprovalRule[]
-  approvals        Approval[]
-  purchaseOrders   PurchaseOrder[]
-  invoices         Invoice[]
-  riskAssessments  RiskAssessment[]
-  intelDigests     IntelDigest[]
+  landParcels        LandParcel[]
+  materialRequests   MaterialRequest[]
+  approvalRules      ApprovalRule[]
+  approvals          Approval[]
+  purchaseOrders     PurchaseOrder[]
+  invoices           Invoice[]
+  riskAssessments    RiskAssessment[]
+  intelDigests       IntelDigest[]
+  // v3 domain slices (money core, inventory, platform)
+  paymentRequests    PaymentRequest[]
+  ledgerAccounts     LedgerAccount[]
+  ledgerTransactions LedgerTransaction[]
+  inventoryItems     InventoryItem[]
+  stockMovements     StockMovement[]
+  boqs               Boq[]
+  savedSuppliers     SavedSupplier[]
+  attachments        Attachment[]
+  domainEvents       DomainEvent[]
+  jobRecords         JobRecord[]
+  healthSnapshots    ProjectHealth[]
 }
 
 model Phase {
-  id              String        @id @default(cuid())
-  projectId       String
-  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name            String
-  order           Int
-  budget          Float
-  status          String        @default("pending") // pending, in_progress, done
-  progressManual  Int?          // manual override; falls back to tasks average
-  tasks           Task[]
-  photos          SitePhoto[]
+  id             String      @id @default(cuid())
+  projectId      String
+  project        Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name           String
+  order          Int
+  budget         Float
+  status         String      @default("pending") // pending, in_progress, done
+  progressManual Int? // manual override; falls back to tasks average
+  tasks          Task[]
+  photos         SitePhoto[]
 }
 
 model Task {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   phaseId   String
-  phase     Phase    @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  phase     Phase     @relation(fields: [phaseId], references: [id], onDelete: Cascade)
   title     String
-  status    String   @default("pending") // pending, in_progress, done, blocked
-  progress  Int      @default(0)
+  status    String    @default("pending") // pending, in_progress, done, blocked
+  progress  Int       @default(0)
   dueDate   DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 model Worker {
@@ -86,27 +98,27 @@ model Worker {
 }
 
 model Attendance {
-  id        String   @id @default(cuid())
-  workerId  String
-  worker    Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
-  projectId String
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  date      String // YYYY-MM-DD
-  checkIn   DateTime?
-  checkOut  DateTime?
-  status    String   @default("present") // present, absent, half_day, excused
-  method    String   @default("geofence") // geofence, ussd, app, kiosk_pin, qr_card, manager
-  wage      Float
-  paid      Boolean  @default(false)
-  synced    Boolean  @default(true)
+  id              String    @id @default(cuid())
+  workerId        String
+  worker          Worker    @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  projectId       String
+  project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  date            String // YYYY-MM-DD
+  checkIn         DateTime?
+  checkOut        DateTime?
+  status          String    @default("present") // present, absent, half_day, excused
+  method          String    @default("geofence") // geofence, ussd, app, kiosk_pin, qr_card, manager
+  wage            Float
+  paid            Boolean   @default(false)
+  synced          Boolean   @default(true)
   // Workforce Trust: reported vs verified presence
-  verification String  @default("reported") // verified (worker/kiosk evidence), reported (manager says), exception (needs review)
-  evidence     String? // JSON array of evidence signals (gps, pin, qr, photo, supervisor)
+  verification    String    @default("reported") // verified (worker/kiosk evidence), reported (manager says), exception (needs review)
+  evidence        String? // JSON array of evidence signals (gps, pin, qr, photo, supervisor)
   exceptionReason String? // phone_damaged, battery_dead, network, forgot, new_worker, emergency, other
   exceptionNote   String?
-  overrideLog String? // JSON array of {at, by, from, to, reason} — append-only, never erased
-  recordedBy  String? // who created this record (name/role)
-  createdAt DateTime @default(now())
+  overrideLog     String? // JSON array of {at, by, from, to, reason} — append-only, never erased
+  recordedBy      String? // who created this record (name/role)
+  createdAt       DateTime  @default(now())
 }
 
 model Material {
@@ -148,17 +160,17 @@ model Consumption {
 }
 
 model SitePhoto {
-  id          String   @id @default(cuid())
+  id          String         @id @default(cuid())
   projectId   String
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   phaseId     String?
-  phase       Phase?   @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+  phase       Phase?         @relation(fields: [phaseId], references: [id], onDelete: SetNull)
   zoneId      String?
   url         String
   caption     String?
   analysis    String? // JSON string with VLM analysis
   progressPct Int?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime       @default(now())
   comments    PhotoComment[]
 }
 
@@ -175,16 +187,18 @@ model Alert {
 }
 
 model Transaction {
-  id        String   @id @default(cuid())
-  projectId String
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  type      String // wage, material, transport, other
-  amount    Float
-  method    String   @default("mpesa") // mpesa, cash
-  reference String?
-  note      String?
-  date      DateTime
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type        String // wage, material, transport, other, invoice, milestone, payment_request
+  amount      Float
+  method      String   @default("mpesa") // mpesa, cash, bank, card, wallet
+  reference   String?
+  costCode    String? // finance cost-code dimension (spec §36)
+  ledgerTxnId String? // link to the double-entry LedgerTransaction (unique per txn)
+  note        String?
+  date        DateTime
+  createdAt   DateTime @default(now())
 }
 
 model Recap {
@@ -198,27 +212,39 @@ model Recap {
 
 // ---------------- MjengoOS Trust & Money platform models ----------------
 
-// Bias-Free Ledger: chronological, append-only record of everything that happened
+// Bias-Free Ledger: chronological, append-only record of everything that happened.
+// v3: richer context per spec §43 (entity/entityId/before/after/ip/userAgent/requestId).
 model AuditEvent {
   id        String   @id @default(cuid())
   projectId String
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  kind      String // delivery, wage, attendance, milestone, variation, escrow, photo, comment, export, project, expense, share, auth...
+  kind      String // delivery, wage, attendance, milestone, variation, escrow, photo, comment, export, project, expense, share, auth, inventory, boq, payment, wallet, ledger...
   actor     String // who did it
-  role      String // contractor, foreman, client, system, ai
+  role      String // contractor, foreman, client, system, ai, finance, supervisor
   summary   String // human-readable one-liner
   meta      String? // JSON extra detail
+  entity    String? // entity type acted on (e.g. StockMovement)
+  entityId  String? // id of the entity
+  before    String? // JSON snapshot before (mutations only)
+  after     String? // JSON snapshot after (mutations only)
+  ip        String? // request origin IP
+  userAgent String? // request user-agent
+  requestId String? // correlation id
   createdAt DateTime @default(now())
 }
 
-// MjengoPay — milestone-based escrow (simulated money, real workflow)
+// MjengoPay — milestone-based escrow (simulated money, real workflow).
+// Balance is mirrored from the double-entry ledger (see modules/ledger); the
+// ledger is the source of truth, this field is a projection kept in the same
+// db.$transaction so it can never drift silently.
 model EscrowWallet {
-  id        String   @id @default(cuid())
-  projectId String   @unique
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  balance   Float    @default(0) // KES held in escrow
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String   @id @default(cuid())
+  projectId       String   @unique
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  balance         Float    @default(0) // KES held in escrow (ledger-derived projection)
+  ledgerAccountId String? // backing LedgerAccount (liability account)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model Milestone {
@@ -257,16 +283,16 @@ model VariationOrder {
 
 // Contextual photo commenting — client pins a question on a site photo
 model PhotoComment {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   photoId   String
   photo     SitePhoto @relation(fields: [photoId], references: [id], onDelete: Cascade)
   projectId String
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   author    String
   role      String // client, contractor, foreman
   message   String
-  resolved  Boolean  @default(false)
-  createdAt DateTime @default(now())
+  resolved  Boolean   @default(false)
+  createdAt DateTime  @default(now())
 }
 
 // Interactive site map zones (schematic coords over a plan image, 0-100 %)
@@ -284,18 +310,20 @@ model SiteZone {
 
 // Notification center (in-app) + WhatsApp delivery log stub
 model Notification {
-  id          String   @id @default(cuid())
-  projectId   String?
-  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  kind        String // recap, milestone, variation, anomaly, comment, attendance, share, system, approval.requested, delivery.discrepancy, invoice.submitted, price.alert...
-  title       String
-  body        String
-  channel     String   @default("in_app") // in_app, whatsapp, sms, push (whatsapp/sms = delivery log stub)
-  recipient   String? // e.g. client name/phone
-  audienceRole String? // role the notification targets (client, contractor, supervisor, finance...)
-  read        Boolean  @default(false)
-  readAt      DateTime? // when the target read it (analytics / digest)
-  createdAt   DateTime @default(now())
+  id             String    @id @default(cuid())
+  projectId      String?
+  project        Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind           String // recap, milestone, variation, anomaly, comment, attendance, share, system, approval.requested, delivery.discrepancy, invoice.submitted, price.alert...
+  title          String
+  body           String
+  channel        String    @default("in_app") // in_app, whatsapp, sms, push, email
+  deliveryStatus String    @default("logged") // logged (in-app row only), sent, failed — honest channel state
+  deliveredAt    DateTime? // when an external channel actually delivered
+  recipient      String? // e.g. client name/phone
+  audienceRole   String? // role the notification targets (client, contractor, supervisor, finance...)
+  read           Boolean   @default(false)
+  readAt         DateTime? // when the target read it (analytics / digest)
+  createdAt      DateTime  @default(now())
 }
 
 // Authentication (NextAuth.js v4 credentials + JWT sessions)
@@ -304,7 +332,7 @@ model User {
   email        String   @unique
   passwordHash String
   name         String
-  role         String   @default("contractor") // contractor, client, admin
+  role         String   @default("contractor") // contractor, client, admin, finance, supervisor
   projectId    String? // the client user's project (client-role login boots that project)
   createdAt    DateTime @default(now())
 }
@@ -316,9 +344,9 @@ model User {
 // an anomaly needs human review. MjengoOS records evidence — it never claims
 // government verification.
 model LandParcel {
-  id          String            @id @default(cuid())
+  id          String             @id @default(cuid())
   projectId   String
-  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   plotNumber  String // e.g. "LR No. 2090/1234"
   county      String
   town        String?
@@ -326,9 +354,9 @@ model LandParcel {
   lng         Float?
   approxArea  String? // e.g. "0.25 ha", "50x100 ft"
   tenureType  String? // freehold, leasehold
-  status      String            @default("searching") // searching, verified, flagged
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  status      String             @default("searching") // searching, verified, flagged
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
   documents   ParcelDocument[]
   searches    TitleSearch[]
   assignments ParcelAssignment[]
@@ -392,26 +420,26 @@ model Professional {
 // One recorded credential check on a professional (who checked, how, what they
 // found). Findings are honest observations — "licence expired — renewal pending".
 model CredentialCheck {
-  id            String      @id @default(cuid())
+  id             String       @id @default(cuid())
   professionalId String
-  professional  Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
-  checkedBy     String // name of the person recording the check
-  method        String // document_review, reference_call, registry_lookup
-  finding       String
-  recordedAt    DateTime    @default(now())
+  professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  checkedBy      String // name of the person recording the check
+  method         String // document_review, reference_call, registry_lookup
+  finding        String
+  recordedAt     DateTime     @default(now())
 }
 
 // Assignment of a professional to a parcel for a project.
 model ParcelAssignment {
-  id            String      @id @default(cuid())
-  parcelId      String
-  parcel        LandParcel  @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+  id             String       @id @default(cuid())
+  parcelId       String
+  parcel         LandParcel   @relation(fields: [parcelId], references: [id], onDelete: Cascade)
   professionalId String
-  professional  Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
-  role          String // surveyor, advocate, engineer, qty_surveyor
-  status        String      @default("active") // active, completed, withdrawn
-  note          String?
-  createdAt     DateTime    @default(now())
+  professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  role           String // surveyor, advocate, engineer, qty_surveyor
+  status         String       @default("active") // active, completed, withdrawn
+  note           String?
+  createdAt      DateTime     @default(now())
 }
 
 // ---------------- MjengoOS v2 — Supply & procurement / Finder (module: supply) ----------------
@@ -421,7 +449,7 @@ model ParcelAssignment {
 // trusted) based on platform activity — never conflated with government
 // certification.
 model Supplier {
-  id                String         @id @default(cuid())
+  id                String          @id @default(cuid())
   businessName      String
   county            String
   town              String?
@@ -430,48 +458,53 @@ model Supplier {
   phone             String?
   email             String?
   warehouseLocation String?
-  deliveryZones     String         @default("") // CSV of zones/counties served
-  deliveryFeeBase   Float          @default(0) // KES base delivery fee
+  deliveryZones     String          @default("") // CSV of zones/counties served
+  deliveryFeeBase   Float           @default(0) // KES base delivery fee
   freeDeliveryOver  Float? // free delivery above this order value (KES)
-  minimumOrder      Float          @default(0) // minimum order value (KES)
-  verificationState Int            @default(0) // 0-5 ladder
-  reliabilityScore  Int            @default(50) // 0-100 from transaction history
-  responseHours     Int            @default(24) // average quote response time
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  minimumOrder      Float           @default(0) // minimum order value (KES)
+  verificationState Int             @default(0) // 0-5 ladder
+  reliabilityScore  Int             @default(50) // 0-100 from transaction history
+  responseHours     Int             @default(24) // average quote response time
+  operatingHours    String? // e.g. "Mon-Sat 07:00-18:00" (spec §31)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
   catalogItems      CatalogItem[]
   quotes            Quote[]
   purchaseOrders    PurchaseOrder[]
   invoices          Invoice[]
+  savedBy           SavedSupplier[]
 }
 
 // One catalog item a supplier sells (name/unit/price/stock/min order).
 model CatalogItem {
-  id          String   @id @default(cuid())
-  supplierId  String
-  supplier    Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
-  name        String
-  unit        String // bag, length, tonne, roll, sheet
-  unitPrice   Float // KES
-  stockQty    Float   @default(0)
-  minOrderQty Float   @default(1)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String   @id @default(cuid())
+  supplierId    String
+  supplier      Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  name          String
+  category      String? // cement, steel, timber, roofing, plumbing, electrical, paint, tiles, sand, ballast, blocks, tools, equipment, finishes (spec §29)
+  brand         String? // e.g. "Simba", "Devki", "Bamburi"
+  specification String? // e.g. "42.5N 50kg bag", "Y12 deformed bar"
+  unit          String // bag, length, tonne, roll, sheet
+  unitPrice     Float // KES
+  stockQty      Float    @default(0)
+  minOrderQty   Float    @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt // surfaced as "stock as of …" (spec §31)
 }
 
 // Purchase/material request — the "don't immediately charge the wallet" step.
 // Status ladder: draft → submitted → approved/rejected → converted (to a PO).
 model MaterialRequest {
-  id              String                 @id @default(cuid())
+  id              String                @id @default(cuid())
   projectId       String
-  project         Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project         Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   requestCode     String // e.g. MR-1042
   requestedByRole String // supervisor, contractor, client, procurement, finance
   requestedByName String
   notes           String?
-  status          String                 @default("draft") // draft, submitted, approved, rejected, converted
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
+  status          String                @default("draft") // draft, submitted, approved, rejected, converted
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
   lines           MaterialRequestLine[]
   quotes          Quote[]
   orders          PurchaseOrder[]
@@ -532,31 +565,47 @@ model Quote {
   fees         Float           @default(0)
   totalLanded  Float // KES — full landed cost for the requested quantities
   deliveryEta  String? // e.g. "2 days", "same day"
+  validUntil   DateTime? // quote validity window (spec §32)
+  terms        String? // payment/delivery terms text (spec §32)
   stockOk      Boolean         @default(true)
-  status       String          @default("requested") // requested, received, declined
+  status       String          @default("requested") // requested, received, declined, expired
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
+  lines        QuoteLine[]
+}
+
+// Per-line quote detail (spec §32 multi-line bids). v1 compare used the first
+// line only; lines carry the full per-material breakdown.
+model QuoteLine {
+  id        String @id @default(cuid())
+  quoteId   String
+  quote     Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  name      String
+  unit      String
+  qty       Float
+  unitPrice Float
+  lineTotal Float
 }
 
 // Purchase order — approved request + selected supplier.
 model PurchaseOrder {
-  id            String            @id @default(cuid())
+  id            String              @id @default(cuid())
   orderCode     String // e.g. PO-2026-000012
   projectId     String
-  project       Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   requestId     String?
-  request       MaterialRequest?  @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  request       MaterialRequest?    @relation(fields: [requestId], references: [id], onDelete: SetNull)
   supplierId    String
-  supplier      Supplier          @relation(fields: [supplierId], references: [id])
+  supplier      Supplier            @relation(fields: [supplierId], references: [id])
   subtotal      Float
-  deliveryFee   Float             @default(0)
+  deliveryFee   Float               @default(0)
   total         Float
-  status        String            @default("draft") // draft, pending_approval, approved, sent, confirmed, delivering, delivered, closed, cancelled
-  paymentSource String            @default("client") // client, contractor, project_wallet, finance
+  status        String              @default("draft") // draft, pending_approval, approved, sent, confirmed, delivering, delivered, closed, cancelled
+  paymentSource String              @default("client") // client, contractor, project_wallet, finance
   createdByRole String // who placed the order
   note          String?
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
   lines         PurchaseOrderLine[]
   deliveries    OrderDelivery[]
   invoices      Invoice[]
@@ -584,8 +633,9 @@ model OrderDelivery {
   dispatchedAt DateTime?
   receivedAt   DateTime?
   receivedBy   String? // who confirmed receipt on the ground
-  note         String?
-  photoCount   Int                 @default(0) // evidence photos attached
+  note         String? // delivery note (ground truth)
+  photoUrls    String              @default("[]") // JSON array of evidence photo URLs (spec §34)
+  photoCount   Int                 @default(0) // evidence photos attached (count mirror)
   gpsLat       Float?
   gpsLng       Float?
   createdAt    DateTime            @default(now())
@@ -594,13 +644,16 @@ model OrderDelivery {
 
 // Per-line physical count: ordered vs received → discrepancy records.
 model OrderDeliveryLine {
-  id          String           @id @default(cuid())
+  id          String            @id @default(cuid())
   deliveryId  String
-  delivery    OrderDelivery    @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  delivery    OrderDelivery     @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
   orderLineId String
   orderLine   PurchaseOrderLine @relation(fields: [orderLineId], references: [id], onDelete: Cascade)
   qtyOrdered  Float
   qtyReceived Float
+  qtyRejected Float             @default(0) // explicitly rejected on inspection (spec §34)
+  damageNote  String? // damage/condition observations
+  condition   String            @default("ok") // ok, damaged, partial — inspection result
 }
 
 // ---------------- MjengoOS v2 — Invoices (module: invoices) ----------------
@@ -608,18 +661,18 @@ model OrderDeliveryLine {
 // Supplier invoice lifecycle: draft → submitted → approved/rejected/disputed →
 // paid. Payment recording (2-d) writes the Transaction ledger entry.
 model Invoice {
-  id               String          @id @default(cuid())
+  id               String         @id @default(cuid())
   invoiceCode      String // e.g. INV-2026-000031
   projectId        String
-  project          Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project          Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   orderId          String?
-  order            PurchaseOrder?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  order            PurchaseOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
   supplierId       String?
-  supplier         Supplier?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  status           String          @default("draft") // draft, submitted, approved, rejected, paid, disputed
-  subtotal         Float           @default(0)
-  tax              Float           @default(0)
-  total            Float           @default(0)
+  supplier         Supplier?      @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  status           String         @default("draft") // draft, submitted, approved, rejected, paid, disputed
+  subtotal         Float          @default(0)
+  tax              Float          @default(0)
+  total            Float          @default(0)
   dueDate          DateTime?
   issuedAt         DateTime?
   submittedAt      DateTime?
@@ -631,8 +684,8 @@ model Invoice {
   paymentReference String? // e.g. MPESA-8HKT4Q2A
   createdBy        String? // supplier / system name
   note             String?
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
   lines            InvoiceLine[]
 }
 
@@ -679,4 +732,258 @@ model PricePoint {
   unitPrice    Float // KES
   recordedAt   DateTime @default(now())
   source       String   @default("seed") // order, manual, seed
+}
+
+// ---------------- MjengoOS v3 — Money core: double-entry ledger (module: ledger/wallet) ----------------
+
+// A chart-of-accounts entry. Accounts are either platform-global (projectId
+// null, e.g. CASH_MPESA pool) or project-scoped (escrow, project expense).
+// A wallet is simply an account with ownerType='wallet' — balances are ALWAYS
+// derived from LedgerEntry sums, never stored (spec §39).
+model LedgerAccount {
+  id         String        @id @default(cuid())
+  code       String        @unique // e.g. "CASH_MPESA", "ESCROW:<projectId>", "W-0001"
+  name       String
+  kind       String // asset, liability, revenue, expense, equity
+  normalSide String        @default("debit") // debit, credit
+  projectId  String? // null = platform-global account
+  project    Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ownerType  String? // wallet, escrow, project, platform
+  ownerId    String? // id of the owning entity (WalletAccount.id etc.)
+  active     Boolean       @default(true)
+  createdAt  DateTime      @default(now())
+  entries    LedgerEntry[]
+}
+
+// Immutable double-entry transaction. Every financial movement posts here with
+// balanced debit/credit legs. Reversals are new transactions linked via
+// reversalOfId — history is never edited or deleted (spec §39).
+model LedgerTransaction {
+  id             String        @id @default(cuid())
+  ref            String        @unique // LX-2026-000001
+  projectId      String?
+  project        Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  description    String
+  occurredAt     DateTime      @default(now())
+  postedBy       String // actor name
+  postedRole     String // contractor, client, finance, system
+  status         String        @default("posted") // posted, reversed
+  reversalOfId   String? // if this txn reverses an earlier one
+  reversalRef    String? // quick-lookup ref of the reversing txn
+  idempotencyKey String?       @unique // natural idempotency (spec §57)
+  createdAt      DateTime      @default(now())
+  entries        LedgerEntry[]
+}
+
+// One debit or credit leg of a ledger transaction. Σdebits = Σcredits per txn.
+model LedgerEntry {
+  id        String            @id @default(cuid())
+  txnId     String
+  txn       LedgerTransaction @relation(fields: [txnId], references: [id], onDelete: Cascade)
+  accountId String
+  account   LedgerAccount     @relation(fields: [accountId], references: [id])
+  side      String // debit, credit
+  amount    Float // positive KES
+  memo      String?
+  createdAt DateTime          @default(now())
+}
+
+// Idempotency guard (spec §57): repeated Idempotency-Key requests replay the
+// original response instead of double-applying money movements.
+model IdempotencyRecord {
+  id           String   @id @default(cuid())
+  key          String   @unique
+  scope        String // action type / route the key applies to
+  projectId    String?
+  responseBody String? // JSON string of the original result
+  createdAt    DateTime @default(now())
+}
+
+// Universal wallet account (spec §37/§38) — reusable financial infrastructure.
+// Balance is derived from the backing LedgerAccount's entries, never stored.
+model WalletAccount {
+  id              String   @id @default(cuid())
+  code            String   @unique // W-0001
+  label           String // "Project Escrow", "Org Float"
+  ownerType       String // project, organization, supplier, user
+  ownerId         String?
+  currency        String   @default("KES")
+  status          String   @default("active") // active, frozen, closed
+  ledgerAccountId String? // backing LedgerAccount — balance derived from entries
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Payment request (spec §36/§59): milestone.release → PaymentRequest created →
+// finance/client approves → payment recorded via the ledger.
+model PaymentRequest {
+  id                String    @id @default(cuid())
+  requestCode       String // PR-2026-000007
+  projectId         String
+  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requestedByRole   String // contractor, supervisor, finance, client
+  requestedByName   String
+  description       String
+  amount            Float // KES
+  payee             String // who gets paid
+  method            String    @default("mpesa") // mpesa, bank, card, wallet, cash
+  status            String    @default("pending") // pending, approved, rejected, paid
+  relatedEntityType String? // milestone, invoice, purchase_order, wages, none
+  relatedEntityId   String?
+  decidedBy         String?
+  decidedAt         DateTime?
+  decisionNote      String?
+  paidAt            DateTime?
+  paidTxnId         String? // Transaction id once paid
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+// ---------------- MjengoOS v3 — Inventory & BOQ (module: inventory) ----------------
+
+// A project's stock line per material+location. Closing stock is ALWAYS the
+// sum of movements — never stored (spec §33).
+model InventoryItem {
+  id           String          @id @default(cuid())
+  projectId    String
+  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  materialName String
+  unit         String
+  materialId   String? // optional link to the global Material catalog
+  location     String          @default("Site Store") // site store / zone name
+  supplierId   String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  movements    StockMovement[]
+
+  @@unique([projectId, materialName, location])
+}
+
+// Append-only inventory movement ledger (spec §33). Types: opening, received,
+// consumed, transferred_in, transferred_out, returned, damaged, adjusted.
+// Closing = opening + received + returned + transferred_in − consumed −
+// damaged − transferred_out ± adjusted.
+model StockMovement {
+  id              String        @id @default(cuid())
+  projectId       String
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  type            String // opening, received, consumed, transferred_in, transferred_out, returned, damaged, adjusted
+  quantity        Float // positive KES qty; sign semantics by type
+  unitCost        Float? // KES when known
+  reference       String? // PO code / delivery id / consumption id
+  note            String?
+  recordedBy      String // name/role
+  createdAt       DateTime      @default(now())
+}
+
+// Bill of Quantities (spec §28 chain head): project + versioned lines. Lines
+// convert into MaterialRequests ("generate material requirement").
+model Boq {
+  id        String    @id @default(cuid())
+  projectId String
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  version   Int       @default(1)
+  status    String    @default("draft") // draft, approved, superseded
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  lines     BoqLine[]
+}
+
+model BoqLine {
+  id           String  @id @default(cuid())
+  boqId        String
+  boq          Boq     @relation(fields: [boqId], references: [id], onDelete: Cascade)
+  materialName String
+  unit         String
+  qty          Float
+  estUnitPrice Float   @default(0)
+  category     String? // structural, finishes, plumbing, electrical...
+  note         String?
+}
+
+// Saved/favorite suppliers per project (spec §30 "save supplier").
+model SavedSupplier {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  savedBy    String
+  note       String?
+  createdAt  DateTime @default(now())
+
+  @@unique([projectId, supplierId])
+}
+
+// Universal file attachment (spec §32/§42): quotes, POs, invoices, deliveries,
+// BOQs, payment requests. DB stores metadata; storageKey points at the file.
+model Attachment {
+  id         String   @id @default(cuid())
+  entityType String // quote, purchase_order, invoice, delivery, boq, payment_request, document
+  entityId   String
+  fileName   String
+  storageKey String // /uploads/... or /photos/... path
+  kind       String? // delivery_photo, quote_doc, invoice_doc...
+  uploadedBy String
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+}
+
+// ---------------- MjengoOS v3 — Platform: events, jobs, flags, health (module: events/jobs) ----------------
+
+// Internal domain event record (spec §59) — MaterialDelivered →
+// InventoryUpdated → ProjectCostUpdated → NotificationCreated chains.
+// Emitted after the state change commits; consumers run in-process.
+model DomainEvent {
+  id          String    @id @default(cuid())
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type        String // material.delivered, inventory.updated, payment.approved, milestone.released...
+  payload     String    @default("{}") // JSON
+  occurredAt  DateTime  @default(now())
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// Background job record (spec §58) — anomaly scans, digests, recaps,
+// reconciliation, notification dispatch. A cron-callee route drains the queue.
+model JobRecord {
+  id         String    @id @default(cuid())
+  type       String // anomaly_scan, digest.weekly, recap.daily, reconciliation, notification.dispatch
+  projectId  String?
+  project    Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status     String    @default("queued") // queued, running, done, failed
+  payload    String    @default("{}")
+  result     String?
+  attempts   Int       @default(0)
+  lastError  String?
+  runAt      DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+// Feature flags (spec §81): ai_progress, ai_voice, wallet, marketplace,
+// land_verification, low_data. DB-backed, cached in-process.
+model FeatureFlag {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  enabled     Boolean  @default(true)
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+// Project health snapshot (spec §48): 6 transparent dimensions — progress,
+// budget, schedule, procurement, issues, evidence — with per-dimension grades.
+model ProjectHealth {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  computedAt DateTime @default(now())
+  overall    Int      @default(0) // 0-100 (higher = healthier)
+  dimensions String   @default("[]") // JSON: [{key, score, grade, summary}]
 }
