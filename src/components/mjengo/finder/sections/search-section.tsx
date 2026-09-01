@@ -31,6 +31,7 @@ import { useFinderLink } from './requests/finder-link'
 import { SearchResultsTable } from './search/results-table'
 import { SupplierDirectory } from './search/supplier-directory'
 import { RADIUS_OPTIONS, DELIVERY_DAY_OPTIONS, formatKes } from './search/bits'
+import { MapView } from '@/components/mjengo/map-view'
 
 export function SearchSection() {
   const { data, dispatch, viewMode, actionBusy, online, outbox } = useMjengo()
@@ -241,6 +242,9 @@ export function SearchSection() {
       </Card>
 
       <SupplierDirectory canManage={isSiteTeam} />
+
+      {/* Schematic supplier & parcel map (spec §51) — real recorded coordinates */}
+      <MapView suppliers={suppliers} parcels={data.land.parcels} />
     </section>
   )
 }

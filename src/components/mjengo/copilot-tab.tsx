@@ -143,8 +143,29 @@ export function CopilotTab() {
 
 // ------------------------------------------------------------------ Photo
 
+/** Data-Saver downscale (spec §74): canvas resize to max 1024px, JPEG q0.72. */
+async function downscaleDataUrl(dataUrl: string, max = 1024, quality = 0.72): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height))
+      if (scale >= 1) { resolve(dataUrl); return } // already small enough
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(img.width * scale)
+      canvas.height = Math.round(img.height * scale)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { reject(new Error('Canvas unavailable')); return }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      resolve(canvas.toDataURL('image/jpeg', quality))
+    }
+    img.onerror = () => reject(new Error('Could not load image for downscale'))
+    img.src = dataUrl
+  })
+}
+
 function PhotoPanel({ online }: { online: boolean }) {
   const { data, dispatch, load } = useMjengo()
+  const dataMode = useMjengo((s) => s.dataMode)
   const [preview, setPreview] = useState<string | null>(null)
   const [previewIsData, setPreviewIsData] = useState(false)
   const [phaseId, setPhaseId] = useState<string>('')
@@ -154,6 +175,10 @@ function PhotoPanel({ online }: { online: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null)
 
   if (!data) return null
+
+  // Feature flag (spec §81): ai_progress gates this whole panel's analysis.
+  const aiProgressOn = data.intel.flags?.ai_progress !== false
+  const saver = dataMode === 'data_saver'
 
   function pickSeeded(url: string, caption: string | null) {
     setPreview(url)
@@ -175,17 +200,39 @@ function PhotoPanel({ online }: { online: boolean }) {
   async function analyze() {
     if (!preview) { toast.error('Upload or pick a site photo first'); return }
     if (!online) { toast.error('AI analysis needs connectivity — toggle Online in the header'); return }
+    if (!aiProgressOn) { toast.error('AI progress is disabled by feature flag (ai_progress)'); return }
     setBusy(true); setResult(null)
     try {
-      let dataUrl: string | undefined
       let url: string | undefined
+      let dataUrl: string | undefined
       let photoId: string | undefined
       if (previewIsData) {
-        // upload first so the photo persists in the evidence log
-        const up = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl: preview }) })
-        const upJson = await up.json()
-        if (upJson.url) { url = upJson.url; setPreview(upJson.url); setPreviewIsData(false) }
-        else dataUrl = preview
+        // Data Saver (spec §74): compress on-device BEFORE anything is sent.
+        let toSend = preview
+        if (saver) {
+          try {
+            toSend = await downscaleDataUrl(preview)
+            toast.info('Data Saver — photo compressed before upload (max 1024px JPEG)')
+          } catch {
+            toast.info('Data Saver — could not compress this image, uploading as-is')
+          }
+        }
+        // Upload first (POST /api/upload) so the photo persists at a real URL —
+        // the analysis AND the photo.apply action both need that url; a raw
+        // dataUrl used to leave "Apply to ledger" silently dead.
+        const up = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataUrl: toSend }),
+        })
+        const upJson = await up.json().catch(() => null)
+        if (!up.ok || !upJson?.url) {
+          toast.error(upJson?.error ?? 'Photo upload failed — analysis aborted (nothing was recorded)')
+          return
+        }
+        url = upJson.url as string
+        setPreview(url)
+        setPreviewIsData(false)
       } else {
         url = preview
         const match = data?.photos.find((p) => p.url === url)
@@ -193,7 +240,7 @@ function PhotoPanel({ online }: { online: boolean }) {
       }
       const res = await fetch('/api/ai/analyze-photo', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataUrl: !url ? dataUrl : undefined, url, photoId, phaseId: phaseId || undefined, apply: applyToLedger, projectId: data?.project.id }),
+        body: JSON.stringify({ dataUrl, url, photoId, phaseId: phaseId || undefined, apply: applyToLedger, projectId: data?.project.id }),
       })
       const json = await res.json()
       if (json.ok) {
@@ -224,8 +271,13 @@ function PhotoPanel({ online }: { online: boolean }) {
       progressPct: typeof result.analysis.progressPct === 'number' ? result.analysis.progressPct : undefined,
       analysis: result.analysis,
     }, 'Apply AI photo analysis')
-    if (ok) toast.success('Applied to ledger — phase progress updated with photo evidence')
-    setResult(null)
+    if (ok) {
+      toast.success('Applied to ledger — phase progress updated with photo evidence')
+      setResult(null)
+    } else {
+      // Dispatch failures are surfaced, never silent (spec §84 no dead UI).
+      toast.error('Apply to ledger failed — the analysis was NOT recorded. Try again.')
+    }
   }
 
   return (
@@ -253,6 +305,7 @@ function PhotoPanel({ online }: { online: boolean }) {
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileRef.current?.click()}>
               <Upload className="w-4 h-4" aria-hidden /> {preview ? 'Change photo' : 'Upload photo'}
             </Button>
+            {saver && <p className="text-[11px] text-stone-400">Data Saver on — photos are compressed to ≤1024px JPEG before upload</p>}
           </div>
 
           <div>
@@ -287,10 +340,21 @@ function PhotoPanel({ online }: { online: boolean }) {
             <Switch id="apply-ledger" checked={applyToLedger} onCheckedChange={setApplyToLedger} className="data-[state=checked]:bg-amber-600" />
           </div>
 
-          <Button className="w-full gap-2 bg-amber-600 hover:bg-amber-700 text-white" size="lg" onClick={() => void analyze()} disabled={busy || !preview}>
+          <Button
+            className="w-full gap-2 bg-amber-600 hover:bg-amber-700 text-white"
+            size="lg"
+            onClick={() => void analyze()}
+            disabled={busy || !preview || !aiProgressOn}
+            title={!aiProgressOn ? 'Disabled by feature flag (ai_progress)' : undefined}
+          >
             {busy ? <Loader2 className="w-5 h-5 animate-spin" aria-hidden /> : <ScanSearch className="w-5 h-5" aria-hidden />}
             {busy ? 'Vision model analyzing…' : 'Analyze with vision AI'}
           </Button>
+          {!aiProgressOn && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="status">
+              Disabled by feature flag (ai_progress) — an admin can re-enable it from the Settings icon in the header.
+            </p>
+          )}
           {busy && <Progress value={70} className="h-1.5 bg-stone-200 [&>[data-slot=progress-indicator]]:bg-amber-500" />}
         </CardContent>
       </Card>

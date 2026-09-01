@@ -9,6 +9,7 @@
 // no anonymous ratings, no opaque "AI scores".
 
 import type { RiskAssessment, IntelDigest, PricePoint, Supplier } from '@prisma/client'
+import type { FlagMap } from './flags'
 
 // ---- domain enums ----
 
@@ -166,12 +167,57 @@ export interface ReliabilityResult extends SupplierReliability {
   updated: boolean
 }
 
+// ---- PROJECT HEALTH SCORE (spec §48, computed in health.ts) ----
+
+/** Grade per dimension (and the overall score): Good ≥80, Attention 50-79, Poor <50. */
+export type HealthGrade = 'good' | 'attention' | 'poor'
+
+export type HealthDimensionKey = 'progress' | 'budget' | 'schedule' | 'procurement' | 'issues' | 'evidence'
+
+/** One scored dimension with a one-line summary citing the real numbers. */
+export interface HealthDimension {
+  key: HealthDimensionKey
+  label: string
+  score: number // 0-100
+  grade: HealthGrade
+  summary: string
+}
+
+/** The persisted ProjectHealth snapshot shape (serialized in the intel slice). */
+export interface HealthSnapshot {
+  projectId: string
+  computedAt: string // ISO
+  overall: number // 0-100, mean of the 6 dimension scores
+  dimensions: HealthDimension[]
+}
+
+/** Display labels for the 6 health dimensions (shared by health.ts + Overview). */
+export const HEALTH_DIMENSION_LABELS: Record<HealthDimensionKey, string> = {
+  progress: 'Progress',
+  budget: 'Budget',
+  schedule: 'Schedule',
+  procurement: 'Procurement',
+  issues: 'Issues',
+  evidence: 'Evidence',
+}
+
+/** Documented inputs per dimension — rendered in the "How this is computed" section. */
+export const HEALTH_INPUTS: Record<HealthDimensionKey, string> = {
+  progress: 'Budget-weighted phase progress (same rule as the Overview %): each phase is its manual progress if set, else its tasks\' average; weighted by phase budget.',
+  budget: 'Spend pace vs the linear calendar plan (transactions / phase budgets vs day count / total days), plus open-PO commitments against the remaining budget.',
+  schedule: 'Overdue tasks (not done, past dueDate) as a share of all tasks on the project.',
+  procurement: 'Open material requests + open purchase orders, delivery discrepancies (received ≠ ordered) and orders stuck in SENT/CONFIRMED for more than 14 days.',
+  issues: 'Unacknowledged alerts plus the severity mix of the latest risk assessment findings (critical −15, warning −5 each).',
+  evidence: 'Photo coverage per phase: how many phases carry at least one site photo, out of all phases.',
+}
+
 // ---- slice shapes ----
 
 /**
  * The `intel` slice of ProjectPayload — populated by repository.loadIntelSlice.
  * The first three fields are raw rows; the rest are read-side computations so
- * the client never derives numbers itself.
+ * the client never derives numbers itself. `health` is the §48 snapshot
+ * (recomputed on every load) and `flags` the §81 feature-flag map (global).
  */
 export interface IntelSlice {
   risk: RiskAssessment | null
@@ -181,6 +227,8 @@ export interface IntelSlice {
   priceTrends: PriceTrendRow[]
   suggestions: ProcurementSuggestion[]
   reliability: SupplierReliability[]
+  health: HealthSnapshot | null
+  flags: FlagMap
 }
 
 export const EMPTY_INTEL_SLICE: IntelSlice = {
@@ -190,6 +238,10 @@ export const EMPTY_INTEL_SLICE: IntelSlice = {
   priceTrends: [],
   suggestions: [],
   reliability: [],
+  health: null,
+  flags: Object.fromEntries(
+    ['ai_progress', 'ai_voice', 'wallet', 'marketplace', 'land_verification', 'low_data'].map((k) => [k, true]),
+  ) as FlagMap,
 }
 
 /** Supplier row shape the engine needs (subset of the Prisma Supplier model). */

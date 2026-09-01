@@ -36,6 +36,21 @@ export async function seedIntel(db: PrismaClient): Promise<void> {
   await db.pricePoint.deleteMany()
   await db.notification.deleteMany({ where: { kind: { in: V2_KINDS } } })
 
+  // ---------------- feature flags (spec §81 — F-INSIGHT) ----------------
+  // The runtime also creates these lazily (modules/intel/flags.ts ensureRows),
+  // so this is a belt-and-braces seed: 6 keys, all enabled by default.
+  const FLAG_SEED: Array<{ key: string; description: string }> = [
+    { key: 'ai_progress', description: 'AI progress (photo analysis)' },
+    { key: 'ai_voice', description: 'AI voice logging' },
+    { key: 'wallet', description: 'Wallet & payment requests' },
+    { key: 'marketplace', description: 'Supplier marketplace (Finder)' },
+    { key: 'land_verification', description: 'Land verification ladder' },
+    { key: 'low_data', description: 'Low-data mode option' },
+  ]
+  for (const f of FLAG_SEED) {
+    await db.featureFlag.upsert({ where: { key: f.key }, create: { ...f, enabled: true }, update: {} })
+  }
+
   const p1 = await db.project.findFirst({ where: { name: { contains: 'Nyumba Yangu' } } })
   if (!p1) throw new Error('Project 1 (Nyumba Yangu) missing — run `bun prisma/seed.ts` first')
 
@@ -142,7 +157,7 @@ export async function seedIntel(db: PrismaClient): Promise<void> {
     ],
   })
 
-  console.log('seedIntel: 48 price points, 1 risk assessment (score 58), 1 digest, 4 notifications')
+  console.log('seedIntel: 48 price points, 1 risk assessment (score 58), 1 digest, 4 notifications, 6 feature flags')
 }
 
 // Standalone runner (Bun): `bun prisma/seed-extras/intel.ts`

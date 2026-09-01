@@ -1,10 +1,10 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { useSession, signOut } from 'next-auth/react'
 import { toast } from 'sonner'
-import { useMjengo } from '@/hooks/use-mjengo'
+import { useMjengo, type DataMode } from '@/hooks/use-mjengo'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -17,6 +17,7 @@ import {
   Flag, FileDiff, MessageSquare, TriangleAlert, BellRing,
   Landmark, PackageSearch, Radar, Phone,
   Truck, Package, UserCheck, ClipboardCheck, FileText, ReceiptText, TrendingUp, Newspaper, ShieldAlert,
+  Search, ChevronDown, Settings, Check, Loader2, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { Notification } from '@prisma/client'
@@ -143,6 +144,425 @@ function UserChip() {
 
 const SCROLLBAR = '[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full'
 
+// ---------------- Global search (spec §80, F-INSIGHT) ----------------
+
+interface SearchItem {
+  id: string
+  title: string
+  sub: string
+  project: string | null
+  target: 'project' | 'parcel' | 'worker' | 'supplier' | 'catalog' | 'request' | 'order' | 'invoice' | 'transaction' | 'notification'
+}
+interface SearchGroup { group: string; items: SearchItem[] }
+
+/** Which tab a search target routes to (app.tsx listens on 'mjengo:tab'). */
+const TARGET_TABS: Partial<Record<SearchItem['target'], string>> = {
+  parcel: 'land',
+  worker: 'fundis',
+  supplier: 'finder',
+  catalog: 'finder',
+  request: 'finder',
+  order: 'finder',
+  invoice: 'finder',
+  transaction: 'money',
+}
+
+/**
+ * Header search — always visible on desktop, icon-expand on mobile. Results
+ * are grouped (max 5 per group) and keyboard navigable: '/' focuses the input,
+ * ArrowUp/Down move, Enter opens, Escape closes. Click behavior per target:
+ * project → switch project; others → their tab via the 'mjengo:tab' event;
+ * notification → opens the bell sheet via 'mjengo:notifications'.
+ */
+function GlobalSearch() {
+  const { status } = useSession()
+  const switchProject = useMjengo((s) => s.switchProject)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const mobileInputRef = useRef<HTMLInputElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [q, setQ] = useState('')
+  const [groups, setGroups] = useState<SearchGroup[]>([])
+  const [open, setOpen] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [active, setActive] = useState(-1)
+
+  const flat = useMemo(
+    () => groups.flatMap((g) => g.items.map((it) => ({ ...it, group: g.group }))),
+    [groups],
+  )
+
+  // Debounced query — min 2 characters, abortable.
+  useEffect(() => {
+    const query = q.trim()
+    if (query.length < 2) {
+      setGroups([])
+      setOpen(false)
+      setActive(-1)
+      setLoading(false)
+      return
+    }
+    const controller = new AbortController()
+    setLoading(true)
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
+          const json = await res.json()
+          if (json.ok) {
+            setGroups((json.groups ?? []) as SearchGroup[])
+            setOpen(true)
+            setActive(json.groups?.length ? 0 : -1)
+          } else {
+            toast.error(json.error ?? 'Search failed')
+          }
+        } catch (e) {
+          if ((e as Error).name !== 'AbortError') toast.error('Search unreachable — check connectivity')
+        } finally {
+          setLoading(false)
+        }
+      })()
+    }, 250)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [q])
+
+  // '/' focuses search (when not already typing); Escape closes; click-outside closes.
+  useEffect(() => {
+    const typing = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null
+      return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === '/' && !typing(e.target)) {
+        e.preventDefault()
+        if (window.innerWidth < 768) {
+          setMobileOpen(true)
+          setTimeout(() => mobileInputRef.current?.focus(), 30)
+        } else {
+          inputRef.current?.focus()
+        }
+      }
+      if (e.key === 'Escape') {
+        setOpen(false)
+        setMobileOpen(false)
+      }
+    }
+    const onDown = (e: MouseEvent) => {
+      if (open && wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('mousedown', onDown)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onDown)
+    }
+  }, [open])
+
+  function handleTarget(item: SearchItem) {
+    setOpen(false)
+    setMobileOpen(false)
+    if (item.target === 'project') {
+      void switchProject(item.id)
+      return
+    }
+    if (item.target === 'notification') {
+      window.dispatchEvent(new CustomEvent('mjengo:notifications'))
+      return
+    }
+    const tab = TARGET_TABS[item.target]
+    if (tab) window.dispatchEvent(new CustomEvent('mjengo:tab', { detail: { tab } }))
+  }
+
+  function onInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open || flat.length === 0) {
+      if (e.key === 'Escape') { setOpen(false); setMobileOpen(false) }
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActive((i) => Math.min(flat.length - 1, i + 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActive((i) => Math.max(0, i - 1))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      const item = flat[active >= 0 ? active : 0]
+      if (item) handleTarget(item)
+    } else if (e.key === 'Escape') {
+      setOpen(false)
+    }
+  }
+
+  function searchBox(inputRefLocal: React.RefObject<HTMLInputElement | null>, autoFocus = false) {
+    return (
+      <div className="relative">
+        <div className="flex items-center gap-2 rounded-lg border border-stone-700 bg-stone-900 px-2.5 h-9 focus-within:border-amber-500">
+          <Search className="w-4 h-4 text-stone-500 shrink-0" aria-hidden />
+          <input
+            ref={inputRefLocal}
+            type="search"
+            value={q}
+            autoFocus={autoFocus}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={onInputKeyDown}
+            onFocus={() => { if (q.trim().length >= 2 && flat.length) setOpen(true) }}
+            placeholder="Search projects, suppliers, MRs, POs…"
+            aria-label="Global search"
+            className="bg-transparent text-sm text-stone-100 placeholder:text-stone-500 outline-none w-full min-w-0 [&::-webkit-search-cancel-button]:hidden"
+          />
+          {loading ? (
+            <Loader2 className="w-3.5 h-3.5 text-stone-500 animate-spin shrink-0" aria-label="Searching" />
+          ) : (
+            <kbd className="hidden lg:inline text-[10px] text-stone-500 border border-stone-700 rounded px-1 shrink-0" aria-hidden>/</kbd>
+          )}
+          {q && (
+            <button
+              type="button"
+              onClick={() => { setQ(''); setGroups([]); setOpen(false) }}
+              aria-label="Clear search"
+              className="text-stone-500 hover:text-stone-200 shrink-0"
+            >
+              <X className="w-3.5 h-3.5" aria-hidden />
+            </button>
+          )}
+        </div>
+
+        {open && (
+          <div
+            className={`absolute left-0 right-0 top-full mt-2 rounded-lg border border-stone-200 bg-white shadow-xl z-50 max-h-96 overflow-y-auto ${SCROLLBAR}`}
+            role="listbox"
+            aria-label="Search results"
+          >
+            {flat.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-stone-500 text-center">
+                {q.trim().length < 2 ? 'Type at least 2 characters' : `No matches for “${q.trim()}”`}
+              </p>
+            ) : (
+              groups.map((g) => (
+                <div key={g.group}>
+                  <p className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wide text-stone-400 sticky top-0 bg-white">
+                    {g.group}
+                  </p>
+                  {g.items.map((item) => {
+                    const idx = flat.findIndex((f) => f.id === item.id && f.group === g.group)
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        role="option"
+                        aria-selected={idx === active}
+                        onMouseEnter={() => setActive(idx)}
+                        onClick={() => handleTarget(item)}
+                        className={`w-full text-left px-3 py-2 min-h-11 flex items-start gap-2.5 ${
+                          idx === active ? 'bg-amber-50' : 'hover:bg-stone-50'
+                        }`}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-stone-900 truncate">{item.title}</span>
+                          <span className="block text-xs text-stone-500 truncate">{item.sub}</span>
+                          {item.project && (
+                            <span className="block text-[10px] text-stone-400 truncate">{item.project}</span>
+                          )}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Share-link visitors have no session — the search API is sign-in guarded.
+  if (status !== 'authenticated') return null
+
+  return (
+    <>
+      {/* Mobile: icon button that expands a fixed search panel */}
+      <button
+        type="button"
+        onClick={() => {
+          setMobileOpen((v) => !v)
+          setTimeout(() => mobileInputRef.current?.focus(), 30)
+        }}
+        aria-label="Open search"
+        aria-expanded={mobileOpen}
+        className="md:hidden flex items-center justify-center w-11 h-11 rounded-md border border-stone-700 bg-stone-900 text-stone-300 hover:text-white"
+      >
+        <Search className="w-4 h-4" aria-hidden />
+      </button>
+
+      {/* Desktop: always-visible inline search */}
+      <div ref={wrapRef} className="hidden md:block w-56 lg:w-72 shrink-0">
+        {searchBox(inputRef)}
+      </div>
+
+      {/* Mobile expanded panel */}
+      {mobileOpen && (
+        <div className="md:hidden fixed left-3 right-3 top-[72px] z-50">
+          {searchBox(mobileInputRef, true)}
+        </div>
+      )}
+    </>
+  )
+}
+
+// ---------------- Feature flags popover (spec §81, admin only) ----------------
+
+const FLAG_ROWS: Array<{ key: string; label: string }> = [
+  { key: 'ai_progress', label: 'AI progress (photo analysis)' },
+  { key: 'ai_voice', label: 'AI voice logging' },
+  { key: 'wallet', label: 'Wallet & payment requests' },
+  { key: 'marketplace', label: 'Supplier marketplace (Finder)' },
+  { key: 'land_verification', label: 'Land verification ladder' },
+  { key: 'low_data', label: 'Low-data mode option' },
+]
+
+/**
+ * Admin-only feature-flag popover (Settings icon). Toggles persist through
+ * POST /api/flags and update the payload's intel.flags in place so gated UI
+ * (Copilot analyze button) reacts immediately. Only ai_progress gates a real
+ * behavior today — the rest are honest state for rollout planning.
+ */
+function FlagsPopover() {
+  const { data: session } = useSession()
+  const data = useMjengo((s) => s.data)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  if (session?.user?.role !== 'admin') return null
+  const flags = (data?.intel as { flags?: Record<string, boolean> } | undefined)?.flags ?? {}
+
+  async function toggle(key: string, enabled: boolean) {
+    setBusy(key)
+    try {
+      const res = await fetch('/api/flags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, enabled }),
+      })
+      const json = await res.json()
+      if (json.ok && json.flags) {
+        const d = useMjengo.getState().data
+        if (d) useMjengo.setState({ data: { ...d, intel: { ...d.intel, flags: json.flags } } })
+        toast.success(`Feature flag ${key} ${enabled ? 'enabled' : 'disabled'}`)
+      } else {
+        toast.error(json.error ?? 'Could not save flag')
+      }
+    } catch {
+      toast.error('Network error — flag not saved')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          size="sm"
+          variant="outline"
+          aria-label="Feature flags (admin)"
+          title="Feature flags — controlled rollout (admin)"
+          className="h-11 w-11 p-0 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white"
+        >
+          <Settings className="w-4 h-4" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80">
+        <p className="text-xs font-bold uppercase tracking-wide text-stone-400">Feature flags</p>
+        <p className="mt-1 text-[11px] text-stone-500 leading-snug">
+          Controlled rollout (spec §81). Only <strong>AI progress</strong> gates a live behavior today — the
+          Copilot photo-analysis button. Others are recorded state for rollout planning.
+        </p>
+        <div className="mt-3 space-y-2.5">
+          {FLAG_ROWS.map(({ key, label }) => (
+            <div key={key} className="flex items-center justify-between gap-3 min-h-11">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-stone-800 leading-tight">{label}</p>
+                <p className="text-[10px] font-mono text-stone-400">{key}</p>
+              </div>
+              <Switch
+                checked={flags[key] !== false}
+                disabled={busy === key}
+                onCheckedChange={(v) => void toggle(key, v)}
+                aria-label={`Toggle ${label}`}
+                className="data-[state=checked]:bg-emerald-500"
+              />
+            </div>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ---------------- Data mode selector (spec §74 low-data) ----------------
+
+/**
+ * Compact Wifi-icon selector with two modes. Data Saver: copilot photos are
+ * downscaled client-side before upload (max 1024px JPEG q0.72) and the recap
+ * button is labeled text-only. Choice persists in the store (reload-safe).
+ */
+function DataModeSelector() {
+  const dataMode = useMjengo((s) => s.dataMode)
+  const setDataMode = useMjengo((s) => s.setDataMode)
+  const saver = dataMode === 'data_saver'
+
+  const options: Array<{ value: DataMode; label: string; hint: string }> = [
+    { value: 'normal', label: 'Normal', hint: 'Full-size photo uploads, all background calls' },
+    { value: 'data_saver', label: 'Data Saver', hint: 'Smaller uploads, fewer background calls' },
+  ]
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Data mode: ${saver ? 'Data Saver' : 'Normal'}`}
+          title={`Data mode: ${saver ? 'Data Saver' : 'Normal'} (spec §74)`}
+          className="flex items-center gap-1.5 h-11 px-2.5 rounded-full bg-stone-900 border border-stone-800 text-stone-200 hover:text-white"
+        >
+          <Wifi className={`w-4 h-4 ${saver ? 'text-emerald-400' : 'text-stone-400'}`} aria-hidden />
+          <span className="hidden sm:inline text-xs font-medium">{saver ? 'Data Saver' : 'Normal'}</span>
+          <ChevronDown className="w-3 h-3 text-stone-400" aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72">
+        <p className="text-xs font-bold uppercase tracking-wide text-stone-400">Data mode</p>
+        <div className="mt-2 space-y-1.5">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={dataMode === o.value}
+              onClick={() => { if (dataMode !== o.value) setDataMode(o.value) }}
+              className={`w-full text-left rounded-lg border px-3 py-2.5 min-h-11 transition-colors ${
+                dataMode === o.value ? 'border-amber-400 bg-amber-50' : 'border-stone-200 hover:bg-stone-50'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <span className="text-sm font-medium text-stone-800">{o.label}</span>
+                {dataMode === o.value && <Check className="w-3.5 h-3.5 text-amber-600" aria-label="Selected" />}
+              </span>
+              <span className="block text-xs text-stone-500 mt-0.5">{o.hint}</span>
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-[11px] text-stone-400 leading-snug">
+          Data Saver compresses Copilot photo uploads on-device before sending and skips image-heavy calls.
+        </p>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 /**
  * Notification center bell — works for the owner and for a client on their
  * share link. Signed-in users mark read via POST /api/notifications (a client
@@ -164,6 +584,17 @@ function NotificationBell() {
     [notifications, filter],
   )
   const busy = marking || actionBusy !== null
+
+  // Global-search notification results open this sheet (header dispatches
+  // 'mjengo:notifications'). Stamps seen like a manual open.
+  useEffect(() => {
+    const openBell = () => {
+      setOpen(true)
+      useMjengo.setState({ notificationsSeenAt: Date.now() })
+    }
+    window.addEventListener('mjengo:notifications', openBell)
+    return () => window.removeEventListener('mjengo:notifications', openBell)
+  }, [])
 
   function markSeen() {
     if (Date.now() - (notificationsSeenAt ?? 0) > 2000) {
@@ -349,7 +780,6 @@ export function Header({
   // client-role user — owner controls hidden, read-mostly header
   const isShareClient = viewMode === 'client' && (Boolean(shareToken) || clientRole)
   const tabs = isShareClient ? TABS.filter((t) => t.key !== 'copilot') : TABS
-
   return (
     <header className="bg-stone-950 text-stone-100 sticky top-0 z-40 shadow-lg">
       <div className="h-1 bg-amber-500" aria-hidden />
@@ -389,11 +819,20 @@ export function Header({
                 </span>
               </>
             )}
+
+            {/* Global search — desktop inline here, mobile icon in this row too */}
+            <GlobalSearch />
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Signed-in identity (hidden for share-link clients — no session) */}
             <UserChip />
+
+            {/* Feature flags (admin only) */}
+            {!isShareClient && <FlagsPopover />}
+
+            {/* Low-data mode selector (spec §74) */}
+            {!isShareClient && <DataModeSelector />}
 
             {/* Share with client (owner only) */}
             {!isShareClient && viewMode === 'owner' && (
@@ -414,8 +853,12 @@ export function Header({
 
             {!isShareClient && (
               <>
-                {/* Connectivity toggle — simulates field connectivity */}
-                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-stone-900 border border-stone-800">
+                {/* Connectivity toggle — SIMULATES field connectivity; real
+                    browser online/offline events are followed separately */}
+                <div
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-stone-900 border border-stone-800"
+                  title="Simulation toggle — the app also follows the browser's real connectivity"
+                >
                   {online ? (
                     <Wifi className="w-4 h-4 text-emerald-400" aria-label="Online" />
                   ) : (
@@ -424,10 +867,10 @@ export function Header({
                   <Switch
                     checked={online}
                     onCheckedChange={setOnline}
-                    aria-label="Toggle connectivity"
+                    aria-label="Toggle simulated connectivity"
                     className="scale-90 data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-amber-600"
                   />
-                  <span className="text-xs font-medium w-12 hidden sm:inline">{online ? 'Online' : 'Offline'}</span>
+                  <span className="text-xs font-medium w-12 hidden sm:inline">{online ? 'Online' : 'Offline·sim'}</span>
                 </div>
 
                 <Button

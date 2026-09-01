@@ -30,6 +30,11 @@ export type TabKey =
   | 'overview' | 'site' | 'materials' | 'finder' | 'fundis' | 'money'
   | 'land' | 'evidence' | 'intel' | 'copilot' | 'ussd'
 
+const TABS_SET: readonly string[] = [
+  'overview', 'site', 'materials', 'finder', 'fundis', 'money',
+  'land', 'evidence', 'intel', 'copilot', 'ussd',
+]
+
 function BootSkeleton() {
   return (
     <div className="min-h-screen flex flex-col bg-stone-100">
@@ -116,6 +121,37 @@ export function MjengoApp() {
 
   useEffect(() => {
     setOrigin(window.location.origin)
+  }, [])
+
+  // ---------------- Real connectivity (F-INSIGHT, spec §50/§74) ----------------
+  // The store's `online` flag starts persisted (possibly stale from a previous
+  // session). On mount we re-sync it with the browser's real connectivity and
+  // keep following the window online/offline events: going offline is silent
+  // (the amber banner appears), coming back online drains the outbox via
+  // setOnline → toast "Back online — syncing queued actions" + auto-syncNow.
+  useEffect(() => {
+    useMjengo.setState({ online: navigator.onLine })
+    const onOffline = () => useMjengo.getState().setOnline(false)
+    const onOnline = () => useMjengo.getState().setOnline(true)
+    window.addEventListener('offline', onOffline)
+    window.addEventListener('online', onOnline)
+    return () => {
+      window.removeEventListener('offline', onOffline)
+      window.removeEventListener('online', onOnline)
+    }
+  }, [])
+
+  // ---------------- Cross-component tab navigation (F-INSIGHT, spec §80) ----------------
+  // Global-search result clicks dispatch 'mjengo:tab' (detail: { tab }) from
+  // anywhere in the tree; the app owner switches tabs here. Unknown tabs are
+  // ignored rather than guessed.
+  useEffect(() => {
+    const onTab = (e: Event) => {
+      const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab
+      if (tab && (TABS_SET as readonly string[]).includes(tab)) setTab(tab as TabKey)
+    }
+    window.addEventListener('mjengo:tab', onTab)
+    return () => window.removeEventListener('mjengo:tab', onTab)
   }, [])
 
   async function handleCreateProject(payload: CreateProjectPayload): Promise<boolean> {

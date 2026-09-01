@@ -59,15 +59,20 @@ server.log
 db/
 
 # internal working documents & agent artifacts
+# (root-anchored: the unanchored `upload/` also matched src/app/api/upload/ —
+#  F-INSIGHT's route would have been silently untracked)
 worklog.md
 PENDING_FEATURES.md
 agent-ctx/
 tool-results/
 .zscripts/
-upload/
-download/
-mini-services/
+/upload/
+/download/
+/mini-services/
 Caddyfile
+
+# runtime photo uploads (POST /api/upload writes here — not repo content)
+/public/photos/upp-*
 
 # reports & sandbox-only docs (architecture roadmap lives locally)
 docs/

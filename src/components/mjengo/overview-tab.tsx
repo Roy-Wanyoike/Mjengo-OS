@@ -17,12 +17,17 @@ import {
   downloadCSV, materialsLedgerCSV, attendanceCSV, transactionsCSV, projectSummaryCSV, projectFilePrefix,
 } from '@/components/mjengo/export-utils'
 import {
+  downloadDailyReportCSV, downloadWeeklyReportCSV, downloadFinancialReportCSV,
+  downloadProcurementReportCSV, downloadWeeklyReportPDF,
+} from '@/components/mjengo/report-utils'
+import { HEALTH_INPUTS, type HealthSnapshot } from '@/modules/intel/types'
+import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
 import {
   AlertTriangle, TrendingUp, Users, Wallet, Camera, MessageSquareText, ShieldAlert,
   TriangleAlert, Info, CheckCircle2, Sparkles, Send, CalendarDays, MapPin, RefreshCw,
-  Download, ReceiptText,
+  Download, ReceiptText, HeartPulse, FileDown, ChevronDown, FileText,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, dateShort } from '@/lib/format'
@@ -46,8 +51,184 @@ function SeverityIcon({ severity }: { severity: string }) {
   return <Info className="w-4 h-4 text-stone-400" aria-hidden />
 }
 
+// ---------------- Project health card (spec §48, F-INSIGHT) ----------------
+
+const GRADE_META: Record<string, { label: string; chip: string; bar: string }> = {
+  good: { label: 'Good', chip: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100 border-0', bar: 'bg-emerald-600' },
+  attention: { label: 'Attention', chip: 'bg-amber-100 text-amber-800 hover:bg-amber-100 border-0', bar: 'bg-amber-500' },
+  poor: { label: 'Poor', chip: 'bg-red-100 text-red-700 hover:bg-red-100 border-0', bar: 'bg-red-500' },
+}
+
+/**
+ * Transparent health score — overall out of 100 prominent, six dimension bars
+ * with grade chips and one-line summaries citing the real numbers, plus an
+ * expandable "How this is computed" section (never an unexplained score).
+ * Renders for BOTH roles (owner + client view).
+ */
+function HealthCard({ health }: { health: HealthSnapshot | null }) {
+  const [showHow, setShowHow] = useState(false)
+
+  if (!health) {
+    return (
+      <Card className="border-stone-200 shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
+            <HeartPulse className="h-5 w-5 text-amber-600" aria-hidden /> Project health
+          </CardTitle>
+          <CardDescription>Computing the six-dimension health score…</CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+
+  const overallGrade = GRADE_META[health.overall >= 80 ? 'good' : health.overall >= 50 ? 'attention' : 'poor']
+
+  return (
+    <Card className="border-stone-200 shadow-sm">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
+          <HeartPulse className="h-5 w-5 text-amber-600" aria-hidden /> Project health
+        </CardTitle>
+        <CardDescription>
+          Six transparent dimensions — progress, budget, schedule, procurement, issues, evidence.
+          Computed {dateShort(health.computedAt)} from live project rows.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col sm:flex-row gap-6">
+          {/* Overall score — prominent */}
+          <div className="sm:w-44 shrink-0 flex flex-row sm:flex-col items-center sm:items-start justify-between gap-3">
+            <div>
+              <p className="text-4xl font-bold text-stone-900 tabular-nums leading-none">
+                {health.overall}
+                <span className="text-lg font-medium text-stone-400">/100</span>
+              </p>
+              <p className="text-xs text-stone-500 mt-1">overall health</p>
+            </div>
+            <Badge className={`text-xs ${overallGrade.chip}`}>
+              {overallGrade.label}
+            </Badge>
+          </div>
+
+          {/* Dimension bars */}
+          <div className="flex-1 space-y-3.5 min-w-0">
+            {health.dimensions.map((d) => {
+              const meta = GRADE_META[d.grade] ?? GRADE_META.attention
+              return (
+                <div key={d.key}>
+                  <div className="flex items-center justify-between mb-1 gap-2">
+                    <span className="text-sm font-medium text-stone-800">{d.label}</span>
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      <span className="text-sm font-bold tabular-nums text-stone-700">{d.score}</span>
+                      <Badge className={`text-[10px] ${meta.chip}`}>{meta.label}</Badge>
+                    </span>
+                  </div>
+                  <Progress value={d.score} className={`h-2 bg-stone-200 [&>[data-slot=progress-indicator]]:${meta.bar}`} />
+                  <p className="text-[11px] text-stone-500 mt-1 leading-snug">{d.summary}</p>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Expandable: how each dimension is computed (spec §48 — explain the score) */}
+        <div className="mt-4 border-t border-stone-100 pt-3">
+          <button
+            type="button"
+            onClick={() => setShowHow((v) => !v)}
+            aria-expanded={showHow}
+            className="flex items-center gap-1.5 text-xs font-semibold text-stone-600 hover:text-stone-900 min-h-8"
+          >
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showHow ? '' : '-rotate-90'}`} aria-hidden />
+            How this is computed
+          </button>
+          {showHow && (
+            <dl className="mt-2 space-y-2 text-xs text-stone-600" aria-label="Health score inputs">
+              {health.dimensions.map((d) => (
+                <div key={d.key} className="grid grid-cols-[110px_1fr] gap-2">
+                  <dt className="font-semibold text-stone-800">{d.label}</dt>
+                  <dd className="leading-snug">{HEALTH_INPUTS[d.key]}</dd>
+                </div>
+              ))}
+              <div className="pt-1 text-[11px] text-stone-400">
+                Overall = mean of the six dimension scores. Grades: Good ≥ 80 · Attention 50-79 · Poor &lt; 50.
+                Every input row is queryable — same rows in, same score out.
+              </div>
+            </dl>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------- Reports menu (spec §49 + §79, F-INSIGHT) ----------------
+
+const REPORT_ITEMS: Array<{ key: string; label: string; kind: 'csv' | 'pdf' }> = [
+  { key: 'daily', label: 'Daily report (CSV)', kind: 'csv' },
+  { key: 'weekly', label: 'Weekly report (CSV)', kind: 'csv' },
+  { key: 'financial', label: 'Financial report (CSV)', kind: 'csv' },
+  { key: 'procurement', label: 'Procurement report (CSV)', kind: 'csv' },
+  { key: 'weekly-pdf', label: 'Weekly report (PDF)', kind: 'pdf' },
+]
+
+/** Reports popover — 4 CSV variants + the weekly PDF, all from live project data. */
+function ReportsMenu({ disabled }: { disabled?: boolean }) {
+  const data = useMjengo((s) => s.data)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  if (!data) return null
+
+  async function downloadReport(key: string) {
+    if (busy || !data) return
+    setBusy(key)
+    try {
+      if (key === 'daily') {
+        const f = downloadDailyReportCSV(data)
+        toast.success(`${f} downloaded — generated from live project data`)
+      } else if (key === 'weekly') {
+        const f = downloadWeeklyReportCSV(data)
+        toast.success(`${f} downloaded — generated from live project data`)
+      } else if (key === 'financial') {
+        const f = downloadFinancialReportCSV(data)
+        toast.success(`${f} downloaded — generated from live project data`)
+      } else if (key === 'procurement') {
+        const f = downloadProcurementReportCSV(data)
+        toast.success(`${f} downloaded — generated from live project data`)
+      } else if (key === 'weekly-pdf') {
+        const f = await downloadWeeklyReportPDF(data)
+        toast.success(`${f} downloaded — generated from live project data`)
+      }
+    } catch (e) {
+      console.error('report download failed', e)
+      toast.error('Report build failed — nothing was downloaded')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-1.5" disabled={disabled || busy !== null}
+          aria-label="Download project reports">
+          <FileDown className="w-4 h-4" aria-hidden /> Reports
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {REPORT_ITEMS.map((r) => (
+          <DropdownMenuItem key={r.key} onSelect={() => void downloadReport(r.key)}>
+            <FileText className="w-3.5 h-3.5 mr-1.5" aria-hidden /> {r.label}
+          </DropdownMenuItem>
+        ))}
+        <p className="px-2 py-1.5 text-[10px] text-stone-400">Generated from live project data — nothing fabricated.</p>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
-  const { data, dispatch, viewMode, shareToken, clientRole, online } = useMjengo()
+  const { data, dispatch, viewMode, shareToken, clientRole, online, dataMode } = useMjengo()
   const [recapBusy, setRecapBusy] = useState(false)
   const [photoOpen, setPhotoOpen] = useState<string | null>(null)
   const [expenseOpen, setExpenseOpen] = useState(false)
@@ -111,31 +292,34 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
 
   return (
     <div className="space-y-6">
-      {/* Owner toolbar: exports + record expense (hidden in client preview) */}
-      {!isClient && (
-        <div className="flex items-center gap-2 flex-wrap" role="toolbar" aria-label="Project exports and expenses">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="gap-1.5" aria-label="Export project data as CSV">
-                <Download className="w-4 h-4" aria-hidden /> Export
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem onSelect={() => exportCSV('summary')}>Project summary</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => exportCSV('materials')}>Materials ledger</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => exportCSV('attendance')}>Attendance &amp; wages</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => exportCSV('transactions')}>Transactions CSV</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            size="sm"
-            className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white"
-            onClick={() => setExpenseOpen(true)}
-          >
-            <ReceiptText className="w-4 h-4" aria-hidden /> Record expense
-          </Button>
-        </div>
-      )}
+      {/* Toolbar: exports + reports (reports for BOTH roles) + record expense (owner only) */}
+      <div className="flex items-center gap-2 flex-wrap" role="toolbar" aria-label="Project exports, reports and expenses">
+        <ReportsMenu />
+        {!isClient && (
+          <>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-1.5" aria-label="Export project data as CSV">
+                  <Download className="w-4 h-4" aria-hidden /> Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onSelect={() => exportCSV('summary')}>Project summary</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => exportCSV('materials')}>Materials ledger</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => exportCSV('attendance')}>Attendance &amp; wages</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => exportCSV('transactions')}>Transactions CSV</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              size="sm"
+              className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={() => setExpenseOpen(true)}
+            >
+              <ReceiptText className="w-4 h-4" aria-hidden /> Record expense
+            </Button>
+          </>
+        )}
+      </div>
 
       {/* KPI cards */}
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" aria-label="Key metrics">
@@ -188,6 +372,9 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
           </CardContent>
         </Card>
       </section>
+
+      {/* Project health score (spec §48) — both roles */}
+      <HealthCard health={data.intel.health} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Burn-down chart */}
@@ -345,9 +532,17 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
             <CardDescription>Auto-generated WhatsApp digest for the diaspora client — no more evening calls</CardDescription>
           </div>
           {!isClient && (
-            <Button size="sm" onClick={() => void generateRecap()} disabled={recapBusy || !online} className="gap-1.5 shrink-0 bg-amber-600 hover:bg-amber-700 text-white">
+            <Button
+              size="sm"
+              onClick={() => void generateRecap()}
+              disabled={recapBusy || !online}
+              title={dataMode === 'data_saver'
+                ? 'Data Saver on — the recap is a text-only digest (no images fetched)'
+                : undefined}
+              className="gap-1.5 shrink-0 bg-amber-600 hover:bg-amber-700 text-white"
+            >
               {recapBusy ? <RefreshCw className="w-4 h-4 animate-spin" aria-hidden /> : <Send className="w-4 h-4" aria-hidden />}
-              {recapBusy ? 'Writing…' : 'Generate today\'s recap'}
+              {recapBusy ? 'Writing…' : dataMode === 'data_saver' ? 'Generate recap · Data Saver (text-only)' : 'Generate today\'s recap'}
             </Button>
           )}
         </CardHeader>

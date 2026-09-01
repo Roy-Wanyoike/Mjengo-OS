@@ -28,6 +28,9 @@ export interface CreateProjectInput {
 
 export type ViewMode = 'owner' | 'client'
 
+/** Connectivity mode (spec §74 low-data): 'normal' | 'data_saver'. */
+export type DataMode = 'normal' | 'data_saver'
+
 /** Actions a client may perform (shared with the server guards — single source of truth). */
 export { CLIENT_ACTIONS } from '@/lib/client-actions'
 import { CLIENT_ACTIONS as CLIENT_ACTION_LIST } from '@/lib/client-actions'
@@ -51,6 +54,9 @@ interface MjengoState {
   syncing: boolean
   outbox: OutboxItem[]
   lastSyncAt: number | null
+  /** Low-data mode (spec §74) — persisted so it survives reloads. */
+  dataMode: DataMode
+  setDataMode: (m: DataMode) => void
   load: () => Promise<void>
   /** Boot the public client view from a share token (GET /api/share). */
   bootFromShare: (token: string, fromUrl?: boolean) => Promise<void>
@@ -383,6 +389,14 @@ export const useMjengo = create<MjengoState>()(
       syncing: false,
       outbox: [],
       lastSyncAt: null,
+      dataMode: 'normal',
+
+      setDataMode: (m) => {
+        set({ dataMode: m })
+        toast.success(m === 'data_saver'
+          ? 'Data Saver on — photos are compressed before upload, background calls reduced'
+          : 'Data Saver off — normal uploads and background calls')
+      },
 
       bootFromShare: async (token: string, fromUrl = false) => {
         set({ loading: !get().data, shareError: null })
@@ -511,9 +525,17 @@ export const useMjengo = create<MjengoState>()(
       setViewMode: (v) => set({ viewMode: v }),
 
       setOnline: (v) => {
+        const wasOnline = get().online
+        const hadQueued = get().outbox.length > 0
         set({ online: v })
-        if (v && get().outbox.length > 0) {
-          void get().syncNow()
+        if (v && !wasOnline) {
+          if (hadQueued) {
+            // Real reconnection (or ending a simulated-offline run): drain the queue.
+            toast.success('Back online — syncing queued actions')
+            void get().syncNow()
+          } else {
+            toast.success('Back online')
+          }
         }
       },
 
@@ -590,7 +612,15 @@ export const useMjengo = create<MjengoState>()(
             console.error('action failed', json.error)
             return false
           } catch {
-            return false
+            // Network-level failure while we believed we were online (dropped
+            // connection, server unreachable): mirror the simulated-offline
+            // branch — optimistic local write + queue for sync — so a field
+            // user never silently loses an action.
+            const item: OutboxItem = { id: uid(), type, payload, label, createdAt: Date.now(), projectId: projectId ?? null }
+            const data = get().data
+            if (data) set({ data: reduceLocal(data, type, payload) })
+            set({ outbox: [...get().outbox, item] })
+            return true
           } finally {
             set({ actionBusy: null })
           }
@@ -647,6 +677,7 @@ export const useMjengo = create<MjengoState>()(
         lastSyncAt: s.lastSyncAt,
         activeProjectId: s.activeProjectId,
         shareToken: s.shareToken,
+        dataMode: s.dataMode,
       }),
     },
   ),
