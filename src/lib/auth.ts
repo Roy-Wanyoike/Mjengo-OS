@@ -12,7 +12,7 @@ export interface MjengoSessionUser {
   id: string
   email: string
   name: string
-  role: 'contractor' | 'client' | 'admin' | string
+  role: 'contractor' | 'client' | 'admin' | 'finance' | 'supervisor' | string
   /** For client-role users: the project they are buying. Null for site team / admin. */
   projectId: string | null
 }

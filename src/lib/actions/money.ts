@@ -4,19 +4,29 @@
 //
 // Rules of the house:
 //  - Money never moves without photo proof (requestRelease requires ≥1 evidence photo).
-//  - Only the client decides releases and variations (decide actions are client actions).
-//  - A release both debits the escrow wallet and writes a Transaction (type 'milestone').
+//  - Only the client decides releases and variations — the decision-maker is
+//    resolved from the signed-in session (modules/wallet/session.ts), never
+//    from the payload `by` (F3). The sessionless share-link path falls back to
+//    the payload actor, exactly like the invoices module.
+//  - A release debits the escrow ledger account, credits project EXPENSE and
+//    writes a Transaction (type 'milestone', costCode 'milestone', ledgerTxnId)
+//    — all in ONE db.$transaction with the balance checked inside it (F2).
+//  - escrow.topup posts CASH→ESCROW ledger rows and keeps the wallet
+//    projection in sync in the same transaction (the ledger is the source of
+//    truth — spec §39).
 
 import { db } from '@/lib/db'
+import { postEscrowTopup, releaseMilestoneAtomic } from '@/modules/wallet/service'
+import { currentActor, requireDeciderRole } from '@/modules/wallet/session'
 
 export const MONEY_ACTIONS = [
-  'escrow.topup', // { amount>0, method? ('mpesa'|'bank'|'card'), reference? }
+  'escrow.topup', // { amount>0, method? ('mpesa'|'bank'|'card'), reference? } — posts CASH→ESCROW ledger rows atomically
   'milestone.create', // { name, amount, phaseId? }
   'milestone.evidence', // { id, photoIds: string[] } — proof-of-work gate
   'milestone.requestRelease', // { id } — requires ≥1 evidence photo
-  'milestone.decide', // { id, decision: 'approve'|'reject', by, note? } — release moves escrow → transaction
+  'milestone.decide', // { id, decision: 'approve'|'reject', note? } — CLIENT-only (session-gated); release posts ESCROW→EXPENSE + Transaction atomically
   'variation.submit', // { title, description, budgetImpact, phaseId?, submittedBy? }
-  'variation.decide', // { id, decision: 'approve'|'reject', by, note? } — approve adjusts phase budget
+  'variation.decide', // { id, decision: 'approve'|'reject', note? } — CLIENT-only (session-gated); approve adjusts phase budget
 ] as const
 
 // ---------------- helpers ----------------
@@ -68,12 +78,18 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
         typeof payload?.reference === 'string' && payload.reference.trim()
           ? payload.reference.trim()
           : autoReference(method)
-      const wallet = await db.escrowWallet.upsert({
-        where: { projectId },
-        create: { projectId, balance: amount },
-        update: { balance: { increment: amount } },
+      // Actor from the session (falls back honestly when sessionless);
+      // ledger posting + wallet projection + ledgerAccountId all commit in ONE
+      // db.$transaction via postEscrowTopup (F2 — the A-1 top-up mystery is gone:
+      // top-ups now post CASH→ESCROW ledger rows).
+      const actor = await currentActor()
+      const by = actor.name?.trim() || 'Client'
+      const { ledgerRef, balance } = await postEscrowTopup(projectId, amount, by, {
+        reference,
+        method,
+        role: actor.role ?? 'client',
       })
-      return { balance: wallet.balance, reference }
+      return { balance, reference, ledgerRef }
     }
 
     case 'milestone.create': {
@@ -141,38 +157,32 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
     case 'milestone.decide': {
       const id = String(payload?.id ?? '')
       const decision = payload?.decision
-      const by = String(payload?.by ?? '').trim()
       if (!id) throw new Error('Milestone id required')
       if (decision !== 'approve' && decision !== 'reject') throw new Error("decision must be 'approve' or 'reject'")
-      if (!by) throw new Error('Decision maker (by) required')
       const milestone = await db.milestone.findFirst({ where: { id, projectId } })
       if (!milestone) throw new Error('Milestone not found in this project')
       if (milestone.status !== 'release_requested') throw new Error('Milestone is not awaiting a client decision')
       const note =
         typeof payload?.note === 'string' && payload.note.trim() ? payload.note.trim() : null
 
+      // F3: the decision-maker is resolved from the signed-in session — the
+      // payload `by` is trusted ONLY on the sessionless share-link path
+      // (requireDeciderRole falls back to the payload actor / project client
+      // there, exactly like the invoices module).
+      const decider = await requireDeciderRole(projectId, {
+        allowed: ['client'],
+        action: 'decide milestone releases',
+        payloadBy: payload?.by,
+      })
+
       if (decision === 'approve') {
-        const wallet = await db.escrowWallet.findUnique({ where: { projectId } })
-        if (!wallet || wallet.balance < milestone.amount) throw new Error('Insufficient escrow balance — top up first')
-        const now = new Date()
-        await db.milestone.update({
-          where: { id },
-          data: { status: 'released', decidedAt: now, decidedBy: by, decisionNote: note, releasedAt: now },
-        })
-        const updatedWallet = await db.escrowWallet.update({
-          where: { projectId },
-          data: { balance: { decrement: milestone.amount } },
-        })
-        await db.transaction.create({
-          data: {
-            projectId,
-            type: 'milestone',
-            amount: milestone.amount,
-            method: 'escrow',
-            reference: `MJP-${id.slice(-6)}`,
-            note: `${milestone.name} released to contractor — approved by ${by}`,
-            date: now,
-          },
+        // Atomic: milestone update + escrow debit + EXPENSE credit + Transaction
+        // row (costCode 'milestone' + ledgerTxnId), balance re-checked INSIDE the
+        // transaction (F2).
+        const released = await releaseMilestoneAtomic(projectId, {
+          milestone: { id: milestone.id, name: milestone.name, amount: milestone.amount },
+          decider,
+          note,
         })
         const project = await db.project.findUnique({ where: { id: projectId } })
         await db.notification.create({
@@ -180,17 +190,17 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
             projectId,
             kind: 'milestone',
             title: `Released: ${milestone.name}`,
-            body: `${kes(milestone.amount)} released — approved by ${by}`,
+            body: `${kes(milestone.amount)} released — approved by ${decider.name} (ledger ${released.ledgerRef})`,
             recipient: project?.client ?? null,
           },
         })
-        return { id, balance: updatedWallet.balance }
+        return { id, balance: released.balance, ledgerRef: released.ledgerRef }
       }
 
       // reject — no money moves, decision history preserved
       await db.milestone.update({
         where: { id },
-        data: { status: 'rejected', decidedAt: new Date(), decidedBy: by, decisionNote: note },
+        data: { status: 'rejected', decidedAt: new Date(), decidedBy: decider.name, decisionNote: note },
       })
       const wallet = await db.escrowWallet.findUnique({ where: { projectId } })
       return { id, balance: wallet?.balance ?? 0 }
@@ -227,34 +237,43 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
     case 'variation.decide': {
       const id = String(payload?.id ?? '')
       const decision = payload?.decision
-      const by = String(payload?.by ?? '').trim()
       if (!id) throw new Error('Variation id required')
       if (decision !== 'approve' && decision !== 'reject') throw new Error("decision must be 'approve' or 'reject'")
-      if (!by) throw new Error('Decision maker (by) required')
       const variation = await db.variationOrder.findFirst({ where: { id, projectId } })
       if (!variation) throw new Error('Variation not found in this project')
       if (variation.status !== 'submitted') throw new Error('Variation is not awaiting a client decision')
       const note =
         typeof payload?.note === 'string' && payload.note.trim() ? payload.note.trim() : null
 
+      // F3: client-only decision, resolved from the session (share-link fallback
+      // mirrors the invoices module — payload `by` is never trusted with a session)
+      const decider = await requireDeciderRole(projectId, {
+        allowed: ['client'],
+        action: 'decide variation orders',
+        payloadBy: payload?.by,
+      })
+
       if (decision === 'approve') {
-        // Budget moves ONLY after client approval
-        if (variation.phaseId) {
-          const phase = await db.phase.findFirst({ where: { id: variation.phaseId, projectId } })
-          if (phase) {
-            await db.phase.update({
-              where: { id: phase.id },
-              data: { budget: Math.max(0, phase.budget + variation.budgetImpact) },
-            })
+        // Budget moves ONLY after client approval — phase + project budgets
+        // adjust and the variation flips in one db.$transaction (F2)
+        await db.$transaction(async (tx) => {
+          if (variation.phaseId) {
+            const phase = await tx.phase.findFirst({ where: { id: variation.phaseId, projectId } })
+            if (phase) {
+              await tx.phase.update({
+                where: { id: phase.id },
+                data: { budget: Math.max(0, phase.budget + variation.budgetImpact) },
+              })
+            }
           }
-        }
-        await db.project.update({
-          where: { id: projectId },
-          data: { budget: { increment: variation.budgetImpact } },
-        })
-        await db.variationOrder.update({
-          where: { id },
-          data: { status: 'approved', decidedBy: by, decidedAt: new Date(), decisionNote: note },
+          await tx.project.update({
+            where: { id: projectId },
+            data: { budget: { increment: variation.budgetImpact } },
+          })
+          await tx.variationOrder.update({
+            where: { id },
+            data: { status: 'approved', decidedBy: decider.name, decidedAt: new Date(), decisionNote: note },
+          })
         })
         const project = await db.project.findUnique({ where: { id: projectId } })
         await db.notification.create({
@@ -262,7 +281,7 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
             projectId,
             kind: 'variation',
             title: `Variation approved: ${variation.title}`,
-            body: `Budget ${variation.budgetImpact >= 0 ? 'increased' : 'reduced'} by ${kes(Math.abs(variation.budgetImpact))}`,
+            body: `Budget ${variation.budgetImpact >= 0 ? 'increased' : 'reduced'} by ${kes(Math.abs(variation.budgetImpact))} — approved by ${decider.name}`,
             recipient: project?.client ?? null,
           },
         })
@@ -272,7 +291,7 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
       // reject — budget untouched
       await db.variationOrder.update({
         where: { id },
-        data: { status: 'rejected', decidedBy: by, decidedAt: new Date(), decisionNote: note },
+        data: { status: 'rejected', decidedBy: decider.name, decidedAt: new Date(), decisionNote: note },
       })
       return { id }
     }

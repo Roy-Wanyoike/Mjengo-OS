@@ -33,10 +33,29 @@ export const PLATFORM_ACCOUNTS = [
 export async function ensureAccount(code: string): Promise<{ id: string; kind: string; name: string }> {
   const existing = await db.ledgerAccount.findUnique({ where: { code } })
   if (existing) return { id: existing.id, kind: existing.kind, name: existing.name }
+  return ensureAccountTx(db, code)
+}
+
+/**
+ * Account resolution INSIDE a db.$transaction — used by postLedgerTransactionInTx
+ * so atomic money flows never post against a half-created chart of accounts.
+ * Understands the platform accounts, the ESCROW:<projectId> / EXPENSE:<projectId>
+ * project convention and pre-created WALLET:<code> accounts; anything else must
+ * be created explicitly first.
+ */
+export async function ensureAccountTx(tx: Prisma.TransactionClient, code: string): Promise<{ id: string; kind: string; name: string }> {
+  const existing = await tx.ledgerAccount.findUnique({ where: { code } })
+  if (existing) return { id: existing.id, kind: existing.kind, name: existing.name }
   const platform = PLATFORM_ACCOUNTS.find((a) => a.code === code)
   if (platform) {
-    const created = await db.ledgerAccount.create({ data: { code: platform.code, name: platform.name, kind: platform.kind, normalSide: platform.normalSide, ownerType: 'platform' } })
+    const created = await tx.ledgerAccount.create({ data: { code: platform.code, name: platform.name, kind: platform.kind, normalSide: platform.normalSide, ownerType: 'platform' } })
     return { id: created.id, kind: created.kind, name: created.name }
+  }
+  if (code.startsWith('ESCROW:')) {
+    return ensureProjectAccountTx(tx, code.slice('ESCROW:'.length), code, `Project Escrow — ${code.slice(-6)}`, 'liability')
+  }
+  if (code.startsWith('EXPENSE:')) {
+    return ensureProjectAccountTx(tx, code.slice('EXPENSE:'.length), code, `Project Expense — ${code.slice(-6)}`, 'expense')
   }
   throw new Error(`Unknown ledger account code: ${code} — create the account first`)
 }
@@ -45,7 +64,14 @@ export async function ensureAccount(code: string): Promise<{ id: string; kind: s
 export async function ensureProjectAccount(projectId: string, code: string, name: string, kind: string): Promise<{ id: string; kind: string; name: string }> {
   const existing = await db.ledgerAccount.findUnique({ where: { code } })
   if (existing) return { id: existing.id, kind: existing.kind, name: existing.name }
-  const created = await db.ledgerAccount.create({
+  return ensureProjectAccountTx(db, projectId, code, name, kind)
+}
+
+/** Project-scoped account creation inside a db.$transaction. */
+export async function ensureProjectAccountTx(tx: Prisma.TransactionClient, projectId: string, code: string, name: string, kind: string): Promise<{ id: string; kind: string; name: string }> {
+  const existing = await tx.ledgerAccount.findUnique({ where: { code } })
+  if (existing) return { id: existing.id, kind: existing.kind, name: existing.name }
+  const created = await tx.ledgerAccount.create({
     data: { code, name, kind, normalSide: kind === 'asset' || kind === 'expense' ? 'debit' : 'credit', projectId, ownerType: 'project', ownerId: projectId },
   })
   return { id: created.id, kind: created.kind, name: created.name }
@@ -66,14 +92,14 @@ export function nextLedgerRef(): string {
   return `LX-${now.getFullYear()}-${String(refCounter).padStart(6, '0')}-${Date.now() % 1000}`
 }
 
-/**
- * Post one balanced double-entry transaction. Fails hard when:
- *  - lines are empty / amounts are non-positive
- *  - debits ≠ credits (spec §39 invariant)
- *  - idempotency key already used (returns the original txn — no double post)
- */
-export async function postLedgerTransaction(input: PostLedgerInput) {
-  const lines = input.lines
+/** Cash account code for a payment rail — one mapping, one source of truth. */
+export function cashAccountForMethod(method: string): 'CASH_MPESA' | 'CASH_BANK' {
+  // mpesa settles into the (simulated) mobile-money pool; bank / card / cash
+  // settle into the (simulated) bank float.
+  return String(method).toLowerCase() === 'mpesa' ? 'CASH_MPESA' : 'CASH_BANK'
+}
+
+function validateLines(lines: LedgerLineInput[]) {
   if (!lines.length) throw new Error('Ledger transaction needs at least one line')
   for (const l of lines) {
     if (!(l.amount > 0)) throw new Error('Ledger amounts must be positive')
@@ -84,50 +110,69 @@ export async function postLedgerTransaction(input: PostLedgerInput) {
   if (Math.abs(debit - credit) > 0.005) {
     throw new Error(`Unbalanced ledger transaction: debits ${debit} ≠ credits ${credit}`)
   }
+}
+
+/**
+ * Post one balanced double-entry transaction. Fails hard when:
+ *  - lines are empty / amounts are non-positive
+ *  - debits ≠ credits (spec §39 invariant)
+ *  - idempotency key already used (returns the original txn — no double post)
+ */
+export async function postLedgerTransaction(input: PostLedgerInput) {
+  return db.$transaction((tx) => postLedgerTransactionInTx(tx, input))
+}
+
+/**
+ * The posting core, INSIDE a caller-owned db.$transaction — used by every
+ * atomic money flow (escrow top-up, milestone release, invoice payment,
+ * wages, expense posting, payment requests). Runs the idempotency check and
+ * the chart-of-accounts resolution on the SAME tx client as the posting so
+ * the whole money movement commits or rolls back as one unit.
+ */
+export async function postLedgerTransactionInTx(tx: Prisma.TransactionClient, input: PostLedgerInput) {
+  validateLines(input.lines)
 
   if (input.idempotencyKey) {
-    const existing = await db.ledgerTransaction.findUnique({ where: { idempotencyKey: input.idempotencyKey } })
+    const existing = await tx.ledgerTransaction.findUnique({ where: { idempotencyKey: input.idempotencyKey } })
     if (existing) return existing
   }
 
   const resolved = await Promise.all(
-    lines.map(async (l) => ({ line: l, account: await ensureAccount(l.accountCode) })),
+    input.lines.map(async (l) => ({ line: l, account: await ensureAccountTx(tx, l.accountCode) })),
   )
 
   const reversalOf = input.reversalOfId
-    ? await db.ledgerTransaction.findUnique({ where: { id: input.reversalOfId } })
+    ? await tx.ledgerTransaction.findUnique({ where: { id: input.reversalOfId } })
     : null
 
-  return db.$transaction(async (tx) => {
-    const txn = await tx.ledgerTransaction.create({
-      data: {
-        ref: nextLedgerRef(),
-        projectId: input.projectId,
-        description: input.description,
-        occurredAt: input.occurredAt ?? new Date(),
-        postedBy: input.postedBy,
-        postedRole: input.postedRole,
-        reversalOfId: reversalOf?.id ?? null,
-        idempotencyKey: input.idempotencyKey ?? null,
-        entries: {
-          create: resolved.map(({ line, account }) => ({
-            accountId: account.id,
-            side: line.side,
-            amount: line.amount,
-            memo: line.memo ?? null,
-          })),
-        },
+  const txn = await tx.ledgerTransaction.create({
+    data: {
+      ref: nextLedgerRef(),
+      projectId: input.projectId,
+      description: input.description,
+      occurredAt: input.occurredAt ?? new Date(),
+      postedBy: input.postedBy,
+      postedRole: input.postedRole,
+      reversalOfId: reversalOf?.id ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      entries: {
+        create: resolved.map(({ line, account }) => ({
+          accountId: account.id,
+          side: line.side,
+          amount: line.amount,
+          memo: line.memo ?? null,
+        })),
       },
-      include: { entries: true },
-    })
-    if (reversalOf) {
-      await tx.ledgerTransaction.update({
-        where: { id: reversalOf.id },
-        data: { status: 'reversed', reversalRef: txn.ref },
-      })
-    }
-    return txn
+    },
+    include: { entries: true },
   })
+  if (reversalOf) {
+    await tx.ledgerTransaction.update({
+      where: { id: reversalOf.id },
+      data: { status: 'reversed', reversalRef: txn.ref },
+    })
+  }
+  return txn
 }
 
 /** Reverse a posted transaction with mirrored entries (never edit history). */

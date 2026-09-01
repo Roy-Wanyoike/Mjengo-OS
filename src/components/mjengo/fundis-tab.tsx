@@ -75,7 +75,7 @@ function last7Days(): string[] {
 function VerificationBadge({ verification, exceptionReason, compact = false }: { verification: string | null; exceptionReason?: string | null; compact?: boolean }) {
   const t = compact ? 'text-[9px]' : 'text-[10px]'
   if (verification === 'verified') {
-    return <Badge className={`bg-emerald-100 text-emerald-800 border-0 gap-1 ${t} hover:bg-emerald-100`} title="Worker self check-in — geofence, USSD or kiosk PIN evidence"><ShieldCheck className="w-3 h-3" aria-hidden />Verified</Badge>
+    return <Badge className={`bg-emerald-100 text-emerald-800 border-0 gap-1 ${t} hover:bg-emerald-100`} title="Worker self check-in — app, USSD or kiosk PIN evidence"><ShieldCheck className="w-3 h-3" aria-hidden />Verified</Badge>
   }
   if (verification === 'reported') {
     return <Badge className={`bg-amber-100 text-amber-800 border-0 gap-1 ${t} hover:bg-amber-100`} title="Manager-recorded — reported, not verified"><CircleAlert className="w-3 h-3" aria-hidden />Reported</Badge>
@@ -197,6 +197,8 @@ interface PayrollResult {
   amount: number
   forced?: boolean
   date?: string
+  /** Ledger transaction ref for the posted wage payout (F-MONEY). */
+  ledgerRef?: string
   requiringReview?: Array<{ workerId: string; name?: string; reason?: string | null }>
   reviewAmount?: number
 }
@@ -249,8 +251,8 @@ export function FundisTab() {
   }
 
   async function checkIn(workerId: string, workerName: string) {
-    const ok = await dispatch('attendance.checkin', { workerId, toggle: 'in', method: 'geofence' }, `Check in ${workerName}`)
-    if (ok) toast.success(online ? `${workerName} checked in (geofence verified)` : `Checked in on-device — queued (${outbox.length})`)
+    const ok = await dispatch('attendance.checkin', { workerId, toggle: 'in', method: 'app' }, `Check in ${workerName}`)
+    if (ok) toast.success(online ? `${workerName} checked in — evidence level recorded on the attendance row` : `Checked in on-device — queued (${outbox.length})`)
     else toast.error('Check-in failed')
   }
 
@@ -334,8 +336,10 @@ export function FundisTab() {
   }
 
   /**
-   * THE GATE: payroll.approve — direct POST because the UI needs the blocked
+   * THE GATE: wages.pay (F-MONEY) — direct POST because the UI needs the blocked
    * payload (list of records requiring review) to render the warning dialog.
+   * The payout posts a balanced ledger entry (costCode 'wages') through the
+   * payment-provider seam — simulated rails, honestly labelled.
    */
   async function runPayroll(force = false) {
     if (!data) return
@@ -349,7 +353,7 @@ export function FundisTab() {
       const res = await fetch('/api/actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'payroll.approve', payload: { force }, projectId: data.project.id }),
+        body: JSON.stringify({ type: 'wages.pay', payload: { force }, projectId: data.project.id }),
       })
       const json = await res.json()
       if (!json.ok) {
@@ -362,8 +366,8 @@ export function FundisTab() {
       } else if ((result.paid ?? 0) > 0) {
         toast.success(
           result.forced
-            ? `Payroll forced through — ${result.paid} fundis paid ${formatKES(result.amount)} (exceptions stay on record)`
-            : `Paid ${result.paid} fundis — ${formatKES(result.amount)} (M-Pesa B2C)`,
+            ? `Payroll forced through — ${result.paid} fundis paid ${formatKES(result.amount)} (exceptions stay on record; ledger ${result.ledgerRef ?? '—'})`
+            : `Paid ${result.paid} fundis — ${formatKES(result.amount)} recorded on the ledger${result.ledgerRef ? ` (${result.ledgerRef})` : ''} (simulated rails)`,
         )
       } else {
         toast.info('Nothing to pay — no unpaid wages for today')
@@ -581,7 +585,7 @@ export function FundisTab() {
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
           <div>
             <CardTitle className="text-lg text-stone-900">Attendance — last 7 days</CardTitle>
-            <CardDescription>Geofenced app check-ins + USSD (*384*88#) for feature phones</CardDescription>
+            <CardDescription>App check-ins + USSD (*384*88#) for feature phones</CardDescription>
           </div>
           <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={exportAttendance} aria-label="Export attendance and wages as CSV">
             <Download className="w-4 h-4" aria-hidden /> <span className="hidden sm:inline">Export CSV</span>
@@ -649,7 +653,7 @@ export function FundisTab() {
             </DialogTitle>
             <DialogDescription>
               Record today&rsquo;s crew in one pass. Manager-recorded = <strong>Reported</strong>, not Verified — verified
-              comes from the worker&rsquo;s own check-in (geofence, USSD or kiosk PIN).
+              comes from the worker&rsquo;s own check-in (app, USSD or kiosk PIN).
             </DialogDescription>
           </DialogHeader>
 

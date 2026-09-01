@@ -6,6 +6,7 @@
 //   contractor@mjengo.os / mjengo2026  → Site Manager (contractor, full owner app)
 //   client@mjengo.os     / mjengo2026  → Amina (Client)   (client role, boots "Nyumba Yangu")
 //   admin@mjengo.os      / admin2026   → Mjengo Admin     (admin, full owner app)
+//   finance@mjengo.os    / mjengo2026  → Fatuma (Finance) (finance role, F-MONEY — wallet/payment queue)
 
 import { PrismaClient } from '@prisma/client'
 import { randomBytes, scryptSync } from 'node:crypto'
@@ -45,6 +46,13 @@ async function main() {
         passwordHash: hashPassword('admin2026'),
         name: 'Mjengo Admin',
         role: 'admin',
+        projectId: null,
+      },
+      {
+        email: 'finance@mjengo.os',
+        passwordHash: hashPassword('mjengo2026'),
+        name: 'Fatuma (Finance)',
+        role: 'finance',
         projectId: null,
       },
     ],

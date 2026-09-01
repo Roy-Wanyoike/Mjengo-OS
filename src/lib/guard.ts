@@ -33,22 +33,41 @@ export function forbidden(role?: string) {
   )
 }
 
-type GuardedHandler = (
+// ---------------- role allowlists (F-MONEY: finance role lands, spec §36/§38) ----
+
+/**
+ * Roles that may operate the finance / wallet surface (spec §38 wallet API,
+ * payment execution, journals). Finance owns the queue; admin is superuser.
+ */
+export const FINANCE_ROLES: readonly string[] = ['finance', 'admin']
+
+/** Roles that may execute payments on behalf of the payer queue (incl. the client). */
+export const PAYMENT_ROLES: readonly string[] = ['finance', 'admin', 'client']
+
+/** Every known staff/finance role (defensive: unknown roles still fail closed). */
+export const KNOWN_ROLES: readonly string[] = [
+  'contractor', 'client', 'admin', 'finance', 'supervisor',
+]
+
+type GuardedHandler<C> = (
   req: NextRequest,
   session: NonNullable<GuardSession>,
+  ctx: C,
 ) => Promise<NextResponse> | NextResponse
 
 /**
  * Uniform server-side guard for owner APIs:
  * no session → 401 'Sign in required'; optional role allowlist → 403.
+ * The wrapped handler receives the route context (Next 16 dynamic-route
+ * `{ params }`) so guarded handlers can read path segments.
  */
-export function withGuard(handler: GuardedHandler, opts?: { roles?: readonly string[] }) {
-  return async (req: NextRequest): Promise<NextResponse> => {
+export function withGuard<C = unknown>(handler: GuardedHandler<C>, opts?: { roles?: readonly string[] }) {
+  return async (req: NextRequest, ctx: C): Promise<NextResponse> => {
     const session = await getSessionFromReq(req)
     if (!session) return unauthorized()
     if (opts?.roles && !opts.roles.includes(session.user.role)) {
       return forbidden(session.user.role)
     }
-    return handler(req, session)
+    return handler(req, session, ctx)
   }
 }

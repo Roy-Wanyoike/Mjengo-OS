@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { useSession } from 'next-auth/react'
 import { useMjengo } from '@/hooks/use-mjengo'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,8 +14,10 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import type { ProjectPayload } from '@/lib/mjengo'
+import type { PaymentRequestRow } from '@/modules/wallet/types'
+import { EMPTY_FINANCE_SLICE } from '@/modules/wallet/types'
 import {
-  Banknote, Camera, Check, Hourglass, ImageOff, Lock, Minus, Plus, Send, ShieldCheck, TrendingUp, Wallet, X,
+  Banknote, BookOpen, Camera, Check, CheckCheck, Hourglass, ImageOff, Lock, Minus, Plus, Send, ShieldCheck, TrendingUp, Wallet, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, dateShort } from '@/lib/format'
@@ -147,10 +150,58 @@ function EvidenceThumb({ photo }: { photo: PhotoRow | undefined }) {
   )
 }
 
+// ---------------- payment request + ledger bits (F-MONEY) ----------------
+
+function PaymentRequestStatusBadge({ status }: { status: string }) {
+  if (status === 'paid')
+    return <Badge className="border-0 bg-emerald-100 text-emerald-800 gap-1 hover:bg-emerald-100"><CheckCheck className="h-3 w-3" aria-hidden /> Paid</Badge>
+  if (status === 'approved')
+    return <Badge className="border-0 bg-sky-100 text-sky-800 gap-1 hover:bg-sky-100"><Banknote className="h-3 w-3" aria-hidden /> Approved — ready to pay</Badge>
+  if (status === 'rejected')
+    return <Badge className="border-0 bg-rose-100 text-rose-800 gap-1 hover:bg-rose-100"><X className="h-3 w-3" aria-hidden /> Rejected</Badge>
+  return <Badge className="border-0 bg-amber-100 text-amber-900 gap-1 hover:bg-amber-100"><Hourglass className="h-3 w-3" aria-hidden /> Awaiting decision</Badge>
+}
+
+const PR_METHODS: Array<{ value: string; label: string }> = [
+  { value: 'mpesa', label: 'M-Pesa (simulated)' },
+  { value: 'bank', label: 'Bank transfer (simulated)' },
+  { value: 'cash', label: 'Cash (recorded)' },
+  { value: 'card', label: 'Card (simulated)' },
+  { value: 'wallet', label: 'Escrow wallet' },
+]
+
+/** Escrow projection vs ledger-derived balance — the honesty chip (spec §39). */
+function EscrowConsistencyChip({ escrow }: { escrow: NonNullable<ProjectPayload['finance']['escrow']> }) {
+  if (escrow.consistent) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge className="border-0 bg-emerald-100 text-emerald-800 gap-1 hover:bg-emerald-100">
+          <BookOpen className="h-3 w-3" aria-hidden /> Ledger consistent
+        </Badge>
+        <span className="text-[11px] text-stone-400">
+          Derived {formatKES(escrow.derived)} = stored projection {formatKES(escrow.projected)} — every top-up and release posts ledger rows
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge className="border-0 bg-amber-100 text-amber-900 gap-1 hover:bg-amber-100">
+        <ShieldCheck className="h-3 w-3" aria-hidden /> Drift {formatKES(Math.abs(escrow.drift))} — investigate
+      </Badge>
+      <span className="text-[11px] text-amber-700">
+        Ledger-derived {formatKES(escrow.derived)} ≠ projection {formatKES(escrow.projected)} — the ledger is the source of truth
+      </span>
+    </div>
+  )
+}
+
 // ---------------- main tab ----------------
 
 export function MoneyTab() {
-  const { data, dispatch, online, outbox, viewMode, actionBusy } = useMjengo()
+  const { data, dispatch, online, outbox, viewMode, actionBusy, clientRole, shareToken } = useMjengo()
+  const { data: session } = useSession()
+  const sessionRole = String(session?.user?.role ?? '')
   const busy = actionBusy !== null
 
   // top-up dialog
@@ -187,11 +238,36 @@ export function MoneyTab() {
   const [vAmount, setVAmount] = useState('')
   const [vPhase, setVPhase] = useState('none')
 
+  // payment request create dialog (F-MONEY)
+  const [prOpen, setPrOpen] = useState(false)
+  const [prDesc, setPrDesc] = useState('')
+  const [prAmount, setPrAmount] = useState('')
+  const [prPayee, setPrPayee] = useState('')
+  const [prMethod, setPrMethod] = useState('mpesa')
+  const [prLink, setPrLink] = useState('none')
+
+  // payment request reject dialog
+  const [prReject, setPrReject] = useState<PaymentRequestRow | null>(null)
+  const [prNote, setPrNote] = useState('')
+
+  // payment request approve confirm
+  const [prApprove, setPrApprove] = useState<PaymentRequestRow | null>(null)
+
   const refPreview = useMemo(() => previewReference(tMethod), [topupOpen, tMethod])
 
   if (!data) return null
   const isClient = viewMode === 'client'
   const clientName = data.project.client
+  // Stale persisted payloads (pre-F-MONEY) may lack the finance slice — fall
+  // back to the empty slice until the next payload refresh lands.
+  const finance = data.finance ?? EMPTY_FINANCE_SLICE
+  // Real decider surfaces: a logged-in client-role user, or finance/admin
+  // sessions. Share-link visitors are read-only for payment requests (their
+  // allowlist covers milestones/variations), and contractors see the clearly
+  // labelled "acting as client" demo flow — the server records the true actor.
+  const isFinanceSession = !isClient && (sessionRole === 'finance' || sessionRole === 'admin')
+  const isContractorActing = !isClient && !isFinanceSession
+  const canDecideRequests = (isClient && clientRole && !shareToken) || isFinanceSession || isContractorActing
 
   const balance = data.escrow?.balance ?? 0
   const lockedAmount = data.milestones
@@ -297,6 +373,62 @@ export function MoneyTab() {
       setRejectTarget(null); setRejectNote('')
       setApproveConfirm(null)
     } else toast.error('Could not record the decision')
+  }
+
+  // ---------------- payment request handlers (F-MONEY) ----------------
+
+  async function createPaymentRequest() {
+    const amount = Number(prAmount)
+    if (!prDesc.trim()) { toast.error('Describe what the payment is for'); return }
+    if (!prAmount || Number.isNaN(amount) || amount <= 0) { toast.error('Payment request amount must be greater than zero'); return }
+    if (!prPayee.trim()) { toast.error('Who gets paid? (payee)'); return }
+    const related: { relatedEntityType?: string; relatedEntityId?: string } = {}
+    if (prLink !== 'none') {
+      const [kind, id] = prLink.split(':')
+      related.relatedEntityType = kind
+      related.relatedEntityId = id
+    }
+    const ok = await dispatch('payment.request', {
+      description: prDesc.trim(), amount, payee: prPayee.trim(), method: prMethod, ...related,
+    }, `Payment request: ${formatKES(amount)} to ${prPayee.trim()}`)
+    if (ok) {
+      toast.success(online ? `Payment request submitted — awaiting approval` : offlineNote)
+      setPrOpen(false); setPrDesc(''); setPrAmount(''); setPrPayee(''); setPrMethod('mpesa'); setPrLink('none')
+    } else toast.error('Could not create the payment request')
+  }
+
+  async function decidePaymentRequest(pr: PaymentRequestRow, decision: 'approve' | 'reject', note?: string) {
+    const ok = await dispatch('payment.decide', {
+      id: pr.id, decision, note: note?.trim() || undefined,
+    }, `Payment request ${decision}: ${pr.requestCode}`)
+    if (ok) {
+      toast.success(decision === 'approve'
+        ? `${pr.requestCode} approved — ${formatKES(pr.amount)} ready to pay`
+        : `${pr.requestCode} rejected — the requester can revise and re-submit`)
+      setPrReject(null); setPrNote('')
+      setPrApprove(null)
+    } else {
+      toast.error('Could not record the decision — the server blocked it (role or status)')
+    }
+  }
+
+  async function payRequest(pr: PaymentRequestRow) {
+    // Money action — online only; the fresh payload after dispatch carries the
+    // ledger ref for the honest toast.
+    if (!online) {
+      toast.error('Payments need a connection — money actions are online-only')
+      return
+    }
+    const ok = await dispatch('payment.pay', { id: pr.id }, `Pay ${pr.requestCode}`)
+    if (ok) {
+      const fresh = useMjengo.getState().data?.finance?.paymentRequests.find((p) => p.id === pr.id)
+      const ledgerRef = fresh?.ledgerRef
+      toast.success(ledgerRef
+        ? `${pr.requestCode} paid — ${formatKES(pr.amount)} to ${pr.payee} recorded (ledger ${ledgerRef})`
+        : `${pr.requestCode} paid — ${formatKES(pr.amount)} to ${pr.payee} recorded in the ledger`)
+    } else {
+      toast.error('Payment was not recorded — the server blocked it (approval, role or escrow balance)')
+    }
   }
 
   // ---------------- render ----------------
@@ -466,14 +598,14 @@ export function MoneyTab() {
                           </div>
                         )}
 
-                        {/* client decision panel */}
-                        {awaiting && (
+                        {/* client decision panel — F3: only the CLIENT decides.
+                            The owner view shows the honest wait state instead of
+                            acting-as-client buttons (the server rejects them). */}
+                        {awaiting && isClient && (
                           <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
                             <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
                               <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
-                              {isClient
-                                ? `Client decision — ${clientName} approves via the share link`
-                                : `Acting as client (they'd do this via their share link)`}
+                              {clientName} approves or rejects this release — money moves only on approval
                             </p>
                             <p className="text-xs text-stone-600">
                               Escrow: <span className="font-semibold tabular-nums">{formatKES(balance)}</span>
@@ -501,6 +633,12 @@ export function MoneyTab() {
                               </Button>
                             </div>
                           </div>
+                        )}
+                        {awaiting && !isClient && (
+                          <p className="rounded-md bg-stone-50 px-2.5 py-1.5 text-xs text-stone-500">
+                            <Hourglass className="mr-1 inline h-3.5 w-3.5 text-amber-600" aria-hidden />
+                            Awaiting {clientName}'s decision — they approve from their MjengoOS login or share link (the server rejects site-team decisions).
+                          </p>
                         )}
                       </div>
                     </div>
@@ -564,11 +702,11 @@ export function MoneyTab() {
                         {v.decisionNote ? ` — “${v.decisionNote}”` : ''}
                       </p>
                     )}
-                    {v.status === 'submitted' && (
+                    {v.status === 'submitted' && isClient && (
                       <div className="mt-3 space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
                         <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
                           <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
-                          {isClient ? `Your decision — budget moves only after approval` : `Acting as client (they'd do this via their share link)`}
+                          {clientName} decides — budget moves only after approval
                         </p>
                         <div className="flex flex-wrap gap-2">
                           <Button
@@ -590,11 +728,239 @@ export function MoneyTab() {
                         </div>
                       </div>
                     )}
+                    {v.status === 'submitted' && !isClient && (
+                      <p className="mt-3 rounded-md bg-stone-50 px-2.5 py-1.5 text-xs text-stone-500">
+                        <Hourglass className="mr-1 inline h-3.5 w-3.5 text-amber-600" aria-hidden />
+                        Awaiting {clientName}'s decision — they approve from their MjengoOS login or share link (the server rejects site-team decisions).
+                      </p>
+                    )}
                   </div>
                 )
               })}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Payment requests — request → approval → payment, every payout ledgered (F-MONEY) */}
+      <Card className="border-stone-200 shadow-sm">
+        <CardHeader className="flex flex-row items-start justify-between space-y-0">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
+              <Banknote className="h-5 w-5 text-amber-600" aria-hidden /> Payment requests
+              {finance.paymentRequests.length > 0 && (
+                <Badge className="border-0 bg-stone-100 text-stone-600">{finance.paymentRequests.length}</Badge>
+              )}
+            </CardTitle>
+            <CardDescription>
+              Site team requests → client/finance decision → payment recorded on the double-entry ledger.
+              Budget {formatKES(finance.budget)} · committed {formatKES(finance.committed)} · spent {formatKES(finance.spent)} · remaining {formatKES(finance.remaining)}.
+            </CardDescription>
+          </div>
+          {!isClient && (
+            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" onClick={() => setPrOpen(true)} aria-label="Create a new payment request">
+              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">New request</span>
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent>
+          {finance.paymentRequests.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
+              <Banknote className="mx-auto h-8 w-8 text-stone-300" aria-hidden />
+              <p className="pt-3 text-sm font-medium text-stone-700">No payment requests yet</p>
+              <p className="pt-1 text-xs text-stone-500">
+                Request a payout with a description, payee and rail — every approved payment posts a balanced ledger entry.
+              </p>
+            </div>
+          ) : (
+            <div className="max-h-96 space-y-3 overflow-y-auto pr-2 -mr-2" role="region" aria-label="Payment requests, scrollable">
+              {finance.paymentRequests.map((pr) => {
+                const relatedLabel =
+                  pr.relatedEntityType === 'milestone'
+                    ? data.milestones.find((m) => m.id === pr.relatedEntityId)?.name ?? null
+                    : pr.relatedEntityType === 'invoice'
+                      ? data.invoices.invoices.find((i) => i.id === pr.relatedEntityId)?.invoiceCode ?? null
+                      : null
+                return (
+                  <div key={pr.id} className={`rounded-lg border bg-white p-4 ${pr.status === 'pending' ? 'border-amber-300' : 'border-stone-200'}`}>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-stone-900">
+                          <span className="font-mono text-xs text-stone-500">{pr.requestCode}</span>
+                          <span className="truncate">{pr.description}</span>
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <span className="text-xs text-stone-500">to <span className="font-medium text-stone-700">{pr.payee}</span></span>
+                          <Badge variant="outline" className="text-[10px]">{PR_METHODS.find((m) => m.value === pr.method)?.label ?? pr.method}</Badge>
+                          {relatedLabel && <Badge variant="outline" className="text-[10px]">↔ {relatedLabel}</Badge>}
+                          <span className="text-xs text-stone-400">by {pr.requestedByName} · {dateShort(pr.createdAt)}</span>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-1.5">
+                        <span className="text-base font-bold tabular-nums text-stone-900">{formatKES(pr.amount)}</span>
+                        <PaymentRequestStatusBadge status={pr.status} />
+                      </div>
+                    </div>
+
+                    {/* decision history */}
+                    {pr.decidedBy && (
+                      <p className={`mt-2 rounded-md px-2.5 py-1.5 text-xs ${pr.status === 'rejected' ? 'bg-rose-50 text-rose-700' : 'bg-stone-50 text-stone-500'}`}>
+                        {pr.status === 'rejected' ? 'Rejected' : 'Approved'} by <span className="font-medium">{pr.decidedBy}</span>
+                        {pr.decidedAt ? ` · ${dateShort(pr.decidedAt)}` : ''}
+                        {pr.decisionNote ? ` — “${pr.decisionNote}”` : ''}
+                      </p>
+                    )}
+
+                    {/* ledger column — the payment's double-entry reference */}
+                    {(pr.status === 'paid' || pr.ledgerRef) && (
+                      <p className="mt-2 flex flex-wrap items-center gap-1.5 rounded-md bg-stone-50 px-2.5 py-1.5 text-xs text-stone-500">
+                        <BookOpen className="h-3.5 w-3.5 text-stone-400" aria-hidden />
+                        Ledger <span className="font-mono font-medium text-stone-700">{pr.ledgerRef ?? '—'}</span>
+                        {pr.paidAt ? ` · paid ${dateShort(pr.paidAt)}` : ''}
+                      </p>
+                    )}
+
+                    {/* decision panel (role-appropriate) */}
+                    {pr.status === 'pending' && (
+                      <div className="mt-3 space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
+                        <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
+                          <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
+                          {isClient && clientRole
+                            ? `Your decision — ${clientName} approves or rejects this payment`
+                            : isFinanceSession
+                              ? 'Finance decision queue'
+                              : `Acting as client (they'd approve this in their queue)`}
+                        </p>
+                        {canDecideRequests ? (
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm" className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
+                              disabled={busy}
+                              onClick={() => setPrApprove(pr)}
+                              aria-label={`Approve payment request ${pr.requestCode}`}
+                            >
+                              <Check className="h-4 w-4" aria-hidden /> Approve
+                            </Button>
+                            <Button
+                              size="sm" variant="outline" className="min-h-11 gap-1.5 border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+                              disabled={busy}
+                              onClick={() => { setPrReject(pr); setPrNote('') }}
+                              aria-label={`Reject payment request ${pr.requestCode}, with a note`}
+                            >
+                              <X className="h-4 w-4" aria-hidden /> Reject with note
+                            </Button>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-stone-500">
+                            {clientName} decides from their MjengoOS login — share-link visitors are read-only for payment requests.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* pay action for approved requests */}
+                    {pr.status === 'approved' && canDecideRequests && (
+                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stone-100 pt-3">
+                        <Button
+                          size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700"
+                          disabled={busy || (pr.method === 'wallet' && balance < pr.amount)}
+                          onClick={() => void payRequest(pr)}
+                          aria-label={`Pay ${formatKES(pr.amount)} for ${pr.requestCode}`}
+                        >
+                          <Banknote className="h-4 w-4" aria-hidden /> Pay {formatKES(pr.amount)}
+                        </Button>
+                        {pr.method === 'wallet' && balance < pr.amount && (
+                          <Badge className="border-0 bg-rose-100 text-rose-800 hover:bg-rose-100">Insufficient escrow — top up first</Badge>
+                        )}
+                        <span className="text-[11px] text-stone-400">
+                          Simulated rails — posts a balanced double-entry ledger entry (provider seam, spec §40)
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Ledger — the double-entry source of truth (spec §39, F-MONEY) */}
+      <Card className="border-stone-200 shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
+            <BookOpen className="h-5 w-5 text-stone-700" aria-hidden /> Double-entry ledger
+            <Badge variant="outline" className="text-[10px] font-mono">{finance.ledger.transactions.length} recent</Badge>
+          </CardTitle>
+          <CardDescription>
+            Immutable history — every entry is balanced (Σdebits = Σcredits); corrections are reversal entries, never edits.
+          </CardDescription>
+          <div className="pt-2">
+            {finance.escrow ? (
+              <EscrowConsistencyChip escrow={finance.escrow} />
+            ) : (
+              <span className="text-[11px] text-stone-400">No escrow wallet on file yet.</span>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {finance.ledger.transactions.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
+              <BookOpen className="mx-auto h-8 w-8 text-stone-300" aria-hidden />
+              <p className="pt-3 text-sm font-medium text-stone-700">No ledger transactions yet</p>
+              <p className="pt-1 text-xs text-stone-500">Top up the escrow wallet or release a milestone — money movements post here.</p>
+            </div>
+          ) : (
+            <div className="max-h-96 space-y-3 overflow-y-auto pr-2 -mr-2" role="region" aria-label="Ledger transactions, scrollable">
+              {finance.ledger.transactions.map((t) => {
+                const debits = t.entries.filter((e) => e.side === 'debit')
+                const credits = t.entries.filter((e) => e.side === 'credit')
+                const debitTotal = debits.reduce((s, e) => s + e.amount, 0)
+                const creditTotal = credits.reduce((s, e) => s + e.amount, 0)
+                const balanced = Math.abs(debitTotal - creditTotal) < 1
+                return (
+                  <div key={t.id} className="rounded-lg border border-stone-200 bg-white p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-stone-900">
+                          <span className="font-mono text-xs text-stone-500">{t.ref}</span>
+                          <span className="truncate">{t.description}</span>
+                        </p>
+                        <p className="pt-0.5 text-xs text-stone-400">
+                          {dateShort(t.occurredAt)} · posted by {t.postedBy} ({t.postedRole})
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {t.status === 'reversed' && (
+                          <Badge className="border-0 bg-stone-200 text-stone-700 hover:bg-stone-200">Reversed{t.reversalOfRef ? ` by ${t.reversalOfRef}` : ''}</Badge>
+                        )}
+                        <Badge className={`border-0 gap-1 ${balanced ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100' : 'bg-rose-100 text-rose-800 hover:bg-rose-100'}`}>
+                          <CheckCheck className="h-3 w-3" aria-hidden /> {balanced ? 'Balanced' : 'UNBALANCED'}
+                        </Badge>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                      <div className="rounded-md bg-rose-50/60 px-2.5 py-1.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-700">Debits — {formatKES(debitTotal)}</p>
+                        {debits.map((e, i) => (
+                          <p key={i} className="text-xs text-stone-600"><span className="font-mono text-[10px] text-stone-500">{e.accountCode}</span> {formatKES(e.amount)}</p>
+                        ))}
+                      </div>
+                      <div className="rounded-md bg-emerald-50/60 px-2.5 py-1.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">Credits — {formatKES(creditTotal)}</p>
+                        {credits.map((e, i) => (
+                          <p key={i} className="text-xs text-stone-600"><span className="font-mono text-[10px] text-stone-500">{e.accountCode}</span> {formatKES(e.amount)}</p>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          <p className="pt-3 text-[11px] text-stone-400">
+            Accounts: {finance.ledger.accounts.map((a) => `${a.code} (${formatKES(a.balance)})`).join(' · ') || 'none yet'}
+          </p>
         </CardContent>
       </Card>
 
@@ -912,6 +1278,123 @@ export function MoneyTab() {
             <Button variant="outline" onClick={() => setVOpen(false)}>Cancel</Button>
             <Button onClick={() => void submitVariation()} disabled={busy} className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700">
               <Send className="h-4 w-4" aria-hidden /> Submit for approval
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---------------- New payment request dialog (F-MONEY) ---------------- */}
+      <Dialog open={prOpen} onOpenChange={setPrOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-stone-900">New payment request</DialogTitle>
+            <DialogDescription>
+              Request a payout — the client (or finance) approves it, then the payment posts a balanced ledger entry. Simulated rails, real workflow.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="pr-desc">What is it for?</Label>
+              <Input id="pr-desc" value={prDesc} onChange={(e) => setPrDesc(e.target.value)} placeholder="e.g. Steel delivery transport — Kiambu Road" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="pr-amount">Amount (KSh)</Label>
+                <Input id="pr-amount" type="number" min="1" value={prAmount} onChange={(e) => setPrAmount(e.target.value)} placeholder="e.g. 45000" inputMode="numeric" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="pr-payee">Payee</Label>
+                <Input id="pr-payee" value={prPayee} onChange={(e) => setPrPayee(e.target.value)} placeholder="e.g. Mwangi Transport" />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Method</Label>
+              <Select value={prMethod} onValueChange={setPrMethod}>
+                <SelectTrigger aria-label="Payment method"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PR_METHODS.map((m) => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Link to (optional)</Label>
+              <Select value={prLink} onValueChange={setPrLink}>
+                <SelectTrigger aria-label="Link to a milestone or invoice"><SelectValue placeholder="No link" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No link</SelectItem>
+                  {data.milestones.map((m) => (
+                    <SelectItem key={`milestone:${m.id}`} value={`milestone:${m.id}`}>Milestone — {m.name}</SelectItem>
+                  ))}
+                  {data.invoices.invoices.map((i) => (
+                    <SelectItem key={`invoice:${i.id}`} value={`invoice:${i.id}`}>Invoice — {i.invoiceCode}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-[11px] leading-relaxed text-stone-500">
+              <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
+              Every approved payment posts a balanced double-entry ledger entry (EXPENSE debit, cash credit) — the payment provider seam is simulated and clearly labelled.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrOpen(false)}>Cancel</Button>
+            <Button onClick={() => void createPaymentRequest()} disabled={busy} className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700">
+              <Plus className="h-4 w-4" aria-hidden /> Submit request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---------------- PR reject with note ---------------- */}
+      <Dialog open={prReject !== null} onOpenChange={(open) => { if (!open) setPrReject(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-stone-900">Reject payment request</DialogTitle>
+            <DialogDescription>
+              {prReject ? `Rejecting ${prReject.requestCode} — ${formatKES(prReject.amount)} to ${prReject.payee}. The note is recorded in the decision history.` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="pr-note">Note to the requester (optional)</Label>
+              <Textarea id="pr-note" rows={3} value={prNote} onChange={(e) => setPrNote(e.target.value)} placeholder="e.g. Transport was quoted at 35,000 — revise and re-submit" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrReject(null)}>Cancel</Button>
+            <Button
+              onClick={() => { if (prReject) void decidePaymentRequest(prReject, 'reject', prNote) }}
+              disabled={busy}
+              className="min-h-11 gap-1.5 border-rose-300 bg-white text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+              variant="outline"
+            >
+              <X className="h-4 w-4" aria-hidden /> Reject
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---------------- PR approve confirmation ---------------- */}
+      <Dialog open={prApprove !== null} onOpenChange={(open) => { if (!open) setPrApprove(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-stone-900">Approve payment request</DialogTitle>
+            <DialogDescription>
+              {prApprove ? `This approves ${formatKES(prApprove.amount)} to ${prApprove.payee} for ${prApprove.requestCode}. Payment is recorded separately, after this approval.` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-xs leading-relaxed text-stone-500">
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
+            One deliberate click, not two accidental ones — the decision is recorded in the audit ledger with your signed-in identity and cannot be edited afterwards.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrApprove(null)}>Cancel</Button>
+            <Button
+              onClick={() => { if (prApprove) void decidePaymentRequest(prApprove, 'approve') }}
+              disabled={busy}
+              className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
+            >
+              <Check className="h-4 w-4" aria-hidden /> Confirm approval
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -35,6 +35,8 @@
 import { db } from '@/lib/db'
 import { currentActor } from './session'
 import { computeLedgerConsistency, matchThreeWay } from './three-way'
+import { spendEscrowInTx, spendExternalInTx } from '@/modules/wallet/service'
+import { getProvider } from '@/modules/wallet/providers'
 import type { LedgerCheck, ThreeWayReport } from './types'
 
 // ---------------- helpers (money.ts house conventions) ----------------
@@ -88,15 +90,19 @@ async function nextInvoiceCode(projectId: string): Promise<string> {
   return `INV-${year}-${String(max + 1).padStart(6, '0')}`
 }
 
-/** Server-side client-role gate. Share-link callers (no session) are already client-gated upstream. */
+/**
+ * Server-side payer-role gate: client, finance, or the share-link client path
+ * (no session — already client-gated upstream). Aligns with policy.ts
+ * DECIDER_ROLES (client + finance + share_client decide and pay).
+ */
 async function requireClientRole(projectId: string, actionDescription: string): Promise<string> {
   const actor = await currentActor()
-  if (actor.role === null || actor.role === 'client') {
-    return actor.name || 'client'
+  if (actor.role === null || actor.role === 'client' || actor.role === 'finance') {
+    return actor.name || actor.role || 'client'
   }
   const project = await db.project.findUnique({ where: { id: projectId } })
   throw new Error(
-    `Only the client may ${actionDescription} — signed in as "${actor.role}"${actor.name ? ` (${actor.name})` : ''}. ` +
+    `Only the client or finance may ${actionDescription} — signed in as "${actor.role}"${actor.name ? ` (${actor.name})` : ''}. ` +
       `The decision queue is waiting for ${project?.client ?? 'the project client'}.`,
   )
 }
@@ -385,10 +391,13 @@ async function loadOrderForMatch(orderId: string) {
 }
 
 /**
- * `invoice.pay` { id, method, reference?, acknowledgeMismatch?, by? } — CLIENT only,
- * APPROVED only. Writes exactly ONE Transaction (money.ts conventions); the
- * 3-way check runs internally and mismatched payments need the payer's
- * explicit acknowledgeMismatch — the human decision, recorded in the trail.
+ * `invoice.pay` { id, method, reference?, costCode?, acknowledgeMismatch?, by? } — CLIENT/FINANCE only,
+ * APPROVED only. Writes exactly ONE Transaction ledger row (costCode + ledgerTxnId);
+ * the posting goes through the PaymentProvider seam (spec §40 — simulated rail,
+ * clearly labelled) and the double-entry ledger inside ONE db.$transaction with
+ * the escrow balance re-checked inside it (F2). The 3-way check runs internally
+ * and mismatched payments need the payer's explicit acknowledgeMismatch — the
+ * human decision, recorded in the trail.
  */
 export async function payInvoice(projectId: string, payload: Record<string, unknown>) {
   const invoice = await getInvoiceOrThrow(payload.id, projectId)
@@ -408,6 +417,10 @@ export async function payInvoice(projectId: string, payload: Record<string, unkn
     ? payload.by.trim()
     : sessionName !== 'client' ? sessionName : project?.client ?? 'Client'
   const paidByRole = actor.role === 'finance' ? 'finance' : 'client'
+  const costCode =
+    typeof payload.costCode === 'string' && payload.costCode.trim()
+      ? payload.costCode.trim()
+      : 'invoice'
 
   // ---- 3-way match gate: warn, human decides ----
   const report = await threeWayCheck(projectId, { id: invoice.id })
@@ -423,47 +436,87 @@ export async function payInvoice(projectId: string, payload: Record<string, unkn
       ? payload.reference.trim()
       : autoReference(method)
 
-  // ---- wallet semantics (mirrors money.ts milestone.decide) ----
-  let balance: number | undefined
-  if (method === 'wallet') {
-    const wallet = await db.escrowWallet.findUnique({ where: { projectId } })
-    if (!wallet || wallet.balance < invoice.total) throw new Error('Insufficient escrow balance — top up first')
-    const updatedWallet = await db.escrowWallet.update({
-      where: { projectId },
-      data: { balance: { decrement: invoice.total } },
-    })
-    balance = updatedWallet.balance
-  }
-
-  // ---- exactly ONE ledger row (append-only; never mutated/deleted here) ----
-  const now = new Date()
-  const supplierName = invoice.supplierId
+  // ---- PaymentProvider seam (spec §40) — the simulated rail records an ----
+  // honest result; a real provider plugs in here without touching the ledger.
+  const supplierNamePreview = invoice.supplierId
     ? (await db.supplier.findUnique({ where: { id: invoice.supplierId } }))?.businessName ?? 'the supplier'
     : 'the supplier'
+  const provider = getProvider(method)
+  const initiation = await provider.initiatePayment({
+    amount: invoice.total,
+    currency: 'KES',
+    method: method as 'mpesa' | 'bank' | 'card' | 'wallet' | 'cash',
+    payee: supplierNamePreview,
+    reference,
+    description: invoice.invoiceCode,
+  })
+  if (initiation.status !== 'succeeded') {
+    throw new Error(`Provider did not accept the payment: ${initiation.detail}`)
+  }
+
+  const now = new Date()
+  const supplierName = supplierNamePreview
   const orderCode = invoice.orderId
     ? (await db.purchaseOrder.findUnique({ where: { id: invoice.orderId } }))?.orderCode ?? null
     : null
-  await db.transaction.create({
-    data: {
-      projectId,
-      type: 'invoice', // peer of money.ts 'milestone' — supplier payments ledgered at source
-      amount: invoice.total,
-      method,
-      reference,
-      note: `${invoice.invoiceCode}${orderCode ? ` (${orderCode})` : ''} paid to ${supplierName} — recorded by ${by}`,
-      date: now,
-    },
-  })
 
-  await db.invoice.update({
-    where: { id: invoice.id },
-    data: {
-      status: 'paid',
-      paidAt: now,
-      paidByRole,
-      paymentMethod: method,
-      paymentReference: reference,
-    },
+  // ---- ONE atomic money movement (F2): escrow debit (wallet) or EXPENSE debit ----
+  // ---- + cash credit, Transaction row with ledgerTxnId, invoice flip        ----
+  const { ledgerRef, balance } = await db.$transaction(async (tx) => {
+    // Status re-checked INSIDE the transaction — no double-payment race.
+    const fresh = await tx.invoice.findUnique({ where: { id: invoice.id } })
+    if (!fresh || fresh.status !== 'approved') {
+      throw new Error(`Invoice must be APPROVED before payment — ${invoice.invoiceCode} is ${(fresh?.status ?? 'missing').toUpperCase()}`)
+    }
+
+    const spend =
+      method === 'wallet'
+        ? await spendEscrowInTx(tx, projectId, {
+            amount: fresh.total,
+            description: `Invoice payment ${fresh.invoiceCode} — ${supplierName} (escrow)`,
+            postedBy: by,
+            postedRole: paidByRole,
+            idempotencyKey: `invoice.pay:${fresh.id}`,
+          })
+        : await spendExternalInTx(tx, projectId, {
+            amount: fresh.total,
+            method,
+            description: `Invoice payment ${fresh.invoiceCode} — ${supplierName}`,
+            postedBy: by,
+            postedRole: paidByRole,
+            idempotencyKey: `invoice.pay:${fresh.id}`,
+          })
+
+    // exactly ONE ledger row (append-only; never mutated/deleted here) —
+    // idempotent on the ledger txn id
+    const txnRow =
+      (await tx.transaction.findFirst({ where: { ledgerTxnId: spend.ledgerTxnId } })) ??
+      (await tx.transaction.create({
+        data: {
+          projectId,
+          type: 'invoice', // peer of money.ts 'milestone' — supplier payments ledgered at source
+          amount: fresh.total,
+          method,
+          reference,
+          costCode,
+          ledgerTxnId: spend.ledgerTxnId,
+          note: `${fresh.invoiceCode}${orderCode ? ` (${orderCode})` : ''} paid to ${supplierName} — recorded by ${by}`,
+          date: now,
+        },
+      }))
+
+    await tx.invoice.update({
+      where: { id: fresh.id },
+      data: {
+        status: 'paid',
+        paidAt: now,
+        paidByRole,
+        paymentMethod: method,
+        paymentReference: reference,
+      },
+    })
+
+    return { ledgerRef: spend.ledgerRef, balance: 'balance' in spend ? spend.balance : undefined }
   })
 
   // The acknowledged-discrepancy decision is part of the honest trail
@@ -486,11 +539,11 @@ export async function payInvoice(projectId: string, payload: Record<string, unkn
     projectId,
     'invoice.paid',
     `Invoice paid: ${invoice.invoiceCode}`,
-    `${kes(invoice.total)} paid to ${supplierName} via ${method.toUpperCase()} (${reference}) — recorded by ${by}.`,
+    `${kes(invoice.total)} paid to ${supplierName} via ${method.toUpperCase()} (${reference}) — ledger ${ledgerRef}, recorded by ${by}.`,
     'contractor',
     null,
   )
-  return { id: invoice.id, status: 'paid', reference, balance }
+  return { id: invoice.id, status: 'paid', reference, ledgerRef, balance }
 }
 
 // ---------------- A-1-lite (read-only) ----------------

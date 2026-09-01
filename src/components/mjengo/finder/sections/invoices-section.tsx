@@ -101,6 +101,23 @@ export function InvoicesSection() {
   const queue = invoices.filter((i) => i.status === 'submitted' || i.status === 'disputed')
   const paymentRecords = (data?.transactions ?? []).filter((t) => t.type === 'invoice')
   const offlineNote = `Saved on-device — queued (${outbox.length})`
+  // Ledger refs for paid invoices (F-MONEY): Transaction.ledgerTxnId → ledger txn ref
+  const allTransactions = data?.transactions
+  const ledgerTxns = data?.finance?.ledger.transactions
+  const ledgerRefByInvoice = useMemo(() => {
+    const byId = new Map<string, string | null>()
+    for (const inv of invoices) {
+      if (inv.status !== 'paid') continue
+      const txnRow = (allTransactions ?? []).find(
+        (t) => t.type === 'invoice' && t.reference === inv.paymentReference,
+      )
+      const ref = txnRow?.ledgerTxnId
+        ? ledgerTxns?.find((lt) => lt.id === txnRow.ledgerTxnId)?.ref
+        : undefined
+      byId.set(inv.id, ref ?? null)
+    }
+    return byId
+  }, [invoices, allTransactions, ledgerTxns])
 
   if (!data) return null
 
@@ -154,14 +171,22 @@ export function InvoicesSection() {
     } else toast.error('Could not file the dispute — only the client role may dispute')
   }
 
-  async function payConfirmed(inv: InvoiceWithLines, payload: { method: string; reference: string; acknowledgeMismatch: boolean }) {
+  async function payConfirmed(inv: InvoiceWithLines, payload: { method: string; reference: string; costCode: string | null; acknowledgeMismatch: boolean }) {
     const ok = await dispatch('invoice.pay', {
       id: inv.id, method: payload.method, reference: payload.reference,
+      costCode: payload.costCode ?? undefined,
       acknowledgeMismatch: payload.acknowledgeMismatch || undefined, by: clientName,
     }, `Invoice paid: ${inv.invoiceCode}`)
     if (ok) {
+      // F-MONEY: the payment posts a double-entry ledger row — quote its ref
+      // from the refreshed payload (Transaction.ledgerTxnId → ledger ref).
+      const fresh = useMjengo.getState().data
+      const txnRow = fresh?.transactions.find((t) => t.type === 'invoice' && t.reference === payload.reference)
+      const ledgerRef = txnRow?.ledgerTxnId
+        ? fresh?.finance.ledger.transactions.find((lt) => lt.id === txnRow.ledgerTxnId)?.ref
+        : undefined
       toast.success(online
-        ? `${formatKES(inv.total)} paid — ${payload.reference} recorded in the Transaction ledger`
+        ? `${formatKES(inv.total)} paid — ${payload.reference} recorded${ledgerRef ? ` (ledger ${ledgerRef}, cost code ${txnRow?.costCode ?? 'invoice'})` : ' in the Transaction ledger'}`
         : offlineNote)
       setPayTarget(null)
       setDetailTarget(null)
@@ -306,7 +331,7 @@ export function InvoicesSection() {
                           <td className="px-2 py-2.5">{report ? <ThreeWayChip report={report} /> : null}</td>
                           <td className="whitespace-nowrap px-2 py-2.5 text-right font-semibold tabular-nums text-stone-800">{formatKes(inv.total)}</td>
                           <td className="px-2 py-2.5"><InvoiceStatusBadge status={inv.status} /></td>
-                          <td className="px-3 py-2.5">{inv.status === 'paid' ? <PaymentRecordBadge invoice={inv} /> : <span className="text-[11px] text-stone-400">—</span>}</td>
+                          <td className="px-3 py-2.5">{inv.status === 'paid' ? <PaymentRecordBadge invoice={inv} ledgerRef={ledgerRefByInvoice.get(inv.id)} /> : <span className="text-[11px] text-stone-400">—</span>}</td>
                           <td className="whitespace-nowrap px-2 py-2.5 text-right">
                             <div className="flex justify-end gap-1.5">
                               {isSiteTeam && inv.status === 'draft' && (
@@ -411,8 +436,8 @@ export function InvoicesSection() {
         report={payTarget ? reports.get(payTarget.id) ?? null : null}
         walletBalance={walletBalance}
         busy={busy}
-        onConfirm={({ method, reference, acknowledgeMismatch }) => {
-          if (payTarget) void payConfirmed(payTarget, { method, reference, acknowledgeMismatch })
+        onConfirm={({ method, reference, costCode, acknowledgeMismatch }) => {
+          if (payTarget) void payConfirmed(payTarget, { method, reference, costCode, acknowledgeMismatch })
         }}
         onClose={() => setPayTarget(null)}
       />

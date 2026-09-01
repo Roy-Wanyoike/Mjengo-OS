@@ -11,6 +11,9 @@ import { INVENTORY_ACTIONS, applyInventoryAction } from '@/lib/actions/inventory
 import { loadInventorySlice, loadBoqSlice } from '@/modules/inventory/repository'
 import { loadFinanceSlice } from '@/modules/wallet/repository'
 import { WALLET_ACTIONS, applyWalletAction } from '@/lib/actions/wallet'
+import { spendExternalInTx, reverseTransaction as reverseTransactionService } from '@/modules/wallet/service'
+import { getProvider } from '@/modules/wallet/providers'
+import { currentActor } from '@/modules/wallet/session'
 import { INTEL_ACTIONS, applyIntelAction } from '@/lib/actions/intel'
 import { loadLandSlice } from '@/modules/land/repository'
 import { loadProfessionalsSlice } from '@/modules/professionals/repository'
@@ -444,6 +447,116 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
   return result
 }
 
+// ---------------- money-core helpers (F-MONEY) ----------------
+
+/**
+ * Expense posting (expense.create): debit EXPENSE:<projectId>, credit the cash
+ * pool for the rail + the legacy Transaction row (costCode, ledgerTxnId) —
+ * ONE db.$transaction.
+ */
+async function postExpenseTransaction(input: {
+  projectId: string
+  amount: number
+  type: string
+  method: string
+  costCode: string
+  note: string | null
+  reference: string | null
+  date: Date
+}): Promise<{ transactionId: string; ledgerRef: string }> {
+  const actor = await currentActor()
+  const postedBy = actor.name?.trim() || 'Site Manager'
+  return db.$transaction(async (tx) => {
+    const spend = await spendExternalInTx(tx, input.projectId, {
+      amount: input.amount,
+      method: input.method,
+      description: `Expense (${input.type})${input.note ? ` — ${input.note}` : ''}`,
+      postedBy,
+      postedRole: actor.role ?? 'contractor',
+      idempotencyKey: input.reference ? `expense:${input.projectId}:${input.reference}` : undefined,
+    })
+    const txnRow =
+      (await tx.transaction.findFirst({ where: { ledgerTxnId: spend.ledgerTxnId } })) ??
+      (await tx.transaction.create({
+        data: {
+          projectId: input.projectId,
+          type: input.type,
+          amount: input.amount,
+          method: input.method,
+          reference: input.reference ?? spend.ledgerRef,
+          costCode: input.costCode,
+          ledgerTxnId: spend.ledgerTxnId,
+          note: input.note,
+          date: input.date,
+        },
+      }))
+    return { transactionId: txnRow.id, ledgerRef: spend.ledgerRef }
+  })
+}
+
+/**
+ * Payroll gate for wages.pay (mirrors trust.ts payroll.approve): refuses to
+ * pay while unreviewed attendance exceptions exist, unless forced. The gate
+ * result carries the review payload the fundis UI renders.
+ */
+async function payrollGate(
+  projectId: string,
+  date: string,
+  payload: any,
+  force: boolean,
+): Promise<{
+  blocked: boolean
+  result?: { blocked: true; date: string; requiringReview: Array<{ workerId: string; name: string; reason: string | null }>; amount: number; reviewAmount: number }
+  unpaid: Array<{ id: string; workerId: string; wage: number }>
+  exceptions: Array<{ workerId: string; exceptionReason: string | null }>
+  total: number
+  names: string
+}> {
+  const where: { date: string; paid: boolean; projectId: string; workerId?: { in: string[] } } = {
+    date,
+    paid: false,
+    projectId,
+  }
+  if (Array.isArray(payload?.workerIds) && payload.workerIds.length > 0) {
+    where.workerId = { in: payload.workerIds.map(String) }
+  }
+  const rows = await db.attendance.findMany({ where })
+  const unpaid = rows.filter((r) => r.status !== 'absent' && r.status !== 'excused' && r.wage > 0)
+  if (unpaid.length === 0) {
+    return { blocked: false, unpaid: [], exceptions: [], total: 0, names: '' }
+  }
+  const exceptions = unpaid
+    .filter((r) => r.verification === 'exception')
+    .map((r) => ({ workerId: r.workerId, exceptionReason: r.exceptionReason }))
+  const total = unpaid.reduce((s, u) => s + u.wage, 0)
+  const workers = await db.worker.findMany({ where: { id: { in: unpaid.map((u) => u.workerId) } } })
+  const names = unpaid.map((u) => workers.find((w) => w.id === u.workerId)?.name.split(' ')[0] ?? '?').join(', ')
+
+  if (exceptions.length > 0 && !force) {
+    return {
+      blocked: true,
+      result: {
+        blocked: true,
+        date,
+        requiringReview: exceptions.map((e) => ({
+          workerId: e.workerId,
+          name: workers.find((w) => w.id === e.workerId)?.name ?? 'Unknown',
+          reason: e.exceptionReason,
+        })),
+        amount: total, // payroll on hold
+        reviewAmount: unpaid
+          .filter((u) => exceptions.some((e) => e.workerId === u.workerId))
+          .reduce((s, u) => s + u.wage, 0),
+      },
+      unpaid,
+      exceptions,
+      total,
+      names,
+    }
+  }
+  return { blocked: false, unpaid, exceptions, total, names }
+}
+
 async function applyCoreAction(type: ActionType, payload: any, projectId: string): Promise<any> {
   switch (type) {
     case 'task.create': {
@@ -558,9 +671,9 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
         att = await db.attendance.create({
           data: {
             workerId, projectId, date: today, checkIn: new Date(), status: 'present',
-            method: payload.method || 'geofence', wage: worker.dailyRate,
+            method: payload.method || 'app', wage: worker.dailyRate,
             verification: 'verified', // worker-initiated check-in carries device evidence
-            evidence: JSON.stringify([payload.method === 'ussd' ? 'ussd' : payload.method === 'kiosk_pin' ? 'pin' : 'gps', 'device']),
+            evidence: JSON.stringify([payload.method === 'ussd' ? 'ussd' : payload.method === 'kiosk_pin' ? 'pin' : 'device', 'device']),
           },
         })
       } else if (toggle === 'out' && !att.checkOut) {
@@ -658,28 +771,45 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
     }
 
     case 'expense.create': {
-      const { type, amount, method, note, reference, date } = payload
+      const { type, amount, method, note, reference, date, costCode } = payload
       if (!['material', 'wage', 'other', 'transport'].includes(type)) throw new Error("type must be 'material' | 'wage' | 'other' | 'transport'")
       if (typeof amount !== 'number' || !(amount > 0)) throw new Error('amount must be a positive number')
-      const tx = await db.transaction.create({
-        data: {
-          projectId,
-          type,
-          amount,
-          method: ['mpesa', 'cash', 'bank'].includes(method) ? method : 'mpesa',
-          note: note || null,
-          reference: reference || null,
-          date: date ? new Date(date) : new Date(),
-        },
+      const payMethod = ['mpesa', 'cash', 'bank'].includes(method) ? method : 'mpesa'
+      // F2/F-MONEY: the expense posts a balanced double-entry ledger txn
+      // (debit EXPENSE:<projectId>, credit the cash pool for the rail) and the
+      // legacy Transaction row (costCode + ledgerTxnId) in ONE db.$transaction.
+      const posted = await postExpenseTransaction({
+        projectId,
+        amount,
+        type,
+        method: payMethod,
+        costCode: typeof costCode === 'string' && costCode.trim() ? costCode.trim() : type,
+        note: note || null,
+        reference: reference || null,
+        date: date ? new Date(date) : new Date(),
       })
-      return { id: tx.id }
+      return { id: posted.transactionId, ledgerRef: posted.ledgerRef }
     }
 
     case 'transaction.delete': {
-      const { id } = payload
+      // F1 (audit finding): this used to hard-delete ANY transaction with no
+      // project scoping. History is immutable now (spec §39) — the action name
+      // stays for UI compatibility, but it ALWAYS writes a compensating
+      // reversal via the wallet service (project-scoped lookup). Even an admin
+      // asking for `confirmHardDelete: true` is refused.
+      const { id, confirmHardDelete, reason } = payload
       if (!id) throw new Error('transaction id required')
-      const tx = await db.transaction.delete({ where: { id } })
-      return { id: tx.id }
+      if (confirmHardDelete === true) {
+        throw new Error(
+          'Hard deletes are refused — financial history is immutable (spec §39). ' +
+            'A compensating reversal entry is posted instead.',
+        )
+      }
+      const reversal = await reverseTransactionService(projectId, {
+        id,
+        reason: typeof reason === 'string' && reason.trim() ? reason.trim() : 'correction (transaction.delete)',
+      })
+      return { id: reversal.reversalTransactionId, ledgerRef: reversal.ledgerRef, reversed: true }
     }
 
     case 'material.create': {
@@ -697,29 +827,67 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
     }
 
     case 'wages.pay': {
-      // payload: { workerIds?: string[] } — pays unpaid attendance wages for today (or given date)
-      const date = payload?.date || todayStr()
-      const where = { date, paid: false, projectId }
-      const rows = await db.attendance.findMany({
-        where: payload?.workerIds?.length ? { ...where, workerId: { in: payload.workerIds } } : where,
+      // payload: { workerIds?: string[], date?, force? } — pays unpaid attendance
+      // wages for today (or the given date). F-MONEY: the payroll gate (unreviewed
+      // exceptions block unless forced) + the ledger posting + the Transaction row
+      // (costCode 'wages') run in ONE db.$transaction, and the payout goes through
+      // the PaymentProvider seam (simulated rail, honestly labelled).
+      const date = typeof payload?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payload.date) ? payload.date : todayStr()
+      const force = Boolean(payload?.force)
+      const gate = await payrollGate(projectId, date, payload, force)
+      if (gate.blocked) return gate.result
+
+      const initiation = await getProvider('mpesa').initiatePayment({
+        amount: gate.total,
+        currency: 'KES',
+        method: 'mpesa',
+        payee: `${gate.unpaid.length} fundi(s)`,
+        reference: `PAYROLL-${date}`,
+        description: `Wages ${date}`,
       })
-      const unpaid = rows.filter((r) => r.wage > 0)
-      if (!unpaid.length) return { paid: 0, amount: 0 }
-      await db.attendance.updateMany({ where: { id: { in: unpaid.map((u) => u.id) } }, data: { paid: true } })
-      const workers = await db.worker.findMany({ where: { id: { in: unpaid.map((u) => u.workerId) } } })
-      const total = unpaid.reduce((s, u) => s + u.wage, 0)
-      await db.transaction.create({
-        data: {
-          projectId,
-          type: 'wage',
-          amount: total,
+      if (initiation.status !== 'succeeded') {
+        throw new Error(`Provider did not accept the payroll: ${initiation.detail}`)
+      }
+
+      const posted = await db.$transaction(async (tx) => {
+        const paid = await tx.attendance.updateMany({
+          where: { id: { in: gate.unpaid.map((u) => u.id) } },
+          data: { paid: true },
+        })
+        void paid
+        const spend = await spendExternalInTx(tx, projectId, {
+          amount: gate.total,
           method: 'mpesa',
-          reference: `B2C-${Date.now().toString().slice(-8)}`,
-          note: `Wages ${date} — ${unpaid.map((u) => workers.find((w) => w.id === u.workerId)?.name.split(' ')[0]).join(', ')}`,
-          date: new Date(),
-        },
+          description: `Wages ${date} — ${gate.unpaid.length} fundi(s)${gate.exceptions.length > 0 ? ' (forced past exceptions)' : ''}`,
+          postedBy: 'Site Manager',
+          postedRole: 'contractor',
+          idempotencyKey: `wages.pay:${projectId}:${date}:${gate.unpaid.map((u) => u.id).join(',')}`,
+        })
+        const txnRow =
+          (await tx.transaction.findFirst({ where: { ledgerTxnId: spend.ledgerTxnId } })) ??
+          (await tx.transaction.create({
+            data: {
+              projectId,
+              type: 'wage',
+              amount: gate.total,
+              method: 'mpesa',
+              reference: `PAY-${date.replace(/-/g, '')}-${spend.ledgerRef.slice(-4)}`,
+              costCode: 'wages',
+              ledgerTxnId: spend.ledgerTxnId,
+              note: `Wages ${date}${gate.exceptions.length > 0 ? ' (forced past exceptions)' : ''} — ${gate.names}`,
+              date: new Date(),
+            },
+          }))
+        return { ledgerRef: spend.ledgerRef, transactionId: txnRow.id }
       })
-      return { paid: unpaid.length, amount: total }
+
+      return {
+        blocked: false,
+        paid: gate.unpaid.length,
+        amount: gate.total,
+        forced: force && gate.exceptions.length > 0,
+        ledgerRef: posted.ledgerRef,
+      }
     }
 
     case 'share.regenerate': {

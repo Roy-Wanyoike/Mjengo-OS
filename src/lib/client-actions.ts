@@ -16,4 +16,8 @@ export const CLIENT_ACTIONS: readonly ActionType[] = [
   // work (create/update/submit) stays site-team.
   'invoice.decide',
   'invoice.pay',
+  // Payment requests (F-MONEY): client-role users decide and pay them (mirrors
+  // invoice.decide / invoice.pay). Share-link clients stay on the route allowlist.
+  'payment.decide',
+  'payment.pay',
 ]

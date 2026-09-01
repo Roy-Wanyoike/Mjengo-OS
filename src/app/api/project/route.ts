@@ -20,7 +20,12 @@ export async function GET(req: NextRequest) {
         : null
       if (!project) return unauthorized()
     }
-    const projectId = req.nextUrl.searchParams.get('projectId')
+    // Tenant isolation: client-role sessions are PINNED to their own project —
+    // a ?projectId from the URL is ignored (mirrors /api/sync).
+    const projectId =
+      session?.user.role === 'client'
+        ? session.user.projectId
+        : req.nextUrl.searchParams.get('projectId')
     const payload = await getProjectPayload(projectId)
     if (!payload) {
       return NextResponse.json({ error: projectId ? 'Project not found' : 'No project found' }, { status: 404 })

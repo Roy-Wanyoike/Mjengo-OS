@@ -1,0 +1,165 @@
+// Payment provider abstraction (spec §40) — the seam between MjengoOS and the
+// outside payment world. The wallet/ledger engine records money movement; the
+// provider interface is how a REAL rail (M-Pesa Daraja, bank API, card
+// gateway…) would plug in without touching the money core.
+//
+// HONESTY LABEL: the only implementation today is SimulatedProvider. It
+// completes instantly and clearly reports `simulated: true` — MjengoOS is NOT
+// integrated with any licensed financial institution, and no provider result
+// ever claims otherwise (spec §40: "Do not pretend to be a bank or licensed
+// financial institution").
+
+/** Payment method / rail identifier. */
+export type PaymentMethod = 'mpesa' | 'bank' | 'card' | 'cash' | 'wallet'
+
+export interface PaymentInitiation {
+  amount: number
+  currency: string
+  method: PaymentMethod
+  payee: string
+  reference: string
+  description?: string
+}
+
+export interface ProviderResult {
+  /** Provider-side reference for the attempted transfer. */
+  providerRef: string
+  /** Human-readable status — 'succeeded' only on the simulated rail today. */
+  status: 'succeeded' | 'failed' | 'pending'
+  /** Always true until a real provider integration exists. */
+  simulated: true
+  /** Honest detail line for the audit trail / UI toast. */
+  detail: string
+}
+
+/**
+ * The provider contract every future rail implements (spec §40):
+ *   initiatePayment — start an outbound transfer to a payee
+ *   verifyPayment   — confirm a previously initiated transfer settled
+ *   refund          — reverse a settled transfer (provider-side)
+ */
+export interface PaymentProvider {
+  readonly id: string
+  readonly label: string
+  /** Honest capability line shown in UI copy. */
+  readonly integrationNote: string
+  initiatePayment(input: PaymentInitiation): Promise<ProviderResult>
+  verifyPayment(providerRef: string): Promise<ProviderResult>
+  refund(providerRef: string, amount: number): Promise<ProviderResult>
+}
+
+/** Pseudo-random provider-style reference — clearly NOT a real rail receipt. */
+function simulatedRef(prefix: string): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  let suffix = ''
+  for (let i = 0; i < 8; i++) suffix += chars[Math.floor(Math.random() * chars.length)]
+  return `SIM-${prefix}-${suffix}`
+}
+
+/**
+ * The only provider wired today (spec §40). Every result is labelled
+ * `simulated: true` — this records workflow, it never pretends to move real
+ * money through a licensed rail.
+ */
+export class SimulatedProvider implements PaymentProvider {
+  readonly id: string
+  readonly label: string
+  readonly integrationNote = 'Simulated rail — no licensed provider is integrated (workflow + ledger only)'
+
+  constructor(id: string, label: string) {
+    this.id = id
+    this.label = label
+  }
+
+  async initiatePayment(input: PaymentInitiation): Promise<ProviderResult> {
+    if (!(input.amount > 0)) {
+      return {
+        providerRef: simulatedRef(this.prefix()),
+        status: 'failed',
+        simulated: true,
+        detail: `Rejected ${input.method} transfer of ${input.amount} — amount must be positive`,
+      }
+    }
+    return {
+      providerRef: simulatedRef(this.prefix()),
+      status: 'succeeded',
+      simulated: true,
+      detail: `Simulated ${this.label} transfer of KSh ${Math.round(input.amount).toLocaleString('en-KE')} to ${input.payee} (ref ${input.reference}) — recorded, no real money moved`,
+    }
+  }
+
+  async verifyPayment(providerRef: string): Promise<ProviderResult> {
+    return {
+      providerRef,
+      status: 'succeeded',
+      simulated: true,
+      detail: `Simulated verification — ${providerRef} is recorded as settled on the simulated rail`,
+    }
+  }
+
+  async refund(providerRef: string, amount: number): Promise<ProviderResult> {
+    return {
+      providerRef,
+      status: 'succeeded',
+      simulated: true,
+      detail: `Simulated refund of KSh ${Math.round(amount).toLocaleString('en-KE')} against ${providerRef} — recorded on the ledger`,
+    }
+  }
+
+  private prefix(): string {
+    return this.id.slice(0, 4).toUpperCase()
+  }
+}
+
+/** The internal escrow rail — money moves inside MjengoOS's own ledger. */
+export class EscrowWalletProvider implements PaymentProvider {
+  readonly id = 'wallet'
+  readonly label = 'Escrow wallet (internal ledger)'
+  readonly integrationNote = 'Internal ledger movement — escrow funds held for the project, no external rail involved'
+
+  async initiatePayment(input: PaymentInitiation): Promise<ProviderResult> {
+    return {
+      providerRef: simulatedRef('WALT'),
+      status: 'succeeded',
+      simulated: true,
+      detail: `Escrow release of KSh ${Math.round(input.amount).toLocaleString('en-KE')} to ${input.payee} — internal ledger movement (ref ${input.reference})`,
+    }
+  }
+
+  async verifyPayment(providerRef: string): Promise<ProviderResult> {
+    return {
+      providerRef,
+      status: 'succeeded',
+      simulated: true,
+      detail: `Escrow movement ${providerRef} is verifiable from the double-entry ledger`,
+    }
+  }
+
+  async refund(providerRef: string, amount: number): Promise<ProviderResult> {
+    return {
+      providerRef,
+      status: 'succeeded',
+      simulated: true,
+      detail: `Escrow refund of KSh ${Math.round(amount).toLocaleString('en-KE')} against ${providerRef} — posted as a reversal on the internal ledger`,
+    }
+  }
+}
+
+// ---- registry (getProvider) ----
+
+const REGISTRY: Record<string, PaymentProvider> = {
+  mpesa: new SimulatedProvider('mpesa', 'M-Pesa (simulated)'),
+  bank: new SimulatedProvider('bank', 'Bank transfer (simulated)'),
+  card: new SimulatedProvider('card', 'Card (simulated)'),
+  cash: new SimulatedProvider('cash', 'Cash (recorded)'),
+  wallet: new EscrowWalletProvider(),
+}
+
+/** Resolve the provider for a payment method — the single seam (spec §40). */
+export function getProvider(method: string): PaymentProvider {
+  const key = String(method ?? '').toLowerCase()
+  return REGISTRY[key] ?? REGISTRY.mpesa
+}
+
+/** Every registered provider id (for guards / UI copy). */
+export const PROVIDER_METHODS = Object.keys(REGISTRY) as PaymentMethod[]

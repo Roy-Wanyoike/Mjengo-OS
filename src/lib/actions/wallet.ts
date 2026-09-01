@@ -19,12 +19,12 @@ import {
 } from '@/modules/wallet/service'
 
 export const WALLET_ACTIONS = [
-  'payment.request', // { description, amount, payee, method?, relatedEntityType?, relatedEntityId? }
-  'payment.decide', // { id, decision: 'approve'|'reject', note? }
-  'payment.pay', // { id, method?, reference?, acknowledgeMismatch? } — posts the double-entry ledger
+  'payment.request', // { description, amount, payee, method?, costCode?, relatedEntityType?, relatedEntityId? } — requester stamped from the session
+  'payment.decide', // { id, decision: 'approve'|'reject', note? } — decider resolved from the session (client/finance queue)
+  'payment.pay', // { id, method?, reference?, costCode? } — provider seam + double-entry ledger, atomic; balance checked in-tx
   'wallet.create', // { label, ownerType?, ownerId? }
-  'wallet.deposit', // { walletId | code, amount, reference? }
-  'wallet.withdraw', // { walletId, amount, note? }
+  'wallet.deposit', // { walletId | code, amount, reference? } — posts CASH→WALLET ledger rows
+  'wallet.withdraw', // { walletId, amount, note? } — balance re-checked inside the transaction
   'wallet.transfer', // { fromWalletId, toWalletId, amount, note? }
   'transaction.reverse', // { id, reason } — reversal entry; history is never edited/deleted (spec §39)
   'ledger.post', // { description, lines: [{ accountCode, side, amount }] } — manual journal entry

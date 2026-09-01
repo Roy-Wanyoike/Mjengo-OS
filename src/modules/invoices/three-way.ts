@@ -257,9 +257,10 @@ export function matchThreeWay(input: {
  *    amount AND a Transaction row (type 'invoice') — ledgered.
  *  · `invoice.pay` on external rails (mpesa/bank/card/cash) → Transaction row,
  *    wallet untouched (external money, not escrow).
- *  · money.ts `escrow.topup` → wallet += amount but NO Transaction row — the
- *    inflow side is invisible to the Transaction ledger. Expenses/wages never
- *    touch the wallet at all.
+ *  · money.ts `escrow.topup` → posts CASH→ESCROW ledger rows and keeps the
+ *    wallet projection in sync since F-MONEY (the ledger is now the source of
+ *    truth; the A-1 "invisible top-ups" gap is closed). Expenses/wages never
+ *    touch the escrow wallet at all.
  *
  * Consequence: the wallet balance cannot be reconstructed from the ledger
  * alone without inventing an unknowable "opening balance" (any choice would

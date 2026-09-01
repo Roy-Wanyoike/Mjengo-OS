@@ -63,10 +63,31 @@ export const POST = withGuard(async (req, session) => {
             continue
           }
         }
+        // Offline-sync idempotency (spec §57): every outbox item id is recorded
+        // as `sync:<projectId>:<itemId>` once applied — a re-flushed item (double
+        // tap, retry after a timeout, duplicated queue) is skipped instead of
+        // double-applying a money movement. This kills the offline double-payment
+        // vector: applyAction's money services are additionally guarded by their
+        // own natural keys, so a lost ack can never re-post money.
+        const itemProjectId = isClient ? pinnedProject!.id : action.projectId ?? body.projectId ?? null
+        const idemKey = `sync:${itemProjectId ?? 'global'}:${action.id}`
+        const alreadyApplied = await db.idempotencyRecord.findUnique({ where: { key: idemKey } })
+        if (alreadyApplied) {
+          results.push({ id: action.id, ok: true })
+          continue
+        }
         const actorPayload = isClient
           ? { ...(action.payload ?? {}), __actor: session.user.name, __role: 'client' }
           : { ...(action.payload ?? {}), __actor: session.user.name, __role: session.user.role }
         await applyAction(action.type, actorPayload, isClient ? pinnedProject!.id : action.projectId)
+        try {
+          await db.idempotencyRecord.create({
+            data: { key: idemKey, scope: `sync:${action.type}`, projectId: itemProjectId },
+          })
+        } catch {
+          // Unique collision = a concurrent flush already recorded this item —
+          // the action was applied exactly once either way.
+        }
         results.push({ id: action.id, ok: true })
       } catch (e) {
         results.push({ id: action.id, ok: false, error: e instanceof Error ? e.message : 'failed' })

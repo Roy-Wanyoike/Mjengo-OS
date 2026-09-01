@@ -26,7 +26,7 @@ export const INVOICE_ACTIONS = [
   'invoice.update', // { id, lines?, tax?, dueDate?, note? } — edit while DRAFT · { id, status: 'disputed', note } — dispute while SUBMITTED/APPROVED
   'invoice.submit', // { id } — into the client/finance decision queue
   'invoice.decide', // { id, decision: 'approve'|'reject', by?, note? } — client decision
-  'invoice.pay', // { id, method: 'mpesa'|'bank'|'card'|'wallet'|'cash', reference?, acknowledgeMismatch?, by? } — writes Transaction
+  'invoice.pay', // { id, method: 'mpesa'|'bank'|'card'|'wallet'|'cash', reference?, costCode?, acknowledgeMismatch?, by? } — provider seam + double-entry ledger (ledgerTxnId on the Transaction row)
   'invoice.threeWayCheck', // { id } — PO vs invoice vs delivery match report (warn-only)
 ] as const
 

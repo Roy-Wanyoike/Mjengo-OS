@@ -84,7 +84,7 @@ export function ExpenseDialog({ open, onOpenChange, onSubmit, submitting }: Expe
       date: date || undefined,
     })
     if (ok) {
-      toast.success(`Expense recorded — ${formatKES(Math.round(amountNum))} (${METHOD_OPTIONS.find((m) => m.value === method)?.label})`)
+      toast.success(`Expense recorded — ${formatKES(Math.round(amountNum))} (${METHOD_OPTIONS.find((m) => m.value === method)?.label}) · ledger entry posted`)
       onOpenChange(false)
     } else {
       toast.error('Could not record expense — try again')

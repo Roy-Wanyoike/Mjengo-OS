@@ -50,7 +50,7 @@ export function summarizeAction(type: string, payload: any, result: any): string
     case 'project.update': return `Project details updated`
     case 'project.create': return `Project created`
     case 'expense.create': return `Expense recorded: KSh ${p.amount} (${p.type})`
-    case 'transaction.delete': return `Removed transaction ${p.id?.slice(-6)}`
+    case 'transaction.delete': return `Reversed transaction ${p.id?.slice(-6)} — compensating entry posted${result?.ledgerRef ? ` (ledger ${result.ledgerRef})` : ''}`
     case 'material.create': return `Material "${p.name}" added to catalog`
     case 'share.regenerate': return `Share link regenerated`
     // Trust module

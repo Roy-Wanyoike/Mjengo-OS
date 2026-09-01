@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { AlertTriangle, Banknote, Check, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Banknote, BookOpen, Check, ShieldCheck } from 'lucide-react'
 import type { InvoiceWithLines, ThreeWayReport } from '@/modules/invoices/types'
 import { PAYMENT_METHOD_LABELS, formatKes } from './invoice-bits'
 
@@ -35,7 +35,7 @@ interface Props {
   report: ThreeWayReport | null
   walletBalance: number
   busy: boolean
-  onConfirm: (payload: { method: string; reference: string; acknowledgeMismatch: boolean }) => void
+  onConfirm: (payload: { method: string; reference: string; costCode: string | null; acknowledgeMismatch: boolean }) => void
   onClose: () => void
 }
 
@@ -43,6 +43,7 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
   const [method, setMethod] = useState('mpesa')
   const [reference, setReference] = useState('')
   const [useAutoRef, setUseAutoRef] = useState(true)
+  const [costCode, setCostCode] = useState('')
   const [ack, setAck] = useState(false)
   const [step, setStep] = useState<'form' | 'confirm'>('form')
 
@@ -56,6 +57,7 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
     setMethod('mpesa')
     setReference('')
     setUseAutoRef(true)
+    setCostCode('')
     setAck(false)
     setStep('form')
   }
@@ -134,6 +136,19 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
               <p className="text-[11px] text-stone-400">Provider-agnostic record — never hard-coded to one rail.</p>
             </div>
 
+            {/* cost code (optional, F-MONEY) — the finance dimension on the ledger row */}
+            <div className="space-y-2">
+              <Label htmlFor="pay-cost-code">Cost code (optional)</Label>
+              <Input
+                id="pay-cost-code"
+                value={costCode}
+                onChange={(e) => setCostCode(e.target.value)}
+                placeholder="e.g. materials / transport / finishing — defaults to ‘invoice’"
+                aria-label="Optional finance cost code for this payment"
+              />
+              <p className="text-[11px] text-stone-400">Tag the ledger row with a cost code so finance reports slice spend honestly.</p>
+            </div>
+
             {/* mismatch banner + reviewed-discrepancy checkbox — the human decision */}
             {hasMismatch && (
               <div className="space-y-2 rounded-md border border-amber-300 bg-amber-50 p-3">
@@ -187,6 +202,10 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
                 <span className="text-stone-500">Reference</span>
                 <span className="font-mono text-xs text-stone-800">{finalReference}</span>
               </p>
+              <p className="flex items-center justify-between gap-3">
+                <span className="text-stone-500">Cost code</span>
+                <span className="font-mono text-xs text-stone-800">{costCode.trim() || 'invoice'}</span>
+              </p>
               {method === 'wallet' && (
                 <p className="flex items-center justify-between gap-3">
                   <span className="text-stone-500">Wallet after</span>
@@ -224,7 +243,7 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
               <Button variant="outline" onClick={() => setStep('form')} disabled={busy}>Back</Button>
               <Button
                 onClick={() => {
-                  onConfirm({ method, reference: finalReference, acknowledgeMismatch: hasMismatch })
+                  onConfirm({ method, reference: finalReference, costCode: costCode.trim() || null, acknowledgeMismatch: hasMismatch })
                   reset()
                 }}
                 disabled={busy}
@@ -240,13 +259,18 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
   )
 }
 
-/** Paid-state chip shown in lists/details: method + reference. */
-export function PaymentRecordBadge({ invoice }: { invoice: InvoiceWithLines }) {
+/** Paid-state chip shown in lists/details: method + reference (+ ledger ref). */
+export function PaymentRecordBadge({ invoice, ledgerRef }: { invoice: InvoiceWithLines; ledgerRef?: string | null }) {
   if (invoice.status !== 'paid') return null
   return (
     <Badge variant="outline" className="gap-1 font-mono text-[10px] text-stone-600">
       <Banknote className="h-3 w-3" aria-hidden />
       {(invoice.paymentMethod ?? '').toUpperCase()}{invoice.paymentReference ? ` · ${invoice.paymentReference}` : ''}
+      {ledgerRef && (
+        <span className="flex items-center gap-0.5 text-stone-500" title="Double-entry ledger transaction">
+          <BookOpen className="h-3 w-3" aria-hidden /> {ledgerRef}
+        </span>
+      )}
     </Badge>
   )
 }
