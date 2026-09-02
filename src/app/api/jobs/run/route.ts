@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { withGuard } from '@/backend/lib/guard'
+import { withGuard, safeErrorMessage } from '@/backend/lib/guard'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 import { enqueue, isJobType, loadRecentJobs, runDueJobs } from '@/backend/modules/jobs/service'
 
 export const dynamic = 'force-dynamic'
@@ -22,6 +23,12 @@ export const maxDuration = 120
  */
 export const POST = withGuard(
   async (req) => {
+    // Rate limit (S-SEC): 10 runs/min — each call drains up to 10 background
+    // jobs (expensive), and an unvalidated projectId otherwise reaches prisma
+    // on every request.
+    const limited = await enforceRateLimit(req, 'jobs.run', 10, 60_000)
+    if (limited) return limited
+
     try {
       let body: { type?: unknown; projectId?: unknown } = {}
       try {
@@ -45,7 +52,9 @@ export const POST = withGuard(
       return NextResponse.json({ ok: true, ran, results })
     } catch (e) {
       console.error('[api/jobs/run POST]', e)
-      return NextResponse.json({ error: e instanceof Error ? e.message : 'Job run failed' }, { status: 500 })
+      // Redacted (S-SEC): an unknown projectId trips a Prisma FK error whose
+      // message leaks build paths — keep the honest generic message instead.
+      return NextResponse.json({ error: safeErrorMessage(e, 'Job run failed') }, { status: 500 })
     }
   },
   { roles: ['contractor', 'admin'] },

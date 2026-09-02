@@ -3,7 +3,8 @@ import { createHash } from 'crypto'
 import { db } from '@/backend/lib/db'
 import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/backend/lib/mjengo'
 import { CLIENT_ACTIONS } from '@/shared/client-actions'
-import { withGuard } from '@/backend/lib/guard'
+import { withGuard, safeErrorMessage } from '@/backend/lib/guard'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -369,6 +370,12 @@ async function detectConflict(projectId: string, action: QueuedAction): Promise<
  */
 export const POST = withGuard(async (req, session) => {
   try {
+    // Rate limit (S-SEC): 30 flushes/min per principal — sync batches many
+    // actions per request, so without this it would bypass the per-request
+    // 60/min limit on /api/actions.
+    const limited = await enforceRateLimit(req, 'sync', 30, 60_000)
+    if (limited) return limited
+
     const body = (await req.json()) as { actions?: QueuedAction[]; projectId?: string }
     const actions = body.actions
     if (!Array.isArray(actions)) return NextResponse.json({ error: 'actions[] required' }, { status: 400 })
@@ -471,7 +478,7 @@ export const POST = withGuard(async (req, session) => {
         }
         results.push({ id: action.id, ok: true })
       } catch (e) {
-        const msg = e instanceof Error ? e.message : 'failed'
+        const msg = safeErrorMessage(e, 'failed')
         // Error-shape interpretation (thin, honest net): financial appliers that
         // refuse with an "already …" state between pre-check and apply are
         // server-wins conflicts, not silent failures.

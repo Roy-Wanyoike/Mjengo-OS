@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { getProjectPayload, getProjectsList } from '@/backend/lib/mjengo'
-import { withGuard } from '@/backend/lib/guard'
+import { withGuard, safeErrorMessage } from '@/backend/lib/guard'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,10 +60,24 @@ interface CreateProjectBody {
 }
 
 export const POST = withGuard(async (req) => {
+  // Rate limit (S-SEC): 10 creates/min — each create writes a project + its
+  // phase rows + a full payload build.
+  const limited = await enforceRateLimit(req, 'projects.create', 10, 60_000)
+  if (limited) return limited
+
   try {
     const body = (await req.json()) as CreateProjectBody
     const name = typeof body.name === 'string' ? body.name.trim() : ''
     if (!name) return NextResponse.json({ error: 'name required' }, { status: 400 })
+    if (name.length > 200) return NextResponse.json({ error: 'name must be at most 200 characters' }, { status: 400 })
+    for (const [field, value, max] of [
+      ['client', body.client, 120],
+      ['location', body.location, 120],
+    ] as const) {
+      if (value !== undefined && (typeof value !== 'string' || value.length > max)) {
+        return NextResponse.json({ error: `${field} must be a string of at most ${max} characters` }, { status: 400 })
+      }
+    }
     const budget = Number(body.budget)
     if (!isFinite(budget) || budget <= 0) return NextResponse.json({ error: 'budget must be a positive number' }, { status: 400 })
     const clientType = ['diaspora', 'local', 'company'].includes(body.clientType ?? '')
@@ -70,6 +85,15 @@ export const POST = withGuard(async (req) => {
       : 'diaspora'
     const template = body.template && body.template in TEMPLATES ? body.template : 'blank'
 
+    // Unparseable dates reach Prisma as Invalid Date (S-SEC: its validation
+    // error leaks internals) — reject them with an honest 400 instead.
+    const invalidDate = (v: string | undefined) => v !== undefined && Number.isNaN(new Date(v).getTime())
+    if (invalidDate(body.startDate) || invalidDate(body.targetDate)) {
+      return NextResponse.json(
+        { error: `startDate/targetDate must be valid dates (got ${JSON.stringify(body.startDate ?? body.targetDate)})` },
+        { status: 400 },
+      )
+    }
     const startDate = body.startDate ? new Date(body.startDate) : new Date()
     const defaultTarget = new Date()
     defaultTarget.setDate(defaultTarget.getDate() + 120)
@@ -107,6 +131,8 @@ export const POST = withGuard(async (req) => {
     return NextResponse.json({ ok: true, result: { id: project.id, shareToken: project.shareToken }, data, projects })
   } catch (e) {
     console.error('[api/projects POST]', e)
-    return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to create project' }, { status: 500 })
+    // Prisma internals are redacted (S-SEC — the raw message leaked build
+    // paths + schema shapes to the client).
+    return NextResponse.json({ error: safeErrorMessage(e, 'Failed to create project') }, { status: 500 })
   }
 }, { roles: ['contractor', 'admin'] })

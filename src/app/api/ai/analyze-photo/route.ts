@@ -42,7 +42,12 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
     } else if (url) {
       const safe = url.replace(/\.\./g, '')
       const filePath = path.join(process.cwd(), 'public', safe.startsWith('/') ? safe.slice(1) : safe)
-      const buf = await readFile(filePath)
+      const buf = await readFile(filePath).catch(() => null)
+      if (!buf) {
+        // S-SEC: the raw ENOENT message leaks the server's absolute path —
+        // answer with the honest not-found instead.
+        return NextResponse.json({ error: 'Photo not found' }, { status: 404 })
+      }
       mime = filePath.endsWith('.png') ? 'image/png' : 'image/jpeg'
       base64 = buf.toString('base64')
     } else {

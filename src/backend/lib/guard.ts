@@ -33,6 +33,36 @@ export function forbidden(role?: string) {
   )
 }
 
+// ---------------- internal-error redaction (S-SEC) ----------------
+
+/**
+ * True when an exception carries framework internals that must not reach a
+ * client body: Prisma client errors (class name `Prisma*`, code `P####`, or
+ * the "`` invocation in" validation banner) leak absolute build paths, table
+ * shapes and the dev-server chunk map. Multi-line messages are treated as
+ * internal too — domain errors thrown by the appliers are single-line.
+ */
+export function isInternalError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false
+  const name = e.constructor?.name ?? e.name ?? ''
+  const code = String((e as { code?: unknown }).code ?? '')
+  return (
+    name.startsWith('Prisma') ||
+    /^P\d{4}$/.test(code) ||
+    e.message.includes('` invocation in') ||
+    e.message.includes('\n')
+  )
+}
+
+/**
+ * Honest error message for a response body: the appliers' own single-line
+ * Error messages (business rules) pass through; Prisma/framework internals
+ * are replaced with `fallback` (full detail still goes to the server log).
+ */
+export function safeErrorMessage(e: unknown, fallback: string): string {
+  return e instanceof Error && !isInternalError(e) ? e.message : fallback
+}
+
 // ---------------- role allowlists (F-MONEY: finance role lands, spec §36/§38) ----
 
 /**

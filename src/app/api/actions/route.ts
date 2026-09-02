@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/backend/lib/mjengo'
 import { CLIENT_ACTIONS } from '@/shared/client-actions'
-import { getSessionFromReq, unauthorized, forbidden } from '@/backend/lib/guard'
+import { getSessionFromReq, unauthorized, forbidden, safeErrorMessage } from '@/backend/lib/guard'
 import { kindForAction, withAuditContext } from '@/backend/lib/audit'
 import { enforceRateLimit } from '@/backend/lib/rate-limit'
 
@@ -136,6 +136,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, result, data, projects })
   } catch (e) {
     console.error('[api/actions]', e)
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'Action failed' }, { status: 400 })
+    // Honest domain messages pass through; Prisma/framework internals are
+    // redacted (S-SEC — they leaked absolute build paths + schema shapes).
+    return NextResponse.json({ ok: false, error: safeErrorMessage(e, 'Action failed') }, { status: 400 })
   }
 }

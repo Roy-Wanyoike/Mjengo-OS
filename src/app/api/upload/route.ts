@@ -77,6 +77,12 @@ export const POST = withGuard(
       }
 
       // ------------------------------------------------- legacy photo path
+      // Rate limit (S-SEC): document mode has its own 10/min bucket below; the
+      // legacy photo path wrote unlimited files to public/photos — same 10/min
+      // posture now.
+      const limited = await enforceRateLimit(req, 'upload:photo', 10, 60_000)
+      if (limited) return limited
+
       const { dataUrl } = body as { dataUrl?: string }
       if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
         return NextResponse.json({ error: 'A data:image/* URL is required' }, { status: 400 })
