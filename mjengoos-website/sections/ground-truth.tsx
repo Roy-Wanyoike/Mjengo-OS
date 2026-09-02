@@ -4,6 +4,7 @@ import { SectionHeading } from "@/components/section-heading";
 import { Reveal } from "@/components/reveal";
 import { DemoChip } from "@/components/badge";
 import { Button } from "@/components/button";
+import { asset } from "@/lib/utils";
 
 /**
  * Physical Ground Truth (§16) — the core differentiator.
@@ -43,7 +44,7 @@ export function GroundTruth() {
               <figure className="relative overflow-hidden rounded-xl border border-ink/10 shadow-[0_24px_64px_-28px_rgb(23_25_24/0.4)]">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src="/images/ground-truth.jpg"
+                  src={asset("/images/ground-truth.jpg")}
                   alt="Construction site in Kenya — workers on a walling phase with formwork and scaffolding"
                   className="aspect-[4/3] w-full object-cover"
                   loading="lazy"

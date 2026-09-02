@@ -48,7 +48,9 @@ export function ContactForm({ config }: { config: Config }) {
     setFormError(null);
 
     try {
-      const res = await fetch("/api/contact", {
+      // basePath-aware: the site may be served under /website (proxied by the
+      // web app) — plain "/api/contact" would hit the app's 404 there.
+      const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/contact`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

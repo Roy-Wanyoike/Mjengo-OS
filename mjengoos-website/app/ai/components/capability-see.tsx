@@ -1,6 +1,7 @@
 import { Eye } from "lucide-react";
 import { Reveal } from "@/components/reveal";
 import { DemoChip, Badge } from "@/components/badge";
+import { asset } from "@/lib/utils";
 
 /**
  * /ai — SEE: photo-based progress analysis. Foundation (Day 18) vs
@@ -30,7 +31,7 @@ export function CapabilitySee() {
               <div className="mt-2 overflow-hidden rounded-lg">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src="/images/foundation.jpg"
+                  src={asset("/images/foundation.jpg")}
                   alt="Foundation phase of a building under construction with formwork"
                   className="aspect-[4/3] w-full object-cover"
                   loading="lazy"
@@ -45,7 +46,7 @@ export function CapabilitySee() {
               <div className="relative mt-2 overflow-hidden rounded-lg">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src="/images/ground-truth.jpg"
+                  src={asset("/images/ground-truth.jpg")}
                   alt="Ground floor walls substantially complete with formwork for the ring beam"
                   className="aspect-[4/3] w-full object-cover"
                   loading="lazy"

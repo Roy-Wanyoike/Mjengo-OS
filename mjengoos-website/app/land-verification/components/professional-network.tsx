@@ -6,6 +6,7 @@ import { Reveal } from "@/components/reveal";
 import { SiteLink } from "@/components/site-link";
 import { DemoChip, VerificationBadge } from "@/components/badge";
 import { ArrowRight } from "lucide-react";
+import { asset } from "@/lib/utils";
 
 /**
  * /land-verification — the "connect with verified professionals" band:
@@ -46,7 +47,7 @@ export function ProfessionalNetwork() {
           <figure className="relative overflow-hidden rounded-xl border border-ink/10 shadow-[0_24px_64px_-28px_rgb(23_25_24/0.4)]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/images/surveyor.jpg"
+              src={asset("/images/surveyor.jpg")}
               alt="A licensed surveyor in Kenya taking measurements with a survey instrument on a plot of land"
               className="aspect-[4/3] w-full object-cover lg:aspect-[4/5]"
               loading="lazy"

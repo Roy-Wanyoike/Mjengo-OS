@@ -3,6 +3,7 @@ import { PageSection } from "@/components/page-hero";
 import { SectionHeading } from "@/components/section-heading";
 import { Reveal } from "@/components/reveal";
 import { DemoChip, VerificationBadge } from "@/components/badge";
+import { asset } from "@/lib/utils";
 
 /**
  * /platform deep dive 1 — evidence capture. The real ground-truth photo with
@@ -72,7 +73,7 @@ export function EvidenceDeepDive() {
             <figure className="relative">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="/images/ground-truth.jpg"
+                src={asset("/images/ground-truth.jpg")}
                 alt="Construction site in Kenya — workers on a walling phase with formwork and scaffolding"
                 className="aspect-[4/3] w-full object-cover"
                 loading="lazy"

@@ -13,9 +13,23 @@ else: its own `package.json`, config, dependencies and dev-server port.
 ```bash
 cd mjengoos-website
 bun install            # once
-cp .env.example .env   # optional — every variable is optional
-bun run dev            # http://localhost:3001
+cp .env.example .env   # recommended — sets NEXT_PUBLIC_BASE_PATH=/website
+bun run dev            # http://localhost:3001/website
 ```
+
+> The web app (repo root, port 3000) proxies `/website/*` here, so the
+> site is best previewed at **`http://localhost:3000/website`** — one origin
+> for the whole product. The website server must be running for that path
+> to respond.
+
+**Serving modes:** the sandbox runs this site in production mode
+(`bun run build` once, then `bun run start` — ~180 MB RAM) because two
+Turbopack *dev* servers exceed the box's 3.9 GB and the OOM killer reaps
+them (that is what kept taking the site and app down). After editing
+website files: rebuild and restart — and kill the old server **by port**
+(`ss -tlnp | grep :3001` → kill that PID; the process renames itself to
+`next-server`, so `pkill -f "next start"` misses it and leaves a stale
+manifest serving 500s).
 
 Production build (uses the repo-standard standalone flow):
 
@@ -43,8 +57,32 @@ All optional — the site runs with none set.
 | Variable | Purpose | Default |
 |---|---|---|
 | `NEXT_PUBLIC_SITE_URL` | Canonical origin for SEO metadata + sitemap | `http://localhost:3001` |
-| `NEXT_PUBLIC_APP_URL` | Where "Sign in" points (the MjengoOS app) | `/` (same-origin gateway) |
+| `NEXT_PUBLIC_BASE_PATH` | Serve the site under a prefix (integrated mode: proxied by the web app at `/website`) | unset (standalone) |
+| `NEXT_PUBLIC_APP_URL` | Where "Sign in" points (the MjengoOS app) | auto: `http://localhost:3000` when the site itself is served from localhost:3001, otherwise `/` (same-origin gateway) |
 | `NEXT_PUBLIC_ANALYTICS_ENDPOINT` | Optional analytics sink — tracked events are POSTed here as JSON via `sendBeacon` | unset → dev-only console logging |
+
+## Sign-in behavior (website → web app connection)
+
+The navbar **Sign in** button resolves its target at click time:
+
+1. `NEXT_PUBLIC_APP_URL` if set (standalone deployments).
+2. `http://localhost:3000` when the website itself is browsed directly from
+   local dev (`localhost:3001`) — the web app's dev server.
+3. Otherwise the bare `/` — in the integrated mode the website is proxied by
+   the web app at `/website`, so `/` IS the web app's login screen: same
+   origin, same session cookie domain. The login screen links back to
+   `/website`, closing the loop.
+
+### Why the proxy (and not `?XTransformPort` browsing)
+
+The single-origin preview gateway reliably serves only the default route
+(port 3000). Requesting a second app's pages via the `XTransformPort` query
+parameter loads the HTML, but the browser then requests that app's
+`/_next/*` assets **without** the parameter — the gateway routes those to
+the default app and they fail, leaving an unstyled, non-hydrated page.
+Proxying `/website/*` through the web app (rewrites in the root
+`next.config.ts` + `basePath` here) keeps every request on one origin, so
+pages, assets, hydration and the website's own API all work.
 
 The analytics layer is **provider-agnostic by design**: no vendor SDK, no
 cookies, no PII. See `lib/analytics.ts` for the event list.

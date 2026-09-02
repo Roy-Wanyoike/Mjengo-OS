@@ -1,6 +1,7 @@
 import { SectionHeading } from "@/components/section-heading";
 import { Reveal } from "@/components/reveal";
 import { PageSection } from "@/components/page-hero";
+import { asset } from "@/lib/utils";
 
 /**
  * /materials — short editorial block on material price opacity in the
@@ -35,7 +36,7 @@ export function PriceEditorial() {
           <figure className="overflow-hidden rounded-xl border border-ink/10 shadow-[0_24px_64px_-28px_rgb(23_25_24/0.4)]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/images/materials.jpg"
+              src={asset("/images/materials.jpg")}
               alt="Stacked bags of cement in a Kenyan building materials yard"
               className="aspect-[4/3] w-full object-cover"
               loading="lazy"

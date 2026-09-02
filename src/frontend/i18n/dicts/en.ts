@@ -94,6 +94,7 @@ export const enDict = {
   'login.demo.procurement': 'Otieno — Finder/Materials/Evidence, lands on Finder',
   'login.demo.qs': 'Kariuki — Site Plan/Materials/Finder/Evidence, lands on Materials',
   'login.shareNote': "Share-link clients don't need an account — the site team sends a link that just works.",
+  'login.website': 'Marketing website',
 
   // ------------------------------------------------------------- header
   'header.aria.signedInAs': 'Signed in as {name} ({role})',

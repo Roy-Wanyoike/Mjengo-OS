@@ -7,6 +7,7 @@ import { MonitoringDashboard } from "./components/monitoring-dashboard";
 import { HandoverArtifacts } from "./components/handover-artifacts";
 import { RoleSurfaces } from "./components/role-surfaces";
 import { ProjectsCtaBand } from "./components/cta-band";
+import { asset } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "Projects",
@@ -32,7 +33,7 @@ export default function ProjectsPage() {
           <figure className="relative overflow-hidden rounded-xl border border-ink/10 shadow-[0_24px_64px_-28px_rgb(23_25_24/0.45)]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/images/aerial.jpg"
+              src={asset("/images/aerial.jpg")}
               alt="Aerial view of a residential construction site and its surroundings"
               className="aspect-[21/9] w-full object-cover"
               loading="lazy"

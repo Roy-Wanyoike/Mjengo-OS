@@ -7,6 +7,7 @@ import { SupplierView } from "./components/supplier-view";
 import { DeliveryLoop } from "./components/delivery-loop";
 import { SuppliersBand } from "./components/suppliers-band";
 import { MarketplaceCtaBand } from "./components/cta-band";
+import { asset } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "Marketplace",
@@ -32,7 +33,7 @@ export default function MarketplacePage() {
           <figure className="relative overflow-hidden rounded-xl border border-ink/10 shadow-[0_24px_64px_-28px_rgb(23_25_24/0.45)]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/images/phone.jpg"
+              src={asset("/images/phone.jpg")}
               alt="An engineer on a construction site in Kenya requesting material quotes on a smartphone"
               className="aspect-[21/9] w-full object-cover"
               loading="lazy"

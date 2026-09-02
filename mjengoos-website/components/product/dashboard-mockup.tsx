@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Camera, MapPin, Clock, CheckCircle2, Truck, FileText } from "lucide-react";
 import { ParcelMap } from "@/components/map-visual";
 import { DemoChip } from "@/components/badge";
-import { cn } from "@/lib/utils";
+import { asset, cn } from "@/lib/utils";
 
 /**
  * The hero product visual — a real composition of the MjengoOS project
@@ -139,7 +139,7 @@ export function DashboardMockup({ className }: { className?: string }) {
           title="Site photo"
           value="5 new"
           sub="GPS + timestamp"
-          imageUrl="/images/site-photo.jpg"
+          imageUrl={asset("/images/site-photo.jpg")}
           delay={0}
         />
         <EvidenceCard
