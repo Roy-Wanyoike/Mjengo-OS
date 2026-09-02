@@ -1,0 +1,62 @@
+# MjengoOS — quality + build gates.
+# quality: ESLint + `tsc --noEmit` on a fresh checkout (next-env.d.ts and
+#   .next/types are gitignored + generated; verified locally that tsc passes
+#   without them, so no typegen step is needed).
+# build: real `next build` (standalone output) with a throwaway SQLite URL +
+#   dummy secret — the production build must never require real env secrets.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per ref; newer pushes to a PR cancel the stale run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    name: Lint + typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint (eslint .)
+        run: bun run lint
+
+      - name: Typecheck (tsc --noEmit)
+        run: bunx tsc --noEmit
+
+  build:
+    name: Next.js production build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Idempotent: bun install may already generate the client via prisma's
+      # install hooks — the explicit step guarantees it before `next build`.
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      - name: Build (standalone)
+        run: bun run build
+        env:
+          DATABASE_URL: "file:ci.db"
+          NEXTAUTH_SECRET: "ci-dummy-secret-0123456789abcdef-never-real"
+          NEXT_TELEMETRY_DISABLED: "1"
