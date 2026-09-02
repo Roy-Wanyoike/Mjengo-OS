@@ -4,6 +4,7 @@ import { SectionHeading } from "@/components/section-heading";
 import { Reveal } from "@/components/reveal";
 import { Button } from "@/components/button";
 import { Badge, DemoChip } from "@/components/badge";
+import { asset } from "@/lib/utils";
 
 /**
  * AI section (§26-29) — SEE / LISTEN / UNDERSTAND / DETECT,
@@ -103,7 +104,7 @@ export function AI() {
                   <p className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-mute">Before · Day 18</p>
                   <div className="mt-2 overflow-hidden rounded-lg">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/images/foundation.jpg" alt="Foundation phase of a building under construction with formwork" className="aspect-[4/3] w-full object-cover" loading="lazy" />
+                    <img src={asset("/images/foundation.jpg")} alt="Foundation phase of a building under construction with formwork" className="aspect-[4/3] w-full object-cover" loading="lazy" />
                   </div>
                   <p className="mt-2 text-[12.5px] font-medium text-ink">Foundation</p>
                 </div>
@@ -111,7 +112,7 @@ export function AI() {
                   <p className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-mute">Current · Day 47</p>
                   <div className="relative mt-2 overflow-hidden rounded-lg">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/images/ground-truth.jpg" alt="Ground floor walls substantially complete with formwork for ring beam" className="aspect-[4/3] w-full object-cover" loading="lazy" />
+                    <img src={asset("/images/ground-truth.jpg")} alt="Ground floor walls substantially complete with formwork for ring beam" className="aspect-[4/3] w-full object-cover" loading="lazy" />
                     <span className="absolute right-2 top-2 rounded-md bg-earth-500 px-2 py-0.5 text-[10.5px] font-bold text-ink">82%</span>
                   </div>
                   <p className="mt-2 text-[12.5px] font-medium text-ink">Ground floor walls</p>

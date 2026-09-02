@@ -17,3 +17,13 @@ export function withGatewayPort(href: string, port: string | null): string {
   const separator = href.includes("?") ? "&" : "?";
   return `${href}${separator}XTransformPort=${encodeURIComponent(port)}`;
 }
+
+/**
+ * Prefix a public-asset path with the serving base path. Next.js only
+ * prefixes assets referenced through next/image or metadata — plain
+ * <img src="/images/…"> tags need this helper so the file resolves when the
+ * site is served under /website (integrated mode). No-op when standalone.
+ */
+export function asset(path: string): string {
+  return `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}${path}`;
+}

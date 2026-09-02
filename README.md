@@ -201,4 +201,14 @@ src/shared/                 # ISOMORPHIC contracts (server + client)
   permissions.ts            # role → tab matrix (client mirror of guard.ts)
   client-actions.ts         # CLIENT_ACTIONS allowlist (routes + store share it)
 public/photos|audio/        # demo site photos + Swahili voice notes
+mjengoos-website/          # MARKETING WEBSITE (independent Next.js app, :3001)
 ```
+
+**The four surfaces:** the **marketing website** is proxied through the web
+app at **`/website`** (its dev server runs on port 3001 — `bun run site:dev`;
+`next.config.ts` rewrites `/website/*` → `127.0.0.1:3001`, so one origin
+serves the whole product); the **web app** (`src/app` + `src/frontend`, port
+3000) is the default route; its APIs and domain logic live in `src/backend/`;
+phones get the mobile shell (`src/mobile/`). The website's **Sign in**
+lands on the web app's login screen at `/` (where the demo accounts above
+log in), and the login screen links back to `/website`.

@@ -2,12 +2,13 @@
   "name": "mjengoos-website",
   "version": "1.0.0",
   "private": true,
-  "description": "MjengoOS marketing website — Build with evidence.",
+  "description": "MjengoOS marketing website \u2014 Build with evidence.",
   "scripts": {
     "dev": "next dev -p 3001 2>&1 | tee dev.log",
     "build": "next build",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "start": "next start -p 3001"
   },
   "dependencies": {
     "clsx": "^2.1.1",

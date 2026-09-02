@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import { PageSection } from "@/components/page-hero";
 import { SectionHeading } from "@/components/section-heading";
 import { Reveal } from "@/components/reveal";
+import { asset } from "@/lib/utils";
 
 /**
  * /professionals — what professionals get on MjengoOS: assignments,
@@ -62,7 +63,7 @@ export function ProfessionalBenefits() {
           <figure className="overflow-hidden rounded-xl border border-ink/10 shadow-[0_24px_64px_-28px_rgb(23_25_24/0.4)]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/images/architect.jpg"
+              src={asset("/images/architect.jpg")}
               alt="An architect reviewing building plans and drawings at a desk"
               className="aspect-[4/5] w-full object-cover sm:aspect-[4/3] lg:aspect-[4/5]"
               loading="lazy"

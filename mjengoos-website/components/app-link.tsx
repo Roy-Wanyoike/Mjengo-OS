@@ -6,23 +6,35 @@ import { cn } from "@/lib/utils";
 import { track } from "@/lib/analytics";
 
 /**
- * Link to the actual MjengoOS application ("Sign in").
+ * Link to the actual MjengoOS application ("Sign in") — the login connector
+ * between the marketing website and the web app.
  *
- * Behind the sandbox gateway the app is the same host at the bare "/" (no
- * XTransformPort query) — so we strip the parameter. Standalone deployments
- * use NEXT_PUBLIC_APP_URL (e.g. https://app.mjengoos.com).
+ * Resolution order:
+ * 1. NEXT_PUBLIC_APP_URL (standalone deployments, e.g. https://app.mjengoos.com)
+ * 2. Direct local dev (website served from localhost:3001) → the web app's
+ *    dev server at http://localhost:3000
+ * 3. Otherwise "/" — behind the single-origin sandbox gateway the app lives
+ *    at the bare "/" (the website is previewed with ?XTransformPort=3001;
+ *    Sign in strips that parameter so the gateway routes to the app on :3000).
+ *
+ * The href is resolved via useSyncExternalStore (server snapshot: "/") which
+ * keeps SSR and first client render consistent — no hydration mismatch.
  */
-function useAppHref(): string {
-  const env = process.env.NEXT_PUBLIC_APP_URL;
-  return useSyncExternalStore(
-    subscribeLocation,
-    () => {
-      if (env && env !== "/") return env;
-      // Same host, no port parameter → gateway routes to the app on :3000.
-      return "/";
-    },
-    () => env && env !== "/" ? env : "/",
-  );
+
+const APP_URL_ENV = process.env.NEXT_PUBLIC_APP_URL;
+
+function appHrefFromLocation(): string {
+  if (APP_URL_ENV && APP_URL_ENV !== "/") return APP_URL_ENV;
+  if (typeof window !== "undefined") {
+    const { hostname, port } = window.location;
+    // Direct local dev: `bun run dev` serves the website on :3001 and the
+    // web app on :3000 — a bare "/" would loop back to the website itself.
+    if ((hostname === "localhost" || hostname === "127.0.0.1") && port === "3001") {
+      return "http://localhost:3000";
+    }
+  }
+  // Same-origin gateway (or same-origin deployment): the app is at "/".
+  return "/";
 }
 
 function subscribeLocation(callback: () => void) {
@@ -39,7 +51,11 @@ export function AppLink({
   className?: string;
   trackEvent?: string;
 }) {
-  const href = useAppHref();
+  const href = useSyncExternalStore(
+    subscribeLocation,
+    appHrefFromLocation,
+    () => (APP_URL_ENV && APP_URL_ENV !== "/" ? APP_URL_ENV : "/"),
+  );
 
   return (
     <a

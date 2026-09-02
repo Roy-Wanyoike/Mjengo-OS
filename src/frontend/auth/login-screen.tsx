@@ -200,6 +200,17 @@ export function LoginScreen() {
         <p className="mt-4 text-center text-xs text-stone-400 px-4">
           {t('login.shareNote')}
         </p>
+
+        {/* Discreet bridge to the marketing site (proxied at /website by this
+            app) — the site's "Sign in" links back here, closing the loop. */}
+        <p className="mt-2 text-center text-xs px-4">
+          <a
+            href="/website"
+            className="text-stone-400 underline decoration-stone-300 underline-offset-2 hover:text-amber-700 hover:decoration-amber-500 transition-colors"
+          >
+            {t('login.website')} →
+          </a>
+        </p>
       </main>
     </div>
   )

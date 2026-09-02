@@ -96,6 +96,7 @@ export const swDict = {
   'login.demo.procurement': 'Otieno — Finder/Vifaa/Uthibitisho, huanza kwenye Finder',
   'login.demo.qs': 'Kariuki — Ramu ya Ujenzi/Vifaa/Finder/Uthibitisho, huanza kwenye Vifaa',
   'login.shareNote': 'Wateja wa kiungo cha kushiriki hawahitaji akaunti — timu ya ujenzi hutuma kiungo kinachofanya kazi mara moja.',
+  'login.website': 'Tovuti ya masoko',
 
   // ------------------------------------------------------------- header
   'header.aria.signedInAs': 'Umeingia kama {name} ({role})',

@@ -4,7 +4,7 @@ import { SectionHeading } from "@/components/section-heading";
 import { Reveal } from "@/components/reveal";
 import { DemoChip } from "@/components/badge";
 import { Counter } from "@/components/counter";
-import { formatKES } from "@/lib/utils";
+import { asset, formatKES } from "@/lib/utils";
 
 /**
  * /projects — remote monitoring: the client's read-only window into the
@@ -12,9 +12,9 @@ import { formatKES } from "@/lib/utils";
  * (remote-monitoring.tsx concepts, §17).
  */
 const PHOTOS = [
-  { src: "/images/ground-truth.jpg", alt: "Walling phase with formwork for the ring beam", caption: "Day 47 · walling" },
-  { src: "/images/site-photo.jpg", alt: "General site works during the structure phase", caption: "Day 44 · site" },
-  { src: "/images/fundis.jpg", alt: "Fundis working on the structure phase of the build", caption: "Day 39 · fundis" },
+  { src: asset("/images/ground-truth.jpg"), alt: "Walling phase with formwork for the ring beam", caption: "Day 47 · walling" },
+  { src: asset("/images/site-photo.jpg"), alt: "General site works during the structure phase", caption: "Day 44 · site" },
+  { src: asset("/images/fundis.jpg"), alt: "Fundis working on the structure phase of the build", caption: "Day 39 · fundis" },
 ] as const;
 
 export function MonitoringDashboard() {

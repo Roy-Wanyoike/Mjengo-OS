@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { withGatewayPort } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
@@ -13,20 +13,24 @@ import { cn } from "@/lib/utils";
  * so the gateway keeps routing to the website. Standalone deployments are
  * unaffected — links render as plain relative hrefs.
  *
- * The parameter is read via useSyncExternalStore (server snapshot: null),
- * which keeps SSR and first client render identical — no hydration mismatch.
+ * The parameter is read in an effect after mount: SSR and the first client
+ * render show the param-less href (no hydration mismatch), then links
+ * re-render with the parameter preserved. Because every internal link then
+ * carries the parameter, App Router client navigations keep it in the URL
+ * — the store only needs to re-read on mount and on back/forward (popstate).
  */
 function useGatewayPort(): string | null {
-  return useSyncExternalStore(
-    subscribeLocation,
-    () => new URLSearchParams(window.location.search).get("XTransformPort"),
-    () => null,
-  );
-}
+  const [port, setPort] = useState<string | null>(null);
 
-function subscribeLocation(callback: () => void) {
-  window.addEventListener("popstate", callback);
-  return () => window.removeEventListener("popstate", callback);
+  useEffect(() => {
+    const read = () =>
+      setPort(new URLSearchParams(window.location.search).get("XTransformPort"));
+    read(); // post-hydration sync — SSR rendered with port=null
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+
+  return port;
 }
 
 export function SiteLink({
