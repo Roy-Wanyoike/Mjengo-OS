@@ -429,6 +429,12 @@ export async function updateRequest(projectId: string, payload: Record<string, u
  * Est total = best RECEIVED quote, else Σ(avg catalog unitPrice × qty).
  * Band-matching rules chain by priority; sole-approver = requester's own role
  * → auto-approve within limit; otherwise PENDING Approval rows per role.
+ *
+ * §24 client-direct ordering (backend wave): when the CLIENT raised the
+ * request, their own rung in the chain is substituted with 'contractor' —
+ * the site team that must commit the purchase. By construction this also
+ * disables the sole-approver auto-approve shortcut for client requesters:
+ * a client's request always waits for a site-team (and/or finance) signer.
  */
 export async function submitRequest(projectId: string, payload: Record<string, unknown>) {
   const request = await getRequestOrThrow(payload.id, projectId)
@@ -440,6 +446,11 @@ export async function submitRequest(projectId: string, payload: Record<string, u
   const rules: RuleLike[] = await db.approvalRule.findMany({ where: { projectId, active: true } })
   let chain = requiredApproverRoles(rules, estimate.total)
   if (chain.length === 0) chain = ['client'] // conservative default, documented
+  // §24: the client never sits on their own approval — their rung falls to
+  // the contractor (auto-approve below then cannot fire for a client requester).
+  if (request.requestedByRole === 'client') {
+    chain = chain.map((r) => (r === 'client' ? 'contractor' : r))
+  }
 
   const now = new Date()
 
@@ -522,13 +533,27 @@ export async function decideApproval(projectId: string, payload: Record<string, 
   })
   if (!pending.length) throw new Error(`No pending approval found for ${request.requestCode}`)
 
+  // Actor resolution — the same documented pattern as modules/wallet/session.ts
+  // requireDeciderRole: the signed-in session role decides; with NO session
+  // (share-link / public path — the entry routes upstream already restrict
+  // those callers to the CLIENT_ACTIONS allowlist) the decider is the client.
   const actor = await currentActor()
-  if (!actor.role) throw new Error('Sign in to decide approvals — the actor role is resolved server-side')
-  const myRow = pending.find((p) => p.approverRole === actor.role)
+  const actorRole = actor.role ?? 'client'
+  // §24 client-direct ordering: a client may raise requests, but may NEVER
+  // approve their own — the ladder (submitRequest substituted their rung to
+  // the contractor) waits for the site team. Honest refusal, before any
+  // approval row is touched.
+  if (actorRole === 'client' && request.requestedByRole === 'client') {
+    throw new Error(
+      `${request.requestCode} was raised by the client — a client cannot approve their own request (spec §24). ` +
+        'The site team holds the decision.',
+    )
+  }
+  const myRow = pending.find((p) => p.approverRole === actorRole)
   if (!myRow) {
     const waiting = pending.map((p) => roleLabel(p.approverRole)).join(' and ')
     throw new Error(
-      `Only the ${waiting} role may decide ${request.requestCode} — you are signed in as ${roleLabel(actor.role)}. ` +
+      `Only the ${waiting} role may decide ${request.requestCode} — you are ${roleLabel(actorRole)}. ` +
         'The approval chain is waiting for the right signer.',
     )
   }
@@ -734,6 +759,10 @@ export async function createOrder(projectId: string, payload: Record<string, unk
     ? String(payload.paymentSource)
     : 'client'
   const actor = await currentActor()
+  // §24 client-direct ordering: a client-created request produces a
+  // client-created PO — payload fallback only matters for sessionless
+  // (share-link) traffic, same trust boundary as createRequest's requester.
+  const createdByRole = actor.role ?? str(payload.createdByRole) ?? 'contractor'
   const orderCode = await nextOrderCode(projectId)
 
   const order = await db.purchaseOrder.create({
@@ -747,7 +776,7 @@ export async function createOrder(projectId: string, payload: Record<string, unk
       total,
       status: 'approved', // the request's approval counts (documented)
       paymentSource,
-      createdByRole: actor.role ?? 'contractor',
+      createdByRole,
       note: str(payload.note),
       lines: { create: lineData },
     },
@@ -891,6 +920,8 @@ export async function closeOrder(projectId: string, payload: Record<string, unkn
  * `delivery.receive` { deliveryId, lines: [{ orderLineId, qtyReceived,
  * qtyRejected?, damageNote?, condition? }], note?, gpsLat?, gpsLng?,
  * photoCount? } — per-line physical counts + inspection + evidence.
+ * Accepts a truck that is DISPATCHED (§26 leg skipped — back-compat) or
+ * ARRIVED (the driver leg ran: assign → dispatch → transit → arrive).
  * ANY qtyReceived < qtyOrdered → OrderDelivery 'discrepancy' ("Ordered X ·
  * Received Y — N missing, flagged for review") + client & contractor
  * notifications. Documented: the order still completes (DELIVERED) — the flag
@@ -917,7 +948,13 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
     include: { order: { include: { lines: true, supplier: true } }, lines: true },
   })
   if (!delivery) throw new Error('Delivery not found in this project')
-  if (delivery.status !== 'dispatched') {
+  if (delivery.status === 'in_transit') {
+    // §26 driver leg: the truck has not reached the site yet — count at the gate.
+    throw new Error(
+      'The truck is still in transit — record the arrival (delivery.arrive) before receiving',
+    )
+  }
+  if (delivery.status !== 'dispatched' && delivery.status !== 'arrived') {
     throw new Error(`Delivery is already ${delivery.status.toUpperCase()} — it cannot be re-received`)
   }
   const rawLines = Array.isArray(payload.lines) ? payload.lines : []
@@ -1131,7 +1168,15 @@ async function postDeliveryToInventory(
   return { movementsPosted: movements.length, movements, catalogClamped }
 }
 
-/** `delivery.dispatch` { deliveryId, note? } — update dispatch info while DISPATCHED. */
+/**
+ * `delivery.dispatch` { deliveryId, note? } — the §26 driver-leg departure:
+ * the truck with the ASSIGNED driver physically leaves for the site.
+ * Requires driverName on the row (delivery.assign first — honest error
+ * otherwise), stamps departedAt and keeps status 'dispatched' (deliveries
+ * are born dispatched by order.dispatch; transit/arrive advance the leg).
+ * An optional note still replaces the delivery note (v1 note-update
+ * behavior rides along; it is no longer required).
+ */
 export async function updateDispatch(projectId: string, payload: Record<string, unknown>) {
   const deliveryId = str(payload.deliveryId)
   if (!deliveryId) throw new Error('deliveryId required')
@@ -1140,15 +1185,24 @@ export async function updateDispatch(projectId: string, payload: Record<string, 
   })
   if (!delivery) throw new Error('Delivery not found in this project')
   if (delivery.status !== 'dispatched') {
-    throw new Error(`Only DISPATCHED deliveries can be updated — this one is ${delivery.status.toUpperCase()}`)
+    throw new Error(`Only DISPATCHED deliveries can depart — this one is ${delivery.status.toUpperCase()}`)
+  }
+  if (!str(delivery.driverName)) {
+    throw new Error(
+      'Assign a driver before dispatching the truck — delivery.assign { deliveryId, driverName, … } first (spec §26)',
+    )
+  }
+  if (delivery.departedAt) {
+    throw new Error(
+      `Truck already departed at ${delivery.departedAt.toISOString()} — use delivery.transit / delivery.arrive for the next legs`,
+    )
   }
   const note = str(payload.note)
-  if (!note) throw new Error('A dispatch note is required')
-  await db.orderDelivery.update({
+  const updated = await db.orderDelivery.update({
     where: { id: delivery.id },
-    data: { note, dispatchedAt: delivery.dispatchedAt ?? new Date() },
+    data: { departedAt: new Date(), dispatchedAt: delivery.dispatchedAt ?? new Date(), note: note ?? delivery.note },
   })
-  return { id: delivery.id }
+  return { id: updated.id, departedAt: updated.departedAt, driverName: updated.driverName }
 }
 
 // ---------------- approval rules (Finder §11 — project-configurable) ----------------

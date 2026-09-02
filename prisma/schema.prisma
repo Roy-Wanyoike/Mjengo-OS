@@ -36,6 +36,8 @@ model Project {
   photoComments      PhotoComment[]
   zones              SiteZone[]
   notifications      Notification[]
+  // Backend wave: professional staffing roster (distinct from app Users)
+  team               ProjectTeam[]
   // v2 domain slices (land, supply, invoices, intel)
   landParcels        LandParcel[]
   materialRequests   MaterialRequest[]
@@ -106,6 +108,13 @@ model Worker {
   pin         String? // 4-digit kiosk PIN (worker identity on shared site device)
   dailyRate   Float
   active      Boolean      @default(true)
+  // Worker record depth (Doc A §14, backend wave): identity + skills +
+  // employment terms + who to call when something happens on site.
+  idNumber                String? // national ID (stored as given; no verification claim)
+  employmentType          String? // casual | contract | full_time
+  skills                  String? // JSON array of trade skills
+  emergencyContactName    String?
+  emergencyContactPhone   String?
   attendances Attendance[]
   // Task assignment inverse (Task v2, Doc A §11) — required opposite side of
   // the "TaskAssignedWorker" relation. Additive; nothing else on Worker changes.
@@ -347,9 +356,26 @@ model User {
   email        String   @unique
   passwordHash String
   name         String
-  role         String   @default("contractor") // contractor, client, admin, finance, supervisor
+  role         String   @default("contractor") // contractor, client, admin, finance, supervisor, procurement, qs
   projectId    String? // the client user's project (client-role login boots that project)
   createdAt    DateTime @default(now())
+  // Notification preferences (Doc A §42, backend wave): per-kind opt-in map
+  // stored as JSON — the in-app channel is always on, prefs gate future channels.
+  notificationPrefs String? // JSON { kind: { inApp: true, ... } }
+}
+
+// Project staffing roster (Doc A §54/§10, backend wave): who is attached to
+// the project in which professional capacity — distinct from app Users.
+model ProjectTeam {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  role      String // contractor, supervisor, qs, architect, engineer, surveyor, client_rep
+  phone     String?
+  email     String?
+  note      String?
+  joinedAt  DateTime @default(now())
 }
 
 // ---------------- MjengoOS v2 — Land & Property (module: land) ----------------
@@ -644,7 +670,7 @@ model OrderDelivery {
   id           String              @id @default(cuid())
   orderId      String
   order        PurchaseOrder       @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  status       String              @default("dispatched") // dispatched, received, discrepancy
+  status       String              @default("dispatched") // dispatched, in_transit, arrived, received, discrepancy
   dispatchedAt DateTime?
   receivedAt   DateTime?
   receivedBy   String? // who confirmed receipt on the ground
@@ -654,6 +680,14 @@ model OrderDelivery {
   gpsLat       Float?
   gpsLng       Float?
   createdAt    DateTime            @default(now())
+  // Driver / dispatch leg (Doc A §26, backend wave): who is bringing it,
+  // in what, when it left, when it is expected, when it arrived.
+  driverName   String?
+  driverPhone  String?
+  vehicleReg   String?
+  etaAt        DateTime?
+  departedAt   DateTime?
+  arrivedAt    DateTime?
   lines        OrderDeliveryLine[]
 }
 
@@ -946,6 +980,22 @@ model Attachment {
   projectId  String?
   project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
+  // Document intelligence (Doc A §60, backend wave): category, provenance,
+  // extraction + human review. Extracted data NEVER writes official records —
+  // reviewStatus gates any use (spec: AI assists, humans decide).
+  category            String?   // contract | drawing | permit | receipt | boq | invoice | quote | other
+  mimeType            String?
+  sizeBytes           Int?
+  title               String?
+  version             Int       @default(1)
+  expiresAt           DateTime? // permits and insurance expire — surfaced before they do
+  ocrText             String?   // extracted plain text (searchable)
+  extractedJson       String?   // structured extraction { lines, total, supplier, ... }
+  extractionConfidence Float?
+  extractionModel     String?   // which model produced it (provenance)
+  reviewStatus        String    @default("pending") // pending | approved | rejected
+  reviewedBy          String?
+  reviewedAt          DateTime?
 }
 
 // ---------------- MjengoOS v3 — Platform: events, jobs, flags, health (module: events/jobs) ----------------
@@ -971,7 +1021,7 @@ model JobRecord {
   type       String // anomaly_scan, digest.weekly, recap.daily, reconciliation, notification.dispatch
   projectId  String?
   project    Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  status     String    @default("queued") // queued, running, done, failed
+  status     String    @default("queued") // queued, running, done, failed, retrying
   payload    String    @default("{}")
   result     String?
   attempts   Int       @default(0)
@@ -980,6 +1030,10 @@ model JobRecord {
   startedAt  DateTime?
   finishedAt DateTime?
   createdAt  DateTime  @default(now())
+  // Failure handling (Doc A §48, backend wave): bounded retries with
+  // exponential backoff, then an honest terminal 'failed' — no silent loss.
+  maxAttempts Int      @default(3)
+  lastAttemptAt DateTime?
 }
 
 // Feature flags (spec §81): ai_progress, ai_voice, wallet, marketplace,

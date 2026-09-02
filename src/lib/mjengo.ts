@@ -27,8 +27,9 @@ import type { InvoicesSlice } from '@/modules/invoices/types'
 import type { IntelSlice } from '@/modules/intel/types'
 import type { InventorySlice, BoqSlice } from '@/modules/inventory/types'
 import type { FinanceSlice } from '@/modules/wallet/types'
+import { supplyCan, type SupplyAction, type SupplyRole } from '@/modules/supply/policy'
 import type {
-  Alert, Attendance, AuditEvent, Consumption, Delivery, EscrowWallet, Material, Milestone, Notification, Phase, PhotoComment, Project, Recap, SitePhoto, SiteZone, Task, Transaction, VariationOrder, Worker,
+  Alert, Attendance, AuditEvent, Consumption, Delivery, EscrowWallet, Material, Milestone, Notification, OrderDelivery, Phase, PhotoComment, Project, ProjectTeam, Recap, SitePhoto, SiteZone, Task, Transaction, VariationOrder, Worker,
 } from '@prisma/client'
 
 // ---------------- Types (client contract) ----------------
@@ -371,6 +372,132 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
   }
 }
 
+// ---------------- B1 domain constants + helpers (Doc A §14/§26/§33) ----------------
+
+/** Roles that may operate the delivery driver leg (§26). */
+const DELIVERY_LEG_ROLES: readonly string[] = ['contractor', 'admin', 'supervisor']
+
+/** Driver-leg actions gated above (§26). 'delivery.dispatch' is the supply action. */
+const DELIVERY_LEG_ACTIONS: readonly string[] = ['delivery.assign', 'delivery.transit', 'delivery.arrive']
+
+/** Roles that may manage the project team roster (§33). */
+const TEAM_ROLES: readonly string[] = ['contractor', 'admin']
+
+/** Team-roster actions gated above (§33). */
+const TEAM_ACTIONS: readonly string[] = ['team.add', 'team.update', 'team.remove']
+
+/** §33 professional roles a roster entry may carry. */
+const PROJECT_TEAM_ROLES: readonly string[] = ['contractor', 'supervisor', 'qs', 'architect', 'engineer', 'surveyor', 'client_rep']
+
+/** §14 employment terms. */
+const WORKER_EMPLOYMENT_TYPES: readonly string[] = ['casual', 'contract', 'full_time']
+
+/** §14 skills caps: max 10 skills, 40 characters each. */
+const WORKER_SKILLS_MAX = 10
+const WORKER_SKILL_MAX_LEN = 40
+
+/**
+ * Validate + normalize the §14 worker-profile fields (idNumber, employmentType,
+ * skills, emergency contacts). All optional and additive: an absent field is
+ * never touched; null/'' clears it. skills is stored JSON-stringified on the
+ * Worker row (Prisma primitive, no list columns). Shared by worker.create and
+ * worker.update so both speak the exact same validation.
+ */
+function workerProfileData(payload: Record<string, unknown>): Partial<Worker> {
+  const data: Partial<Worker> = {}
+  if (payload.idNumber !== undefined) {
+    if (payload.idNumber === null || payload.idNumber === '') {
+      data.idNumber = null
+    } else {
+      if (typeof payload.idNumber !== 'string') throw new Error('idNumber must be a string')
+      const v = payload.idNumber.trim()
+      if (!v) data.idNumber = null
+      else if (v.length > 30) throw new Error('idNumber is too long — at most 30 characters')
+      else data.idNumber = v
+    }
+  }
+  if (payload.employmentType !== undefined) {
+    if (payload.employmentType === null || payload.employmentType === '') {
+      data.employmentType = null
+    } else if (
+      typeof payload.employmentType !== 'string' ||
+      !WORKER_EMPLOYMENT_TYPES.includes(payload.employmentType)
+    ) {
+      throw new Error(
+        `employmentType must be one of ${WORKER_EMPLOYMENT_TYPES.join(', ')} (got ${JSON.stringify(payload.employmentType)})`,
+      )
+    } else {
+      data.employmentType = payload.employmentType
+    }
+  }
+  if (payload.skills !== undefined) {
+    if (payload.skills === null) {
+      data.skills = null
+    } else {
+      if (!Array.isArray(payload.skills)) throw new Error('skills must be an array of trade strings')
+      if (payload.skills.length > WORKER_SKILLS_MAX) {
+        throw new Error(`Too many skills — at most ${WORKER_SKILLS_MAX} are allowed`)
+      }
+      const skills = payload.skills.map((s) => {
+        if (typeof s !== 'string' || !s.trim()) throw new Error('Every skill must be a non-empty string')
+        const t = s.trim()
+        if (t.length > WORKER_SKILL_MAX_LEN) {
+          throw new Error(`Skill "${t.slice(0, 20)}…" is too long — at most ${WORKER_SKILL_MAX_LEN} characters`)
+        }
+        return t
+      })
+      data.skills = JSON.stringify(skills)
+    }
+  }
+  if (payload.emergencyContactName !== undefined) {
+    if (payload.emergencyContactName === null || payload.emergencyContactName === '') {
+      data.emergencyContactName = null
+    } else {
+      if (typeof payload.emergencyContactName !== 'string') throw new Error('emergencyContactName must be a string')
+      const v = payload.emergencyContactName.trim()
+      if (!v) data.emergencyContactName = null
+      else if (v.length > 80) throw new Error('emergencyContactName is too long — at most 80 characters')
+      else data.emergencyContactName = v
+    }
+  }
+  if (payload.emergencyContactPhone !== undefined) {
+    if (payload.emergencyContactPhone === null || payload.emergencyContactPhone === '') {
+      data.emergencyContactPhone = null
+    } else {
+      if (typeof payload.emergencyContactPhone !== 'string') throw new Error('emergencyContactPhone must be a string')
+      const v = payload.emergencyContactPhone.trim()
+      if (!v) data.emergencyContactPhone = null
+      else if (v.length > 20) throw new Error('emergencyContactPhone is too long — at most 20 characters')
+      else data.emergencyContactPhone = v
+    }
+  }
+  return data
+}
+
+/** Load an OrderDelivery scoped to the project (via its order) — honest miss error. */
+async function orderDeliveryInProject(deliveryId: string, projectId: string) {
+  const delivery = await db.orderDelivery.findFirst({
+    where: { id: deliveryId, order: { projectId } },
+  })
+  if (!delivery) throw new Error('Delivery not found in this project')
+  return delivery
+}
+
+/** Optional bounded string: absent → skip; null/'' → clear; else validate + trim. */
+function optionalBoundedString(
+  field: string,
+  v: unknown,
+  maxLen: number,
+): { value: string | null } | null {
+  if (v === undefined) return null
+  if (v === null || v === '') return { value: null }
+  if (typeof v !== 'string') throw new Error(`${field} must be a string`)
+  const t = v.trim()
+  if (!t) return { value: null }
+  if (t.length > maxLen) throw new Error(`${field} is too long — at most ${maxLen} characters`)
+  return { value: t }
+}
+
 // ---------------- Action dispatcher (online + offline sync) ----------------
 
 export type ActionType =
@@ -385,6 +512,12 @@ export type ActionType =
   | 'phase.update'
   | 'phase.create'
   | 'delivery.create'
+  | 'delivery.assign' // §26 driver leg: name who is bringing the load
+  | 'delivery.transit' // §26 driver leg: truck en route + validated ETA
+  | 'delivery.arrive' // §26 driver leg: on site + arrival stamp
+  | 'team.add' // §33 professional roster
+  | 'team.update'
+  | 'team.remove'
   | 'consumption.create'
   | 'attendance.checkin'
   | 'attendance.setStatus'
@@ -415,6 +548,39 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
 
   // Optional actor override (used by the public share route / client role); never reaches handlers
   const { __actor, __role, ...cleanPayload } = payload ?? {}
+
+  // ---- B1 domain role gates (Doc A §24/§26/§33) ------------------------------
+  // The role stamp arrives via __role, written SERVER-side by every entry
+  // route (/api/actions, /api/share, /api/sync resolve it from the session
+  // and overwrite any payload copy; /api/ussd stamps 'ussd'). No stamp (an
+  // internal job or a node-level script) falls back to 'contractor' — the
+  // same default the ledger actor uses below.
+  const effectiveRole = __role ?? 'contractor'
+  if (DELIVERY_LEG_ACTIONS.includes(type) && !DELIVERY_LEG_ROLES.includes(effectiveRole)) {
+    throw new Error(
+      `Only a contractor, admin or supervisor may run the delivery driver leg — "${effectiveRole}" is not permitted (spec §26)`,
+    )
+  }
+  if (TEAM_ACTIONS.includes(type) && !TEAM_ROLES.includes(effectiveRole)) {
+    throw new Error(
+      `Only a contractor or admin may manage the project team roster — "${effectiveRole}" is not permitted (spec §33)`,
+    )
+  }
+  // §24 client-direct ordering: a client (or share-link) caller may reach the
+  // supply loop ONLY through the seams supplyCan allows — request.create,
+  // order.create and request.decide (the CLIENT_ACTIONS band-approval seam).
+  // Every other supply action refuses here, server-side, before any handler
+  // touches data — the route-layer allowlists stay a convenience gate.
+  if (
+    (SUPPLY_ACTIONS as readonly string[]).includes(type) &&
+    (effectiveRole === 'client' || effectiveRole === 'share_client') &&
+    !supplyCan(effectiveRole as SupplyRole, type as SupplyAction)
+  ) {
+    throw new Error(
+      `Clients may raise material requests and place purchase orders — "${type}" stays with the site team (spec §24). ` +
+        'Sign in as the site team, or ask them to run it.',
+    )
+  }
 
   let result: any
   if ((TRUST_ACTIONS as readonly string[]).includes(type)) {
@@ -946,8 +1112,19 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
     case 'worker.create': {
       const { name, role, phone, dailyRate, pin } = payload
       if (!name) throw new Error('name required')
+      // §14 worker record depth: idNumber / employmentType / skills /
+      // emergency contact ride along on creation (all optional, validated by
+      // the shared normalizer so create and update speak one contract).
       const w = await db.worker.create({
-        data: { projectId, name, role: role || 'Mtumishi (Labourer)', phone: phone || '', dailyRate: Number(dailyRate) || 800, pin: typeof pin === 'string' && /^\d{4}$/.test(pin) ? pin : null },
+        data: {
+          projectId,
+          name,
+          role: role || 'Mtumishi (Labourer)',
+          phone: phone || '',
+          dailyRate: Number(dailyRate) || 800,
+          pin: typeof pin === 'string' && /^\d{4}$/.test(pin) ? pin : null,
+          ...workerProfileData(payload),
+        },
       })
       return { id: w.id }
     }
@@ -964,8 +1141,165 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
       if (typeof dailyRate === 'number' && dailyRate >= 0) data.dailyRate = dailyRate
       if (typeof active === 'boolean') data.active = active
       if (typeof pin === 'string') data.pin = /^\d{4}$/.test(pin) ? pin : null
+      // §14 worker record depth — same validation as worker.create
+      Object.assign(data, workerProfileData(payload))
       const w = await db.worker.update({ where: { id }, data })
       return { id: w.id }
+    }
+
+    case 'delivery.assign': {
+      // §26 driver leg: name who is bringing the load (and in what). The
+      // driver can be set/changed while the truck is en route; after arrival
+      // or receipt the record is history and refuses edits.
+      const { deliveryId, driverName, driverPhone, vehicleReg } = payload
+      if (!deliveryId) throw new Error('deliveryId required')
+      const delivery = await orderDeliveryInProject(String(deliveryId), projectId)
+      if (!['dispatched', 'in_transit'].includes(delivery.status)) {
+        throw new Error(
+          `A driver can only be assigned while the truck is en route — this delivery is ${delivery.status.toUpperCase()}`,
+        )
+      }
+      if (driverName === undefined || driverName === null || driverName === '') {
+        throw new Error('driverName required — name who is bringing the load')
+      }
+      const name = typeof driverName === 'string' ? driverName.trim() : ''
+      if (!name) throw new Error('driverName required — name who is bringing the load')
+      if (name.length > 60) throw new Error('driverName is too long — at most 60 characters')
+      const data: Partial<OrderDelivery> = { driverName: name }
+      const phone = optionalBoundedString('driverPhone', driverPhone, 20)
+      if (phone) data.driverPhone = phone.value
+      const reg = optionalBoundedString('vehicleReg', vehicleReg, 20)
+      if (reg) data.vehicleReg = reg.value
+      const updated = await db.orderDelivery.update({ where: { id: delivery.id }, data })
+      return { id: updated.id, driverName: updated.driverName }
+    }
+
+    case 'delivery.transit': {
+      // §26 driver leg: the truck is en route, with a validated ETA.
+      const { deliveryId, etaAt } = payload
+      if (!deliveryId) throw new Error('deliveryId required')
+      const delivery = await orderDeliveryInProject(String(deliveryId), projectId)
+      if (!['dispatched', 'in_transit'].includes(delivery.status)) {
+        throw new Error(
+          `Only DISPATCHED or IN_TRANSIT deliveries can report transit — this one is ${delivery.status.toUpperCase()}`,
+        )
+      }
+      if (etaAt === undefined || etaAt === null || etaAt === '') {
+        throw new Error('etaAt required — when is the truck expected on site?')
+      }
+      const eta = new Date(String(etaAt))
+      if (Number.isNaN(eta.getTime())) {
+        throw new Error(`etaAt is not a valid date (got ${JSON.stringify(etaAt)})`)
+      }
+      const updated = await db.orderDelivery.update({
+        where: { id: delivery.id },
+        data: { status: 'in_transit', etaAt: eta },
+      })
+      return { id: updated.id, status: 'in_transit', etaAt: updated.etaAt }
+    }
+
+    case 'delivery.arrive': {
+      // §26 driver leg: the truck is on site. Optional GPS pins the arrival;
+      // the physical count still happens at delivery.receive (§13).
+      const { deliveryId, gpsLat, gpsLng } = payload
+      if (!deliveryId) throw new Error('deliveryId required')
+      const delivery = await orderDeliveryInProject(String(deliveryId), projectId)
+      if (!['dispatched', 'in_transit'].includes(delivery.status)) {
+        throw new Error(
+          `Only en-route deliveries can arrive — this one is ${delivery.status.toUpperCase()}`,
+        )
+      }
+      const data: Partial<OrderDelivery> = { status: 'arrived', arrivedAt: new Date() }
+      if (gpsLat !== undefined && gpsLat !== null) {
+        const lat = Number(gpsLat)
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+          throw new Error(`gpsLat must be a number between -90 and 90 (got ${JSON.stringify(gpsLat)})`)
+        }
+        data.gpsLat = lat
+      }
+      if (gpsLng !== undefined && gpsLng !== null) {
+        const lng = Number(gpsLng)
+        if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+          throw new Error(`gpsLng must be a number between -180 and 180 (got ${JSON.stringify(gpsLng)})`)
+        }
+        data.gpsLng = lng
+      }
+      const updated = await db.orderDelivery.update({ where: { id: delivery.id }, data })
+      return { id: updated.id, status: 'arrived', arrivedAt: updated.arrivedAt }
+    }
+
+    case 'team.add': {
+      // §33 professional assignment: who is on the project team, in which
+      // professional role, with contact details. Distinct from app Users —
+      // this is the site roster (people, not logins).
+      const { name, role, phone, email, note } = payload
+      if (!name || typeof name !== 'string' || !name.trim()) throw new Error('name required')
+      if (name.trim().length > 80) throw new Error('name is too long — at most 80 characters')
+      if (role === undefined || role === null || role === '') {
+        throw new Error('role required — the professional role on the team')
+      }
+      const teamRole =
+        typeof role === 'string' && PROJECT_TEAM_ROLES.includes(role)
+          ? role
+          : undefined
+      if (!teamRole) {
+        throw new Error(`role must be one of ${PROJECT_TEAM_ROLES.join(', ')} (got ${JSON.stringify(role)})`)
+      }
+      const data: { projectId: string; name: string; role: string; phone: string | null; email: string | null; note: string | null } = {
+        projectId,
+        name: name.trim(),
+        role: teamRole,
+        phone: null,
+        email: null,
+        note: null,
+      }
+      const phoneV = optionalBoundedString('phone', phone, 20)
+      if (phoneV) data.phone = phoneV.value
+      const emailV = optionalBoundedString('email', email, 120)
+      if (emailV) data.email = emailV.value
+      const noteV = optionalBoundedString('note', note, 300)
+      if (noteV) data.note = noteV.value
+      const member = await db.projectTeam.create({ data })
+      return { id: member.id }
+    }
+
+    case 'team.update': {
+      const { id, name, role, phone, email, note } = payload
+      if (!id) throw new Error('team member id required')
+      const existing = await db.projectTeam.findFirst({ where: { id: String(id), projectId } })
+      if (!existing) throw new Error('Team member not found in this project')
+      const data: Partial<ProjectTeam> = {}
+      if (name !== undefined) {
+        if (typeof name !== 'string' || !name.trim()) throw new Error('name cannot be empty')
+        if (name.trim().length > 80) throw new Error('name is too long — at most 80 characters')
+        data.name = name.trim()
+      }
+      if (role !== undefined) {
+        if (typeof role !== 'string' || !PROJECT_TEAM_ROLES.includes(role)) {
+          throw new Error(`role must be one of ${PROJECT_TEAM_ROLES.join(', ')} (got ${JSON.stringify(role)})`)
+        }
+        data.role = role
+      }
+      const phoneV = optionalBoundedString('phone', phone, 20)
+      if (phoneV) data.phone = phoneV.value
+      const emailV = optionalBoundedString('email', email, 120)
+      if (emailV) data.email = emailV.value
+      const noteV = optionalBoundedString('note', note, 300)
+      if (noteV) data.note = noteV.value
+      if (!Object.keys(data).length) {
+        throw new Error('Nothing to update — provide name, role, phone, email or note')
+      }
+      const member = await db.projectTeam.update({ where: { id: existing.id }, data })
+      return { id: member.id }
+    }
+
+    case 'team.remove': {
+      const { id } = payload
+      if (!id) throw new Error('team member id required')
+      const existing = await db.projectTeam.findFirst({ where: { id: String(id), projectId } })
+      if (!existing) throw new Error('Team member not found in this project')
+      await db.projectTeam.delete({ where: { id: existing.id } })
+      return { id: existing.id }
     }
 
     case 'project.update': {

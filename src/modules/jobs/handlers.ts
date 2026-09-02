@@ -18,10 +18,146 @@ import { emit } from '@/modules/events/service'
 import { generateDigest } from '@/modules/intel/service'
 import { computeLedgerConsistency } from '@/modules/invoices/three-way'
 import type { LedgerCheck } from '@/modules/invoices/types'
+import {
+  computeAttendanceFraudFindings, computeCostVarianceFindings, computeDuplicatePurchaseFindings,
+  overallProgress, type AttendanceAuditRow, type CostCategory, type DuplicateOrderRow, type EngineFinding,
+} from '@/modules/intel/engine'
 
 /** Nairobi/EAT date string (UTC+3) — the platform's "today". */
 function todayEAT(): string {
   return new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10)
+}
+
+/** EAT date string `days` days before now (attendance date strings are EAT-based). */
+function dateEATAgo(days: number): string {
+  return new Date(Date.now() + 3 * 3600 * 1000 - days * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** Alert.type bucket per deterministic rule key (Doc A §16 attendance / §29 budget+cost). */
+const RULE_ALERT_TYPE: Record<string, string> = {
+  attendance_override_pattern: 'attendance',
+  weekend_ghost_pattern: 'attendance',
+  budget_category_overrun: 'budget',
+  duplicate_purchase_watch: 'anomaly',
+}
+
+/** Transaction.type → §29 cost category (costCode can re-route to professional fees). */
+function costCategoryOf(type: string, costCode: string | null): CostCategory {
+  if (costCode && /professional|consult|architect|engineer|survey|design|fee/i.test(costCode)) return 'professional_fees'
+  if (type === 'material') return 'materials'
+  if (type === 'wage') return 'labour'
+  if (type === 'transport') return 'transport'
+  return 'other'
+}
+
+/** "Not yet delivered" for the duplicate rule: terminal status or a received delivery. */
+const DUPLICATE_DELIVERED_STATUSES = ['delivered', 'closed']
+
+/**
+ * B4-INTEL deterministic rules (Doc A §16 anti-fraud attendance + §29 cost
+ * control) — the same scan-invoked pattern as the LLM pass: fetch the rows,
+ * run the pure engines, write Alert rows. Every finding carries its evidence
+ * (counts, dates, amounts, and the budget basis) in the message. Alerts NEVER
+ * auto-change money or records — humans decide.
+ */
+async function runDeterministicScanRules(projectId: string): Promise<EngineFinding[]> {
+  const now = new Date()
+  const windowStart = dateEATAgo(14)
+  const historyStart = dateEATAgo(90)
+
+  const [attendanceRows, weekendHistory, transactions, phases, boq, orders] = await Promise.all([
+    db.attendance.findMany({
+      where: { projectId, date: { gte: windowStart } },
+      select: {
+        date: true, status: true, workerId: true, overrideLog: true, recordedBy: true,
+        worker: { select: { name: true } },
+      },
+    }),
+    db.attendance.findMany({
+      where: { projectId, date: { gte: historyStart, lt: windowStart } },
+      select: { date: true, status: true },
+    }),
+    db.transaction.findMany({ where: { projectId }, select: { type: true, amount: true, costCode: true } }),
+    db.phase.findMany({
+      where: { projectId },
+      select: { budget: true, progressManual: true, tasks: { select: { progress: true } } },
+    }),
+    db.boq.findMany({
+      where: { projectId },
+      orderBy: { version: 'desc' },
+      include: { lines: { select: { qty: true, estUnitPrice: true } } },
+    }),
+    db.purchaseOrder.findMany({
+      where: { projectId, createdAt: { gte: new Date(now.getTime() - 60 * 86_400_000) } },
+      include: { lines: { select: { name: true, lineTotal: true } }, deliveries: { select: { receivedAt: true } } },
+    }),
+  ])
+
+  // §16 rows — the last 14 days, with worker names for the ghost rule.
+  const auditRows: AttendanceAuditRow[] = attendanceRows.map((a) => ({
+    date: a.date,
+    status: a.status,
+    workerId: a.workerId,
+    workerName: a.worker.name,
+    recordedBy: a.recordedBy,
+    isOverride: a.overrideLog !== null,
+  }))
+
+  // Weekend baseline from the PRIOR history window (before the 14-day window).
+  let weekendRows = 0
+  let weekendPresent = 0
+  for (const a of weekendHistory) {
+    const dow = new Date(`${a.date}T00:00:00.000Z`).getUTCDay()
+    if (dow !== 0 && dow !== 6) continue
+    weekendRows += 1
+    if (a.status === 'present') weekendPresent += 1
+  }
+
+  // §29 spend grouped into the 5 categories from the Transaction ledger.
+  const spendByCategory: Record<CostCategory, number> = {
+    materials: 0, labour: 0, transport: 0, professional_fees: 0, other: 0,
+  }
+  for (const t of transactions) spendByCategory[costCategoryOf(t.type, t.costCode)] += t.amount
+
+  // Overall progress + phase budget total on the SAME basis as risk rule R1.
+  const phaseBudgetTotal = phases.reduce((s, p) => s + p.budget, 0)
+  const progressPct = overallProgress(
+    phases.map((p) => ({
+      name: '',
+      status: '',
+      budget: p.budget,
+      progressManual: p.progressManual,
+      tasks: p.tasks.map((t) => ({ title: '', status: 'done', progress: t.progress, dueDate: null })),
+    })),
+  )
+
+  // Budget basis: the latest APPROVED BOQ (a draft revision with partial lines
+  // is not a budget); falls back to the newest version when none is approved.
+  const boqRow =
+    boq.find((b) => b.status === 'approved' && b.lines.some((l) => l.qty * l.estUnitPrice > 0)) ?? boq[0] ?? null
+  const boqEstimate = boqRow
+    ? {
+      version: boqRow.version,
+      status: boqRow.status,
+      estTotal: boqRow.lines.reduce((s, l) => s + l.qty * l.estUnitPrice, 0),
+    }
+    : null
+
+  const duplicateRows: DuplicateOrderRow[] = orders.map((o) => ({
+    orderCode: o.orderCode,
+    createdAt: o.createdAt,
+    total: o.total,
+    status: o.status,
+    delivered:
+      DUPLICATE_DELIVERED_STATUSES.includes(o.status) || o.deliveries.some((d) => d.receivedAt !== null),
+    lines: o.lines.map((l) => ({ name: l.name, lineTotal: l.lineTotal })),
+  }))
+
+  return [
+    ...computeAttendanceFraudFindings({ now, rows: auditRows, weekendBaseline: { rows: weekendRows, present: weekendPresent } }),
+    ...computeCostVarianceFindings({ progressPct, phaseBudgetTotal, boq: boqEstimate, spendByCategory }),
+    ...computeDuplicatePurchaseFindings(duplicateRows),
+  ]
 }
 
 /** Resolve the project a job runs against (explicit id > first project). */
@@ -40,13 +176,18 @@ async function resolveProjectId(projectId?: string | null): Promise<string> {
 export interface AnomalyScanResult {
   projectId: string
   alerts: Array<{ id: string; type: string; severity: string; title: string }>
+  /** Rule keys of the deterministic (non-LLM) findings this scan produced. */
+  deterministicRules: string[]
   summary: string
 }
 
 /**
  * Anomaly scan shared core: reconcile deliveries vs consumption vs progress
- * vs budget, write up to 4 Alert rows, then emit 'anomaly.detected' (the event
- * policy notifies the contractor — kind 'anomaly' — so the bell surfaces it).
+ * vs budget, write up to 4 LLM Alert rows PLUS the B4-INTEL deterministic
+ * anti-fraud/cost-control alerts (§16/§29 — attendance overrides, weekend
+ * ghosts, category variance, duplicate purchases), then emit
+ * 'anomaly.detected' (the event policy notifies the contractor — kind
+ * 'anomaly' — so the bell surfaces it).
  */
 export async function runAnomalyScan(projectId?: string | null): Promise<AnomalyScanResult> {
   const digest = await buildProjectDigest(projectId)
@@ -82,16 +223,47 @@ Max 4 alerts, ordered by severity. Only flag genuine discrepancies — do not in
     created.push({ id: alert.id, type: alert.type, severity: alert.severity, title: alert.title })
   }
 
+  // B4-INTEL deterministic rules (§16/§29) — every finding states its evidence
+  // and rule key in the message, same Alert shape as the LLM pass above.
+  const findings = await runDeterministicScanRules(digest.projectId)
+  const deterministicRules: string[] = []
+  for (const f of findings.slice(0, 6)) {
+    const alert = await db.alert.create({
+      data: {
+        projectId: digest.projectId,
+        type: RULE_ALERT_TYPE[f.rule] ?? 'anomaly',
+        severity: ['info', 'warning', 'critical'].includes(f.severity) ? f.severity : 'info',
+        title: f.title.slice(0, 140),
+        message: `${f.message} Evidence: ${f.evidence}. [rule: ${f.rule}]`,
+      },
+    })
+    created.push({ id: alert.id, type: alert.type, severity: alert.severity, title: alert.title })
+    deterministicRules.push(f.rule)
+  }
+
+  const summaryParts = [result.summary ?? '']
+  if (deterministicRules.length > 0) {
+    const counts = new Map<string, number>()
+    for (const r of deterministicRules) counts.set(r, (counts.get(r) ?? 0) + 1)
+    summaryParts.push(
+      `Deterministic rules (§16/§29): ${deterministicRules.length} finding(s) — ${Array.from(counts.entries()).map(([r, n]) => `${r}×${n}`).join(', ')}.`,
+    )
+  } else {
+    summaryParts.push('Deterministic rules (§16/§29): 0 findings — attendance overrides, weekend ghosts, category variance and duplicate purchases all within their thresholds.')
+  }
+  const summary = summaryParts.filter(Boolean).join(' ')
+
   // §59 domain event → default policy → in-app notification (kind 'anomaly').
   await emit(digest.projectId, 'anomaly.detected', {
     count: created.length,
-    summary: result.summary ?? '',
+    summary,
+    deterministicRules,
     severity: created.some((a) => a.severity === 'critical')
       ? 'critical'
       : created.some((a) => a.severity === 'warning') ? 'warning' : 'info',
   })
 
-  return { projectId: digest.projectId, alerts: created, summary: result.summary ?? '' }
+  return { projectId: digest.projectId, alerts: created, deterministicRules, summary }
 }
 
 // ---------------- digest.weekly ----------------

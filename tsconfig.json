@@ -31,8 +31,10 @@
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "next.config.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "prisma/**/*.ts",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
@@ -42,6 +44,7 @@
     "examples",
     "tests",
     "mini-services",
-    "skills"
+    "skills",
+    "upload"
   ]
 }
