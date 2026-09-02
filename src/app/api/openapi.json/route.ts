@@ -8,7 +8,9 @@ import { NextResponse } from 'next/server'
  * Hand-written but kept truthful field-for-field against the route code —
  * every documented path, parameter, body field, response field and status
  * code is produced by src/app/api/v1/** (this is the SDK-generation seam
- * listed in ARCHITECTURE.md's roadmap). 8 paths = the 8 v1 route files.
+ * listed in ARCHITECTURE.md's roadmap). 8 /api/v1 paths = the 8 v1 route
+ * files, plus the two wave-3 app-level GETs added by W3-B: /api/audit
+ * (admin audit log, spec §44) and /api/reports/budget-variance (QS report).
  *
  * Honest facts baked into the text: simulated payment rails, KES-only money,
  * ledger as source of truth, idempotent replays that never 409, single-instance
@@ -174,6 +176,126 @@ const serverErrorResponse = {
 
 const security = [{ cookieAuth: [] }]
 
+// ---- wave-3 (W3-B) schema fragments: audit log + budget variance report ----
+
+const auditEventSchema = {
+  type: 'object',
+  description:
+    'One append-only audit row (written exclusively by lib/audit logAudit — IMMUTABLE: no update/delete ' +
+    'endpoints exist, ever). meta/before/after serialize as parsed JSON when the stored string is valid ' +
+    'JSON, else the raw string; null when absent.',
+  required: ['id', 'projectId', 'kind', 'actor', 'role', 'summary', 'createdAt'],
+  properties: {
+    id: { type: 'string', description: 'AuditEvent id (cuid) — the pagination cursor value.' },
+    projectId: { type: 'string' },
+    kind: {
+      type: 'string',
+      description: 'e.g. delivery, wage, attendance, milestone, variation, escrow, photo, comment, export, share, auth.',
+    },
+    actor: { type: 'string', description: 'Who did it (display name).' },
+    role: { type: 'string', description: 'contractor, foreman, client, system, ai, finance, supervisor…' },
+    summary: { type: 'string', description: 'Human-readable one-liner.' },
+    meta: { description: 'JSON extra detail (parsed) or the raw string; null when absent.' },
+    entity: { type: ['string', 'null'], description: 'Entity type acted on, e.g. StockMovement.' },
+    entityId: { type: ['string', 'null'] },
+    before: { description: 'Snapshot before, mutations only (parsed JSON or raw string; null when absent).' },
+    after: { description: 'Snapshot after, mutations only (parsed JSON or raw string; null when absent).' },
+    ip: { type: ['string', 'null'], description: 'First x-forwarded-for value of the request origin.' },
+    userAgent: { type: ['string', 'null'] },
+    requestId: { type: ['string', 'null'], description: 'Correlation id (incoming x-request-id or a fresh UUID).' },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const budgetVarianceSchema = {
+  type: 'object',
+  required: ['project', 'phases', 'categories'],
+  properties: {
+    project: {
+      type: 'object',
+      required: ['id', 'name', 'budgetTotal', 'spent', 'remaining', 'spentPct', 'progressPct'],
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        budgetTotal: { type: 'number', description: 'Σ Phase.budget — the same derivation as the app payload (ProjectSummary.budgetTotal). KES.' },
+        spent: { type: 'number', description: 'Σ Transaction.amount — the same derivation as ProjectSummary.budgetSpent (flat, KES).' },
+        remaining: { type: 'number', description: 'budgetTotal − spent (plain variance view; the finance slice\'s `committed` dimension is deliberately NOT folded in).' },
+        spentPct: { type: 'integer', description: 'round(spent / budgetTotal × 100); 0 when budgetTotal is 0.' },
+        progressPct: { type: 'integer', description: 'Budget-weighted phase progress (lib/mjengo overallProgress).' },
+      },
+    },
+    phases: {
+      type: 'array',
+      description:
+        'HONEST: the Transaction model has no phaseId, so per-phase spent is milestone-exact where the schema ' +
+        'allows it and otherwise a budget-share ALLOCATION across started phases — Σ phases.spent equals ' +
+        'project.spent exactly (an allocation, not a measurement, until phase cost-codes land in the schema).',
+      items: {
+        type: 'object',
+        required: ['id', 'name', 'budget', 'spent', 'variance', 'variancePct', 'progressPct', 'txCount', 'topTransactions'],
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          budget: { type: 'number' },
+          spent: { type: 'number' },
+          variance: { type: 'number', description: 'budget − spent (positive = under budget).' },
+          variancePct: { type: 'integer', description: 'round(variance / budget × 100); 0 when budget is 0.' },
+          progressPct: { type: 'integer' },
+          txCount: { type: 'integer', description: 'Transactions attributed to this phase.' },
+          topTransactions: {
+            type: 'array',
+            description: 'The 5 largest attributed transactions by amount.',
+            items: {
+              type: 'object',
+              required: ['id', 'note', 'amount', 'date'],
+              properties: {
+                id: { type: 'string' },
+                note: { type: 'string' },
+                amount: { type: 'number' },
+                date: { type: 'string', format: 'date-time' },
+              },
+            },
+          },
+        },
+      },
+    },
+    categories: {
+      type: 'array',
+      description:
+        'HONEST: Transaction has no category field — grouping is by Transaction.type (the one real cost ' +
+        'dimension the model carries), not QS work-sections. Ordered by spent DESC.',
+      items: {
+        type: 'object',
+        required: ['key', 'label', 'spent', 'txCount', 'share'],
+        properties: {
+          key: { type: 'string', description: 'Transaction.type, e.g. material, wage, transport, other.' },
+          label: { type: 'string', description: 'Friendly label, e.g. Materials, Wages.' },
+          spent: { type: 'number' },
+          txCount: { type: 'integer' },
+          share: { type: 'integer', description: '% of total spent, rounded.' },
+        },
+      },
+    },
+  },
+}
+
+const auditRateLimitedResponse = {
+  description:
+    'Per-principal token bucket: 60 reads/min (session email, else IP). Retry-After header (seconds). ' +
+    'Single-instance, in-process — honest limitation of the current deployment.',
+  headers: { 'Retry-After': { schema: { type: 'integer' }, description: 'Seconds until one token refills.' } },
+  content: { 'application/json': { schema: rateErrorSchema } },
+}
+
+const reportRateLimitedResponse = {
+  description:
+    'Per-principal token bucket: 30 reads/min (session email, else IP) — the report walks every project ' +
+    'transaction, so it is a heavyweight read, not a polling target. Retry-After header (seconds). ' +
+    'Single-instance, in-process — honest limitation of the current deployment.',
+  headers: { 'Retry-After': { schema: { type: 'integer' }, description: 'Seconds until one token refills.' } },
+  content: { 'application/json': { schema: rateErrorSchema } },
+}
+
 // ---- the document ------------------------------------------------------------
 
 const spec = {
@@ -196,12 +318,15 @@ const spec = {
       '(replayed: true) and never 409.\n\n' +
       '**Pagination** — limit (1-200, default 50) + id cursor; responses carry nextCursor/hasMore.\n\n' +
       'This document is served unauthenticated at /api/openapi.json and is the SDK-generation seam ' +
-      '(ARCHITECTURE.md roadmap). It covers exactly the 8 /api/v1 route paths.',
+      '(ARCHITECTURE.md roadmap). It covers exactly the 8 /api/v1 route paths, plus the two wave-3 ' +
+      'app-level GETs: /api/audit (admin audit log, spec §44) and /api/reports/budget-variance (QS report).',
   },
   servers: [{ url: '/', description: 'Same-origin (the app that rendered this document).' }],
   tags: [
     { name: 'wallets', description: 'Wallet accounts, balances and ledger transactions (finance/admin).' },
     { name: 'payments', description: 'Payment execution for approved payment requests (finance/admin/client).' },
+    { name: 'audit', description: 'Admin audit-log reads — the append-only event ledger (admin only, spec §44).' },
+    { name: 'reports', description: 'QS / cost-plan reports: budget variance per phase and category (contractor, admin, supervisor, qs).' },
   ],
   components: {
     securitySchemes: {
@@ -313,6 +438,8 @@ const spec = {
           providerNote: { type: 'string', description: 'Honest simulated-rail note.' },
         },
       },
+      AuditEvent: auditEventSchema,
+      BudgetVarianceReport: budgetVarianceSchema,
     },
   },
   paths: {
@@ -612,6 +739,122 @@ const spec = {
           403: forbiddenResponse,
           404: notFoundResponse,
           429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/audit': {
+      get: {
+        tags: ['audit'],
+        summary: 'Audit log with filters (admin-only, cursor-paginated)',
+        description:
+          'Admin → Audit Logs (spec §44): the read side of the append-only Bias-Free Ledger — every dispatched ' +
+          'action writes exactly one AuditEvent (actor, role, summary, entity, ip, userAgent, requestId). ' +
+          'Guard: admin ONLY (any other signed-in role → 403; anonymous → 401). IMMUTABLE BY DESIGN — no ' +
+          'POST/PUT/PATCH/DELETE handlers exist or may ever be added (users must not be able to erase audit ' +
+          'records; lib/audit logAudit is the single append-only writer). ' +
+          'Filters: actor (contains), role / projectId / entity / kind (exact), from / to (inclusive ISO range ' +
+          'on createdAt; a date-only `to` like 2026-02-14 expands to end-of-day UTC), q (free-text contains on ' +
+          'summary). actor/q match ASCII case-insensitively (SQLite LIKE; non-ASCII case folding unsupported). ' +
+          'Keyset pagination like /api/v1/wallets: limit (1-200, default 50) + cursor (the AuditEvent id of the ' +
+          'last row of the previous page; unknown id → 400), ordered createdAt DESC then id DESC. ' +
+          'Rate limit: 60/min per principal.',
+        security,
+        parameters: [
+          { name: 'actor', in: 'query', required: false, schema: { type: 'string', maxLength: 120 }, description: 'Actor name contains (ASCII case-insensitive).' },
+          { name: 'role', in: 'query', required: false, schema: { type: 'string', maxLength: 40 }, description: 'Exact role: contractor, client, system, ai, finance, supervisor, foreman…' },
+          { name: 'projectId', in: 'query', required: false, schema: { type: 'string', minLength: 1, maxLength: 40 }, description: 'Exact project scope.' },
+          { name: 'entity', in: 'query', required: false, schema: { type: 'string', maxLength: 60 }, description: 'Exact entity type acted on, e.g. StockMovement.' },
+          { name: 'kind', in: 'query', required: false, schema: { type: 'string', maxLength: 40 }, description: 'Exact event kind: delivery, wage, milestone, escrow, share, auth…' },
+          { name: 'from', in: 'query', required: false, schema: { type: 'string', format: 'date-time' }, description: 'Inclusive createdAt lower bound (ISO 8601; date-only = midnight UTC).' },
+          { name: 'to', in: 'query', required: false, schema: { type: 'string', format: 'date-time' }, description: 'Inclusive createdAt upper bound (ISO 8601; date-only expands to end-of-day UTC).' },
+          { name: 'q', in: 'query', required: false, schema: { type: 'string', maxLength: 200 }, description: 'Free-text search in the summary (contains, ASCII case-insensitive).' },
+          limitParam,
+          cursorParam('an AuditEvent id'),
+        ],
+        responses: {
+          200: {
+            description:
+              'ok: true. data = AuditEvent page (createdAt DESC, id DESC); nextCursor is null on the last page, ' +
+              'else the id to pass as ?cursor. hasMore mirrors nextCursor.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['ok', 'data', 'nextCursor', 'hasMore'],
+                  properties: {
+                    ok: { const: true },
+                    data: { type: 'array', items: { $ref: '#/components/schemas/AuditEvent' } },
+                    nextCursor: { type: ['string', 'null'], description: 'AuditEvent id for the next page; null on the last page.' },
+                    hasMore: { type: 'boolean' },
+                  },
+                },
+              },
+            },
+          },
+          400: {
+            description: 'Bad limit (must be an integer 1-200), unknown cursor, or unparseable from/to. Body { error }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          401: unauthorizedResponse,
+          403: {
+            description: 'Signed in but not admin — audit logs are admin-only (spec §44). Body { error: "Not permitted for role \\"<role>\\"" }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          429: auditRateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/reports/budget-variance': {
+      get: {
+        tags: ['reports'],
+        summary: 'Budget variance report (QS surface: cost plan vs actuals per phase/category)',
+        description:
+          'QS surface — "BOQ / Cost Plan / Variations / Actual Cost / Forecast / Budget Variance". ' +
+          'Guard: contractor / admin / supervisor / qs (client, finance and procurement are not on this ' +
+          'surface → 403; anonymous → 401). projectId query param REQUIRED (no default-project guessing on a ' +
+          'report) → 400 when absent; unknown project → 404. ' +
+          'project rollup: budgetTotal = Σ Phase.budget and spent = Σ Transaction.amount — the exact ' +
+          'derivations the app payload uses (ProjectSummary), so the report can never disagree with the ' +
+          'dashboard; remaining = budgetTotal − spent. HONEST per-phase derivation: Transaction has no ' +
+          'phaseId — milestone-linked payments are exact, the rest is a budget-share allocation across ' +
+          'started phases that preserves Σ phases.spent == project.spent (see the schema notes). ' +
+          'categories group by Transaction.type (the model has no category field). ' +
+          'Rate limit: 30/min per principal.',
+        security,
+        parameters: [
+          {
+            name: 'projectId',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 40 },
+            description: 'The project to report on. Required — absent → 400; unknown → 404.',
+          },
+        ],
+        responses: {
+          200: {
+            description: 'ok: true, data = BudgetVarianceReport.',
+            content: {
+              'application/json': {
+                schema: ok({ $ref: '#/components/schemas/BudgetVarianceReport' }),
+              },
+            },
+          },
+          400: {
+            description: 'projectId missing. Body { error: "projectId required" }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          401: unauthorizedResponse,
+          403: {
+            description: 'Signed in but the role is not on the QS surface (allowed: contractor, admin, supervisor, qs). Body { error: "Not permitted for role \\"<role>\\"" }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          404: {
+            description: 'Unknown projectId. Body { error: "Project not found" }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          429: reportRateLimitedResponse,
           500: serverErrorResponse,
         },
       },

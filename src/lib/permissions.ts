@@ -23,7 +23,7 @@ import type { TabKey } from '@/components/mjengo/app'
 /** Every tab id the owner app can render (order = canonical nav order). */
 export const ALL_TABS: readonly TabKey[] = [
   'overview', 'site', 'materials', 'finder', 'fundis', 'money',
-  'land', 'evidence', 'intel', 'copilot', 'ussd',
+  'land', 'evidence', 'intel', 'copilot', 'ussd', 'audit',
 ]
 
 // ---------------------------------------------------------------- role registry
@@ -51,16 +51,18 @@ const PAYMENT_ROLES: readonly string[] = ['finance', 'admin', 'client']
  * Role → visible tab ids (Doc B §5: “Do not show every item to every role”).
  * `client` mirrors the existing client surface (all tabs except the AI
  * Copilot); the client flow itself is handled outside this matrix.
+ * `audit` (W3-F1 · spec §44 Admin → Audit Logs) is admin-ONLY: contractor
+ * and client explicitly exclude it from the full set.
  * Unknown roles → ['overview'] (fail closed).
  */
 export const ROLE_TABS: Readonly<Record<string, readonly TabKey[]>> = {
-  contractor: ALL_TABS,
+  contractor: ALL_TABS.filter((t) => t !== 'audit'),
   admin: ALL_TABS,
   supervisor: ['overview', 'site', 'materials', 'finder', 'fundis', 'evidence', 'copilot', 'ussd'],
   finance: ['overview', 'money', 'finder', 'evidence'],
   procurement: ['overview', 'finder', 'materials', 'evidence'],
   qs: ['overview', 'site', 'materials', 'finder', 'evidence'],
-  client: ALL_TABS.filter((t) => t !== 'copilot'),
+  client: ALL_TABS.filter((t) => t !== 'copilot' && t !== 'audit'),
 }
 
 /** Fail-closed fallback for unknown/missing roles: the one safe tab. */

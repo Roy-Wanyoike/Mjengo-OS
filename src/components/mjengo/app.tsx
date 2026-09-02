@@ -15,6 +15,7 @@ import { LandTab } from '@/components/mjengo/land-tab'
 import { FinderTab } from '@/components/mjengo/finder-tab'
 import { IntelTab } from '@/components/mjengo/intel-tab'
 import { UssdTab } from '@/components/mjengo/ussd-tab'
+import { AuditTab } from '@/components/mjengo/audit-tab'
 import { WelcomeScreen } from '@/components/mjengo/welcome-screen'
 import { CreateProjectDialog, type CreateProjectPayload } from '@/components/mjengo/create-project-dialog'
 import { ShareDialog } from '@/components/mjengo/share-dialog'
@@ -30,7 +31,7 @@ import { usePermissions, tabsForRole, landingForRole } from '@/lib/permissions'
 
 export type TabKey =
   | 'overview' | 'site' | 'materials' | 'finder' | 'fundis' | 'money'
-  | 'land' | 'evidence' | 'intel' | 'copilot' | 'ussd'
+  | 'land' | 'evidence' | 'intel' | 'copilot' | 'ussd' | 'audit'
 
 function BootSkeleton() {
   return (
@@ -346,6 +347,9 @@ export function MjengoApp() {
         {activeTab === 'intel' && <IntelTab />}
         {activeTab === 'copilot' && <CopilotTab />}
         {activeTab === 'ussd' && <UssdTab />}
+        {/* Audit log — admin only (W3-F1 · spec §44); the tab itself renders
+            an access-denied panel if a non-admin somehow reaches it. */}
+        {activeTab === 'audit' && <AuditTab />}
       </main>
 
       {/* Mobile owner navigation — fixed bottom bar, hidden on md+ where the
