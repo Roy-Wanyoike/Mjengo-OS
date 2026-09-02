@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ChevronDown, ChevronRight, MapPin, Plus, Scale, Trophy, Tag, AlertTriangle } from 'lucide-react'
 import type { CompareRow } from '@/modules/supply/types'
+import { EmptyState } from '@/components/mjengo/uikit/empty-state'
 import { EtaBadge, RatingBadge, ScoreBar, StockBadge, fmtKm, fmtQty, formatKes, PriceHistoryBadge, type PricePointLite } from './bits'
 
 interface ResultsTableProps {
@@ -29,13 +30,11 @@ export function SearchResultsTable({ rows, siteLabel, busy, onAddToOrder, priceH
 
   if (!rows.length) {
     return (
-      <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
-        <MapPin className="mx-auto h-8 w-8 text-stone-300" aria-hidden />
-        <p className="pt-3 text-sm font-medium text-stone-700">No suppliers match near this site</p>
-        <p className="pt-1 text-xs text-stone-500">
-          Try the material's short name (e.g. "cement", "ballast"), widen the radius, or relax the delivery day.
-        </p>
-      </div>
+      <EmptyState
+        icon={MapPin}
+        title="No suppliers match near this site"
+        description="Try the material's short name (e.g. “cement”, “ballast”), widen the radius, or relax the delivery day."
+      />
     )
   }
 

@@ -9,6 +9,7 @@ import { useMjengo } from '@/hooks/use-mjengo'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Landmark, Plus, ScanSearch, X } from 'lucide-react'
+import { EmptyState } from '@/components/mjengo/uikit/empty-state'
 import { ParcelCard } from './parcels/parcel-card'
 import { ParcelDetail } from './parcels/parcel-detail'
 import { NewParcelDialog } from './parcels/dialogs'
@@ -81,22 +82,17 @@ export function ParcelsSection() {
         </div>
       ) : (
         <Card className="border-stone-200 shadow-sm">
-          <CardContent className="p-6 min-h-48 flex flex-col items-center justify-center text-center gap-3">
-            <div className="w-14 h-14 rounded-full bg-stone-100 flex items-center justify-center" aria-hidden>
-              <ScanSearch className="w-7 h-7 text-stone-500" />
-            </div>
-            <div className="space-y-1.5 max-w-md">
-              <h3 className="text-base font-semibold text-stone-900">No parcels recorded yet</h3>
-              <p className="text-sm text-stone-500 leading-relaxed">
-                Record the plot first — it starts in the honest SEARCHING state, then attach the title deed and request
-                the registry search.
-              </p>
-            </div>
-            {!isClient && (
-              <Button size="sm" className="gap-1.5 bg-stone-900 text-white hover:bg-stone-800" onClick={() => setCreateOpen(true)}>
-                <Plus className="h-4 w-4" aria-hidden /> Record parcel
-              </Button>
-            )}
+          <CardContent className="p-6">
+            <EmptyState
+              icon={ScanSearch}
+              title="No parcels recorded yet"
+              description="Record the plot first — it starts in the honest SEARCHING state, then attach the title deed and request the registry search."
+              action={!isClient && (
+                <Button size="sm" className="gap-1.5 bg-stone-900 text-white hover:bg-stone-800" onClick={() => setCreateOpen(true)}>
+                  <Plus className="h-4 w-4" aria-hidden /> Record parcel
+                </Button>
+              )}
+            />
           </CardContent>
         </Card>
       )}

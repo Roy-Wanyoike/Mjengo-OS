@@ -23,7 +23,7 @@ import type { TabKey } from '@/components/mjengo/app'
 /** Every tab id the owner app can render (order = canonical nav order). */
 export const ALL_TABS: readonly TabKey[] = [
   'overview', 'site', 'materials', 'finder', 'fundis', 'money',
-  'land', 'evidence', 'intel', 'copilot', 'ussd', 'audit',
+  'land', 'evidence', 'intel', 'copilot', 'ussd', 'audit', 'settings',
 ]
 
 // ---------------------------------------------------------------- role registry
@@ -53,15 +53,17 @@ const PAYMENT_ROLES: readonly string[] = ['finance', 'admin', 'client']
  * Copilot); the client flow itself is handled outside this matrix.
  * `audit` (W3-F1 · spec §44 Admin → Audit Logs) is admin-ONLY: contractor
  * and client explicitly exclude it from the full set.
+ * `settings` (W3-F3) is visible to EVERY role incl. client — profile,
+ * local preferences and notification prefs are per-user, not per-role.
  * Unknown roles → ['overview'] (fail closed).
  */
 export const ROLE_TABS: Readonly<Record<string, readonly TabKey[]>> = {
   contractor: ALL_TABS.filter((t) => t !== 'audit'),
   admin: ALL_TABS,
-  supervisor: ['overview', 'site', 'materials', 'finder', 'fundis', 'evidence', 'copilot', 'ussd'],
-  finance: ['overview', 'money', 'finder', 'evidence'],
-  procurement: ['overview', 'finder', 'materials', 'evidence'],
-  qs: ['overview', 'site', 'materials', 'finder', 'evidence'],
+  supervisor: ['overview', 'site', 'materials', 'finder', 'fundis', 'evidence', 'copilot', 'ussd', 'settings'],
+  finance: ['overview', 'money', 'finder', 'evidence', 'settings'],
+  procurement: ['overview', 'finder', 'materials', 'evidence', 'settings'],
+  qs: ['overview', 'site', 'materials', 'finder', 'evidence', 'settings'],
   client: ALL_TABS.filter((t) => t !== 'copilot' && t !== 'audit'),
 }
 
