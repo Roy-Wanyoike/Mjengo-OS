@@ -42,7 +42,7 @@ documents the three settings that make this work:
 | `AUTH_TRUST_HOST` | `1` | next-auth v4's `detectOrigin` otherwise ignores proxy headers and pins every origin to `NEXTAUTH_URL` (or silently to `http://localhost:3000`), which breaks sign-in through any proxy. |
 | `NEXTAUTH_URL` | **unset** | The origin is derived per-request from `x-forwarded-host`/`-proto`, so redirects, callback URLs and cookie origins always target the host the user actually browses. Only set it when self-hosting on a fixed public domain. |
 
-Cookies are policy-switched per request in `src/lib/auth.ts` (`buildAuthOptions`):
+Cookies are policy-switched per request in `src/backend/lib/auth.ts` (`buildAuthOptions`):
 `https` (proxied) traffic gets `SameSite=None; Secure` — the only combination
 browsers send inside cross-site iframes, which is how the preview panel embeds
 the app — while direct localhost dev keeps next-auth's `lax` defaults. A
@@ -86,8 +86,9 @@ and budget alerts, raised both inline and via the **background-job handlers**.
 subscribers), JobRecord queue, FeatureFlag table (admin popover, env override),
 IdempotencyRecord dedupe on critical routes, `/api/v1/wallets` REST surface
 (balance/transactions/deposit/withdraw/transfer, guarded + idempotent), 39-model
-Prisma schema, and per-domain module boundaries (`src/modules/{supply, inventory,
-wallet, ledger, invoices, intel, notify, land, professionals, events, jobs}`).
+Prisma schema, and per-domain module boundaries (`src/backend/modules/{supply,
+inventory, wallet, ledger, invoices, intel, notify, land, professionals, events,
+jobs}`).
 
 ## Run it on your laptop
 
@@ -143,20 +144,37 @@ prisma/schema.prisma        # 39 models — incl. LedgerAccount/Transaction/Entr
                             # SavedSupplier, Attachment, DomainEvent, JobRecord,
                             # FeatureFlag, ProjectHealth, AuditEvent (ctx fields)
 prisma/seed.ts + seed-extras/   # base + trust/money/evidence/users/invoices/supply
-src/app/page.tsx            # the app (single route; login gate + share-link mode)
-src/components/mjengo/      # tabs + domain sections (finder/land/intel/money),
-                            # map-view, report-utils, notifications, wizard
-src/components/auth/        # login screen + session provider
-src/app/api/                # auth, projects, project, actions (idempotency + audit
-                            # ctx), sync (outbox dedupe), share, upload, search,
-                            # flags, jobs/run, v1/wallets* + 5 guarded AI routes
-src/lib/actions/            # trust/money/evidence/land/professionals/supply/
+src/app/                    # Next.js App Router (framework-fixed, never moves)
+  page.tsx                  # the app (single route; login gate + share-link mode)
+  layout.tsx                # shell: fonts, Toaster, session + i18n providers
+  api/                      # auth, projects, project, actions (idempotency +
+                            # audit ctx), sync (outbox dedupe), share, upload,
+                            # search, flags, notifications, jobs/run, audit,
+                            # reports/budget-variance, health, ussd,
+                            # v1/wallets* + 5 guarded AI routes
+src/backend/                # SERVER-ONLY (never imported by client components)
+  lib/                      # mjengo (payload + dispatcher), auth, guard,
+                            # audit (Bias-Free Ledger), rate-limit, db, ai
+  actions/                  # trust/money/evidence/land/professionals/supply/
                             # invoices/inventory/wallet action modules
-src/lib/mjengo.ts           # payload builder + dispatcher (delegates + auto-audits)
-src/lib/audit.ts            # Bias-Free Ledger logging (ctx-aware) + summaries
-src/hooks/use-mjengo.ts     # multi-project store + offline outbox + connectivity
-src/modules/                # domain modules: supply, inventory, wallet, ledger,
+  modules/                  # domain modules: supply, inventory, wallet, ledger,
                             # invoices, intel (health/flags), notify, land,
-                            # professionals, events, jobs
+                            # professionals, events, documents, jobs, reports
+src/frontend/               # WEB UI (client-facing)
+  ui/                       # shadcn/ui primitives (uikit)
+  mjengo/                   # app shell + tabs + domain sections (finder/land/
+                            # intel/money), uikit/, cmdk/, nav/, map-view,
+                            # report-utils, dialogs
+  auth/                     # login screen + session provider
+  i18n/                     # en/sw dictionaries + provider + locale store
+  hooks/                    # use-mjengo (payload facade + offline outbox),
+                            # use-toast, use-mobile
+  lib/                      # utils (cn), format (KES / EAT dates)
+src/mobile/                 # MOBILE SHELL — phone-first experience
+  nav/mobile-bottom-nav.tsx # <768px bottom bar (≤5 tabs + More sheet +
+                            # camera quick-action)
+src/shared/                 # ISOMORPHIC contracts (server + client)
+  permissions.ts            # role → tab matrix (client mirror of guard.ts)
+  client-actions.ts         # CLIENT_ACTIONS allowlist (routes + store share it)
 public/photos|audio/        # demo site photos + Swahili voice notes
 ```

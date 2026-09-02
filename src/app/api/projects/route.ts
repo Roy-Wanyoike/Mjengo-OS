@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { getProjectPayload, getProjectsList } from '@/lib/mjengo'
-import { withGuard } from '@/lib/guard'
+import { db } from '@/backend/lib/db'
+import { getProjectPayload, getProjectsList } from '@/backend/lib/mjengo'
+import { withGuard } from '@/backend/lib/guard'
 
 export const dynamic = 'force-dynamic'
 

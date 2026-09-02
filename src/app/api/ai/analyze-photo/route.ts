@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { readFile } from 'fs/promises'
 import path from 'path'
-import { db } from '@/lib/db'
-import { extractJson, visionMessage } from '@/lib/ai'
-import { applyAction, getProjectPayload } from '@/lib/mjengo'
-import { enforceAiRoutePolicy } from '@/lib/rate-limit'
+import { db } from '@/backend/lib/db'
+import { extractJson, visionMessage } from '@/backend/lib/ai'
+import { applyAction, getProjectPayload } from '@/backend/lib/mjengo'
+import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120

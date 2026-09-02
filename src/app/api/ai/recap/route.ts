@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { runDailyRecap } from '@/modules/jobs/handlers'
-import { enforceAiRoutePolicy } from '@/lib/rate-limit'
+import { runDailyRecap } from '@/backend/modules/jobs/handlers'
+import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120

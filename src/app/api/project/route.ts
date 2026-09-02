@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { getProjectPayload } from '@/lib/mjengo'
-import { getSessionFromReq, unauthorized } from '@/lib/guard'
+import { db } from '@/backend/lib/db'
+import { getProjectPayload } from '@/backend/lib/mjengo'
+import { getSessionFromReq, unauthorized } from '@/backend/lib/guard'
 
 export const dynamic = 'force-dynamic'
 

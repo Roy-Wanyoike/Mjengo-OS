@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
-import { buildProjectDigest, parseDeliveryTranscript } from '@/lib/ai'
-import { enforceAiRoutePolicy } from '@/lib/rate-limit'
+import { buildProjectDigest, parseDeliveryTranscript } from '@/backend/lib/ai'
+import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120

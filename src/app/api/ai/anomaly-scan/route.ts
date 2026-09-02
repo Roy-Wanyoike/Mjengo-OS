@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getProjectPayload } from '@/lib/mjengo'
-import { runAnomalyScan } from '@/modules/jobs/handlers'
-import { enforceAiRoutePolicy } from '@/lib/rate-limit'
+import { getProjectPayload } from '@/backend/lib/mjengo'
+import { runAnomalyScan } from '@/backend/modules/jobs/handlers'
+import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { withGuard } from '@/lib/guard'
-import { enforceRateLimit } from '@/lib/rate-limit'
+import { db } from '@/backend/lib/db'
+import { withGuard } from '@/backend/lib/guard'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 import type { AuditEvent } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'

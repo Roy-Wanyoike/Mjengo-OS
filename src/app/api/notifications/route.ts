@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { withGuard } from '@/lib/guard'
-import { markRead } from '@/modules/notify/service'
+import { db } from '@/backend/lib/db'
+import { withGuard } from '@/backend/lib/guard'
+import { markRead } from '@/backend/modules/notify/service'
 
 export const dynamic = 'force-dynamic'
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { withGuard } from '@/lib/guard'
-import { enqueue, isJobType, loadRecentJobs, runDueJobs } from '@/modules/jobs/service'
+import { withGuard } from '@/backend/lib/guard'
+import { enqueue, isJobType, loadRecentJobs, runDueJobs } from '@/backend/modules/jobs/service'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120

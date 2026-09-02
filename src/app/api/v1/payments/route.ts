@@ -1,7 +1,7 @@
-import { withGuard, PAYMENT_ROLES } from '@/lib/guard'
-import { db } from '@/lib/db'
-import { payPaymentRequest } from '@/modules/wallet/service'
-import { withIdempotency } from '@/modules/wallet/http'
+import { withGuard, PAYMENT_ROLES } from '@/backend/lib/guard'
+import { db } from '@/backend/lib/db'
+import { payPaymentRequest } from '@/backend/modules/wallet/service'
+import { withIdempotency } from '@/backend/modules/wallet/http'
 import { paymentPayBody, validateBody } from '../schemas'
 import { mapServiceError, v1Err, v1Rate, V1_MUTATION_LIMIT } from '../respond'
 

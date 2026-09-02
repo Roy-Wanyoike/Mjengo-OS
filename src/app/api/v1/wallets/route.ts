@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { withGuard, FINANCE_ROLES } from '@/lib/guard'
-import { createWallet, listWallets } from '@/modules/wallet/service'
-import { jsonOk, withIdempotency } from '@/modules/wallet/http'
-import { getProvider, PROVIDER_METHODS } from '@/modules/wallet/providers'
+import { withGuard, FINANCE_ROLES } from '@/backend/lib/guard'
+import { createWallet, listWallets } from '@/backend/modules/wallet/service'
+import { jsonOk, withIdempotency } from '@/backend/modules/wallet/http'
+import { getProvider, PROVIDER_METHODS } from '@/backend/modules/wallet/providers'
 import { walletCreateBody, walletsListQuery, validateBody, validateQuery } from '../schemas'
 import { mapServiceError, pageOf, v1Err, v1Rate, V1_MUTATION_LIMIT, V1_READ_LIMIT } from '../respond'
 

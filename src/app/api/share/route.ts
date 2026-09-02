@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { applyAction, getProjectPayload, type ActionType } from '@/lib/mjengo'
-import { enforceRateLimit } from '@/lib/rate-limit'
+import { db } from '@/backend/lib/db'
+import { applyAction, getProjectPayload, type ActionType } from '@/backend/lib/mjengo'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic'
  * auth) but both verbs now enforce a 30/min per-IP bucket so scripted token
  * brute-forcing cannot run at full speed. 30/min is far above what a human
  * client view generates. In-process limiter — single-instance honesty note in
- * src/lib/rate-limit.ts.
+ * src/backend/lib/rate-limit.ts.
  */
 const CLIENT_ALLOWLIST: readonly ActionType[] = [
   'milestone.decide',

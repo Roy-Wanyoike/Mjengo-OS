@@ -1,5 +1,5 @@
 import NextAuth from 'next-auth'
-import { buildAuthOptions, warnNextAuthUrlMismatch } from '@/lib/auth'
+import { buildAuthOptions, warnNextAuthUrlMismatch } from '@/backend/lib/auth'
 
 /**
  * NextAuth v4 route handler (App Router), hardened for reverse-proxy access.

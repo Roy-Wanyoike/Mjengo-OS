@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { enforceAiRoutePolicy } from '@/lib/rate-limit'
+import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import {
   extractDocument,
   reviewDocument,
-} from '@/modules/documents/service'
-import { isReviewDecision } from '@/modules/documents/types'
+} from '@/backend/modules/documents/service'
+import { isReviewDecision } from '@/backend/modules/documents/types'
 
 // Document intelligence API (MjengoOS backend wave B3, Doc A §60).
 //
