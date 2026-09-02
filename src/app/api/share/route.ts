@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { applyAction, getProjectPayload, type ActionType } from '@/lib/mjengo'
+import { enforceRateLimit } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
@@ -8,6 +9,12 @@ export const dynamic = 'force-dynamic'
  * Public "Virtual Site Visit" endpoint — diaspora clients arrive via a
  * revocable share token (`/?share=<token>`), no auth. GET boots the read-mostly
  * client view; POST is strictly limited to the client-decision allowlist.
+ *
+ * Rate limit (P3 review item, W3-B): the route stays PUBLIC (the token IS the
+ * auth) but both verbs now enforce a 30/min per-IP bucket so scripted token
+ * brute-forcing cannot run at full speed. 30/min is far above what a human
+ * client view generates. In-process limiter — single-instance honesty note in
+ * src/lib/rate-limit.ts.
  */
 const CLIENT_ALLOWLIST: readonly ActionType[] = [
   'milestone.decide',
@@ -19,6 +26,9 @@ const CLIENT_ALLOWLIST: readonly ActionType[] = [
 
 /** GET /api/share?token=... → project payload for the client link. */
 export async function GET(req: NextRequest) {
+  const limited = await enforceRateLimit(req, 'share.get', 30, 60_000)
+  if (limited) return limited
+
   try {
     const token = req.nextUrl.searchParams.get('token')
     if (!token) {
@@ -54,6 +64,9 @@ export async function GET(req: NextRequest) {
  * Bias-Free Ledger records exactly who decided, from a public link.
  */
 export async function POST(req: NextRequest) {
+  const limited = await enforceRateLimit(req, 'share.post', 30, 60_000)
+  if (limited) return limited
+
   try {
     const body = await req.json()
     const { token, type, payload } = body as { token?: string; type?: ActionType; payload?: any }

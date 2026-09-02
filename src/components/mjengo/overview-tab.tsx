@@ -31,6 +31,12 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, dateShort } from '@/lib/format'
+import { usePermissions } from '@/lib/permissions'
+import { BudgetVarianceCard } from '@/components/mjengo/overview/variance-card'
+import { ActivityTimeline } from '@/components/mjengo/overview/timeline'
+import {
+  QsBudgetCard, FinanceSnapshotCard, SystemHealthCard,
+} from '@/components/mjengo/overview/role-cards'
 
  
 
@@ -229,6 +235,7 @@ function ReportsMenu({ disabled }: { disabled?: boolean }) {
 
 export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
   const { data, dispatch, viewMode, shareToken, clientRole, online, dataMode } = useMjengo()
+  const { role, authenticated } = usePermissions()
   const [recapBusy, setRecapBusy] = useState(false)
   const [photoOpen, setPhotoOpen] = useState<string | null>(null)
   const [expenseOpen, setExpenseOpen] = useState(false)
@@ -375,6 +382,19 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
 
       {/* Project health score (spec §48) — both roles */}
       <HealthCard health={data.intel.health} />
+
+      {/* Role dashboard sections (W3-F1 · spec §1660-1700) — ADDITIVE only:
+          the default contractor view is untouched; each card renders null for
+          roles it does not apply to. Variance: qs+contractor+admin; BOQ summary:
+          qs; payments/wallet: finance; system health: admin. */}
+      {authenticated && role !== 'client' && (
+        <section className="space-y-6" aria-label="Role dashboard">
+          <QsBudgetCard />
+          <BudgetVarianceCard />
+          <FinanceSnapshotCard />
+          <SystemHealthCard />
+        </section>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Burn-down chart */}
@@ -565,6 +585,11 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
           )}
         </CardContent>
       </Card>
+
+      {/* Unified activity timeline (W3-F1 · spec §44 Project → Activity) —
+          all OWNER roles, fed by the payload's auditEvents (no new fetch);
+          hidden on the client surface and when the trail is empty. */}
+      {!isClient && <ActivityTimeline />}
 
       {/* Record expense dialog (owner only) */}
       <ExpenseDialog
