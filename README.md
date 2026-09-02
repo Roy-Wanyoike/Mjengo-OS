@@ -9,6 +9,9 @@ trust levels, procurement with delivery-verified inventory, and offline-first sy
 around what happened.* Reported vs verified, everywhere. The ledger never lies;
 AI never approves; payments are idempotent; closing stock is always derived.
 
+[![CI](https://github.com/Roy-Wanyoike/Mjengo-OS/actions/workflows/ci.yml/badge.svg)](https://github.com/Roy-Wanyoike/Mjengo-OS/actions/workflows/ci.yml)
+[![Docker](https://github.com/Roy-Wanyoike/Mjengo-OS/actions/workflows/docker.yml/badge.svg)](https://github.com/Roy-Wanyoike/Mjengo-OS/actions/workflows/docker.yml)
+
 Seeded with **three demo projects** (active bungalow, early-stage duplex, completed
 renovation) so every feature is explorable immediately.
 
@@ -105,17 +108,33 @@ bunx prisma generate
 bun run dev            # → http://localhost:3000
 ```
 
-The repo ships without a database; seed pristine demo data:
+The repo ships without a database; seed pristine demo data (order matters —
+`seed.ts` creates the base rows the extras reference):
 
 ```bash
-bunx prisma db push --accept-data-loss
-bun prisma/seed.ts                          # 3 projects, crew, ledger, photos
-bun prisma/seed-extras/trust.ts             # attendance trust history + PINs
-bun prisma/seed-extras/money.ts             # escrow, milestones, ledger history, payment requests
-bun prisma/seed-extras/evidence.ts          # zones, comments, notifications, audit
-bun prisma/seed-extras/users.ts             # login accounts incl. finance
-bun prisma/seed-extras/invoices.ts          # supplier invoices + 3-way match data
-bun prisma/seed-extras/supply.ts            # suppliers, 40-item catalog, BOQs, site-store history
+bunx prisma db push --accept-data-loss   # or: bunx prisma migrate deploy
+bun prisma/seed.ts                       # 3 projects, crew, ledger, photos + land/supply/invoices/intel
+bun prisma/seed-extras/users.ts          # the 7 login accounts incl. finance
+bun prisma/seed-extras/tasks.ts          # task priorities, blockers, escalation case
+bun prisma/seed-extras/domain.ts         # worker depth, delivery driver leg, team roster
+bun prisma/seed-extras/evidence.ts       # zones, comments, notifications, audit
+bun prisma/seed-extras/money.ts          # escrow, milestones, ledger history, payment requests
+bun prisma/seed-extras/trust.ts          # attendance trust history + PINs
+```
+
+Every extras script wipes only its own models, so partial re-seeds are safe.
+
+## Deployment
+
+CI ([ci.yml](.github/workflows/ci.yml)) runs lint + strict typecheck + a real
+`next build` on every push/PR; a second workflow
+([docker.yml](.github/workflows/docker.yml)) builds the Docker image. Full
+guide — env vars, seed chain, Docker, self-host, reverse proxy, backups — in
+[DEPLOYMENT.md](./DEPLOYMENT.md). Quick start with Docker:
+
+```bash
+cp .env.example .env        # set NEXTAUTH_SECRET (openssl rand -hex 32)
+docker compose up -d --build  # → http://localhost:3000 (migrations run on boot)
 ```
 
 ## Notes on the AI routes
@@ -138,12 +157,17 @@ fully local.
 ## Project structure
 
 ```
+.github/workflows/         # ci.yml (lint + typecheck + build), docker.yml (image build)
+Dockerfile + .dockerignore # production image: bun builder → node:20-slim runner,
+docker-compose.yml         #   prisma migrate deploy on boot, standalone server
+DEPLOYMENT.md              # build / run / test / deploy guide (env, seeds, backups)
 prisma/schema.prisma        # 39 models — incl. LedgerAccount/Transaction/Entry,
                             # IdempotencyRecord, WalletAccount, PaymentRequest,
                             # InventoryItem/StockMovement, Boq/BoqLine, QuoteLine,
                             # SavedSupplier, Attachment, DomainEvent, JobRecord,
                             # FeatureFlag, ProjectHealth, AuditEvent (ctx fields)
-prisma/seed.ts + seed-extras/   # base + trust/money/evidence/users/invoices/supply
+prisma/migrations/          # SQL migrations (baseline 0_init) — the deploy path
+prisma/seed.ts + seed-extras/   # base + users/tasks/domain/evidence/money/trust
 src/app/                    # Next.js App Router (framework-fixed, never moves)
   page.tsx                  # the app (single route; login gate + share-link mode)
   layout.tsx                # shell: fonts, Toaster, session + i18n providers

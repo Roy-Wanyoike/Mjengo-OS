@@ -1,0 +1,25 @@
+# MjengoOS — Dockerfile verification.
+# GitHub-hosted runners ship Docker, so a plain `docker build` here is the
+# REAL verification of the production image (the dev sandbox has no docker
+# CLI). Build only — no registry push, no container run.
+name: Docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docker-build:
+    name: docker build (image verification)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build production image
+        run: docker build -t mjengoos-ci .

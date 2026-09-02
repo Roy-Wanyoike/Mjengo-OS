@@ -1,0 +1,44 @@
+# MjengoOS — single-node self-host (SQLite + local disk uploads).
+#
+#   cp .env.example .env        # set NEXTAUTH_SECRET (openssl rand -hex 32)
+#   docker compose up -d --build
+#   → http://localhost:3000     (migrations apply automatically on boot)
+#
+# DATABASE_URL below OVERRIDES the host path from .env so the database lives
+# in the named volume app-db (→ /app/db/custom.db inside the container).
+# Behind a reverse proxy: keep NEXTAUTH_URL unset and AUTH_TRUST_HOST=1 (see
+# DEPLOYMENT.md — the PR #7 sign-in-behind-a-proxy lesson).
+
+services:
+  app:
+    build: .
+    image: mjengoos
+    container_name: mjengoos
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "file:/app/db/custom.db"
+      # Fixed public domain instead of a proxy? Set in .env:
+      #   NEXTAUTH_URL=https://your-domain.example
+    volumes:
+      - app-db:/app/db                 # SQLite database (back this up!)
+      - app-photos:/app/public/photos  # POST /api/upload photo uploads
+      # - app-docs:/app/public/docs    # documents module writes here (optional)
+    healthcheck:
+      # node:20-slim has no curl/wget — node's global fetch does the probe.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  app-db:
+  app-photos:
