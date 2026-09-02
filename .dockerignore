@@ -1,0 +1,48 @@
+# Build-context hygiene: nothing here is needed to build/run the image, and
+# some of it (db/, *.log) must NEVER enter a layer. .env.example is excluded
+# too — the Docker build does not reference it (env comes from ENV/build args
+# at build time and `docker run`/compose at runtime).
+
+# dependencies & build state (rebuilt inside the image)
+node_modules
+.next
+out
+build
+
+# vcs & ci
+.git
+.github
+
+# secrets & local config
+.env*
+.claude
+.z-ai-config
+
+# local runtime state, logs, pid files
+db
+*.log
+*.pid
+server.log
+dev.log
+
+# agent/sandbox-only artifacts
+tool-results
+worklog.md
+PENDING_FEATURES.md
+agent-ctx
+.zscripts
+tests
+prompt
+download
+upload
+docs
+Caddyfile
+
+# sibling projects that are not part of the app image
+mjengoos-website
+mini-services
+examples
+skills
+
+# os cruft
+.DS_Store
