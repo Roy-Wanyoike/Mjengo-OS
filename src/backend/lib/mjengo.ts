@@ -1,3 +1,5 @@
+import { randomBytes } from 'crypto'
+
 import { db } from '@/backend/lib/db'
 import { logAudit, summarizeAction, kindForAction } from '@/backend/lib/audit'
 import { TRUST_ACTIONS, applyTrustAction } from '@/backend/actions/trust'
@@ -1458,7 +1460,8 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
       if (!id) throw new Error('project id required')
       const existing = await db.project.findUnique({ where: { id } })
       if (!existing) throw new Error('Project not found')
-      const shareToken = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}` // cuid-style
+      // crypto-strong 96-bit token (Math.random is predictable — this is a read-only capability secret)
+      const shareToken = `c${randomBytes(12).toString('hex')}`
       const project = await db.project.update({ where: { id }, data: { shareToken } })
       return { shareToken: project.shareToken }
     }

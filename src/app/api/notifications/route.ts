@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { withGuard } from '@/backend/lib/guard'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 import { markRead } from '@/backend/modules/notify/service'
 
 export const dynamic = 'force-dynamic'
@@ -97,6 +98,10 @@ function validatePrefs(prefs: unknown): string | null {
 }
 
 export const POST = withGuard(async (req, session) => {
+  // Rate limit (S-SEC): 30 mutations/min per principal, the v1 mutation posture.
+  const limited = await enforceRateLimit(req, 'notifications.post', 30, 60_000)
+  if (limited) return limited
+
   try {
     const body = (await req.json()) as { projectId?: unknown; ids?: unknown }
     const projectId = typeof body.projectId === 'string' ? body.projectId.trim() : ''
@@ -129,6 +134,11 @@ export const POST = withGuard(async (req, session) => {
 })
 
 export const GET = withGuard(async (req, session) => {
+  // Rate limit (S-SEC): 60 reads/min per principal — the payload+prefs fan-out
+  // is not a polling target.
+  const limited = await enforceRateLimit(req, 'notifications.get', 60, 60_000)
+  if (limited) return limited
+
   try {
     const sp = req.nextUrl.searchParams
 
@@ -193,6 +203,10 @@ export const GET = withGuard(async (req, session) => {
 })
 
 export const PUT = withGuard(async (req, session) => {
+  // Rate limit (S-SEC): 30 mutations/min per principal, the v1 mutation posture.
+  const limited = await enforceRateLimit(req, 'notifications.put', 30, 60_000)
+  if (limited) return limited
+
   try {
     let body: { prefs?: unknown }
     try {

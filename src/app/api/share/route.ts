@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { applyAction, getProjectPayload, type ActionType } from '@/backend/lib/mjengo'
+import { safeErrorMessage } from '@/backend/lib/guard'
 import { enforceRateLimit } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
@@ -86,6 +87,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, result, data })
   } catch (e) {
     console.error('[api/share POST]', e)
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'Action failed' }, { status: 400 })
+    // Redacted (S-SEC): this route is PUBLIC — Prisma internals must never
+    // reach a share-link caller's response body.
+    return NextResponse.json({ ok: false, error: safeErrorMessage(e, 'Action failed') }, { status: 400 })
   }
 }

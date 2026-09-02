@@ -24,6 +24,23 @@ node_modules
 .DS_Store
 *.pem
 
+# OS / IDE / editor junk (S-SEC hygiene)
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# tool caches
+.eslintcache
+.stylelintcache
+.turbo
+
+# stray database files outside the ignored db/ dir (prisma scratch DBs)
+*.db
+*.sqlite
+*.sqlite3
+
 # debug
 npm-debug.log*
 yarn-debug.log*

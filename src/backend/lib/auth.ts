@@ -59,6 +59,14 @@ export function verifyPassword(password: string, stored: string): boolean {
   return candidate.length === expected.length && timingSafeEqual(candidate, expected)
 }
 
+/**
+ * Burn-hash for login-timing equalization (S-SEC): when the email does not
+ * resolve to an account, one scrypt is still run against this dummy so a
+ * response-timing probe cannot distinguish "no such user" from "wrong
+ * password" (the failure path + lockout accounting are identical either way).
+ */
+const DUMMY_HASH = hashPassword('mjengo-timing-equalizer')
+
 // ---------------------------------------------------------------- next-auth options
 
 /**
@@ -166,6 +174,7 @@ export function buildAuthOptions(secureCookies: boolean): NextAuthOptions {
 
         const user = await db.user.findUnique({ where: { email } })
         if (!user || !verifyPassword(password, user.passwordHash)) {
+          if (!user) verifyPassword(password, DUMMY_HASH) // S-SEC timing equalizer
           const failure = recordLoginFailure(email, ip)
           if (failure.locked) {
             // This failure tripped the 5th strike — say so immediately.

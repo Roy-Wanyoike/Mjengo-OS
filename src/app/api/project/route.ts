@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { getProjectPayload } from '@/backend/lib/mjengo'
 import { getSessionFromReq, unauthorized } from '@/backend/lib/guard'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
@@ -129,6 +130,12 @@ export async function buildTimelineSlice(projectId: string): Promise<TimelineEve
 }
 
 export async function GET(req: NextRequest) {
+  // Rate limit (S-SEC): the ?share= path is an UNAUTHENTICATED token oracle
+  // (the token is the auth) — throttled per principal like /api/share so
+  // scripted token brute-forcing cannot run at full speed on this route either.
+  const limited = await enforceRateLimit(req, 'project.get', 60, 60_000)
+  if (limited) return limited
+
   try {
     const session = await getSessionFromReq(req)
     if (!session) {

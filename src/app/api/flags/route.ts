@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { withGuard } from '@/backend/lib/guard'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 import { FLAG_KEYS, getFlags, setFlag, type FlagKey } from '@/backend/modules/intel/flags'
 
 // Feature-flag toggles (spec §81). GET returns the current flag map; POST
@@ -19,6 +20,11 @@ export const GET = withGuard(async () => {
 
 export const POST = withGuard(
   async (req: NextRequest) => {
+    // Rate limit (S-SEC): 10 toggles/min — admin-only mutation, but flags gate
+    // product behavior for everyone.
+    const limited = await enforceRateLimit(req, 'flags.post', 10, 60_000)
+    if (limited) return limited
+
     try {
       const { key, enabled } = (await req.json()) as { key?: string; enabled?: boolean }
       if (typeof key !== 'string' || !(FLAG_KEYS as readonly string[]).includes(key)) {
