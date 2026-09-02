@@ -1,4 +1,4 @@
-import { MjengoApp } from '@/components/mjengo/app'
+import { MjengoApp } from '@/frontend/mjengo/app'
 
 export default function Home() {
   return <MjengoApp />

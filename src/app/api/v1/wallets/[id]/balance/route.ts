@@ -1,6 +1,6 @@
-import { withGuard, FINANCE_ROLES } from '@/lib/guard'
-import { walletWithBalance } from '@/modules/wallet/service'
-import { jsonOk } from '@/modules/wallet/http'
+import { withGuard, FINANCE_ROLES } from '@/backend/lib/guard'
+import { walletWithBalance } from '@/backend/modules/wallet/service'
+import { jsonOk } from '@/backend/modules/wallet/http'
 import { validateQuery, walletRef, walletScopedQuery } from '../../../schemas'
 import { mapServiceError, v1Err, v1Rate, V1_READ_LIMIT } from '../../../respond'
 

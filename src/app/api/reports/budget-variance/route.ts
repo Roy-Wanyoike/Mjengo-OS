@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { withGuard } from '@/lib/guard'
-import { enforceRateLimit } from '@/lib/rate-limit'
-import { buildBudgetVarianceReport } from '@/modules/reports/service'
+import { withGuard } from '@/backend/lib/guard'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
+import { buildBudgetVarianceReport } from '@/backend/modules/reports/service'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,7 +27,7 @@ export const dynamic = 'force-dynamic'
  *         categories: [ { key, label, spent, txCount, share } ] } }
  *     variance = budget − spent (positive = under budget).
  *     Per-phase spent is an allocation (Transaction has no phaseId) — see the
- *     honest derivation notes in src/modules/reports/service.ts.
+ *     honest derivation notes in src/backend/modules/reports/service.ts.
  */
 export const GET = withGuard(
   async (req: NextRequest) => {

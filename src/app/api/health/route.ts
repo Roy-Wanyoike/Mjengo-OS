@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { db } from '@/backend/lib/db'
 import pkg from '../../../../package.json'
 
 export const dynamic = 'force-dynamic'

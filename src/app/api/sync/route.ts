@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import { createHash } from 'crypto'
-import { db } from '@/lib/db'
-import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/lib/mjengo'
-import { CLIENT_ACTIONS } from '@/lib/client-actions'
-import { withGuard } from '@/lib/guard'
+import { db } from '@/backend/lib/db'
+import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/backend/lib/mjengo'
+import { CLIENT_ACTIONS } from '@/shared/client-actions'
+import { withGuard } from '@/backend/lib/guard'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60

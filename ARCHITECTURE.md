@@ -13,11 +13,17 @@ product domain. It runs as a single deployable web app + PWA.
 
 ```text
 Next.js 16 (App Router, RSC shell + client app)
-  ├── UI:            src/components/mjengo/** (tab surfaces, role-aware)
-  ├── Client state:  src/hooks/use-mjengo.ts (zustand + persisted offline outbox)
-  ├── API:           src/app/api/** (actions dispatch, sync, search, upload, jobs,
-  │                  notifications, ai/*, v1/wallets, v1/payments, ussd, flags)
-  └── Domain:        src/modules/** — each module = service + policy + types
+  ├── app/           src/app/** — pages + /api HTTP routes (framework-fixed)
+  ├── frontend/      src/frontend/** — web UI: mjengo/ (tab surfaces, role-aware),
+  │                  ui/ (shadcn primitives), auth/, i18n/, hooks/
+  │                  (use-mjengo.ts: zustand + persisted offline outbox)
+  ├── mobile/        src/mobile/nav/** — phone-first shell (bottom nav ≤5 tabs,
+  │                  More sheet, camera quick-action); rest is responsive-shared
+  ├── shared/        src/shared/** — isomorphic contracts (permissions role
+  │                  matrix, CLIENT_ACTIONS allowlist)
+  └── backend/       src/backend/** — server-only: lib/ (guard, auth, audit,
+  │                  rate-limit, db, ai, mjengo payload+dispatcher) +
+  │                  actions/ + modules/** — each module = service + policy + types
         ├── ledger    double-entry accounts/transactions/entries (source of truth)
         ├── wallet    escrow, payment requests, provider seam (SimulatedProvider)
         ├── supply    requests → approvals → quotes → POs → deliveries → site store
@@ -48,7 +54,7 @@ Next.js 16 (App Router, RSC shell + client app)
 
 ## Production target architecture (migration roadmap)
 
-The monolith is deliberately structured so each `src/modules/*` domain maps 1:1 to a
+The monolith is deliberately structured so each `src/backend/modules/*` domain maps 1:1 to a
 future extracted service. When scale or reliability requirements demand it, migrate in
 this order — each step is independently valuable:
 
@@ -56,7 +62,7 @@ this order — each step is independently valuable:
 |---|---|---|
 | Web clients | Next.js 16 + React 19 (keep) + Expo/React Native field app | Field crews need native camera/GPS/push beyond PWA |
 | API contract | REST + OpenAPI 3.1 generated from `/api/v1` | External integrators / SDK consumers appear |
-| Core backend | Java 25 LTS + Spring Boot modular monolith (modules mirror `src/modules/*`) | Team grows beyond TypeScript; or need for Spring's transactional tooling |
+| Core backend | Java 25 LTS + Spring Boot modular monolith (modules mirror `src/backend/modules/*`) | Team grows beyond TypeScript; or need for Spring's transactional tooling |
 | Database | PostgreSQL 18 + PostGIS | Multi-tenant scale, real geospatial queries ("cement within 15km of site") |
 | Durable workflows | Temporal (approvals, payments, delivery, document processing) | Long-running sagas need crash-resume guarantees beyond JobRecord |
 | Event streaming | NATS JetStream | Service extraction requires durable cross-service events |
@@ -70,11 +76,11 @@ this order — each step is independently valuable:
 
 **AI layer:** provider-agnostic by design. All AI features (vision progress estimates,
 anomaly scans, voice parsing, recaps, document extraction) call an internal seam
-(`src/lib/ai.ts` → z-ai SDK today) so providers can be swapped without touching domain
+(`src/backend/lib/ai.ts` → z-ai SDK today) so providers can be swapped without touching domain
 logic. AI results are always labeled with confidence and require human application —
 AI never writes official records directly.
 
-**Payments:** `PaymentProvider` abstraction (`src/modules/wallet/providers.ts`).
+**Payments:** `PaymentProvider` abstraction (`src/backend/modules/wallet/providers.ts`).
 `SimulatedProvider` today; M-Pesa Daraja / card rails plug in behind the same seam with
 idempotent replay keys already enforced.
 

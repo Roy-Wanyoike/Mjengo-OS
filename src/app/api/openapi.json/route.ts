@@ -143,7 +143,7 @@ const cursorParam = (of: string) => ({
 })
 
 const unauthorizedResponse = {
-  description: 'No session cookie (guard: src/lib/guard.ts). Body { error: "Sign in required" }.',
+  description: 'No session cookie (guard: src/backend/lib/guard.ts). Body { error: "Sign in required" }.',
   content: { 'application/json': { schema: errorSchema } },
 }
 const forbiddenResponse = {

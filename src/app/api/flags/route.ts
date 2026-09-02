@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { withGuard } from '@/lib/guard'
-import { FLAG_KEYS, getFlags, setFlag, type FlagKey } from '@/modules/intel/flags'
+import { withGuard } from '@/backend/lib/guard'
+import { FLAG_KEYS, getFlags, setFlag, type FlagKey } from '@/backend/modules/intel/flags'
 
 // Feature-flag toggles (spec §81). GET returns the current flag map; POST
 // { key, enabled } persists one toggle. Admin only — flags are a controlled

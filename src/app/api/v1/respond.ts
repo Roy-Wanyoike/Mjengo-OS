@@ -3,8 +3,8 @@
 //
 // ERROR SHAPE (deliberate, kept consistent across the whole v1 surface):
 //   every error  → { error: string, field?: string [, retryAfterSec?] }
-// This matches the shared guard (src/lib/guard.ts 401/403) and rate-limit
-// (src/lib/rate-limit.ts 429) bodies exactly, so ALL /api/v1 errors share one
+// This matches the shared guard (src/backend/lib/guard.ts 401/403) and rate-limit
+// (src/backend/lib/rate-limit.ts 429) bodies exactly, so ALL /api/v1 errors share one
 // contract. Success responses keep the wallet-module contract
 // { ok: true, data, ... } (modules/wallet/http.ts jsonOk) — the `ok` flag
 // means success; errors simply do not carry it. The previous jsonErr-style
@@ -24,7 +24,7 @@
 //   OpenAPI Idempotency-Key description.
 
 import { NextResponse, type NextRequest } from 'next/server'
-import { enforceRateLimit } from '@/lib/rate-limit'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 
 /** v1 error body: { error, field? } — one shape for every failure. */
 export function v1Err(status: number, error: string, field?: string): NextResponse {

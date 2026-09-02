@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { withGuard } from '@/lib/guard'
+import { db } from '@/backend/lib/db'
+import { withGuard } from '@/backend/lib/guard'
 
 // Global search (spec §80) — SQLite LIKE (ASCII case-insensitive by default)
 // across the real entities: projects, land parcels, workers, suppliers +

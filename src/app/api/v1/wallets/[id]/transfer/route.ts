@@ -1,6 +1,6 @@
-import { withGuard, FINANCE_ROLES } from '@/lib/guard'
-import { transferWallet, walletWithBalance } from '@/modules/wallet/service'
-import { withIdempotency } from '@/modules/wallet/http'
+import { withGuard, FINANCE_ROLES } from '@/backend/lib/guard'
+import { transferWallet, walletWithBalance } from '@/backend/modules/wallet/service'
+import { withIdempotency } from '@/backend/modules/wallet/http'
 import { transferBody, validateBody, walletRef } from '../../../schemas'
 import { mapServiceError, v1Err, v1Rate, V1_MUTATION_LIMIT } from '../../../respond'
 

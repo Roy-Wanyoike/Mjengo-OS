@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { applyAction } from '@/lib/mjengo'
-import { withAuditContext } from '@/lib/audit'
-import { enforceRateLimit } from '@/lib/rate-limit'
+import { db } from '@/backend/lib/db'
+import { applyAction } from '@/backend/lib/mjengo'
+import { withAuditContext } from '@/backend/lib/audit'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,7 +37,7 @@ export const dynamic = 'force-dynamic'
  * inside the session. HONEST: no real aggregator is wired to this route —
  * the response footer says 'MjengoOS sim' and GET describes the contract.
  * Rate limit: 20 req/min/phone via the shared in-process limiter (single
- * instance — see src/lib/rate-limit.ts).
+ * instance — see src/backend/lib/rate-limit.ts).
  */
 
 const SERVICE_CODE = '*384#'

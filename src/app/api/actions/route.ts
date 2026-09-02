@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/lib/mjengo'
-import { CLIENT_ACTIONS } from '@/lib/client-actions'
-import { getSessionFromReq, unauthorized, forbidden } from '@/lib/guard'
-import { kindForAction, withAuditContext } from '@/lib/audit'
-import { enforceRateLimit } from '@/lib/rate-limit'
+import { db } from '@/backend/lib/db'
+import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/backend/lib/mjengo'
+import { CLIENT_ACTIONS } from '@/shared/client-actions'
+import { getSessionFromReq, unauthorized, forbidden } from '@/backend/lib/guard'
+import { kindForAction, withAuditContext } from '@/backend/lib/audit'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,7 +31,7 @@ export const dynamic = 'force-dynamic'
  * else IP). Generous for real dispatch bursts; stops scripted abuse of the
  * one endpoint every mutation flows through. Counted BEFORE the idempotency
  * replay — replays are still requests. In-process limiter — single-instance
- * honesty note in src/lib/rate-limit.ts.
+ * honesty note in src/backend/lib/rate-limit.ts.
  */
 
 function auditContextFor(req: NextRequest, type: ActionType, payload: any) {

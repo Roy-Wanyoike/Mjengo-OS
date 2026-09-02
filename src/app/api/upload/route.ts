@@ -2,16 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { mkdir, writeFile } from 'fs/promises'
 import path from 'path'
 import { randomBytes } from 'crypto'
-import { withGuard, OWNER_ROLES } from '@/lib/guard'
-import { enforceRateLimit } from '@/lib/rate-limit'
-import { db } from '@/lib/db'
-import { saveDocument, sniffDocumentMime } from '@/modules/documents/service'
+import { withGuard, OWNER_ROLES } from '@/backend/lib/guard'
+import { enforceRateLimit } from '@/backend/lib/rate-limit'
+import { db } from '@/backend/lib/db'
+import { saveDocument, sniffDocumentMime } from '@/backend/modules/documents/service'
 import {
   isDocumentCategory,
   isDocumentMimeType,
   MAX_DOCUMENT_BYTES,
   sanitizeFileName,
-} from '@/modules/documents/types'
+} from '@/backend/modules/documents/types'
 
 // Upload v2 (spec §84 photo seam + Doc A §60/§53 document intelligence).
 //
