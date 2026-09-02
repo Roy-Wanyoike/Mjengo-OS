@@ -876,7 +876,9 @@ export function Header({
             <CommandPaletteButton />
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3">
+          {/* gap-1 below sm: keeps the 7 control pills inside a 390px viewport
+              (was gap-2 → 12px page-level horizontal overflow at <sm). */}
+          <div className="flex items-center gap-1 sm:gap-3">
             {/* Signed-in identity (hidden for share-link clients — no session) */}
             <UserChip />
 

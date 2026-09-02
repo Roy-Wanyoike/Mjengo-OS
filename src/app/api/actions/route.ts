@@ -56,7 +56,10 @@ export async function POST(req: NextRequest) {
     }
     if (!type) return NextResponse.json({ error: 'type required' }, { status: 400 })
 
-    const idempotencyKey = req.headers.get('idempotency-key')?.trim() || null
+    // Canonical header is Idempotency-Key; the x-idempotency-key variant is
+    // accepted too (clients/api-explorers send both spellings — dedupe either way).
+    const idempotencyKey =
+      req.headers.get('idempotency-key')?.trim() || req.headers.get('x-idempotency-key')?.trim() || null
     if (idempotencyKey) {
       const existing = await db.idempotencyRecord.findUnique({ where: { key: idempotencyKey } })
       if (existing) {

@@ -23,7 +23,10 @@ export async function withIdempotency(
   projectId: string | null,
   run: () => Promise<unknown>,
 ): Promise<NextResponse> {
-  const key = req.headers.get('idempotency-key')?.trim()
+  // Canonical header is Idempotency-Key; the x-idempotency-key variant is
+  // accepted too (clients send both spellings — money dedupes either way).
+  const key =
+    req.headers.get('idempotency-key')?.trim() || req.headers.get('x-idempotency-key')?.trim()
   if (!key) {
     const data = await run()
     return jsonOk(data)
