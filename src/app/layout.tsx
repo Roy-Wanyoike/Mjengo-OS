@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthSessionProvider } from "@/components/auth/session-provider";
+import { I18nProvider } from "@/lib/i18n/provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -39,7 +40,12 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        <AuthSessionProvider>{children}</AuthSessionProvider>
+        {/* i18n (W4-I18N · spec §62) — wraps the session provider so the login
+            gate and every surface below it can use t(); locale persists via the
+            SAME `mjengo-os-settings` store the Settings tab writes. */}
+        <I18nProvider>
+          <AuthSessionProvider>{children}</AuthSessionProvider>
+        </I18nProvider>
         <Toaster richColors position="top-center" />
         {/* Service-worker registration (PWA). /api/* is never cached — see
             public/sw.js. Registered on window load so it never competes with

@@ -26,6 +26,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Phone, PhoneCall, PhoneOff, Delete, Smartphone, WifiOff, Info } from 'lucide-react'
 import { toast } from 'sonner'
+import { useT } from '@/lib/i18n/provider'
 
 // ---------------- LCD session types ----------------
 
@@ -78,6 +79,7 @@ const BOOT_LINES: LcdLine[] = [
 
 export function UssdTab() {
   const { data, dispatch, online, outbox, viewMode } = useMjengo()
+  const t = useT()
 
   const [screen, setScreen] = useState<Screen>('dial')
   const [dialBuf, setDialBuf] = useState('*384#')
@@ -388,26 +390,25 @@ export function UssdTab() {
 
   return (
     <div className="space-y-6">
-      <section aria-label="USSD Muster Line simulation">
+      <section aria-label={t('ussd.aria')}>
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex flex-wrap items-center gap-2">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Phone className="w-4 h-4 text-stone-500" aria-hidden />
-                USSD Muster Line — SIMULATION
+                {t('ussd.title')}
               </CardTitle>
               <Badge className="bg-amber-100 text-amber-900 border-0 text-[10px] hover:bg-amber-100">
-                Demo — real records
+                {t('ussd.demo')}
               </Badge>
               {isClient && (
                 <Badge variant="outline" className="text-[10px] font-medium text-stone-500 border-stone-200">
-                  Read-only client view
+                  {t('ussd.readonly')}
                 </Badge>
               )}
             </div>
             <CardDescription>
-              Demonstrates the *384# attendance flow MjengoOS would run on any phone — this demo
-              dispatches real attendance records.
+              {t('ussd.desc')}
             </CardDescription>
           </CardHeader>
           <CardContent className="pt-0">

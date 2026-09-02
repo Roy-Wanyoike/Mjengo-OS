@@ -21,6 +21,7 @@ import {
   downloadProcurementReportCSV, downloadWeeklyReportPDF,
 } from '@/components/mjengo/report-utils'
 import { HEALTH_INPUTS, type HealthSnapshot } from '@/modules/intel/types'
+import { useT } from '@/lib/i18n/provider'
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
@@ -59,10 +60,10 @@ function SeverityIcon({ severity }: { severity: string }) {
 
 // ---------------- Project health card (spec §48, F-INSIGHT) ----------------
 
-const GRADE_META: Record<string, { label: string; chip: string; bar: string }> = {
-  good: { label: 'Good', chip: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100 border-0', bar: 'bg-emerald-600' },
-  attention: { label: 'Attention', chip: 'bg-amber-100 text-amber-800 hover:bg-amber-100 border-0', bar: 'bg-amber-500' },
-  poor: { label: 'Poor', chip: 'bg-red-100 text-red-700 hover:bg-red-100 border-0', bar: 'bg-red-500' },
+const GRADE_META: Record<string, { labelKey: string; chip: string; bar: string }> = {
+  good: { labelKey: 'overview.grade.good', chip: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100 border-0', bar: 'bg-emerald-600' },
+  attention: { labelKey: 'overview.grade.attention', chip: 'bg-amber-100 text-amber-800 hover:bg-amber-100 border-0', bar: 'bg-amber-500' },
+  poor: { labelKey: 'overview.grade.poor', chip: 'bg-red-100 text-red-700 hover:bg-red-100 border-0', bar: 'bg-red-500' },
 }
 
 /**
@@ -73,15 +74,16 @@ const GRADE_META: Record<string, { label: string; chip: string; bar: string }> =
  */
 function HealthCard({ health }: { health: HealthSnapshot | null }) {
   const [showHow, setShowHow] = useState(false)
+  const t = useT()
 
   if (!health) {
     return (
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <HeartPulse className="h-5 w-5 text-amber-600" aria-hidden /> Project health
+            <HeartPulse className="h-5 w-5 text-amber-600" aria-hidden /> {t('overview.health.title')}
           </CardTitle>
-          <CardDescription>Computing the six-dimension health score…</CardDescription>
+          <CardDescription>{t('overview.health.loading')}</CardDescription>
         </CardHeader>
       </Card>
     )
@@ -93,11 +95,10 @@ function HealthCard({ health }: { health: HealthSnapshot | null }) {
     <Card className="border-stone-200 shadow-sm">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-          <HeartPulse className="h-5 w-5 text-amber-600" aria-hidden /> Project health
+          <HeartPulse className="h-5 w-5 text-amber-600" aria-hidden /> {t('overview.health.title')}
         </CardTitle>
         <CardDescription>
-          Six transparent dimensions — progress, budget, schedule, procurement, issues, evidence.
-          Computed {dateShort(health.computedAt)} from live project rows.
+          {t('overview.health.desc', { date: dateShort(health.computedAt) })}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -109,10 +110,10 @@ function HealthCard({ health }: { health: HealthSnapshot | null }) {
                 {health.overall}
                 <span className="text-lg font-medium text-stone-400">/100</span>
               </p>
-              <p className="text-xs text-stone-500 mt-1">overall health</p>
+              <p className="text-xs text-stone-500 mt-1">{t('overview.health.overall')}</p>
             </div>
             <Badge className={`text-xs ${overallGrade.chip}`}>
-              {overallGrade.label}
+              {t(overallGrade.labelKey)}
             </Badge>
           </div>
 
@@ -126,7 +127,7 @@ function HealthCard({ health }: { health: HealthSnapshot | null }) {
                     <span className="text-sm font-medium text-stone-800">{d.label}</span>
                     <span className="flex items-center gap-1.5 shrink-0">
                       <span className="text-sm font-bold tabular-nums text-stone-700">{d.score}</span>
-                      <Badge className={`text-[10px] ${meta.chip}`}>{meta.label}</Badge>
+                      <Badge className={`text-[10px] ${meta.chip}`}>{t(meta.labelKey)}</Badge>
                     </span>
                   </div>
                   <Progress value={d.score} className={`h-2 bg-stone-200 [&>[data-slot=progress-indicator]]:${meta.bar}`} />
@@ -146,10 +147,10 @@ function HealthCard({ health }: { health: HealthSnapshot | null }) {
             className="flex items-center gap-1.5 text-xs font-semibold text-stone-600 hover:text-stone-900 min-h-8"
           >
             <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showHow ? '' : '-rotate-90'}`} aria-hidden />
-            How this is computed
+            {t('overview.health.how')}
           </button>
           {showHow && (
-            <dl className="mt-2 space-y-2 text-xs text-stone-600" aria-label="Health score inputs">
+            <dl className="mt-2 space-y-2 text-xs text-stone-600" aria-label={t('overview.health.inputs')}>
               {health.dimensions.map((d) => (
                 <div key={d.key} className="grid grid-cols-[110px_1fr] gap-2">
                   <dt className="font-semibold text-stone-800">{d.label}</dt>
@@ -170,17 +171,18 @@ function HealthCard({ health }: { health: HealthSnapshot | null }) {
 
 // ---------------- Reports menu (spec §49 + §79, F-INSIGHT) ----------------
 
-const REPORT_ITEMS: Array<{ key: string; label: string; kind: 'csv' | 'pdf' }> = [
-  { key: 'daily', label: 'Daily report (CSV)', kind: 'csv' },
-  { key: 'weekly', label: 'Weekly report (CSV)', kind: 'csv' },
-  { key: 'financial', label: 'Financial report (CSV)', kind: 'csv' },
-  { key: 'procurement', label: 'Procurement report (CSV)', kind: 'csv' },
-  { key: 'weekly-pdf', label: 'Weekly report (PDF)', kind: 'pdf' },
+const REPORT_ITEMS: Array<{ key: string; labelKey: string; kind: 'csv' | 'pdf' }> = [
+  { key: 'daily', labelKey: 'overview.report.daily', kind: 'csv' },
+  { key: 'weekly', labelKey: 'overview.report.weekly', kind: 'csv' },
+  { key: 'financial', labelKey: 'overview.report.financial', kind: 'csv' },
+  { key: 'procurement', labelKey: 'overview.report.procurement', kind: 'csv' },
+  { key: 'weekly-pdf', labelKey: 'overview.report.weeklyPdf', kind: 'pdf' },
 ]
 
 /** Reports popover — 4 CSV variants + the weekly PDF, all from live project data. */
 function ReportsMenu({ disabled }: { disabled?: boolean }) {
   const data = useMjengo((s) => s.data)
+  const t = useT()
   const [busy, setBusy] = useState<string | null>(null)
 
   if (!data) return null
@@ -217,17 +219,17 @@ function ReportsMenu({ disabled }: { disabled?: boolean }) {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" className="gap-1.5" disabled={disabled || busy !== null}
-          aria-label="Download project reports">
-          <FileDown className="w-4 h-4" aria-hidden /> Reports
+          aria-label={t('overview.aria.reports')}>
+          <FileDown className="w-4 h-4" aria-hidden /> {t('overview.toolbar.reports')}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {REPORT_ITEMS.map((r) => (
           <DropdownMenuItem key={r.key} onSelect={() => void downloadReport(r.key)}>
-            <FileText className="w-3.5 h-3.5 mr-1.5" aria-hidden /> {r.label}
+            <FileText className="w-3.5 h-3.5 mr-1.5" aria-hidden /> {t(r.labelKey)}
           </DropdownMenuItem>
         ))}
-        <p className="px-2 py-1.5 text-[10px] text-stone-400">Generated from live project data — nothing fabricated.</p>
+        <p className="px-2 py-1.5 text-[10px] text-stone-400">{t('overview.reports.note')}</p>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -236,6 +238,7 @@ function ReportsMenu({ disabled }: { disabled?: boolean }) {
 export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
   const { data, dispatch, viewMode, shareToken, clientRole, online, dataMode } = useMjengo()
   const { role, authenticated } = usePermissions()
+  const t = useT()
   const [recapBusy, setRecapBusy] = useState(false)
   const [photoOpen, setPhotoOpen] = useState<string | null>(null)
   const [expenseOpen, setExpenseOpen] = useState(false)
@@ -300,21 +303,21 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
   return (
     <div className="space-y-6">
       {/* Toolbar: exports + reports (reports for BOTH roles) + record expense (owner only) */}
-      <div className="flex items-center gap-2 flex-wrap" role="toolbar" aria-label="Project exports, reports and expenses">
+      <div className="flex items-center gap-2 flex-wrap" role="toolbar" aria-label={t('overview.aria.toolbar')}>
         <ReportsMenu />
         {!isClient && (
           <>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-1.5" aria-label="Export project data as CSV">
-                  <Download className="w-4 h-4" aria-hidden /> Export
+                <Button variant="outline" size="sm" className="gap-1.5" aria-label={t('overview.aria.export')}>
+                  <Download className="w-4 h-4" aria-hidden /> {t('overview.toolbar.export')}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
-                <DropdownMenuItem onSelect={() => exportCSV('summary')}>Project summary</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => exportCSV('materials')}>Materials ledger</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => exportCSV('attendance')}>Attendance &amp; wages</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => exportCSV('transactions')}>Transactions CSV</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => exportCSV('summary')}>{t('overview.export.summary')}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => exportCSV('materials')}>{t('overview.export.materials')}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => exportCSV('attendance')}>{t('overview.export.attendance')}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => exportCSV('transactions')}>{t('overview.export.transactions')}</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Button
@@ -322,59 +325,59 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
               className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white"
               onClick={() => setExpenseOpen(true)}
             >
-              <ReceiptText className="w-4 h-4" aria-hidden /> Record expense
+              <ReceiptText className="w-4 h-4" aria-hidden /> {t('overview.toolbar.recordExpense')}
             </Button>
           </>
         )}
       </div>
 
       {/* KPI cards */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" aria-label="Key metrics">
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" aria-label={t('overview.aria.metrics')}>
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><TrendingUp className="w-3.5 h-3.5" aria-hidden /> Build progress</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><TrendingUp className="w-3.5 h-3.5" aria-hidden /> {t('overview.kpi.progress')}</CardDescription>
             <CardTitle className="text-3xl font-bold text-stone-900 tabular-nums">{s.progressPct}%</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             <Progress value={s.progressPct} className="h-2 bg-stone-200 [&>[data-slot=progress-indicator]]:bg-amber-500" />
-            <p className="text-xs text-stone-500">Day {s.dayCount} of build · {s.daysRemaining} days remaining · AI-verified from site photos</p>
+            <p className="text-xs text-stone-500">{t('overview.kpi.progressNote', { day: s.dayCount, remaining: s.daysRemaining })}</p>
           </CardContent>
         </Card>
 
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><Wallet className="w-3.5 h-3.5" aria-hidden /> Budget position</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><Wallet className="w-3.5 h-3.5" aria-hidden /> {t('overview.kpi.budget')}</CardDescription>
             <CardTitle className="text-3xl font-bold text-stone-900 tabular-nums">{s.budgetSpentPct}%</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             <Progress value={s.budgetSpentPct} className={`h-2 bg-stone-200 [&>[data-slot=progress-indicator]]:${spendLeads > 8 ? 'bg-red-500' : 'bg-emerald-600'}`} />
             <p className="text-xs text-stone-500">
-              {formatKES(s.budgetSpent, true)} of {formatKES(s.budgetTotal, true)} · plan {s.plannedSpendPct}%
-              {spendLeads > 0 ? ` · ${spendLeads}pts ahead of work` : ' · under plan'}
+              {t('overview.kpi.budgetOf', { spent: formatKES(s.budgetSpent, true), total: formatKES(s.budgetTotal, true), pct: s.plannedSpendPct })}
+              {spendLeads > 0 ? ` · ${t('overview.kpi.ahead', { pts: spendLeads })}` : ` · ${t('overview.kpi.underPlan')}`}
             </p>
           </CardContent>
         </Card>
 
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><Users className="w-3.5 h-3.5" aria-hidden /> Crew today</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><Users className="w-3.5 h-3.5" aria-hidden /> {t('overview.kpi.crew')}</CardDescription>
             <CardTitle className="text-3xl font-bold text-stone-900 tabular-nums">{s.fundisToday}<span className="text-lg text-stone-400 font-medium">/{s.fundisExpected}</span></CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-xs text-stone-500">
-              Wages today {formatKES(s.wagesToday)} · unpaid {formatKES(s.wagesUnpaid, true)}
+              {t('overview.kpi.crewNote', { wages: formatKES(s.wagesToday), unpaid: formatKES(s.wagesUnpaid, true) })}
             </p>
           </CardContent>
         </Card>
 
         <Card className={`shadow-sm ${s.unackedAlerts > 0 ? 'border-red-200 bg-red-50/50' : 'border-stone-200'}`}>
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><ShieldAlert className="w-3.5 h-3.5" aria-hidden /> AI integrity alerts</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><ShieldAlert className="w-3.5 h-3.5" aria-hidden /> {t('overview.kpi.alerts')}</CardDescription>
             <CardTitle className="text-3xl font-bold text-stone-900 tabular-nums">{s.unackedAlerts}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-xs text-stone-500">
-              {s.unackedAlerts > 0 ? 'Material variance & budget risks flagged — review below' : 'Ledger reconciled. No anomalies open'}
+              {s.unackedAlerts > 0 ? t('overview.kpi.alertsOpen') : t('overview.kpi.alertsClear')}
             </p>
           </CardContent>
         </Card>
@@ -388,7 +391,7 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
           roles it does not apply to. Variance: qs+contractor+admin; BOQ summary:
           qs; payments/wallet: finance; system health: admin. */}
       {authenticated && role !== 'client' && (
-        <section className="space-y-6" aria-label="Role dashboard">
+        <section className="space-y-6" aria-label={t('overview.aria.roleDashboard')}>
           <QsBudgetCard />
           <BudgetVarianceCard />
           <FinanceSnapshotCard />
@@ -400,14 +403,14 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
         {/* Burn-down chart */}
         <Card className="lg:col-span-2 border-stone-200 shadow-sm">
           <CardHeader>
-            <CardTitle className="text-lg text-stone-900">Budget burn-down vs plan</CardTitle>
+            <CardTitle className="text-lg text-stone-900">{t('overview.burn.title')}</CardTitle>
             <CardDescription>
-              Cumulative spend (KSh thousands) against the linear plan. Spend leading progress by {Math.abs(spendLeads)} pts
-              {spendLeads > 8 ? ' — AI recommends reviewing cement costs' : ' — on track'}.
+              {t('overview.burn.desc', { pts: Math.abs(spendLeads) })}
+              {spendLeads > 8 ? t('overview.burn.review') : t('overview.burn.onTrack')}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-64" role="img" aria-label="Budget burn down chart">
+            <div className="h-64" role="img" aria-label={t('overview.aria.burnChart')}>
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
@@ -425,8 +428,8 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
               </ResponsiveContainer>
             </div>
             <div className="mt-3 flex items-center justify-between text-xs text-stone-500">
-              <span>Progress {s.progressPct}% of build value · Spend {s.budgetSpentPct}% of budget</span>
-              <span className="font-medium text-stone-700">{formatKES(s.budgetTotal - s.budgetSpent, true)} remaining</span>
+              <span>{t('overview.burn.footer', { progress: s.progressPct, spent: s.budgetSpentPct })}</span>
+              <span className="font-medium text-stone-700">{t('overview.burn.remaining', { amount: formatKES(s.budgetTotal - s.budgetSpent, true) })}</span>
             </div>
           </CardContent>
         </Card>
@@ -434,8 +437,8 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
         {/* Phase progress */}
         <Card className="border-stone-200 shadow-sm">
           <CardHeader>
-            <CardTitle className="text-lg text-stone-900">Phases</CardTitle>
-            <CardDescription>Weighted by phase budget · AI photo-verified where available</CardDescription>
+            <CardTitle className="text-lg text-stone-900">{t('overview.phases.title')}</CardTitle>
+            <CardDescription>{t('overview.phases.desc')}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {data.phases.map((p) => (
@@ -443,13 +446,13 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium text-stone-800 flex items-center gap-2">
                     {p.order}. {p.name}
-                    {p.status === 'in_progress' && <Badge className="text-[10px] bg-amber-100 text-amber-800 hover:bg-amber-100 border-0">active</Badge>}
-                    {p.status === 'done' && <Badge className="text-[10px] bg-emerald-100 text-emerald-800 hover:bg-emerald-100 border-0">done</Badge>}
+                    {p.status === 'in_progress' && <Badge className="text-[10px] bg-amber-100 text-amber-800 hover:bg-amber-100 border-0">{t('overview.phases.active')}</Badge>}
+                    {p.status === 'done' && <Badge className="text-[10px] bg-emerald-100 text-emerald-800 hover:bg-emerald-100 border-0">{t('overview.phases.done')}</Badge>}
                   </span>
                   <span className="text-sm font-bold tabular-nums text-stone-700">{p.progress}%</span>
                 </div>
                 <Progress value={p.progress} className={`h-2 bg-stone-200 [&>[data-slot=progress-indicator]]:${p.status === 'done' ? 'bg-emerald-600' : p.status === 'in_progress' ? 'bg-amber-500' : 'bg-stone-400'}`} />
-                <p className="text-[11px] text-stone-400 mt-1">{p.tasks.filter((t) => t.status === 'done').length}/{p.tasks.length} tasks · {formatKES(p.budget, true)}</p>
+                <p className="text-[11px] text-stone-400 mt-1">{t('overview.phases.tasks', { done: p.tasks.filter((tk) => tk.status === 'done').length, total: p.tasks.length, budget: formatKES(p.budget, true) })}</p>
               </div>
             ))}
           </CardContent>
@@ -457,7 +460,7 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
       </div>
 
       {/* Site evidence: Day-1 → today time-lapse + interactive site map */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6" aria-label="Site evidence">
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6" aria-label={t('overview.aria.evidence')}>
         <TimelapseCard />
         <SiteMapCard />
       </section>
@@ -468,13 +471,13 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
           <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <div>
               <CardTitle className="text-lg text-stone-900 flex items-center gap-2">
-                <ShieldAlert className="w-5 h-5 text-amber-600" aria-hidden /> Trust ledger alerts
+                <ShieldAlert className="w-5 h-5 text-amber-600" aria-hidden /> {t('overview.alerts.title')}
               </CardTitle>
-              <CardDescription>AI reconciliation of deliveries, wages & progress</CardDescription>
+              <CardDescription>{t('overview.alerts.desc')}</CardDescription>
             </div>
             {!isClient && (
               <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={onOpenCopilot}>
-                <Sparkles className="w-4 h-4" aria-hidden /> Scan
+                <Sparkles className="w-4 h-4" aria-hidden /> {t('overview.alerts.scan')}
               </Button>
             )}
           </CardHeader>
@@ -497,7 +500,7 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
                           </span>
                           {!a.acknowledged && !isClient && (
                             <Button size="sm" variant="ghost" className="h-6 text-xs gap-1" onClick={() => void dispatch('alert.ack', { id: a.id }, 'Acknowledge alert')}>
-                              <CheckCircle2 className="w-3.5 h-3.5" aria-hidden /> Acknowledge
+                              <CheckCircle2 className="w-3.5 h-3.5" aria-hidden /> {t('overview.alerts.ack')}
                             </Button>
                           )}
                         </div>
@@ -505,7 +508,7 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
                     </div>
                   </div>
                 ))}
-                {data.alerts.length === 0 && <p className="text-sm text-stone-400 py-6 text-center">No alerts. Run an integrity scan from the AI Copilot.</p>}
+                {data.alerts.length === 0 && <p className="text-sm text-stone-400 py-6 text-center">{t('overview.alerts.empty')}</p>}
               </div>
             </ScrollArea>
           </CardContent>
@@ -515,9 +518,9 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
         <Card className="border-stone-200 shadow-sm">
           <CardHeader>
             <CardTitle className="text-lg text-stone-900 flex items-center gap-2">
-              <Camera className="w-5 h-5 text-amber-600" aria-hidden /> Photo evidence log
+              <Camera className="w-5 h-5 text-amber-600" aria-hidden /> {t('overview.photos.title')}
             </CardTitle>
-            <CardDescription>Physical ground truth — tap a photo to view its AI analysis</CardDescription>
+            <CardDescription>{t('overview.photos.desc')}</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-3 gap-2">
@@ -526,14 +529,14 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
                   key={p.id}
                   onClick={() => setPhotoOpen(p.id)}
                   className="group relative aspect-[4/3] rounded-lg overflow-hidden border border-stone-200 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                  aria-label={`Site photo: ${p.caption ?? 'untitled'}`}
+                  aria-label={t('overview.photos.aria', { caption: p.caption ?? t('overview.photos.sitePhoto') })}
                 >
-                  <img src={p.url} alt={p.caption ?? 'Site photo'} className="w-full h-full object-cover transition-transform group-hover:scale-105" />
+                  <img src={p.url} alt={p.caption ?? t('overview.photos.sitePhoto')} className="w-full h-full object-cover transition-transform group-hover:scale-105" />
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-1">
-                    <p className="text-[9px] text-white font-medium truncate">{p.caption ?? 'Site photo'}</p>
+                    <p className="text-[9px] text-white font-medium truncate">{p.caption ?? t('overview.photos.sitePhoto')}</p>
                   </div>
                   {p.analysis && (
-                    <span className="absolute top-1 right-1 bg-amber-500 text-stone-950 text-[9px] font-bold px-1.5 py-0.5 rounded">AI</span>
+                    <span className="absolute top-1 right-1 bg-amber-500 text-stone-950 text-[9px] font-bold px-1.5 py-0.5 rounded">{t('overview.photos.ai')}</span>
                   )}
                 </button>
               ))}
@@ -547,9 +550,9 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
           <div>
             <CardTitle className="text-lg text-stone-900 flex items-center gap-2">
-              <MessageSquareText className="w-5 h-5 text-amber-600" aria-hidden /> 6 PM client recap
+              <MessageSquareText className="w-5 h-5 text-amber-600" aria-hidden /> {t('overview.recap.title')}
             </CardTitle>
-            <CardDescription>Auto-generated WhatsApp digest for the diaspora client — no more evening calls</CardDescription>
+            <CardDescription>{t('overview.recap.desc')}</CardDescription>
           </div>
           {!isClient && (
             <Button
@@ -562,7 +565,7 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
               className="gap-1.5 shrink-0 bg-amber-600 hover:bg-amber-700 text-white"
             >
               {recapBusy ? <RefreshCw className="w-4 h-4 animate-spin" aria-hidden /> : <Send className="w-4 h-4" aria-hidden />}
-              {recapBusy ? 'Writing…' : dataMode === 'data_saver' ? 'Generate recap · Data Saver (text-only)' : 'Generate today\'s recap'}
+              {recapBusy ? t('overview.recap.writing') : dataMode === 'data_saver' ? t('overview.recap.saver') : t('overview.recap.generate')}
             </Button>
           )}
         </CardHeader>
@@ -573,7 +576,7 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
                 {data.recaps.map((r) => (
                   <div key={r.id} className="max-w-2xl ml-auto bg-emerald-50 border border-emerald-200 rounded-2xl rounded-br-sm px-4 py-3">
                     <p className="text-[11px] text-emerald-700 font-semibold mb-1 flex items-center gap-1.5 justify-end">
-                      Day {r.day} · {dateShort(r.createdAt)} <MapPin className="w-3 h-3" aria-hidden />
+                      {t('overview.recap.day', { day: r.day, date: dateShort(r.createdAt) })} <MapPin className="w-3 h-3" aria-hidden />
                     </p>
                     <pre className="whitespace-pre-wrap font-sans text-sm text-stone-800 leading-relaxed">{r.content}</pre>
                   </div>
@@ -581,7 +584,7 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
               </div>
             </ScrollArea>
           ) : (
-            <p className="text-sm text-stone-400 py-4 text-center">No recaps yet — generate the first one above.</p>
+            <p className="text-sm text-stone-400 py-4 text-center">{t('overview.recap.empty')}</p>
           )}
         </CardContent>
       </Card>
@@ -605,15 +608,15 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
           {openPhoto && (
             <>
               <DialogHeader>
-                <DialogTitle className="text-stone-900">Site photo · AI analysis</DialogTitle>
+                <DialogTitle className="text-stone-900">{t('overview.photo.title')}</DialogTitle>
                 <DialogDescription>{openPhoto.caption} · {dateShort(openPhoto.createdAt)}</DialogDescription>
               </DialogHeader>
-              <img src={openPhoto.url} alt={openPhoto.caption ?? 'Site photo'} className="w-full rounded-lg border border-stone-200" />
+              <img src={openPhoto.url} alt={openPhoto.caption ?? t('overview.photos.sitePhoto')} className="w-full rounded-lg border border-stone-200" />
               {openPhoto.analysis ? (
                 <PhotoAnalysisBody analysis={JSON.parse(openPhoto.analysis) as PhotoAnalysis} />
               ) : (
                 <div className="text-sm text-stone-500 bg-stone-50 border border-stone-200 rounded-lg p-4">
-                  This photo has not been AI-analyzed yet. Open the <strong>AI Copilot</strong> tab and re-analyze it to attach progress estimates, safety checks and material counts.
+                  {t('overview.photo.notAnalyzed')}
                 </div>
               )}
               <div className="border-t border-stone-200 pt-4">
@@ -645,19 +648,20 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
 }
 
 export function PhotoAnalysisBody({ analysis }: { analysis: PhotoAnalysis }) {
+  const t = useT()
   return (
     <div className="space-y-4 text-sm">
       {analysis.summary && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <p className="font-medium text-amber-900">{analysis.summary}</p>
           {typeof analysis.progressPct === 'number' && (
-            <p className="text-xs text-amber-700 mt-1">Visual estimate: <strong>{analysis.progressPct}%</strong> of {analysis.phaseShown} · confidence {Math.round((analysis.confidence ?? 0) * 100)}%</p>
+            <p className="text-xs text-amber-700 mt-1">{t('overview.photo.visualEstimate', { pct: analysis.progressPct, phase: analysis.phaseShown ?? '—', conf: Math.round((analysis.confidence ?? 0) * 100) })}</p>
           )}
         </div>
       )}
       {analysis.observations && analysis.observations.length > 0 && (
         <div>
-          <h4 className="font-semibold text-stone-800 mb-1.5">Observations</h4>
+          <h4 className="font-semibold text-stone-800 mb-1.5">{t('overview.photo.observations')}</h4>
           <ul className="list-disc pl-5 space-y-1 text-stone-600">
             {analysis.observations.map((o, i) => <li key={i}>{o}</li>)}
           </ul>
@@ -665,7 +669,7 @@ export function PhotoAnalysisBody({ analysis }: { analysis: PhotoAnalysis }) {
       )}
       {analysis.safety && analysis.safety.length > 0 && (
         <div>
-          <h4 className="font-semibold text-red-700 mb-1.5 flex items-center gap-1.5"><TriangleAlert className="w-4 h-4" aria-hidden /> Safety / PPE</h4>
+          <h4 className="font-semibold text-red-700 mb-1.5 flex items-center gap-1.5"><TriangleAlert className="w-4 h-4" aria-hidden /> {t('overview.photo.safety')}</h4>
           <ul className="space-y-1">
             {analysis.safety.map((sf, i) => (
               <li key={i} className="flex items-center gap-2 text-red-700 bg-red-50 border border-red-200 rounded-md px-2.5 py-1.5 text-xs">
@@ -677,7 +681,7 @@ export function PhotoAnalysisBody({ analysis }: { analysis: PhotoAnalysis }) {
       )}
       {analysis.materialsVisible && analysis.materialsVisible.length > 0 && (
         <div>
-          <h4 className="font-semibold text-stone-800 mb-1.5">Materials visible (AI count)</h4>
+          <h4 className="font-semibold text-stone-800 mb-1.5">{t('overview.photo.materials')}</h4>
           <div className="flex flex-wrap gap-1.5">
             {analysis.materialsVisible.map((m, i) => (
               <Badge key={i} variant="outline" className="text-xs bg-stone-50">{m.name}: {m.roughQty}</Badge>
@@ -687,7 +691,7 @@ export function PhotoAnalysisBody({ analysis }: { analysis: PhotoAnalysis }) {
       )}
       {analysis.qualityFlags && analysis.qualityFlags.length > 0 && (
         <div>
-          <h4 className="font-semibold text-stone-800 mb-1.5">Workmanship</h4>
+          <h4 className="font-semibold text-stone-800 mb-1.5">{t('overview.photo.workmanship')}</h4>
           <ul className="list-disc pl-5 space-y-1 text-stone-600 text-xs">
             {analysis.qualityFlags.map((q, i) => <li key={i}>{q}</li>)}
           </ul>
