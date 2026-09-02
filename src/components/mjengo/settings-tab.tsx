@@ -2,8 +2,6 @@
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useSession } from 'next-auth/react'
-import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import { toast } from 'sonner'
 import {
   Card,
@@ -32,39 +30,16 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Bell, BellOff, Globe, Loader2, RotateCcw, ShieldAlert, User } from 'lucide-react'
 import { useMjengo } from '@/hooks/use-mjengo'
-import { labelForRole } from '@/lib/permissions'
+import { ROLE_LABELS } from '@/lib/permissions'
+import { useT } from '@/lib/i18n/provider'
+import { useLocalePrefs } from '@/lib/i18n/store'
+import type { Locale } from '@/lib/i18n/types'
 
 // ---------------------------------------------------------------- local prefs
-// Mirrors the app's existing persisted-client-state pattern (zustand persist
-// → localStorage, cf. 'mjengo-os-store' in hooks/use-mjengo.ts): local-only
-// display preferences, never synced to the server.
-
-export type UiLanguage = 'en' | 'sw'
-
-interface SettingsPrefsState {
-  /** UI language preference — STORED ONLY (i18n is a future wave). */
-  language: UiLanguage
-  setLanguage: (l: UiLanguage) => void
-  /** Danger zone: restore defaults (caller also clears the storage key). */
-  resetPrefs: () => void
-}
-
-const DEFAULT_LANGUAGE: UiLanguage = 'en'
-
-export const useSettingsPrefs = create<SettingsPrefsState>()(
-  persist(
-    (set) => ({
-      language: DEFAULT_LANGUAGE,
-      setLanguage: (language) => set({ language }),
-      resetPrefs: () => set({ language: DEFAULT_LANGUAGE }),
-    }),
-    {
-      name: 'mjengo-os-settings',
-      version: 1,
-      partialize: (s) => ({ language: s.language }),
-    },
-  ),
-)
+// W4-I18N: the persisted language preference moved to src/lib/i18n/store.ts
+// (SAME localStorage key 'mjengo-os-settings' — no migration) so the
+// I18nProvider and this radio share ONE source of truth. Toggling here
+// re-renders every translated surface instantly.
 
 // ---------------------------------------------------------------- notification prefs
 // Server-backed (User.notificationPrefs) via the EXISTING notification-center
@@ -72,16 +47,16 @@ export const useSettingsPrefs = create<SettingsPrefsState>()(
 // writes { kind: { inApp: boolean } } for the session user. No new backend.
 
 /** Curated, honest subset of the route's allowed kinds (labels are ours). */
-const PREF_KIND_ROWS: Array<{ kind: string; label: string; hint: string }> = [
-  { kind: 'milestone', label: 'Milestones', hint: 'Phase & milestone completions' },
-  { kind: 'variation', label: 'Variations', hint: 'Scope or cost changes' },
-  { kind: 'anomaly', label: 'Anomaly alerts', hint: 'AI-detected site anomalies' },
-  { kind: 'comment', label: 'Photo comments', hint: 'Comments on evidence photos' },
-  { kind: 'attendance', label: 'Attendance', hint: 'Fundi check-in flags' },
-  { kind: 'recap', label: 'Daily recaps', hint: 'End-of-day AI site recaps' },
-  { kind: 'price.alert', label: 'Price alerts', hint: 'Material price movements (Finder)' },
-  { kind: 'digest.weekly', label: 'Weekly digest', hint: 'Weekly project summary' },
-  { kind: 'system', label: 'System notices', hint: 'Platform & account notices' },
+const PREF_KIND_ROWS: Array<{ kind: string; labelKey: string; hintKey: string }> = [
+  { kind: 'milestone', labelKey: 'settings.pref.milestone', hintKey: 'settings.pref.milestoneHint' },
+  { kind: 'variation', labelKey: 'settings.pref.variation', hintKey: 'settings.pref.variationHint' },
+  { kind: 'anomaly', labelKey: 'settings.pref.anomaly', hintKey: 'settings.pref.anomalyHint' },
+  { kind: 'comment', labelKey: 'settings.pref.comment', hintKey: 'settings.pref.commentHint' },
+  { kind: 'attendance', labelKey: 'settings.pref.attendance', hintKey: 'settings.pref.attendanceHint' },
+  { kind: 'recap', labelKey: 'settings.pref.recap', hintKey: 'settings.pref.recapHint' },
+  { kind: 'price.alert', labelKey: 'settings.pref.priceAlert', hintKey: 'settings.pref.priceAlertHint' },
+  { kind: 'digest.weekly', labelKey: 'settings.pref.digest', hintKey: 'settings.pref.digestHint' },
+  { kind: 'system', labelKey: 'settings.pref.system', hintKey: 'settings.pref.systemHint' },
 ]
 
 type ServerPrefs = Record<string, unknown>
@@ -111,6 +86,7 @@ function inAppOn(prefs: ServerPrefs, kind: string): boolean {
 }
 
 function NotificationPrefsCard() {
+  const t = useT()
   const { data, activeProjectId } = useMjengo()
   const projectId = activeProjectId ?? data?.project.id ?? null
   const [prefs, setPrefs] = useState<ServerPrefs | null>(null) // null = loading
@@ -143,11 +119,14 @@ function NotificationPrefsCard() {
         if (!cancelled) setPrefs(json.prefs ?? {})
       })
       .catch((e) => {
-        if (!cancelled) setError(`Could not load your saved preferences — ${e instanceof Error ? e.message : 'network error'}`)
+        if (!cancelled) setError(t('settings.error.load', { error: e instanceof Error ? e.message : 'network error' }))
       })
     return () => {
       cancelled = true
     }
+    // t is captured for the catch's error wording only — it is deliberately
+    // NOT a fetch trigger (the effect keys on projectId/reload; exhaustive-deps
+    // does not flag it, so no disable directive needed).
   }, [projectId, reload])
 
   /** Optimistic toggle → PUT the FULL prefs object (preserves other kinds). */
@@ -186,10 +165,10 @@ function NotificationPrefsCard() {
     <Card className="border-stone-200 shadow-sm">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-stone-900">
-          <Bell className="w-4 h-4 text-amber-600" aria-hidden /> Notifications
+          <Bell className="w-4 h-4 text-amber-600" aria-hidden /> {t('settings.notifications')}
         </CardTitle>
         <CardDescription>
-          In-app notification preferences, saved to your MjengoOS account.
+          {t('settings.notifications.desc')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -200,8 +179,7 @@ function NotificationPrefsCard() {
           >
             <BellOff className="w-4 h-4 shrink-0 mt-0.5 text-stone-400" aria-hidden />
             <span>
-              Notification preferences are saved per MjengoOS account. You're
-              viewing via a client share link — sign in to manage yours.
+              {t('settings.notifications.signedOut')}
             </span>
           </div>
         ) : error ? (
@@ -217,32 +195,33 @@ function NotificationPrefsCard() {
               className="min-h-9 shrink-0"
               onClick={() => setReload((n) => n + 1)}
             >
-              Retry
+              {t('settings.notifications.retry')}
             </Button>
           </div>
         ) : (
-          <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200" aria-label="Notification preferences">
-            {PREF_KIND_ROWS.map(({ kind, label, hint }) => {
+          <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200" aria-label={t('settings.notifications.aria')}>
+            {PREF_KIND_ROWS.map(({ kind, labelKey, hintKey }) => {
+              const label = t(labelKey)
               const checked = prefs ? inAppOn(prefs, kind) : true
               const saving = savingKind === kind
               return (
                 <li key={kind} className="flex items-center gap-3 px-3 sm:px-4 min-h-11 py-3">
                   {busy ? (
-                    <Skeleton className="h-5 w-40 sm:w-64" aria-label="Loading preference" />
+                    <Skeleton className="h-5 w-40 sm:w-64" aria-label={t('settings.notifications.loading')} />
                   ) : (
                     <>
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-stone-900">{label}</p>
-                        <p className="text-xs text-stone-500 truncate">{hint}</p>
+                        <p className="text-xs text-stone-500 truncate">{t(hintKey)}</p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        {saving && <Loader2 className="w-3.5 h-3.5 text-stone-400 animate-spin" aria-label="Saving" />}
+                        {saving && <Loader2 className="w-3.5 h-3.5 text-stone-400 animate-spin" aria-label={t('settings.notifications.saving')} />}
                         <Switch
                           id={`pref-${kind}`}
                           checked={checked}
                           disabled={busy || saving}
                           onCheckedChange={(v) => void toggle(kind, v)}
-                          aria-label={`${label} in-app notifications`}
+                          aria-label={t('settings.notifications.rowAria', { label })}
                           className="data-[state=checked]:bg-amber-600"
                         />
                       </div>
@@ -254,9 +233,7 @@ function NotificationPrefsCard() {
           </ul>
         )}
         <p className="text-xs text-stone-500 leading-relaxed">
-          Honest seam: only the in-app channel exists today — these preferences are
-          recorded on your account and will gate delivery when notification
-          channels land. Unset kinds stay on (default).
+          {t('settings.notifications.seam')}
         </p>
       </CardContent>
     </Card>
@@ -266,25 +243,28 @@ function NotificationPrefsCard() {
 // ---------------------------------------------------------------- tab
 
 /**
- * Settings tab (W3-F3) — visible to every role (owner + client).
+ * Settings tab (W3-F3 · i18n W4-I18N) — visible to every role (owner + client).
  * Data sources: session (next-auth) for the profile, localStorage for local
- * preferences, /api/notifications GET/PUT for notification prefs. Never
- * touches the DB directly.
+ * preferences (the SHARED locale store), /api/notifications GET/PUT for
+ * notification prefs. Never touches the DB directly.
  */
 export function SettingsTab() {
   const { data: session } = useSession()
-  const language = useSettingsPrefs((s) => s.language)
-  const setLanguage = useSettingsPrefs((s) => s.setLanguage)
+  const t = useT()
+  const language = useLocalePrefs((s) => s.language)
+  const setLanguage = useLocalePrefs((s) => s.setLanguage)
   // The persisted store rehydrates from localStorage after mount — gate the
   // persisted-dependent markup on hydration (useSyncExternalStore, no
   // setState-in-effect) to keep the server render stable.
   const hydrated = useHydrated()
 
   const user = session?.user
-  const name = user?.name || user?.email || 'Signed-in user'
+  const name = user?.name || user?.email || t('settings.profile.signedIn')
   const email = user?.email ?? '—'
   const role = user?.role ? String(user.role) : null
-  const roleLabel = labelForRole(role)
+  // Known roles have dict entries; anything else falls back to the honest
+  // "unknown" label (permissions.ts ROLE_LABELS stays the role registry).
+  const roleLabel = role && ROLE_LABELS[role] ? t(`role.${role}`) : t('role.unknown')
   const initials =
     name
       .split(/\s+/)
@@ -294,17 +274,17 @@ export function SettingsTab() {
       .join('') || 'U'
 
   function handleReset() {
-    void useSettingsPrefs.persist.clearStorage()
-    useSettingsPrefs.getState().resetPrefs()
-    toast.success('Local preferences reset on this device')
+    void useLocalePrefs.persist.clearStorage()
+    useLocalePrefs.getState().resetLocale()
+    toast.success(t('settings.resetToast'))
   }
 
   return (
     <div className="max-w-3xl mx-auto space-y-4 sm:space-y-6">
       <header className="space-y-1">
-        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-stone-900">Settings</h1>
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-stone-900">{t('settings.title')}</h1>
         <p className="text-sm text-stone-500">
-          Your profile, device preferences and notification choices.
+          {t('settings.subtitle')}
         </p>
       </header>
 
@@ -314,9 +294,9 @@ export function SettingsTab() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-stone-900">
-            <User className="w-4 h-4 text-amber-600" aria-hidden /> Profile
+            <User className="w-4 h-4 text-amber-600" aria-hidden /> {t('settings.profile')}
           </CardTitle>
-          <CardDescription>From your MjengoOS session — read-only.</CardDescription>
+          <CardDescription>{t('settings.profile.desc')}</CardDescription>
         </CardHeader>
         <CardContent className="flex items-center gap-4">
           {user ? (
@@ -339,7 +319,7 @@ export function SettingsTab() {
                   >
                     {roleLabel}
                   </Badge>
-                  <span className="text-xs text-stone-400">role: {role ?? 'unknown'}</span>
+                  <span className="text-xs text-stone-400">{t('settings.profile.roleLabel', { role: role ?? t('role.unknown') })}</span>
                 </div>
               </div>
             </>
@@ -352,10 +332,9 @@ export function SettingsTab() {
                 <User className="w-5 h-5 text-stone-500" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-bold text-stone-900">Client share-link view</p>
+                <p className="text-sm font-bold text-stone-900">{t('settings.profile.shareTitle')}</p>
                 <p className="text-xs text-stone-500 leading-relaxed">
-                  No MjengoOS account is signed in on this device. Profiles belong
-                  to signed-in accounts.
+                  {t('settings.profile.shareBody')}
                 </p>
               </div>
             </div>
@@ -363,21 +342,22 @@ export function SettingsTab() {
         </CardContent>
       </Card>
 
-      {/* Preferences — local only (localStorage), persisted via zustand persist */}
+      {/* Preferences — local only (localStorage), persisted via the SHARED
+          locale store ('mjengo-os-settings') that the I18nProvider consumes. */}
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-stone-900">
-            <Globe className="w-4 h-4 text-amber-600" aria-hidden /> Preferences
+            <Globe className="w-4 h-4 text-amber-600" aria-hidden /> {t('settings.prefs')}
           </CardTitle>
-          <CardDescription>Saved on this device only.</CardDescription>
+          <CardDescription>{t('settings.prefs.desc')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <fieldset className="space-y-3">
-            <legend className="text-sm font-semibold text-stone-900 mb-2">Language</legend>
+            <legend className="text-sm font-semibold text-stone-900 mb-2">{t('settings.language')}</legend>
             <RadioGroup
-              value={hydrated ? language : DEFAULT_LANGUAGE}
-              onValueChange={(v) => setLanguage(v as UiLanguage)}
-              aria-label="Interface language"
+              value={hydrated ? language : 'en'}
+              onValueChange={(v) => setLanguage(v as Locale)}
+              aria-label={t('settings.language.aria')}
               className="gap-0 rounded-lg border border-stone-200 divide-y divide-stone-100"
             >
               <Label
@@ -385,16 +365,16 @@ export function SettingsTab() {
                 className="flex items-center gap-3 min-h-11 px-3 sm:px-4 py-3 cursor-pointer font-normal hover:bg-stone-50 transition-colors"
               >
                 <RadioGroupItem value="en" id="lang-en" className="data-[state=checked]:border-amber-600 data-[state=checked]:text-amber-600" />
-                <span className="flex-1 text-sm font-medium text-stone-900">English</span>
-                <span className="text-xs text-stone-400">default</span>
+                <span className="flex-1 text-sm font-medium text-stone-900">{t('settings.language.en')}</span>
+                <span className="text-xs text-stone-400">{t('settings.language.enHint')}</span>
               </Label>
               <Label
                 htmlFor="lang-sw"
                 className="flex items-center gap-3 min-h-11 px-3 sm:px-4 py-3 cursor-pointer font-normal hover:bg-stone-50 transition-colors"
               >
                 <RadioGroupItem value="sw" id="lang-sw" className="data-[state=checked]:border-amber-600 data-[state=checked]:text-amber-600" />
-                <span className="flex-1 text-sm font-medium text-stone-900">Kiswahili</span>
-                <span className="text-xs text-stone-400">KES · Kenya</span>
+                <span className="flex-1 text-sm font-medium text-stone-900">{t('settings.language.sw')}</span>
+                <span className="text-xs text-stone-400">{t('settings.language.swHint')}</span>
               </Label>
             </RadioGroup>
           </fieldset>
@@ -405,15 +385,12 @@ export function SettingsTab() {
               className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 leading-relaxed"
             >
               <Globe className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden />
-              Kiswahili UI coming soon — your choice is saved and will apply when
-              the translated interface lands. The app stays in English for now (no
-              half-translations).
+              {t('settings.language.partialNote')}
             </p>
           )}
 
           <p className="text-xs text-stone-500 leading-relaxed">
-            Theme and compact-mode options are intentionally absent: the app has a
-            single fixed light theme today, so a toggle here would be a fake control.
+            {t('settings.prefs.themeNote')}
           </p>
         </CardContent>
       </Card>
@@ -425,16 +402,15 @@ export function SettingsTab() {
       <Card className="border-red-200 shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-red-800">
-            <ShieldAlert className="w-4 h-4" aria-hidden /> Danger zone
+            <ShieldAlert className="w-4 h-4" aria-hidden /> {t('settings.danger')}
           </CardTitle>
-          <CardDescription>Non-destructive — touches this device only.</CardDescription>
+          <CardDescription>{t('settings.danger.desc')}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-stone-900">Reset local preferences</p>
+            <p className="text-sm font-medium text-stone-900">{t('settings.danger.reset')}</p>
             <p className="text-xs text-stone-500 leading-relaxed">
-              Clears the language choice saved on this device. Notification
-              preferences live on your account and are not affected.
+              {t('settings.danger.resetDesc')}
             </p>
           </div>
           <AlertDialog>
@@ -442,27 +418,25 @@ export function SettingsTab() {
               <Button
                 variant="destructive"
                 className="gap-1.5 min-h-11 shrink-0"
-                aria-label="Reset local preferences (opens confirmation)"
+                aria-label={t('settings.danger.aria')}
               >
-                <RotateCcw className="w-4 h-4" aria-hidden /> Reset local preferences
+                <RotateCcw className="w-4 h-4" aria-hidden /> {t('settings.danger.reset')}
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Reset local preferences?</AlertDialogTitle>
+                <AlertDialogTitle>{t('settings.danger.confirmTitle')}</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This clears the locally saved display preferences (language) from
-                  this device and restores the defaults. Your notification
-                  preferences are saved on your MjengoOS account and stay unchanged.
+                  {t('settings.danger.confirmBody')}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel className="min-h-11">Cancel</AlertDialogCancel>
+                <AlertDialogCancel className="min-h-11">{t('settings.danger.cancel')}</AlertDialogCancel>
                 <AlertDialogAction
                   className="min-h-11 bg-red-700 hover:bg-red-800 text-white"
                   onClick={handleReset}
                 >
-                  Reset
+                  {t('settings.danger.confirm')}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

@@ -25,6 +25,7 @@ import { usePermissions, tabsForRole } from '@/lib/permissions'
 import { metaForAll } from '@/components/mjengo/nav/tab-meta'
 import { useTablistKeyboard } from '@/components/mjengo/nav/use-tablist'
 import { useCommandPalette } from '@/components/mjengo/cmdk/palette-store'
+import { useT } from '@/lib/i18n/provider'
 
 /** Noop external-store subscription — lets us read a client-only value via
  *  useSyncExternalStore without hydration mismatches or setState-in-effect. */
@@ -62,15 +63,15 @@ function kindMeta(kind: string) {
 }
 
 /** Filter groups for the notification center (unknown kinds fall into "Site"). */
-const KIND_GROUPS: Array<{ key: string; label: string; kinds: string[] }> = [
-  { key: 'all', label: 'All', kinds: [] },
-  { key: 'approvals', label: 'Approvals', kinds: ['approval.requested', 'approval.decided'] },
-  { key: 'orders', label: 'Orders', kinds: ['order.sent', 'order.confirmed', 'quote.received'] },
-  { key: 'deliveries', label: 'Deliveries', kinds: ['delivery.dispatched', 'delivery.discrepancy'] },
-  { key: 'invoices', label: 'Invoices', kinds: ['invoice.submitted', 'invoice.decided', 'invoice.disputed', 'invoice.paid'] },
-  { key: 'intel', label: 'Risk & prices', kinds: ['price.alert', 'digest.weekly', 'risk.flagged'] },
-  { key: 'money', label: 'Money', kinds: ['milestone', 'variation'] },
-  { key: 'site', label: 'Site', kinds: ['recap', 'comment', 'attendance', 'anomaly', 'share', 'system'] },
+const KIND_GROUPS: Array<{ key: string; labelKey: string; kinds: string[] }> = [
+  { key: 'all', labelKey: 'notif.group.all', kinds: [] },
+  { key: 'approvals', labelKey: 'notif.group.approvals', kinds: ['approval.requested', 'approval.decided'] },
+  { key: 'orders', labelKey: 'notif.group.orders', kinds: ['order.sent', 'order.confirmed', 'quote.received'] },
+  { key: 'deliveries', labelKey: 'notif.group.deliveries', kinds: ['delivery.dispatched', 'delivery.discrepancy'] },
+  { key: 'invoices', labelKey: 'notif.group.invoices', kinds: ['invoice.submitted', 'invoice.decided', 'invoice.disputed', 'invoice.paid'] },
+  { key: 'intel', labelKey: 'notif.group.intel', kinds: ['price.alert', 'digest.weekly', 'risk.flagged'] },
+  { key: 'money', labelKey: 'notif.group.money', kinds: ['milestone', 'variation'] },
+  { key: 'site', labelKey: 'notif.group.site', kinds: ['recap', 'comment', 'attendance', 'anomaly', 'share', 'system'] },
 ]
 
 function groupOf(kind: string): string {
@@ -81,6 +82,7 @@ function groupOf(kind: string): string {
 /** Signed-in identity chip + sign out (hidden for share-token clients — they never log in). */
 function UserChip() {
   const { data: session } = useSession()
+  const t = useT()
   const user = session?.user
   if (!user?.email) return null
 
@@ -105,7 +107,7 @@ function UserChip() {
   }
 
   return (
-    <div className="flex items-center gap-1.5 sm:gap-2" aria-label={`Signed in as ${user.name} (${role})`}>
+    <div className="flex items-center gap-1.5 sm:gap-2" aria-label={t('header.aria.signedInAs', { name: user.name ?? '', role })}>
       <div className="flex items-center gap-2 min-w-0">
         <Avatar className="w-8 h-8 border border-stone-700">
           <AvatarFallback className="bg-amber-500 text-stone-950 text-xs font-bold">
@@ -125,7 +127,7 @@ function UserChip() {
         size="sm"
         variant="outline"
         onClick={handleSignOut}
-        aria-label="Sign out"
+        aria-label={t('header.signOut')}
         className="h-11 w-11 p-0 border-stone-700 bg-stone-900 text-stone-200 hover:bg-red-900/60 hover:text-white"
       >
         <LogOut className="w-4 h-4" aria-hidden />
@@ -168,6 +170,7 @@ const TARGET_TABS: Partial<Record<SearchItem['target'], string>> = {
  */
 function GlobalSearch() {
   const { status } = useSession()
+  const t = useT()
   const switchProject = useMjengo((s) => s.switchProject)
   const inputRef = useRef<HTMLInputElement>(null)
   const mobileInputRef = useRef<HTMLInputElement>(null)
@@ -301,12 +304,12 @@ function GlobalSearch() {
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onInputKeyDown}
             onFocus={() => { if (q.trim().length >= 2 && flat.length) setOpen(true) }}
-            placeholder="Search projects, suppliers, MRs, POs…"
-            aria-label="Global search"
+            placeholder={t('header.search.placeholder')}
+            aria-label={t('header.aria.search')}
             className="bg-transparent text-sm text-stone-100 placeholder:text-stone-500 outline-none w-full min-w-0 [&::-webkit-search-cancel-button]:hidden"
           />
           {loading ? (
-            <Loader2 className="w-3.5 h-3.5 text-stone-500 animate-spin shrink-0" aria-label="Searching" />
+            <Loader2 className="w-3.5 h-3.5 text-stone-500 animate-spin shrink-0" aria-label={t('header.aria.searching')} />
           ) : (
             <kbd className="hidden lg:inline text-[10px] text-stone-500 border border-stone-700 rounded px-1 shrink-0" aria-hidden>/</kbd>
           )}
@@ -314,7 +317,7 @@ function GlobalSearch() {
             <button
               type="button"
               onClick={() => { setQ(''); setGroups([]); setOpen(false) }}
-              aria-label="Clear search"
+              aria-label={t('header.aria.clearSearch')}
               className="text-stone-500 hover:text-stone-200 shrink-0"
             >
               <X className="w-3.5 h-3.5" aria-hidden />
@@ -326,11 +329,11 @@ function GlobalSearch() {
           <div
             className={`absolute left-0 right-0 top-full mt-2 rounded-lg border border-stone-200 bg-white shadow-xl z-50 max-h-96 overflow-y-auto ${SCROLLBAR}`}
             role="listbox"
-            aria-label="Search results"
+            aria-label={t('header.aria.results')}
           >
             {flat.length === 0 ? (
               <p className="px-4 py-6 text-sm text-stone-500 text-center">
-                {q.trim().length < 2 ? 'Type at least 2 characters' : `No matches for “${q.trim()}”`}
+                {q.trim().length < 2 ? t('header.search.minChars') : t('header.search.noMatches', { q: q.trim() })}
               </p>
             ) : (
               groups.map((g) => (
@@ -383,7 +386,7 @@ function GlobalSearch() {
           setMobileOpen((v) => !v)
           setTimeout(() => mobileInputRef.current?.focus(), 30)
         }}
-        aria-label="Open search"
+        aria-label={t('header.aria.openSearch')}
         aria-expanded={mobileOpen}
         className="md:hidden flex items-center justify-center w-11 h-11 rounded-md border border-stone-700 bg-stone-900 text-stone-300 hover:text-white"
       >
@@ -415,6 +418,7 @@ function GlobalSearch() {
  */
 function CommandPaletteButton() {
   const setOpen = useCommandPalette((s) => s.setOpen)
+  const t = useT()
   // Platform hint: the hydration snapshot is false (Ctrl K) and the real
   // client value applies right after — the canonical useSyncExternalStore
   // pattern for read-once browser values.
@@ -429,8 +433,8 @@ function CommandPaletteButton() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Open command palette"
-        title={`Command palette (${isMac ? '⌘K' : 'Ctrl+K'}) — navigate tabs, switch projects, quick actions`}
+        aria-label={t('header.aria.palette')}
+        title={t('header.paletteTitle', { keys: isMac ? '⌘K' : 'Ctrl+K' })}
         className="flex items-center justify-center w-11 h-11 rounded-md border border-stone-700 bg-stone-900 text-stone-300 hover:text-white hover:bg-stone-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
       >
         <Command className="w-4 h-4" aria-hidden />
@@ -462,6 +466,7 @@ const FLAG_ROWS: Array<{ key: string; label: string }> = [
 function FlagsPopover() {
   const { data: session } = useSession()
   const { can } = usePermissions()
+  const t = useT()
   const data = useMjengo((s) => s.data)
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -497,15 +502,15 @@ function FlagsPopover() {
         <Button
           size="sm"
           variant="outline"
-          aria-label="Feature flags (admin)"
-          title="Feature flags — controlled rollout (admin)"
+          aria-label={t('header.aria.flags')}
+          title={t('header.flags.title')}
           className="h-11 w-11 p-0 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white"
         >
           <Settings className="w-4 h-4" aria-hidden />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80">
-        <p className="text-xs font-bold uppercase tracking-wide text-stone-400">Feature flags</p>
+        <p className="text-xs font-bold uppercase tracking-wide text-stone-400">{t('header.flags.title')}</p>
         <p className="mt-1 text-[11px] text-stone-500 leading-snug">
           Controlled rollout (spec §81). Only <strong>AI progress</strong> gates a live behavior today — the
           Copilot photo-analysis button. Others are recorded state for rollout planning.
@@ -542,11 +547,12 @@ function FlagsPopover() {
 function DataModeSelector() {
   const dataMode = useMjengo((s) => s.dataMode)
   const setDataMode = useMjengo((s) => s.setDataMode)
+  const t = useT()
   const saver = dataMode === 'data_saver'
 
   const options: Array<{ value: DataMode; label: string; hint: string }> = [
-    { value: 'normal', label: 'Normal', hint: 'Full-size photo uploads, all background calls' },
-    { value: 'data_saver', label: 'Data Saver', hint: 'Smaller uploads, fewer background calls' },
+    { value: 'normal', label: t('header.dataMode.normal'), hint: t('header.dataMode.normalHint') },
+    { value: 'data_saver', label: t('header.dataMode.saver'), hint: t('header.dataMode.saverHint') },
   ]
 
   return (
@@ -554,17 +560,17 @@ function DataModeSelector() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={`Data mode: ${saver ? 'Data Saver' : 'Normal'}`}
-          title={`Data mode: ${saver ? 'Data Saver' : 'Normal'} (spec §74)`}
+          aria-label={t('header.aria.dataMode', { mode: saver ? t('header.dataMode.saver') : t('header.dataMode.normal') })}
+          title={t('header.aria.dataMode', { mode: saver ? t('header.dataMode.saver') : t('header.dataMode.normal') })}
           className="flex items-center gap-1.5 h-11 px-2.5 rounded-full bg-stone-900 border border-stone-800 text-stone-200 hover:text-white"
         >
           <Wifi className={`w-4 h-4 ${saver ? 'text-emerald-400' : 'text-stone-400'}`} aria-hidden />
-          <span className="hidden sm:inline text-xs font-medium">{saver ? 'Data Saver' : 'Normal'}</span>
+          <span className="hidden sm:inline text-xs font-medium">{saver ? t('header.dataMode.saver') : t('header.dataMode.normal')}</span>
           <ChevronDown className="w-3 h-3 text-stone-400" aria-hidden />
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72">
-        <p className="text-xs font-bold uppercase tracking-wide text-stone-400">Data mode</p>
+        <p className="text-xs font-bold uppercase tracking-wide text-stone-400">{t('header.dataMode.title')}</p>
         <div className="mt-2 space-y-1.5">
           {options.map((o) => (
             <button
@@ -586,7 +592,7 @@ function DataModeSelector() {
           ))}
         </div>
         <p className="mt-2 text-[11px] text-stone-400 leading-snug">
-          Data Saver compresses Copilot photo uploads on-device before sending and skips image-heavy calls.
+          {t('header.dataMode.note')}
         </p>
       </PopoverContent>
     </Popover>
@@ -603,6 +609,7 @@ function DataModeSelector() {
 function NotificationBell() {
   const { data, dispatch, actionBusy, notificationsSeenAt, online } = useMjengo()
   const { data: session } = useSession()
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState('all')
   const [marking, setMarking] = useState(false)
@@ -679,15 +686,15 @@ function NotificationBell() {
         <Button
           size="sm"
           variant="outline"
-          aria-label={unread.length > 0 ? `Notifications, ${unread.length} unread` : 'Notifications'}
+          aria-label={unread.length > 0 ? t('header.aria.notifications', { count: unread.length }) : t('header.aria.notificationsPlain')}
           className="relative gap-1.5 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white"
         >
           <Bell className="w-4 h-4" aria-hidden />
-          <span className="hidden md:inline">Alerts</span>
+          <span className="hidden md:inline">{t('header.alerts')}</span>
           {unread.length > 0 && (
             <span
               className="absolute -top-1.5 -right-1.5 bg-amber-500 text-stone-950 text-[10px] font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center"
-              aria-label={`${unread.length} unread notifications`}
+              aria-label={t('header.aria.unreadCount', { count: unread.length })}
             >
               {unread.length > 9 ? '9+' : unread.length}
             </span>
@@ -696,16 +703,16 @@ function NotificationBell() {
       </SheetTrigger>
       <SheetContent side="right" className="sm:max-w-md w-full p-0 gap-0">
         <SheetHeader className="p-4 pb-3 border-b border-stone-100">
-          <SheetTitle className="text-base text-stone-900">Notifications</SheetTitle>
+          <SheetTitle className="text-base text-stone-900">{t('header.notifications.title')}</SheetTitle>
           <SheetDescription className="text-xs text-stone-400">
-            {unread.length > 0 ? `${unread.length} unread` : 'All caught up'} · {data?.project.name ?? 'project'}
+            {unread.length > 0 ? t('header.notifications.unread', { count: unread.length }) : t('header.notifications.caughtUp')} · {data?.project.name ?? 'project'}
           </SheetDescription>
         </SheetHeader>
 
         <div
           className="px-3 py-2.5 border-b border-stone-100 flex flex-wrap gap-1.5"
           role="group"
-          aria-label="Filter notifications by kind"
+          aria-label={t('header.aria.filterNotifications')}
         >
           {KIND_GROUPS.map((g) => {
             const count = g.key === 'all' ? notifications.length : notifications.filter((n) => groupOf(n.kind) === g.key).length
@@ -721,7 +728,7 @@ function NotificationBell() {
                     : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
                 }`}
               >
-                {g.label}
+                {t(g.labelKey)}
                 {count > 0 && <span className="ml-1 text-[10px] font-normal opacity-70">{count}</span>}
               </button>
             )
@@ -731,11 +738,11 @@ function NotificationBell() {
         {filtered.length === 0 ? (
           <div className="px-4 py-10 text-center flex-1" role="status">
             <Bell className="w-6 h-6 text-stone-300 mx-auto" aria-hidden />
-            <p className="mt-2 text-sm text-stone-500">Nothing needs you right now.</p>
-            <p className="mt-1 text-xs text-stone-400">Decisions, deliveries and price alerts land here.</p>
+            <p className="mt-2 text-sm text-stone-500">{t('header.notifications.emptyTitle')}</p>
+            <p className="mt-1 text-xs text-stone-400">{t('header.notifications.emptySub')}</p>
           </div>
         ) : (
-          <ul className={`flex-1 min-h-0 max-h-[64vh] overflow-y-auto ${SCROLLBAR}`} aria-label="Notifications">
+          <ul className={`flex-1 min-h-0 max-h-[64vh] overflow-y-auto ${SCROLLBAR}`} aria-label={t('header.aria.notificationsPlain')}>
             {filtered.map((n: Notification) => {
               const meta = kindMeta(n.kind)
               return (
@@ -781,7 +788,7 @@ function NotificationBell() {
               disabled={busy}
               onClick={() => void markRead('all')}
             >
-              <CheckCheck className="w-4 h-4" aria-hidden /> Mark all read
+              <CheckCheck className="w-4 h-4" aria-hidden /> {t('header.notifications.markAllRead')}
             </Button>
           </SheetFooter>
         )}
@@ -806,6 +813,7 @@ export function Header({
     online, setOnline, outbox, syncing, syncNow, lastSyncAt,
   } = useMjengo()
   const { tabs: roleTabs } = usePermissions()
+  const t = useT()
   const { listRef, onKeyDown } = useTablistKeyboard<HTMLElement>()
   const summary = data?.summary
   // Client surface: a real client on a share link (no login) OR a logged-in
@@ -828,7 +836,7 @@ export function Header({
             <div className="min-w-0 hidden sm:block">
               <div className="font-bold tracking-tight leading-none">MjengoOS</div>
               <div className="text-[10px] text-stone-400 leading-tight">
-                {isShareClient ? 'Virtual Site Visit' : 'Construction Site OS · Kenya'}
+                {isShareClient ? t('app.shareTagline') : t('app.tagline')}
               </div>
             </div>
           </div>
@@ -836,7 +844,7 @@ export function Header({
           <div className="flex items-center gap-3 min-w-0 flex-1 justify-center">
             {isShareClient ? (
               <div className="min-w-0 text-center">
-                <p className="text-sm font-bold tracking-tight truncate" aria-label="Project name">{data?.project.name}</p>
+                <p className="text-sm font-bold tracking-tight truncate" aria-label={t('header.aria.projectName')}>{data?.project.name}</p>
                 <p className="text-[10px] text-stone-400 leading-tight truncate">
                   {data?.project.client} · {data?.project.location}
                 </p>
@@ -849,9 +857,14 @@ export function Header({
                   onSelect={(id) => void switchProject(id)}
                   onCreate={onCreateProject}
                 />
-                <span className="hidden lg:flex items-center gap-2 text-sm text-stone-400 whitespace-nowrap min-w-0" aria-label="Active project summary">
+                <span className="hidden lg:flex items-center gap-2 text-sm text-stone-400 whitespace-nowrap min-w-0" aria-label={t('header.aria.summary')}>
                   <span className="text-stone-600" aria-hidden>|</span>
-                  Day {summary?.dayCount} · {summary?.progressPct}% complete · {formatKES(summary?.budgetSpent ?? 0, true)} / {formatKES(summary?.budgetTotal ?? 0, true)}
+                  {summary && t('header.summary', {
+                    day: summary.dayCount,
+                    pct: summary.progressPct,
+                    spent: formatKES(summary.budgetSpent, true),
+                    total: formatKES(summary.budgetTotal, true),
+                  })}
                 </span>
               </>
             )}
@@ -879,11 +892,11 @@ export function Header({
                 size="sm"
                 variant="outline"
                 onClick={onShare}
-                aria-label="Share with client"
+                aria-label={t('header.aria.share')}
                 className="gap-1.5 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white"
               >
                 <Share2 className="w-4 h-4" aria-hidden />
-                <span className="hidden md:inline">Share</span>
+                <span className="hidden md:inline">{t('header.share')}</span>
               </Button>
             )}
 
@@ -896,20 +909,20 @@ export function Header({
                     browser online/offline events are followed separately */}
                 <div
                   className="flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-stone-900 border border-stone-800"
-                  title="Simulation toggle — the app also follows the browser's real connectivity"
+                  title={t('header.simNote')}
                 >
                   {online ? (
-                    <Wifi className="w-4 h-4 text-emerald-400" aria-label="Online" />
+                    <Wifi className="w-4 h-4 text-emerald-400" aria-label={t('header.aria.online')} />
                   ) : (
-                    <CloudOff className="w-4 h-4 text-amber-500" aria-label="Offline" />
+                    <CloudOff className="w-4 h-4 text-amber-500" aria-label={t('header.aria.offline')} />
                   )}
                   <Switch
                     checked={online}
                     onCheckedChange={setOnline}
-                    aria-label="Toggle simulated connectivity"
+                    aria-label={t('header.aria.toggleConnectivity')}
                     className="scale-90 data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-amber-600"
                   />
-                  <span className="text-xs font-medium w-12 hidden sm:inline">{online ? 'Online' : 'Offline·sim'}</span>
+                  <span className="text-xs font-medium w-12 hidden sm:inline">{online ? t('header.online') : t('header.offlineSim')}</span>
                 </div>
 
                 <Button
@@ -917,20 +930,20 @@ export function Header({
                   variant="outline"
                   disabled={online || outbox.length === 0 || syncing}
                   onClick={() => void syncNow()}
-                  aria-label="Sync queued actions"
+                  aria-label={t('header.aria.sync')}
                   className="gap-1.5 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white relative"
                 >
                   <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden />
-                  <span className="hidden sm:inline">{syncing ? 'Syncing…' : 'Sync'}</span>
+                  <span className="hidden sm:inline">{syncing ? t('header.syncing') : t('header.sync')}</span>
                   {outbox.length > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-stone-950 text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center" aria-label={`${outbox.length} queued actions`}>
+                    <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-stone-950 text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center" aria-label={t('header.aria.queuedActions', { count: outbox.length })}>
                       {outbox.length}
                     </span>
                   )}
                 </Button>
                 {lastSyncAt && online && outbox.length === 0 && (
                   <span className="hidden md:flex items-center gap-1 text-[11px] text-stone-500">
-                    <CheckCheck className="w-3.5 h-3.5 text-emerald-500" aria-hidden /> synced
+                    <CheckCheck className="w-3.5 h-3.5 text-emerald-500" aria-hidden /> {t('header.synced')}
                   </span>
                 )}
               </>
@@ -946,7 +959,7 @@ export function Header({
         <nav
           ref={listRef}
           onKeyDown={onKeyDown}
-          aria-label="Main navigation"
+          aria-label={t('nav.aria.main')}
           role="tablist"
           className={`${isShareClient ? 'flex' : 'hidden md:flex'} items-center gap-1 overflow-x-auto -mx-1 px-1 pb-2`}
         >
@@ -966,7 +979,7 @@ export function Header({
                 }`}
               >
                 <Icon className="w-4 h-4" aria-hidden />
-                {label}
+                {t(label)}
               </button>
             )
           })}

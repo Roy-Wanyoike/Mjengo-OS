@@ -16,6 +16,7 @@ import { useMjengo } from '@/hooks/use-mjengo'
 import { usePermissions, tabsForRole } from '@/lib/permissions'
 import { metaForAll } from '@/components/mjengo/nav/tab-meta'
 import type { TabKey } from '@/components/mjengo/app'
+import { useT } from '@/lib/i18n/provider'
 import { useCommandPalette } from './palette-store'
 
 /**
@@ -57,6 +58,7 @@ function anyDialogOpen(): boolean {
 export function CommandPalette() {
   const open = useCommandPalette((s) => s.open)
   const setOpen = useCommandPalette((s) => s.setOpen)
+  const t = useT()
   const { data, projects, activeProjectId, viewMode, shareToken, clientRole, switchProject } = useMjengo()
   const { tabs: roleTabs } = usePermissions()
 
@@ -98,14 +100,14 @@ export function CommandPalette() {
     <CommandDialog
       open={open}
       onOpenChange={setOpen}
-      title="Command palette"
-      description="Navigate tabs, switch projects and run quick actions"
+      title={t('palette.title')}
+      description={t('palette.desc')}
     >
-      <CommandInput placeholder="Type a command or search…" aria-label="Command palette search" />
+      <CommandInput placeholder={t('palette.placeholder')} aria-label={t('palette.aria')} />
       <CommandList className="max-h-96">
-        <CommandEmpty>No matches.</CommandEmpty>
+        <CommandEmpty>{t('palette.empty')}</CommandEmpty>
 
-        <CommandGroup heading="Navigate">
+        <CommandGroup heading={t('palette.group.navigate')}>
           {metaForAll(surfaceTabs).map(({ key, label, icon: Icon }) => (
             <CommandItem
               key={key}
@@ -114,13 +116,13 @@ export function CommandPalette() {
               onSelect={() => go(key)}
             >
               <Icon aria-hidden />
-              <span>{label}</span>
+              <span>{t(label)}</span>
             </CommandItem>
           ))}
         </CommandGroup>
 
         {switchable.length > 0 && (
-          <CommandGroup heading="Project">
+          <CommandGroup heading={t('palette.group.project')}>
             {switchable.map((p) => (
               <CommandItem
                 key={p.id}
@@ -132,7 +134,7 @@ export function CommandPalette() {
                 }}
               >
                 <Building2 aria-hidden />
-                <span className="truncate">Switch to {p.name}</span>
+                <span className="truncate">{t('palette.switchTo', { name: p.name })}</span>
                 <CommandShortcut>{p.progressPct}%</CommandShortcut>
               </CommandItem>
             ))}
@@ -140,19 +142,19 @@ export function CommandPalette() {
         )}
 
         {hasActions && (
-          <CommandGroup heading="Actions">
+          <CommandGroup heading={t('palette.group.actions')}>
             {showLogExpense && (
               <CommandItem
                 value="log expense record receipt spend money"
                 className="min-h-11"
                 onSelect={() => {
                   go('overview')
-                  toast.info('Record expense lives on the Overview toolbar')
+                  toast.info(t('palette.toast.expense'))
                 }}
               >
                 <ReceiptText aria-hidden />
-                <span>Log expense</span>
-                <CommandShortcut>Overview</CommandShortcut>
+                <span>{t('palette.action.logExpense')}</span>
+                <CommandShortcut>{t('nav.overview')}</CommandShortcut>
               </CommandItem>
             )}
             {showAddTask && (
@@ -161,12 +163,12 @@ export function CommandPalette() {
                 className="min-h-11"
                 onSelect={() => {
                   go('site')
-                  toast.info('Add task lives on the Site Plan toolbar')
+                  toast.info(t('palette.toast.task'))
                 }}
               >
                 <ListPlus aria-hidden />
-                <span>Add task</span>
-                <CommandShortcut>Site Plan</CommandShortcut>
+                <span>{t('palette.action.addTask')}</span>
+                <CommandShortcut>{t('nav.site')}</CommandShortcut>
               </CommandItem>
             )}
             {showTakePhoto && (
@@ -176,8 +178,8 @@ export function CommandPalette() {
                 onSelect={() => go('copilot')}
               >
                 <Camera aria-hidden />
-                <span>Take photo</span>
-                <CommandShortcut>AI Copilot</CommandShortcut>
+                <span>{t('palette.action.takePhoto')}</span>
+                <CommandShortcut>{t('nav.copilot')}</CommandShortcut>
               </CommandItem>
             )}
           </CommandGroup>
