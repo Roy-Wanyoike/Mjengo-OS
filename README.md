@@ -29,6 +29,25 @@ share tokens can only run an explicit allowlist of actions (approve milestones/
 variations/payment requests, decide client-band material requests, pay invoices,
 comment on photos, read notifications).
 
+## Authentication & reverse proxy
+
+Sign-in must work from **both** access paths: direct `http://localhost:3000`
+and the sandbox preview gateway (an https reverse proxy that preserves the
+original `Host` and sets `X-Forwarded-Proto`). The `.env.example` template
+documents the three settings that make this work:
+
+| Variable | Value | Why |
+|---|---|---|
+| `NEXTAUTH_SECRET` | required, stable | Signs/encrypts JWT session cookies. Rotating it signs everyone out. |
+| `AUTH_TRUST_HOST` | `1` | next-auth v4's `detectOrigin` otherwise ignores proxy headers and pins every origin to `NEXTAUTH_URL` (or silently to `http://localhost:3000`), which breaks sign-in through any proxy. |
+| `NEXTAUTH_URL` | **unset** | The origin is derived per-request from `x-forwarded-host`/`-proto`, so redirects, callback URLs and cookie origins always target the host the user actually browses. Only set it when self-hosting on a fixed public domain. |
+
+Cookies are policy-switched per request in `src/lib/auth.ts` (`buildAuthOptions`):
+`https` (proxied) traffic gets `SameSite=None; Secure` — the only combination
+browsers send inside cross-site iframes, which is how the preview panel embeds
+the app — while direct localhost dev keeps next-auth's `lax` defaults. A
+runtime warning fires if `NEXTAUTH_URL` ever fights the real request host.
+
 ## Features
 
 **Multi-project workspace** — switch projects from the header, create via wizard

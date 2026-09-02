@@ -61,10 +61,71 @@ export function verifyPassword(password: string, stored: string): boolean {
 
 // ---------------------------------------------------------------- next-auth options
 
-export const authOptions: NextAuthOptions = {
-  secret: process.env.NEXTAUTH_SECRET,
-  session: { strategy: 'jwt', maxAge: 30 * 24 * 60 * 60 }, // 30 days
-  providers: [
+/**
+ * Cookie policy for the credentials flow (auth hardening, preview-panel fix).
+ *
+ * next-auth v4 defaults are `sameSite: "lax"` — correct for top-level
+ * browsing, but the sandbox preview renders the app inside an iframe: lax
+ * cookies are NOT sent in cross-site iframe contexts, so sign-in silently
+ * failed for preview users. Behind an https reverse proxy we therefore
+ * switch to `SameSite=None; Secure` (the iframe-safe combination), keeping
+ * plain `lax` for direct http://localhost dev.
+ *
+ * Names deliberately stay unprefixed (no __Secure-/__Host-): v4's prefixes
+ * require every receiving context to be https, and the app is legitimately
+ * reachable both via the https preview gateway and plain http locally —
+ * unprefixed Secure cookies degrade gracefully across both.
+ */
+function cookieOverrides(secure: boolean): NonNullable<NextAuthOptions['cookies']> {
+  const names = {
+    sessionToken: 'next-auth.session-token',
+    csrfToken: 'next-auth.csrf-token',
+    callbackUrl: 'next-auth.callback-url',
+  }
+  const policy = secure
+    ? { httpOnly: true, sameSite: 'none' as const, secure: true, path: '/' }
+    : { httpOnly: true, sameSite: 'lax' as const, path: '/' }
+  return {
+    sessionToken: { name: names.sessionToken, options: policy },
+    csrfToken: { name: names.csrfToken, options: policy },
+    callbackUrl: { name: names.callbackUrl, options: policy },
+  }
+}
+
+/** One-shot console warning when NEXTAUTH_URL fights the real request host. */
+let warnedUrlMismatch = false
+export function warnNextAuthUrlMismatch(headers: Headers): void {
+  if (warnedUrlMismatch || !process.env.NEXTAUTH_URL) return
+  let envHost: string | null = null
+  try {
+    envHost = new URL(process.env.NEXTAUTH_URL).host
+  } catch {
+    return // malformed env value — nothing useful to compare
+  }
+  const reqHost = headers.get('x-forwarded-host') ?? headers.get('host')
+  if (envHost && reqHost && envHost !== reqHost) {
+    warnedUrlMismatch = true
+    console.warn(
+      `[auth] NEXTAUTH_URL (${envHost}) does not match the request host (${reqHost}). ` +
+        'Sign-in redirects and cookie origins will target the wrong host. ' +
+        'Behind a reverse proxy leave NEXTAUTH_URL unset (next-auth derives the origin ' +
+        'from x-forwarded-host/-proto), or set it to the public origin.',
+    )
+  }
+}
+
+/**
+ * Build NextAuthOptions for the CURRENT request. `secureCookies` must reflect
+ * the request's real protocol (x-forwarded-proto behind a proxy): it drives
+ * both the cookie names/prefixes and the SameSite policy (see cookieOverrides).
+ */
+export function buildAuthOptions(secureCookies: boolean): NextAuthOptions {
+  return {
+    secret: process.env.NEXTAUTH_SECRET,
+    useSecureCookies: secureCookies,
+    cookies: cookieOverrides(secureCookies),
+    session: { strategy: 'jwt', maxAge: 30 * 24 * 60 * 60 }, // 30 days
+    providers: [
     CredentialsProvider({
       name: 'MjengoOS account',
       credentials: {
@@ -148,6 +209,7 @@ export const authOptions: NextAuthOptions = {
       return session
     },
   },
+  }
 }
 
 // ---------------------------------------------------------------- helper
