@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  AlertTriangle, ClipboardList, Hourglass, Landmark, LayoutDashboard, Lock, PackageSearch, ShoppingCart, Truck, Warehouse,
+  AlertTriangle, Boxes, ClipboardList, Hourglass, Landmark, LayoutDashboard, Lock, PackageSearch, ShoppingCart, Truck, Warehouse,
 } from 'lucide-react'
 import { boqRows, procurementTotals } from '@/modules/supply/insights'
 import { useFinderLink } from './requests/finder-link'
@@ -22,6 +22,8 @@ import { fmtQty, formatKes } from './requests/bits'
 import { PriceAlertChip } from './dashboard/price-alert-chip'
 import { RulesCard } from './dashboard/rules-card'
 import { BoqCard } from './dashboard/boq-card'
+import { DataTable } from '@/components/mjengo/uikit/data-table'
+import { EmptyState } from '@/components/mjengo/uikit/empty-state'
 
 export function DashboardSection() {
   const { data, viewMode } = useMjengo()
@@ -173,59 +175,59 @@ export function DashboardSection() {
               </h3>
               <p className="text-[11px] text-stone-500">Required counts requests in submitted/approved/converted; purchased counts verified delivery lines.</p>
             </div>
-            {boq.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-stone-300 p-6 text-center text-xs text-stone-500">
-                No material requirements yet — submit a purchase request and the plan-vs-purchase table builds here.
-              </p>
-            ) : (
-              <div className="overflow-x-auto rounded-md border border-stone-200">
-                <table className="w-full min-w-[640px] text-sm">
-                  <caption className="sr-only">Per-material required versus purchased quantities</caption>
-                  <thead>
-                    <tr className="border-b border-stone-200 bg-stone-50 text-left text-[11px] uppercase tracking-wide text-stone-400">
-                      <th scope="col" className="px-3 py-2 font-medium">Material</th>
-                      <th scope="col" className="px-2 py-2 text-right font-medium">Required</th>
-                      <th scope="col" className="px-2 py-2 text-right font-medium">Purchased</th>
-                      <th scope="col" className="px-2 py-2 text-right font-medium">Remaining</th>
-                      <th scope="col" className="px-3 py-2 text-right font-medium">Sourcing</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {boq.map((row) => (
-                      <tr key={row.materialKey} className="border-b border-stone-100 last:border-0 hover:bg-stone-50">
-                        <td className="px-3 py-2.5">
-                          <span className="font-medium text-stone-800">{row.displayNames[0]}</span>
-                          {row.displayNames.length > 1 && (
-                            <Badge variant="outline" className="ml-1.5 text-[10px] font-normal text-stone-400" title={`Grouped variants: ${row.displayNames.join(' · ')}`}>
-                              +{row.displayNames.length - 1} variant{row.displayNames.length > 2 ? 's' : ''}
-                            </Badge>
-                          )}
-                          <span className="block text-[10px] text-stone-400">per {row.unit}</span>
-                        </td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-stone-700">{fmtQty(row.required)}</td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-stone-700">{fmtQty(row.purchased)}</td>
-                        <td className="px-2 py-2.5 text-right font-semibold tabular-nums text-stone-900">{fmtQty(row.remaining)}</td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-right">
-                          {row.remaining > 0 ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 min-h-8 gap-1 px-2 text-xs"
-                              onClick={() => setSearchPrefill({ materialName: row.displayNames[0], qty: row.remaining })}
-                              aria-label={`Find suppliers for the remaining ${fmtQty(row.remaining)} ${row.unit} of ${row.displayNames[0]}`}
-                            >
-                              <PackageSearch className="h-3.5 w-3.5" aria-hidden /> Find remaining
-                            </Button>
-                          ) : (
-                            <span className="text-[11px] text-emerald-700">fully sourced</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            {/* BOQ-lite table (W3-F2: migrated to the shared DataTable —
+                desktop table + mobile stacked cards, empty state via uikit) */}
+            <DataTable
+              columns={[
+                {
+                  key: 'materialKey',
+                  header: 'Material',
+                  className: 'whitespace-normal',
+                  render: (row) => (
+                    <>
+                      <span className="font-medium text-stone-800">{row.displayNames[0]}</span>
+                      {row.displayNames.length > 1 && (
+                        <Badge variant="outline" className="ml-1.5 text-[10px] font-normal text-stone-400" title={`Grouped variants: ${row.displayNames.join(' · ')}`}>
+                          +{row.displayNames.length - 1} variant{row.displayNames.length > 2 ? 's' : ''}
+                        </Badge>
+                      )}
+                      <span className="block text-[10px] text-stone-400">per {row.unit}</span>
+                    </>
+                  ),
+                },
+                { key: 'required', header: 'Required', align: 'right', render: (row) => <span className="tabular-nums text-stone-700">{fmtQty(row.required)}</span> },
+                { key: 'purchased', header: 'Purchased', align: 'right', render: (row) => <span className="tabular-nums text-stone-700">{fmtQty(row.purchased)}</span> },
+                { key: 'remaining', header: 'Remaining', align: 'right', render: (row) => <span className="font-semibold tabular-nums text-stone-900">{fmtQty(row.remaining)}</span> },
+                {
+                  key: 'displayNames',
+                  header: 'Sourcing',
+                  align: 'right',
+                  render: (row) =>
+                    row.remaining > 0 ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 min-h-8 gap-1 px-2 text-xs"
+                        onClick={() => setSearchPrefill({ materialName: row.displayNames[0], qty: row.remaining })}
+                        aria-label={`Find suppliers for the remaining ${fmtQty(row.remaining)} ${row.unit} of ${row.displayNames[0]}`}
+                      >
+                        <PackageSearch className="h-3.5 w-3.5" aria-hidden /> Find remaining
+                      </Button>
+                    ) : (
+                      <span className="text-[11px] text-emerald-700">fully sourced</span>
+                    ),
+                },
+              ]}
+              rows={boq}
+              rowKey={(row) => row.materialKey}
+              emptyState={
+                <EmptyState
+                  icon={Boxes}
+                  title="No material requirements yet"
+                  description="Submit a purchase request and the plan-vs-purchase table builds here."
+                />
+              }
+            />
           </div>
         </CardContent>
       </Card>

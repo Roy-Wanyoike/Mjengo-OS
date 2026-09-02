@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, ListChecks, Boxes, PackageSearch, Users, Wallet, Landmark,
-  Camera, ScrollText, Radar, Sparkles, Phone,
+  Camera, ScrollText, Radar, Sparkles, Phone, Settings,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { TabKey } from '@/components/mjengo/app'
@@ -31,6 +31,7 @@ export const TAB_META: readonly TabMeta[] = [
   { key: 'copilot', label: 'AI Copilot', shortLabel: 'Copilot', icon: Sparkles },
   { key: 'ussd', label: 'USSD', shortLabel: 'USSD', icon: Phone },
   { key: 'audit', label: 'Audit', shortLabel: 'Audit', icon: ScrollText },
+  { key: 'settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
 ]
 
 /** Metadata for one tab id (always found — every TabKey is in TAB_META). */

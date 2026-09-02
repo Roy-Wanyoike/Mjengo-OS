@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { useSession, signOut } from 'next-auth/react'
 import { toast } from 'sonner'
@@ -15,7 +15,7 @@ import {
   Wifi, CloudOff, HardHat, RefreshCw, CheckCheck, Share2, Bell, LogOut,
   Landmark, FileDiff, MessageSquare, TriangleAlert, BellRing,
   Flag, Truck, Package, UserCheck, ClipboardCheck, FileText, ReceiptText, TrendingUp, Newspaper, ShieldAlert,
-  Search, ChevronDown, Settings, Check, Loader2, X,
+  Search, ChevronDown, Settings, Check, Loader2, X, Command,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { Notification } from '@prisma/client'
@@ -24,6 +24,11 @@ import { formatKES } from '@/lib/format'
 import { usePermissions, tabsForRole } from '@/lib/permissions'
 import { metaForAll } from '@/components/mjengo/nav/tab-meta'
 import { useTablistKeyboard } from '@/components/mjengo/nav/use-tablist'
+import { useCommandPalette } from '@/components/mjengo/cmdk/palette-store'
+
+/** Noop external-store subscription — lets us read a client-only value via
+ *  useSyncExternalStore without hydration mismatches or setState-in-effect. */
+const subscribeNoop = () => () => {}
 
 /** Icon + label per notification kind (falls back to a bell). */
 const NOTIFICATION_KINDS: Record<string, { label: string; Icon: LucideIcon; tint: string }> = {
@@ -397,6 +402,43 @@ function GlobalSearch() {
         </div>
       )}
     </>
+  )
+}
+
+// ---------------- ⌘K command palette trigger (W3-F3) ----------------
+
+/**
+ * Header button that opens the ⌘K command palette (cmdk/command-palette.tsx
+ * owns the shortcut itself). Uses the Command glyph rather than a Search
+ * glyph to stay distinct from the GlobalSearch trigger next to it; the
+ * platform-aware kbd hint mirrors GlobalSearch's `/` hint styling.
+ */
+function CommandPaletteButton() {
+  const setOpen = useCommandPalette((s) => s.setOpen)
+  // Platform hint: the hydration snapshot is false (Ctrl K) and the real
+  // client value applies right after — the canonical useSyncExternalStore
+  // pattern for read-once browser values.
+  const isMac = useSyncExternalStore(
+    subscribeNoop,
+    () => /Mac|iPhone|iPad|iPod/.test(navigator.userAgent),
+    () => false,
+  )
+  const hint = isMac ? '⌘K' : 'Ctrl K'
+  return (
+    <div className="flex items-center gap-1.5 shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="Open command palette"
+        title={`Command palette (${isMac ? '⌘K' : 'Ctrl+K'}) — navigate tabs, switch projects, quick actions`}
+        className="flex items-center justify-center w-11 h-11 rounded-md border border-stone-700 bg-stone-900 text-stone-300 hover:text-white hover:bg-stone-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+      >
+        <Command className="w-4 h-4" aria-hidden />
+      </button>
+      <kbd className="hidden lg:inline text-[10px] text-stone-500 border border-stone-700 rounded px-1 shrink-0" aria-hidden>
+        {hint}
+      </kbd>
+    </div>
   )
 }
 
@@ -816,6 +858,9 @@ export function Header({
 
             {/* Global search — desktop inline here, mobile icon in this row too */}
             <GlobalSearch />
+
+            {/* ⌘K command palette (W3-F3) — works on every surface */}
+            <CommandPaletteButton />
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
@@ -895,11 +940,14 @@ export function Header({
 
         {/* Tab navigation — desktop top strip (W1-PERM: role-filtered via
             permissions.ts; on mobile the bottom bar in nav/mobile-bottom-nav.tsx
-            takes over for the owner app — the client surface keeps this strip). */}
+            takes over for the owner app — the client surface keeps this strip).
+            role="tablist" pairs with the role="tab" buttons below (W3-F2 a11y —
+            the mobile strip already had it on its <ul>). */}
         <nav
           ref={listRef}
           onKeyDown={onKeyDown}
           aria-label="Main navigation"
+          role="tablist"
           className={`${isShareClient ? 'flex' : 'hidden md:flex'} items-center gap-1 overflow-x-auto -mx-1 px-1 pb-2`}
         >
           {tabs.map(({ key, label, icon: Icon }) => {

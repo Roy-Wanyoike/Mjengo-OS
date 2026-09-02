@@ -35,6 +35,7 @@ import {
   Fingerprint, Globe, MonitorSmartphone, Server, Activity,
 } from 'lucide-react'
 import { dateShort, timeEAT } from '@/lib/format'
+import { EmptyState } from '@/components/mjengo/uikit/empty-state'
 
 // ---------------- API contract types (mirror of W3-B route) ----------------
 
@@ -444,14 +445,17 @@ export function AuditTab() {
                 <TableBody>
                   {rows.length === 0 && !denied && !error && (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-10 text-center">
-                        <ScrollText className="w-8 h-8 text-stone-300 mx-auto mb-2" aria-hidden />
-                        <p className="text-sm text-stone-500">No audit events match these filters.</p>
-                        <p className="text-xs text-stone-400 mt-0.5">
-                          {activeFilterCount > 0
-                            ? 'Try widening the date range or clearing filters.'
-                            : 'Nothing has been logged for this project yet.'}
-                        </p>
+                      <TableCell colSpan={6} className="p-0">
+                        <EmptyState
+                          compact
+                          icon={ScrollText}
+                          title="No audit events match these filters."
+                          description={
+                            activeFilterCount > 0
+                              ? 'Try widening the date range or clearing filters.'
+                              : 'Nothing has been logged for this project yet.'
+                          }
+                        />
                       </TableCell>
                     </TableRow>
                   )}

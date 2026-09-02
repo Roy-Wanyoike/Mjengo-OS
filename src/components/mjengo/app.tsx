@@ -16,6 +16,9 @@ import { FinderTab } from '@/components/mjengo/finder-tab'
 import { IntelTab } from '@/components/mjengo/intel-tab'
 import { UssdTab } from '@/components/mjengo/ussd-tab'
 import { AuditTab } from '@/components/mjengo/audit-tab'
+import { ErrorBoundary } from '@/components/mjengo/uikit/error-boundary'
+import { SettingsTab } from '@/components/mjengo/settings-tab'
+import { CommandPalette } from '@/components/mjengo/cmdk/command-palette'
 import { WelcomeScreen } from '@/components/mjengo/welcome-screen'
 import { CreateProjectDialog, type CreateProjectPayload } from '@/components/mjengo/create-project-dialog'
 import { ShareDialog } from '@/components/mjengo/share-dialog'
@@ -31,7 +34,7 @@ import { usePermissions, tabsForRole, landingForRole } from '@/lib/permissions'
 
 export type TabKey =
   | 'overview' | 'site' | 'materials' | 'finder' | 'fundis' | 'money'
-  | 'land' | 'evidence' | 'intel' | 'copilot' | 'ussd' | 'audit'
+  | 'land' | 'evidence' | 'intel' | 'copilot' | 'ussd' | 'audit' | 'settings'
 
 function BootSkeleton() {
   return (
@@ -304,6 +307,10 @@ export function MjengoApp() {
         onShare={() => setShareOpen(true)}
       />
 
+      {/* ⌘K command palette (W3-F3) — mounted at the app root so the shortcut
+          works on every surface below the auth/boot gates. */}
+      <CommandPalette />
+
       {showUnknownRoleNotice && (
         <div
           className="bg-amber-100 text-amber-950 px-4 py-2.5 flex items-center justify-center gap-2 text-sm font-medium border-b border-amber-200"
@@ -336,20 +343,28 @@ export function MjengoApp() {
       )}
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 py-6" data-active-project={activeProjectId ?? data.project.id}>
-        {activeTab === 'overview' && <OverviewTab onOpenCopilot={() => setTab('copilot')} />}
-        {activeTab === 'site' && <SitePlanTab />}
-        {activeTab === 'materials' && <MaterialsTab />}
-        {activeTab === 'finder' && <FinderTab />}
-        {activeTab === 'fundis' && <FundisTab />}
-        {activeTab === 'money' && <MoneyTab />}
-        {activeTab === 'land' && <LandTab />}
-        {activeTab === 'evidence' && <EvidenceTab />}
-        {activeTab === 'intel' && <IntelTab />}
-        {activeTab === 'copilot' && <CopilotTab />}
-        {activeTab === 'ussd' && <UssdTab />}
-        {/* Audit log — admin only (W3-F1 · spec §44); the tab itself renders
-            an access-denied panel if a non-admin somehow reaches it. */}
-        {activeTab === 'audit' && <AuditTab />}
+        {/* One error boundary around the ACTIVE tab panel (W3-F2): a render
+            crash in any tab swaps in the friendly boundary card instead of
+            blanking the whole app. key={activeTab} remounts the boundary on
+            tab switch so a crashed tab never shadows a healthy one. */}
+        <ErrorBoundary context={`tab:${activeTab}`} key={activeTab}>
+          {activeTab === 'overview' && <OverviewTab onOpenCopilot={() => setTab('copilot')} />}
+          {activeTab === 'site' && <SitePlanTab />}
+          {activeTab === 'materials' && <MaterialsTab />}
+          {activeTab === 'finder' && <FinderTab />}
+          {activeTab === 'fundis' && <FundisTab />}
+          {activeTab === 'money' && <MoneyTab />}
+          {activeTab === 'land' && <LandTab />}
+          {activeTab === 'evidence' && <EvidenceTab />}
+          {activeTab === 'intel' && <IntelTab />}
+          {activeTab === 'copilot' && <CopilotTab />}
+          {activeTab === 'ussd' && <UssdTab />}
+          {/* Audit log — admin only (W3-F1 · spec §44); the tab itself renders
+              an access-denied panel if a non-admin somehow reaches it. */}
+          {activeTab === 'audit' && <AuditTab />}
+          {/* Settings (W3-F3) — every role: profile, local prefs, notification prefs. */}
+          {activeTab === 'settings' && <SettingsTab />}
+        </ErrorBoundary>
       </main>
 
       {/* Mobile owner navigation — fixed bottom bar, hidden on md+ where the
