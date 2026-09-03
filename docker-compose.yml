@@ -3,6 +3,13 @@
 #   cp .env.example .env        # set NEXTAUTH_SECRET (openssl rand -hex 32)
 #   docker compose up -d --build
 #   → http://localhost:3000     (migrations apply automatically on boot)
+#   → http://localhost:3000/website   (marketing site, proxied by the app)
+#
+# Two services: `app` (this repo's Next.js application) and `website` (the
+# mjengoos-website/ marketing site). The website is NOT published to the host —
+# the app proxies /website/* to it via its next.config.ts rewrite, pointed at
+# WEBSITE_ORIGIN=http://website:3001 (compose service DNS) below. One origin,
+# one cookie domain: the site's "Sign in" lands on the app's login screen.
 #
 # DATABASE_URL below OVERRIDES the host path from .env so the database lives
 # in the named volume app-db (→ /app/db/custom.db inside the container).
@@ -21,6 +28,9 @@ services:
       - .env
     environment:
       DATABASE_URL: "file:/app/db/custom.db"
+      # /website/* rewrite target: the website service on the compose network
+      # (local default when unset: http://127.0.0.1:3001 — see DEPLOYMENT.md §3).
+      WEBSITE_ORIGIN: "http://website:3001"
       # Fixed public domain instead of a proxy? Set in .env:
       #   NEXTAUTH_URL=https://your-domain.example
     volumes:
@@ -39,6 +49,40 @@ services:
       start_period: 30s
       retries: 3
 
+  website:
+    build:
+      context: ./mjengoos-website
+      # The image builds in integrated mode by default (build ARGs
+      # NEXT_PUBLIC_BASE_PATH=/website + NEXT_PUBLIC_APP_URL=/). For a
+      # standalone site on its own domain, override them:
+      #   args:
+      #     NEXT_PUBLIC_BASE_PATH: ""
+      #     NEXT_PUBLIC_APP_URL: "https://app.yourdomain.example"
+    image: mjengoos-website
+    container_name: mjengoos-website
+    restart: unless-stopped
+    # Internal only — reached through the app's /website/* rewrite
+    # (WEBSITE_ORIGIN above). Publish a host port via a compose override
+    # file only if you need direct access to the site's origin.
+    expose:
+      - "3001"
+    volumes:
+      - website-data:/app/data     # contact-form submissions (POST /website/api/contact)
+    healthcheck:
+      # node:20-slim has no curl/wget — node's global fetch does the probe.
+      # /website matches the default integrated build (basePath baked at
+      # build time) — adjust if you override the build args.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3001/website').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
 volumes:
   app-db:
   app-photos:
+  website-data:

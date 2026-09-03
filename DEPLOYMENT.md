@@ -41,6 +41,10 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `NEXTAUTH_SECRET` | yes | 64-hex secret for JWT session-cookie encryption (`openssl rand -hex 32`). **Rotating it signs every user out.** |
 | `NEXTAUTH_URL` | situational | Public base URL. **Leave UNSET when the app is reached through a reverse proxy / any host-varying gateway** — with `AUTH_TRUST_HOST=1` next-auth v4 derives the origin per request from `x-forwarded-host`/`-proto`, so redirects, callback URLs and cookie origins always match the host the user actually browses. Set it ONLY for a fixed public domain (`https://your-domain.example`). Pinning it to localhost behind a proxy breaks sign-in (PR #7). |
 | `AUTH_TRUST_HOST` | behind proxy: yes (`1`) | Makes next-auth v4's `detectOrigin` honor the proxy's forwarded host/proto headers instead of silently pinning every origin to `NEXTAUTH_URL` (or `http://localhost:3000`). Harmless for direct localhost access — keep it set whenever a proxy is involved. |
+| `WEBSITE_ORIGIN` | with the marketing site | Rewrite target for `/website/*` — the origin of the `mjengoos-website/` Next.js app. Default `http://127.0.0.1:3001` (the site's own server in local dev); under docker-compose set `http://website:3001` (service DNS — `docker-compose.yml` does this for you). |
+| `TRUST_PROXY` | hardening: `1` behind a trusted proxy | When set, the app reads the client IP from the **rightmost** `X-Forwarded-For` value (the one appended by your trusted proxy) instead of the first, client-spoofable value. Leave unset when there is no appending proxy in front. |
+| `MUTATION_ORIGIN_ALLOWLIST` | hardening: optional | When set (comma-separated origin list), JSON mutation requests are rejected unless their `Origin` header matches — CSRF defense-in-depth on top of cookies. |
+| `USSD_WEBHOOK_SECRET` | hardening: optional | When set, `/api/ussd` requires a valid HMAC signature derived from this shared secret on every request (authenticated gateway webhooks); unset = the documented demo posture. |
 | `PORT` / `HOSTNAME` | standalone runtime | `3000` / `0.0.0.0` defaults (set by the Docker image; `HOSTNAME=0.0.0.0` binds all interfaces). |
 
 Cookie policy is switched per request in `src/backend/lib/auth.ts`
@@ -141,6 +145,7 @@ check the Overview tab renders KPIs and `/api/health` shows `db: "up"`.
 | `ci.yml` | `quality` | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run lint` → `bunx tsc --noEmit` |
 | `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
 | `docker.yml` | `docker-build` | `docker build -t mjengoos-ci .` on a GitHub runner — **real verification of the Dockerfile** (the dev sandbox has no docker CLI). No registry push. |
+| `docker.yml` | `website-build` | `docker build -t mjengoos-website-ci ./mjengoos-website` — same posture, real verification of the marketing-site image. No registry push. |
 
 PR runs cancel automatically when new commits land (`concurrency` guard).
 
@@ -166,6 +171,8 @@ PR runs cancel automatically when new commits land (`concurrency` guard).
 artifacts, sibling projects are excluded — env reaches the image only via
 `docker run`/compose at runtime, never from the build context).
 
+The marketing website has its own image, built the same way — §6.5.
+
 ### 6.2 Build & run
 
 ```bash
@@ -186,11 +193,25 @@ cp .env.example .env     # set NEXTAUTH_SECRET (+ NEXTAUTH_URL only if fixed dom
 docker compose up -d --build
 ```
 
-`docker-compose.yml` (single-node self-host): service `app` on `3000:3000`,
-`restart: unless-stopped`, env from `.env` **except** `DATABASE_URL` which is
-pinned to the named volume (`file:/app/db/custom.db` → volume `app-db`),
-named volume `app-photos` for `POST /api/upload` uploads, and a healthcheck
-probing `/api/health` with node's `fetch`.
+`docker-compose.yml` (single-node self-host, **two services**):
+
+- **`app`** — the webapp on `3000:3000`, `restart: unless-stopped`, env from
+  `.env` **except** `DATABASE_URL` which is pinned to the named volume
+  (`file:/app/db/custom.db` → volume `app-db`), plus
+  `WEBSITE_ORIGIN=http://website:3001` so the `/website/*` rewrite resolves
+  the website service on the compose network. Named volume `app-photos` for
+  `POST /api/upload` uploads; healthcheck probing `/api/health` with node's
+  `fetch`.
+- **`website`** — the marketing site (`./mjengoos-website`), built in
+  integrated mode by default, `restart: unless-stopped`, **internal port
+  3001 only** (not published — it is reached through the app's rewrite),
+  named volume `website-data` for contact-form submissions, healthcheck
+  probing `/website` with node's `fetch`.
+
+After `up -d --build`: the product is at `http://localhost:3000` and the
+marketing site at `http://localhost:3000/website` — one origin, the site's
+"Sign in" lands on the app's login screen. To publish the site's own origin
+as well, add a compose override file with `ports: ["3001:3001"]`.
 
 ### 6.4 Seeding a containerized database (honest note)
 
@@ -203,6 +224,63 @@ has **node, not bun**. For a demo/self-host instance with seed data either:
    the chain in a one-off container.
 
 Production data does not need seeds — users/projects are created via the app.
+
+### 6.5 The marketing-website image
+
+`mjengoos-website/Dockerfile` mirrors the root Dockerfile's conventions for
+the marketing site (an independent Next.js app: no Prisma, no auth, no
+database, so there is nothing to migrate and no build-time secret to dummy
+out):
+
+- **deps** — `node:20-slim` + the bun binary from `oven/bun:1`:
+  `bun install --frozen-lockfile` against the site's own `package.json` /
+  `bun.lock`.
+- **builder** — `next build` under Node with the two `NEXT_PUBLIC_*` vars
+  supplied as **build ARGs** (Next.js inlines them at build time — switching
+  serving modes is a rebuild, not a re-run; defaults = integrated mode,
+  `NEXT_PUBLIC_BASE_PATH=/website` + `NEXT_PUBLIC_APP_URL=/`).
+- **runner** — `node:20-slim`, non-root `node` user, **standalone output**
+  (`output: "standalone"` in `mjengoos-website/next.config.ts`, mirroring the
+  root app): ships `.next/standalone` + `.next/static` + `public/` only —
+  not the ~600 MB `node_modules` tree — with `PORT=3001`, EXPOSE 3001,
+  `CMD ["node", "server.js"]`. `/app/data` is created writable for the
+  contact-form API.
+
+The site's `.dockerignore` keeps its context clean: `.env*`,
+`node_modules`, `.next`, `data/` and logs never enter an image.
+
+Build & run (standalone container, no compose):
+
+```bash
+docker build -t mjengoos-website ./mjengoos-website
+docker run -d --name mjengoos-website -p 3001:3001 mjengoos-website
+curl http://localhost:3001/website     # 200 (default integrated basePath)
+```
+
+For a standalone-domain image instead (§6.6):
+
+```bash
+docker build -t mjengoos-website ./mjengoos-website \
+  --build-arg NEXT_PUBLIC_BASE_PATH= \
+  --build-arg NEXT_PUBLIC_APP_URL=https://app.yourdomain.example
+docker run -d --name mjengoos-website -p 3001:3001 mjengoos-website
+curl http://localhost:3001/            # 200, site served at /
+```
+
+### 6.6 Marketing site deployment modes
+
+The site supports two modes, chosen at **build time** (the `NEXT_PUBLIC_*`
+vars are inlined by `next build`):
+
+| Mode | Build values | Layout |
+|---|---|---|
+| **Integrated** (default) | `NEXT_PUBLIC_BASE_PATH=/website`, `NEXT_PUBLIC_APP_URL=/` | One origin: the webapp proxies `/website/*` to the site (its `next.config.ts` rewrite → `WEBSITE_ORIGIN`). "Sign in" goes to the app's login screen at `/` — same origin, same cookie domain. This is what compose runs. |
+| **Standalone** | `NEXT_PUBLIC_BASE_PATH` empty, `NEXT_PUBLIC_APP_URL=https://app.yourdomain.example` | Own domain: serve port 3001 behind nginx/Caddy/CDN (e.g. `https://mjengoos.example.com`); "Sign in" jumps to the app's public origin; set `NEXT_PUBLIC_SITE_URL` (site `.env.example`) for SEO metadata / sitemap. |
+
+In integrated mode the site's server must be reachable **from the app
+process** at `WEBSITE_ORIGIN` — `http://127.0.0.1:3001` locally,
+`http://website:3001` under compose. In standalone mode nothing proxies:
+`WEBSITE_ORIGIN` is irrelevant and the site is fronted like any web origin.
 
 ## 7. Production self-host (without Docker)
 
@@ -272,7 +350,8 @@ server {
 ## 8. Updating a deployment
 
 ```bash
-git pull && docker compose up -d --build   # Docker path — migrations run on boot
+git pull && docker compose up -d --build   # Docker path — rebuilds BOTH images
+                                           # (app + website); migrations run on boot
 # or, bare metal:
 git pull && bun install && bunx prisma generate && bun run build \
   && bunx prisma migrate deploy && systemctl restart mjengo
