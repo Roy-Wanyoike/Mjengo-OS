@@ -14,14 +14,29 @@ import { getSessionFromReq, unauthorized, type GuardSession } from '@/backend/li
  * every instance keeps its OWN counters — a user would effectively get
  * `limit × instances` requests, and a login lockout would only lock the
  * instance that happened to serve the failures. Multi-instance deployment
- * needs a shared store (Redis INCR + TTL, or a NATS/durable-object counter)
- * — listed as a migration trigger in ARCHITECTURE.md. Do not copy this
- * module's pattern into a multi-instance service without that.
+ * needs a shared store — the RateLimitStore interface below is the seam:
+ * swap `rateLimitStore` for a Redis-backed implementation (INCR+TTL for fixed
+ * windows, or a Lua token-bucket script for this exact refill semantics) and
+ * the lockout Maps would follow the same pattern. No Redis dependency is
+ * added in this wave (comments only — see MemoryRateLimitStore).
  */
 
 // ---------------------------------------------------------------- primitives
 
-/** First x-forwarded-for value ('' when absent). Shared by rate keys + lockout keys. */
+/**
+ * TRUST_PROXY (W-AUDIT finding #1): x-forwarded-for is a comma-separated
+ * chain the CLIENT can seed with arbitrary values ("spoof, real" after one
+ * appending proxy). Which entry to believe therefore depends on deployment:
+ *   · UNSET (default, local dev / direct exposure): take the FIRST value —
+ *     the historical behavior. With no trusted proxy in front the header is
+ *     client-controlled either way, and loopback dev traffic has none.
+ *   · SET (any non-empty value except 0/false): we sit behind exactly ONE
+ *     appending reverse proxy (Caddy in the compose self-host). The LAST
+ *     value is the entry OUR proxy appended — its view of the client — so
+ *     spoofed values left of it cannot mint rate-limit buckets or fresh
+ *     (email, ip) lockout identities. Set it only in that one-proxy topology;
+ *     with a chain of proxies the last value is a proxy, not the client.
+ */
 export function clientIpFromHeaders(
   headers: Headers | Record<string, string> | undefined | null,
 ): string {
@@ -33,14 +48,27 @@ export function clientIpFromHeaders(
     const rec = headers as Record<string, string | undefined>
     xf = rec['x-forwarded-for'] ?? rec['X-Forwarded-For']
   }
-  return (xf ?? '').split(',')[0]?.trim() || ''
+  const values = (xf ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)
+  if (values.length === 0) return ''
+  return isTrustProxyEnabled() ? values[values.length - 1] : values[0]
+}
+
+/** True when TRUST_PROXY is explicitly enabled (non-empty, not 0/false). */
+function isTrustProxyEnabled(): boolean {
+  const v = process.env.TRUST_PROXY
+  if (!v || !v.trim()) return false
+  const lower = v.trim().toLowerCase()
+  return lower !== '0' && lower !== 'false'
 }
 
 /**
  * Rate-limit principal: session email when a valid JWT cookie is present,
- * else the first x-forwarded-for IP, else 'anon' (no cookie, no forwarding
- * header — e.g. direct loopback traffic). Async because principal #1
- * requires decoding (and HMAC-verifying) the session JWT via getToken.
+ * else the x-forwarded-for IP (per TRUST_PROXY), else 'anon' (no cookie, no
+ * forwarding header — e.g. direct loopback traffic). Async because principal
+ * #1 requires decoding (and HMAC-verifying) the session JWT via getToken.
  */
 export async function principalFor(req: NextRequest): Promise<string> {
   try {
@@ -53,28 +81,79 @@ export async function principalFor(req: NextRequest): Promise<string> {
   return ip ? `ip:${ip}` : 'anon'
 }
 
-// ---------------------------------------------------------------- token bucket
+// ---------------------------------------------------------------- store seam
 
 /**
- * Token bucket: capacity = `limit` (burst), continuous refill of
- * `limit / windowMs` tokens per ms → sustained rate `limit` per `windowMs`.
- * One Map entry per (bucket:principal) key; expired entries are swept
- * periodically (see below) so the Map cannot grow without bound.
+ * Pluggable backing store for the token buckets. `hit` consumes one token
+ * (returning the wait in seconds when the bucket is empty); `check` reports
+ * the same answer WITHOUT consuming (for headers/probes); `sweep` is
+ * best-effort memory hygiene (a Redis store would use TTLs and no-op).
+ *
+ * REDIS-READY SEAM (documented, deliberately not implemented — no new deps
+ * in this wave): implement with `INCR key` + `EXPIRE` for fixed windows, or
+ * a Lua script holding {tokens, lastRefill} per key for this exact
+ * continuous-refill semantics; assign the instance to `rateLimitStore` below
+ * and every limiter call site follows. Keep the keys namespaced per bucket
+ * and set TTLs from windowMs so foreign entries cannot accumulate.
  */
+export interface RateLimitStore {
+  /** Consume one token; null = allowed, else seconds until a token refills. */
+  hit(key: string, limit: number, windowMs: number, now: number): number | null
+  /** Report whether a token is available without consuming one. */
+  check(key: string, limit: number, windowMs: number, now: number): number | null
+  /** Best-effort removal of fully-refilled entries (no-op for TTL stores). */
+  sweep(now: number): void
+}
+
 type BucketState = { tokens: number; lastRefill: number; limit: number; refillPerMs: number }
 
-const buckets = new Map<string, BucketState>()
+/** Current in-process store (single-instance honesty note in the header). */
+export class MemoryRateLimitStore implements RateLimitStore {
+  private readonly buckets = new Map<string, BucketState>()
+
+  private refill(key: string, limit: number, windowMs: number, now: number): BucketState {
+    const refillPerMs = limit / Math.max(1, windowMs)
+    let state = this.buckets.get(key)
+    if (!state || state.limit !== limit || state.refillPerMs !== refillPerMs) {
+      state = { tokens: limit, lastRefill: now, limit, refillPerMs }
+      this.buckets.set(key, state)
+    }
+    return state
+  }
+
+  hit(key: string, limit: number, windowMs: number, now: number): number | null {
+    const state = this.refill(key, limit, windowMs, now)
+    const tokens = Math.min(state.limit, state.tokens + (now - state.lastRefill) * state.refillPerMs)
+    state.lastRefill = now
+    if (tokens >= 1) {
+      state.tokens = tokens - 1
+      return null
+    }
+    state.tokens = tokens // keep the fractional accrual (honest next-token math)
+    return Math.max(1, Math.ceil((1 - tokens) / state.refillPerMs / 1000))
+  }
+
+  check(key: string, limit: number, windowMs: number, now: number): number | null {
+    const state = this.buckets.get(key)
+    if (!state) return null // a bucket nobody hit is full
+    const tokens = Math.min(state.limit, state.tokens + (now - state.lastRefill) * state.refillPerMs)
+    return tokens >= 1 ? null : Math.max(1, Math.ceil((1 - tokens) / state.refillPerMs / 1000))
+  }
+
+  sweep(now: number): void {
+    for (const [key, s] of this.buckets) {
+      // Fully refilled ⇒ nobody consumed anything for ≥ windowMs ⇒ dead entry.
+      if (s.tokens + (now - s.lastRefill) * s.refillPerMs >= s.limit) this.buckets.delete(key)
+    }
+  }
+}
+
+/** Swap this for a shared-store implementation when going multi-instance. */
+export const rateLimitStore: RateLimitStore = new MemoryRateLimitStore()
 
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000
 let opsSinceSweep = 0
 let lastSweepAt = Date.now()
-
-function sweepBuckets(now: number): void {
-  for (const [key, s] of buckets) {
-    // Fully refilled ⇒ nobody consumed anything for ≥ windowMs ⇒ dead entry.
-    if (s.tokens + (now - s.lastRefill) * s.refillPerMs >= s.limit) buckets.delete(key)
-  }
-}
 
 function sweepIfDue(now: number): void {
   // Lazy path: every 256th op, or whenever the periodic tick is overdue.
@@ -82,7 +161,7 @@ function sweepIfDue(now: number): void {
   if (opsSinceSweep % 256 !== 0 && now - lastSweepAt < SWEEP_INTERVAL_MS) return
   opsSinceSweep = 0
   lastSweepAt = now
-  sweepBuckets(now)
+  rateLimitStore.sweep(now)
   sweepLoginTrackers(now)
 }
 
@@ -110,23 +189,8 @@ export async function enforceRateLimit(
   sweepIfDue(now)
 
   const key = `${bucket}:${await principalFor(req)}`
-  const refillPerMs = safeLimit / Math.max(1, windowMs)
-  const state = buckets.get(key)
-
-  if (!state) {
-    // Fresh bucket starts full; this request consumes the first token.
-    buckets.set(key, { tokens: safeLimit - 1, lastRefill: now, limit: safeLimit, refillPerMs })
-    return null
-  }
-
-  const tokens = Math.min(safeLimit, state.tokens + (now - state.lastRefill) * refillPerMs)
-  state.lastRefill = now
-  if (tokens >= 1) {
-    state.tokens = tokens - 1
-    return null
-  }
-  state.tokens = tokens // keep the fractional accrual (honest next-token math)
-  const retryAfterSec = Math.max(1, Math.ceil((1 - tokens) / refillPerMs / 1000))
+  const retryAfterSec = rateLimitStore.hit(key, safeLimit, windowMs, now)
+  if (retryAfterSec === null) return null
   return NextResponse.json(
     { error: 'Too many requests', retryAfterSec },
     { status: 429, headers: { 'Retry-After': String(retryAfterSec) } },
@@ -135,60 +199,85 @@ export async function enforceRateLimit(
 
 // ---------------------------------------------------------------- login lockout
 
-/** 5 failed logins within 15 min (per email+IP) → 15-min lockout. */
+/** 5 failed logins within 15 min → 15-min lockout. */
 export const LOGIN_FAILURE_LIMIT = 5
 export const LOGIN_WINDOW_MS = 15 * 60 * 1000
 export const LOGIN_LOCKOUT_MS = 15 * 60 * 1000
 
 type LoginTracker = { failures: number; lastFailureAt: number; lockedUntil: number }
 
-/** Same in-process store as the rate buckets (single-instance — see header). */
-const loginTrackers = new Map<string, LoginTracker>()
+/**
+ * Lockout trackers (W-AUDIT #1 fix): the failure counter is keyed PRIMARILY
+ * by EMAIL — rotating the (spoofable or distributed) source IP no longer
+ * resets the count, so 5 bad passwords for one account lock that account.
+ * A SECONDARY (email|ip) tracker is kept so a distributed attack still gets
+ * per-pair throttling and the historical same-IP behavior is unchanged.
+ * Same in-process store as the rate buckets (single-instance — see header).
+ */
+const loginTrackers = new Map<string, LoginTracker>() // key: email
+const loginIpTrackers = new Map<string, LoginTracker>() // key: email|ip
 
-function loginKey(email: string, ip: string): string {
-  return `${email.trim().toLowerCase()}|${ip || 'unknown'}`
-}
+const emailLockKey = (email: string): string => email.trim().toLowerCase()
+const pairLockKey = (email: string, ip: string): string =>
+  `${email.trim().toLowerCase()}|${ip || 'unknown'}`
 
 function sweepLoginTrackers(now: number): void {
-  for (const [key, t] of loginTrackers) {
-    const lockServed = !t.lockedUntil || t.lockedUntil <= now
-    const windowCold = now - t.lastFailureAt > LOGIN_WINDOW_MS
-    if (lockServed && windowCold) loginTrackers.delete(key)
+  for (const map of [loginTrackers, loginIpTrackers]) {
+    for (const [key, t] of map) {
+      const lockServed = !t.lockedUntil || t.lockedUntil <= now
+      const windowCold = now - t.lastFailureAt > LOGIN_WINDOW_MS
+      if (lockServed && windowCold) map.delete(key)
+    }
   }
 }
 
-/** Is this (email, ip) currently locked out? `msLeft` > 0 while locked. */
+/** Is this login attempt currently locked out? `msLeft` > 0 while locked. */
 export function checkLoginLockout(email: string, ip: string): { locked: boolean; msLeft: number } {
-  const t = loginTrackers.get(loginKey(email, ip))
-  if (!t) return { locked: false, msLeft: 0 }
   const now = Date.now()
-  if (t.lockedUntil > now) return { locked: true, msLeft: t.lockedUntil - now }
-  if (t.lockedUntil) loginTrackers.delete(loginKey(email, ip)) // lock served → clean slate
-  return { locked: false, msLeft: 0 }
+  let msLeft = 0
+  const probes: Array<[Map<string, LoginTracker>, string]> = [
+    [loginTrackers, emailLockKey(email)],
+    [loginIpTrackers, pairLockKey(email, ip)],
+  ]
+  for (const [map, key] of probes) {
+    const t = map.get(key)
+    if (!t) continue
+    if (t.lockedUntil > now) {
+      msLeft = Math.max(msLeft, t.lockedUntil - now)
+    } else if (t.lockedUntil) {
+      map.delete(key) // this tracker's lock is served → clean slate for it
+    }
+  }
+  return { locked: msLeft > 0, msLeft }
 }
 
 /**
- * Record a failed credentials attempt. When this failure reaches
- * LOGIN_FAILURE_LIMIT inside the window the lockout starts NOW — the return
- * value says so, so authorize() can throw the "Too many attempts" error on
- * the very attempt that tripped it.
+ * Record a failed credentials attempt against BOTH the email-primary tracker
+ * and the (email|ip) pair. When either reaches LOGIN_FAILURE_LIMIT inside the
+ * window the lockout starts NOW — the return value says so, so authorize()
+ * can throw the "Too many attempts" error on the very attempt that tripped it.
  */
 export function recordLoginFailure(email: string, ip: string): { locked: boolean; msLeft: number } {
   const now = Date.now()
-  const key = loginKey(email, ip)
-  const t = loginTrackers.get(key) ?? { failures: 0, lastFailureAt: 0, lockedUntil: 0 }
-  if (now - t.lastFailureAt > LOGIN_WINDOW_MS) t.failures = 0 // stale window → restart the count
-  t.failures += 1
-  t.lastFailureAt = now
-  const locked = t.failures >= LOGIN_FAILURE_LIMIT && !t.lockedUntil
-  if (locked) t.lockedUntil = now + LOGIN_LOCKOUT_MS
-  loginTrackers.set(key, t)
-  return { locked, msLeft: Math.max(0, t.lockedUntil - now) }
+  const bump = (map: Map<string, LoginTracker>, key: string): { locked: boolean; msLeft: number } => {
+    const t = map.get(key) ?? { failures: 0, lastFailureAt: 0, lockedUntil: 0 }
+    if (now - t.lastFailureAt > LOGIN_WINDOW_MS) t.failures = 0 // stale window → restart the count
+    t.failures += 1
+    t.lastFailureAt = now
+    const locked = t.failures >= LOGIN_FAILURE_LIMIT && !t.lockedUntil
+    if (locked) t.lockedUntil = now + LOGIN_LOCKOUT_MS
+    map.set(key, t)
+    return { locked, msLeft: Math.max(0, t.lockedUntil - now) }
+  }
+  const byEmail = bump(loginTrackers, emailLockKey(email))
+  const byPair = bump(loginIpTrackers, pairLockKey(email, ip))
+  return { locked: byEmail.locked || byPair.locked, msLeft: Math.max(byEmail.msLeft, byPair.msLeft) }
 }
 
-/** Successful login resets the counter entirely. */
+/** Successful login resets the counters entirely (both trackers). */
 export function clearLoginFailures(email: string, ip: string): void {
-  loginTrackers.delete(loginKey(email, ip))
+  loginTrackers.delete(emailLockKey(email))
+  loginIpTrackers.delete(pairLockKey(email, ip))
 }
 
 // ---------------------------------------------------------------- /api/ai/* policy

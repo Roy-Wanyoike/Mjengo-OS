@@ -1,4 +1,5 @@
 // /api/v1 request validation (spec §64 API QUALITY — validation; B5-APIV1).
+// Moved from src/app/api/v1/schemas.ts by the backend reorg (W-BACKEND).
 //
 // One zod schema set shared by every v1 route. Rules (honest bounds, kept
 // aligned with what the wallet service actually accepts):
@@ -12,10 +13,16 @@
 //   * unknown top-level body fields are rejected (typo protection, same
 //     policy as the /api/ai/* gate in lib/rate-limit.ts)
 //
-// Invalid input → 400 { error, field } (see respond.ts for the error shape).
+// Invalid body → 400 { error, field } — rendered by route-kit's body
+// pipeline (zodIssueResponse), which absorbed the old validateBody helper
+// verbatim: empty body → {}, unparseable JSON → 'Invalid JSON body',
+// non-object → 'Body must be a JSON object', first zod issue → the honest
+// message + field. Query params are still validated per-route via
+// validateQuery below.
 
-import { NextResponse, type NextRequest } from 'next/server'
-import { z, type ZodIssue } from 'zod'
+import { type NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
+import { zodIssueResponse } from '@/backend/lib/route-kit'
 
 // ---------------------------------------------------------------- primitives
 
@@ -175,52 +182,6 @@ export const walletScopedQuery = z.strictObject({
 
 export type Parsed<T> = { ok: true; data: T } | { ok: false; response: NextResponse }
 
-/** Render one honest zod issue as a 400 { error, field } response. */
-function issueResponse(issues: ZodIssue[]): NextResponse {
-  const issue = issues[0]
-  const field = issue.path.length ? String(issue.path.join('.')) : undefined
-  if (issue.code === 'unrecognized_keys') {
-    const keys = issue.keys.map((k) => `"${String(k)}"`).join(', ')
-    return NextResponse.json({ error: `Unknown field(s): ${keys}` }, { status: 400 })
-  }
-  return NextResponse.json({ error: issue.message, ...(field ? { field } : {}) }, { status: 400 })
-}
-
-/**
- * Read + validate a JSON request body against a schema.
- *  * unparseable JSON → 400 'Invalid JSON body'
- *  * non-object body  → 400 'Body must be a JSON object'
- *  * schema failure   → 400 { error, field } (first issue, honest message)
- * Unknown top-level fields are rejected with the field names listed.
- */
-export async function validateBody<S extends z.ZodType>(
-  req: NextRequest,
-  schema: S,
-): Promise<Parsed<z.output<S>>> {
-  let raw: string
-  try {
-    raw = await req.text()
-  } catch {
-    return { ok: false, response: NextResponse.json({ error: 'Could not read the request body' }, { status: 400 }) }
-  }
-  let body: unknown
-  if (!raw.trim()) {
-    body = {}
-  } else {
-    try {
-      body = JSON.parse(raw)
-    } catch {
-      return { ok: false, response: NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }) }
-    }
-  }
-  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-    return { ok: false, response: NextResponse.json({ error: 'Body must be a JSON object' }, { status: 400 }) }
-  }
-  const result = schema.safeParse(body)
-  if (!result.success) return { ok: false, response: issueResponse(result.error.issues) }
-  return { ok: true, data: result.data }
-}
-
 /** Validate a route's query params against a schema (same 400 contract). */
 export function validateQuery<S extends z.ZodType>(
   req: NextRequest,
@@ -231,6 +192,6 @@ export function validateQuery<S extends z.ZodType>(
     params[key] = value
   })
   const result = schema.safeParse(params)
-  if (!result.success) return { ok: false, response: issueResponse(result.error.issues) }
+  if (!result.success) return { ok: false, response: zodIssueResponse(result.error.issues) }
   return { ok: true, data: result.data }
 }

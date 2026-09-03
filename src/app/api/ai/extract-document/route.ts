@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
+import { safeErrorMessage } from '@/backend/lib/guard'
 import {
   extractDocument,
   reviewDocument,
@@ -67,8 +68,9 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
     })
   } catch (e) {
     console.error('[api/ai/extract-document]', e)
+    // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
     return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : 'Document extraction failed' },
+      { ok: false, error: safeErrorMessage(e, 'Document extraction failed') },
       { status: 500 },
     )
   }
@@ -114,8 +116,9 @@ export const PUT = async (req: NextRequest): Promise<NextResponse> => {
     return NextResponse.json({ ok, ...rest, reviewedBy: name })
   } catch (e) {
     console.error('[api/ai/extract-document PUT]', e)
+    // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
     return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : 'Document review failed' },
+      { ok: false, error: safeErrorMessage(e, 'Document review failed') },
       { status: 500 },
     )
   }

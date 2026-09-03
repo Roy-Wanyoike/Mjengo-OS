@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getProjectPayload } from '@/backend/lib/mjengo'
 import { runAnomalyScan } from '@/backend/modules/jobs/handlers'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
+import { safeErrorMessage } from '@/backend/lib/guard'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -35,6 +36,7 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
     return NextResponse.json({ ok: true, alerts: scan.alerts, summary: scan.summary, data })
   } catch (e) {
     console.error('[api/ai/anomaly-scan]', e)
-    return NextResponse.json({ error: e instanceof Error ? e.message : 'Anomaly scan failed' }, { status: 500 })
+    // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
+    return NextResponse.json({ error: safeErrorMessage(e, 'Anomaly scan failed') }, { status: 500 })
   }
 }
