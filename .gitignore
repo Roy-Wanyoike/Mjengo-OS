@@ -99,7 +99,8 @@ docs/*
 !docs/adr/**
 
 # sandbox environment scripts & template demos
-tests/
+# (tests/ was previously ignored as sandbox scratch — it now holds the real
+#  Vitest suite tracked on feat/test-suite; keep it commited)
 examples/
 *.pid
 
