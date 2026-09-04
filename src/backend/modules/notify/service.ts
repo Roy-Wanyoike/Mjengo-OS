@@ -29,6 +29,24 @@
 //     skip reason is recorded in deliveryDetail).
 //   · WhatsApp/email are NOT wired: future providers implement ChannelProvider
 //     (channels.ts) and get resolved here — the seam is the interface.
+//
+// Recipient preferences gate the SMS attempt (issue #36):
+//   · The prefs model (User.notificationPrefs, recorded via PUT
+//     /api/notifications) is a per-kind map { kind: { inApp: boolean } } —
+//     there is NO explicit channel toggle today, so the gate is coarse and
+//     per-KIND: an opt-out the recipient recorded for the notification's kind
+//     ({ inApp: false }) skips the SMS attempt entirely (no fetch; the row
+//     stays 'logged' with the skip reason in deliveryDetail). We never text a
+//     user about a kind they muted — SMS is strictly more intrusive than the
+//     in-app row the pref was recorded against.
+//   · The in-app row is ALWAYS written regardless of prefs (the schema is
+//     explicit: "the in-app channel is always on").
+//   · DEFAULT FAIL-OPEN: a user with NO recorded prefs, an opted-in/absent
+//     entry for the kind, an SMS opt without userId (recipient unknown), or
+//     any preference-lookup failure → the attempt proceeds exactly as before
+//     — behavior never silently changes for users who never opted out.
+//     Lookup failures append an honest note to the recorded delivery detail.
+//   · The gate only consults prefs (read-only); it never edits them.
 
 import { db } from '@/backend/lib/db'
 import { getSmsProvider, type ChannelSendInput } from './channels'
@@ -44,6 +62,11 @@ import type { NotifyOptions } from './types'
  * (NOTIFY_SMS_WEBHOOK_URL): the row then records the real outcome
  * ('sent'/'failed' + deliveryDetail) via markDelivered(). The SMS attempt is
  * additive — it can never break or delay-fail the in-app row.
+ *
+ * When opts.sms carries a userId, the recipient's recorded notification
+ * preferences gate the attempt first (see the module header): a kind they
+ * opted out of skips the send with an honest skip reason; anything else
+ * fails open and proceeds as today.
  */
 export async function notify(
   projectId: string,
@@ -67,24 +90,99 @@ export async function notify(
   // Additive SMS attempt (opt-in via opts.sms). Catch-everything: a channel
   // problem must never take the in-app notification down with it.
   if (opts?.sms) {
-    await attemptSmsDelivery(row.id, {
-      to: typeof opts.sms.to === 'string' ? opts.sms.to : '',
-      title,
-      body,
-      projectId,
-      kind: row.kind,
-    })
+    await attemptSmsDelivery(
+      row.id,
+      {
+        to: typeof opts.sms.to === 'string' ? opts.sms.to : '',
+        title,
+        body,
+        projectId,
+        kind: row.kind,
+      },
+      typeof opts.sms.userId === 'string' && opts.sms.userId ? opts.sms.userId : undefined,
+    )
   }
   return { id: row.id }
+}
+
+/** Outcome of consulting the recipient's recorded preferences for one SMS attempt. */
+interface SmsPrefGate {
+  /** false → skip the send entirely (the recipient opted out of this kind). */
+  send: boolean
+  /** Skip reason (send=false) or the honest why-the-gate-did-not-apply note (send=true). */
+  detail?: string
+}
+
+/** Type guard: a per-kind pref entry as the recording route writes it ({ inApp }) — anything else fails open. */
+function isPrefObject(v: unknown): v is { inApp?: unknown } {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * Resolve the recipient's notification preferences for one SMS attempt.
+ * Never throws; every failure mode fails OPEN (the attempt proceeds — today's
+ * behavior) with an honest note for the row. Coarse per-kind gate over
+ * User.notificationPrefs — see the module header for the documented default.
+ */
+async function resolveSmsPrefGate(userId: string | undefined, kind: string): Promise<SmsPrefGate> {
+  if (!userId) return { send: true } // recipient user unknown — no gate, today's behavior
+  try {
+    const user = await db.user.findUnique({
+      where: { id: userId },
+      select: { notificationPrefs: true },
+    })
+    if (!user) {
+      return { send: true, detail: 'recipient user not found — preferences not consulted (fail-open)' }
+    }
+    const prefs = parseNotificationPrefs(user.notificationPrefs)
+    if (!prefs) {
+      return { send: true, detail: 'recipient preferences unreadable — attempted anyway (fail-open)' }
+    }
+    const kindPref: unknown = prefs[kind]
+    if (isPrefObject(kindPref) && kindPref.inApp === false) {
+      return {
+        send: false,
+        detail: `skipped: recipient preference disables "${kind}" notifications — nothing sent`,
+      }
+    }
+    return { send: true } // opted in, or no entry for this kind — fail open per kind
+  } catch {
+    return { send: true, detail: 'recipient preference lookup failed — attempted anyway (fail-open)' }
+  }
+}
+
+/**
+ * Parse User.notificationPrefs → a kind→pref map, or null when the stored
+ * value is present but unreadable (malformed JSON / not an object). A MISSING
+ * value and an UNREADABLE one are different honest states: absent returns {}
+ * (no gate), unreadable returns null (gate could not be consulted → fail open
+ * + note). Never throws.
+ */
+function parseNotificationPrefs(raw: string | null | undefined): Record<string, unknown> | null {
+  if (raw === null || raw === undefined || raw === '') return {}
+  try {
+    const v = JSON.parse(raw)
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>
+    return null // present but not an object — unreadable
+  } catch {
+    return null // malformed JSON — unreadable
+  }
 }
 
 /**
  * One honest SMS attempt for a freshly created notification row. Never
  * throws; every outcome (sent / failed / skipped-and-why) lands in the row's
- * deliveryStatus + deliveryDetail via markDelivered().
+ * deliveryStatus + deliveryDetail via markDelivered(). The recipient's
+ * recorded preferences are consulted FIRST — an opted-out kind never reaches
+ * the provider (no fetch at all).
  */
-async function attemptSmsDelivery(id: string, input: ChannelSendInput): Promise<void> {
+async function attemptSmsDelivery(id: string, input: ChannelSendInput, userId?: string): Promise<void> {
   try {
+    const gate = await resolveSmsPrefGate(userId, input.kind)
+    if (!gate.send) {
+      await markDelivered(id, 'logged', gate.detail)
+      return
+    }
     if (!input.to) {
       await markDelivered(id, 'logged', 'SMS requested but no recipient number provided — nothing sent')
       return
@@ -96,7 +194,9 @@ async function attemptSmsDelivery(id: string, input: ChannelSendInput): Promise<
       return
     }
     const result = await provider.send(input)
-    await markDelivered(id, result.status, result.detail)
+    // When the gate could not be consulted (lookup failure / unknown user /
+    // unreadable prefs), append the honest note to the real outcome detail.
+    await markDelivered(id, result.status, gate.detail ? `${result.detail} — ${gate.detail}` : result.detail)
   } catch {
     // Belt-and-braces: provider.send already returns instead of throwing and
     // markDelivered swallows its own errors — but a channel attempt must
