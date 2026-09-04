@@ -26,6 +26,7 @@ import {
 } from '@/backend/modules/ledger/service'
 import { notify } from '@/backend/modules/notify/service'
 import { getProvider, type PaymentMethod } from './providers'
+import { recordDarajaIntent } from './daraja-callback'
 import { currentActor, type DeciderIdentity } from './session'
 
 let prCounter = 0
@@ -256,6 +257,36 @@ export async function payPaymentRequest(projectId: string, p: any) {
     reference,
     description: request.description,
   })
+  if (initiation.status === 'pending') {
+    // A REAL rail is async (M-Pesa STK: the customer must confirm on their
+    // handset). Record the PENDING intent — NO money has moved yet — and
+    // fail honestly: the verified provider callback (webhooks/daraja) posts
+    // the balanced entry and flips this request to paid when Safaricom
+    // confirms settlement. Failures here never record money.
+    try {
+      await recordDarajaIntent({
+        kind: 'payment.request',
+        paymentRequestId: request.id,
+        requestCode: request.requestCode,
+        projectId,
+        amount: request.amount,
+        payee: request.payee,
+        method,
+        reference,
+        providerRef: initiation.providerRef,
+        initiatedBy: paidBy,
+        initiatedByRole: paidByRole,
+      })
+    } catch (e) {
+      // Best-effort row — the callback completes the payment only when the
+      // intent exists; a missing row means an honest operator fix-up, never
+      // invented money.
+      console.error('[wallet] failed to record pending provider intent', e)
+    }
+    throw new Error(
+      `${provider.label} accepted the request but it is PENDING customer confirmation — no money has moved yet. ${initiation.detail}. The payment records automatically once the provider's VERIFIED callback confirms settlement (ref ${initiation.providerRef}).`,
+    )
+  }
   if (initiation.status !== 'succeeded') {
     throw new Error(`Provider did not accept the payment: ${initiation.detail}`)
   }

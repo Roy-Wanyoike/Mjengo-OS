@@ -3,11 +3,17 @@
 // provider interface is how a REAL rail (M-Pesa Daraja, bank API, card
 // gateway…) would plug in without touching the money core.
 //
-// HONESTY LABEL: the only implementation today is SimulatedProvider. It
-// completes instantly and clearly reports `simulated: true` — MjengoOS is NOT
-// integrated with any licensed financial institution, and no provider result
-// ever claims otherwise (spec §40: "Do not pretend to be a bank or licensed
+// HONESTY LABEL: the default rails are simulated (SimulatedProvider /
+// EscrowWalletProvider — instant, clearly labelled `simulated: true`, no
+// licensed provider involved). One REAL rail exists behind the seam today:
+// the Safaricom Daraja SANDBOX provider (daraja.ts), selected ONLY when the
+// full DARAJA_* env set is present — otherwise the simulated M-Pesa rail
+// stands, exactly as before. Daraja sandbox never moves real money (results
+// stay `simulated: true`); MjengoOS is still NOT integrated with any licensed
+// financial institution (spec §40: "Do not pretend to be a bank or licensed
 // financial institution").
+
+import { getDarajaProvider } from './daraja'
 
 /** Payment method / rail identifier. */
 export type PaymentMethod = 'mpesa' | 'bank' | 'card' | 'cash' | 'wallet'
@@ -24,16 +30,16 @@ export interface PaymentInitiation {
 export interface ProviderResult {
   /** Provider-side reference for the attempted transfer. */
   providerRef: string
-  /** Human-readable status — 'succeeded' only on the simulated rail today. */
+  /** Human-readable status — 'pending' means awaiting the provider's async confirmation. */
   status: 'succeeded' | 'failed' | 'pending'
-  /** Always true until a real provider integration exists. */
-  simulated: true
+  /** true = this rail recorded workflow only — no real money moved on it. */
+  simulated: boolean
   /** Honest detail line for the audit trail / UI toast. */
   detail: string
 }
 
 /**
- * The provider contract every future rail implements (spec §40):
+ * The provider contract every rail implements (spec §40):
  *   initiatePayment — start an outbound transfer to a payee
  *   verifyPayment   — confirm a previously initiated transfer settled
  *   refund          — reverse a settled transfer (provider-side)
@@ -57,9 +63,9 @@ function simulatedRef(prefix: string): string {
 }
 
 /**
- * The only provider wired today (spec §40). Every result is labelled
- * `simulated: true` — this records workflow, it never pretends to move real
- * money through a licensed rail.
+ * The simulated rail (spec §40). Every result is labelled `simulated: true` —
+ * this records workflow, it never pretends to move real money through a
+ * licensed rail.
  */
 export class SimulatedProvider implements PaymentProvider {
   readonly id: string
@@ -147,7 +153,12 @@ export class EscrowWalletProvider implements PaymentProvider {
 
 // ---- registry (getProvider) ----
 
-const REGISTRY: Record<string, PaymentProvider> = {
+/**
+ * Stateless rails, instantiated once (they hold no env or token state). The
+ * 'mpesa' entry is the fail-closed fallback — the REAL Daraja provider is
+ * resolved per call in getProvider when its env set is complete.
+ */
+const STATIC_REGISTRY: Record<string, PaymentProvider> = {
   mpesa: new SimulatedProvider('mpesa', 'M-Pesa (simulated)'),
   bank: new SimulatedProvider('bank', 'Bank transfer (simulated)'),
   card: new SimulatedProvider('card', 'Card (simulated)'),
@@ -155,11 +166,21 @@ const REGISTRY: Record<string, PaymentProvider> = {
   wallet: new EscrowWalletProvider(),
 }
 
-/** Resolve the provider for a payment method — the single seam (spec §40). */
+/**
+ * Resolve the provider for a payment method — the single seam (spec §40).
+ * 'mpesa' routes to the Daraja provider ONLY when the full DARAJA_* env set
+ * is present (getDarajaProvider reads env at call time and caches the
+ * instance + OAuth token per config); anything missing fail-closes to the
+ * simulated M-Pesa rail — the default deployment, unchanged. Unknown methods
+ * also land on the SIMULATED mpesa rail (never an env-gated real one).
+ */
 export function getProvider(method: string): PaymentProvider {
   const key = String(method ?? '').toLowerCase()
-  return REGISTRY[key] ?? REGISTRY.mpesa
+  if (key === 'mpesa') {
+    return getDarajaProvider() ?? STATIC_REGISTRY.mpesa
+  }
+  return STATIC_REGISTRY[key] ?? STATIC_REGISTRY.mpesa
 }
 
 /** Every registered provider id (for guards / UI copy). */
-export const PROVIDER_METHODS = Object.keys(REGISTRY) as PaymentMethod[]
+export const PROVIDER_METHODS = ['mpesa', 'bank', 'card', 'cash', 'wallet'] as PaymentMethod[]
