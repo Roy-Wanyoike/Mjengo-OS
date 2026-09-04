@@ -1,6 +1,7 @@
 import ZAI from 'z-ai-web-dev-sdk'
 import { db } from '@/backend/lib/db'
 import { overallProgress } from '@/backend/lib/mjengo'
+import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 
  
 export async function llm(systemPrompt: string, userPrompt: string, jsonMode = false): Promise<any> {
@@ -188,8 +189,23 @@ export interface ParsedVoiceNote {
   confidence: number
 }
 
-/** Parse a (transcribed) supplier/worker voice note into structured delivery items. */
+/**
+ * Parse a (transcribed) supplier/worker voice note into structured delivery
+ * items.
+ *
+ * 8-b (PII): this is the shared parse seam where a transcript is turned into
+ * everything the outside world can see — the LLM prompt below, the
+ * `transcript` field of the returned ParsedVoiceNote (which /api/ai/voice-log
+ * and /api/ai/parse-text return verbatim, and which the copilot UI persists
+ * as delivery.create's rawTranscript) — so Kenyan phone numbers are masked
+ * HERE, at entry (see src/backend/lib/pii-scrub.ts for shapes/guards and the
+ * scoping decision: names are deliberately NOT masked). The LLM only ever
+ * sees the scrubbed text, so derived fields (supplier/notes/items) cannot
+ * echo a number the model never saw, and no structured delivery field needs
+ * the phone — voice logs are notes, not contact records.
+ */
 export async function parseDeliveryTranscript(transcript: string, digest: ProjectDigest): Promise<ParsedVoiceNote> {
+  const { scrubbed } = scrubTranscriptPhones(transcript)
   const catalog = digest.materialsCatalog
   const system = `You are MjengoOS's field-data parser for Kenyan construction sites.
 Input is a NOISY ASR transcription of a contractor's voice note (Swahili / Sheng / English mix). ASR frequently garbles Swahili words. Your job is to RECOVER the intended meaning and extract material deliveries.
@@ -214,7 +230,7 @@ Transcript: "Habari, nimepokea bags themanini za cement kutoka Karioke"
 
   const parsed = await llm(
     system,
-    `Material catalog for matching (name | unit | unit price KES):\n${catalog.map((m) => `${m.name} | ${m.unit} | ${m.unitPriceKES}`).join('\n')}\n\nVoice note transcript:\n"""${transcript}"""`,
+    `Material catalog for matching (name | unit | unit price KES):\n${catalog.map((m) => `${m.name} | ${m.unit} | ${m.unitPriceKES}`).join('\n')}\n\nVoice note transcript:\n"""${scrubbed}"""`,
     true,
   ) as { supplier: string | null; language?: string; items?: Array<{ name: string; quantity: string | number; unit?: string }>; notes?: string | null; confidence?: number }
 
@@ -237,7 +253,7 @@ Transcript: "Habari, nimepokea bags themanini za cement kutoka Karioke"
   }
 
   return {
-    transcript,
+    transcript: scrubbed,
     language: parsed.language ?? 'mix',
     supplier: parsed.supplier ?? null,
     items,

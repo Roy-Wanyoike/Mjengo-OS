@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
 import { buildProjectDigest, parseDeliveryTranscript } from '@/backend/lib/ai'
+import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
 
@@ -14,6 +15,17 @@ export const maxDuration = 120
  * validated projectId + unknown-field rejection) — the transcript parser's
  * project digest can no longer be pointed at an arbitrary project by a
  * non-site-team account.
+ *
+ * 8-b (PII): the transcript is SCRUBBED the moment ASR produces it — Kenyan
+ * phone numbers (07xx/01xx/+2547xx/2547xx forms, incl. spaced/hyphenated)
+ * are masked to "07••••••78"-style before anything else happens, so the
+ * response body, the LLM parse prompt and (downstream) the rawTranscript the
+ * client persists via delivery.create only ever carry the masked form. What
+ * is masked and what deliberately is NOT (times/amounts/references are
+ * untouched; names are NOT masked — field notes are operator-private speech,
+ * this targets accidental full phone-number capture) is documented in
+ * src/backend/lib/pii-scrub.ts; parseDeliveryTranscript re-applies the same
+ * idempotent scrub on the shared parse seam (covers /api/ai/parse-text too).
  */
 export const POST = async (req: NextRequest): Promise<NextResponse> => {
   const gate = await enforceAiRoutePolicy(req, {
@@ -34,10 +46,13 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
 
     const zai = await ZAI.create()
     const asr = await zai.audio.asr.create({ file_base64: audioBase64 })
-    const transcript = (asr.text ?? '').trim()
-    if (!transcript) {
+    const rawTranscript = (asr.text ?? '').trim()
+    if (!rawTranscript) {
       return NextResponse.json({ error: 'Could not hear any speech in that voice note' }, { status: 400 })
     }
+    // 8-b (PII): the boundary — scrub before the transcript is parsed,
+    // returned or persisted anywhere (see route header).
+    const { scrubbed: transcript } = scrubTranscriptPhones(rawTranscript)
 
     const digest = await buildProjectDigest(gate.projectId)
     const parsed = await parseDeliveryTranscript(transcript, digest)
