@@ -48,6 +48,7 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `MUTATION_ORIGIN_ALLOWLIST` | hardening: optional | When set (comma-separated origin list), JSON mutation requests are rejected unless their `Origin` header matches — CSRF defense-in-depth on top of cookies. |
 | `USSD_WEBHOOK_SECRET` | hardening: optional | When set, `/api/ussd` requires a valid HMAC signature derived from this shared secret on every request (authenticated gateway webhooks); unset = the documented demo posture. |
 | `JOBS_RUN_TOKEN` | scheduler: optional | Shared secret (`openssl rand -hex 32`) that lets an external scheduler authenticate `POST /api/jobs/run` with `Authorization: Bearer <token>` (no browser session needed — compose `jobs-tick` sidecar, systemd timer, any cron). Same value must reach the app and the scheduler. **Unset = the bearer path is fully disabled** (fail closed — the endpoint then answers only to contractor/admin sessions, exactly as before). See §7.3. |
+| `S3_ENDPOINT` + 4 more | object storage: optional | The five `S3_*` values (`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) switch photo uploads from local disk to an S3/R2/MinIO-compatible bucket (presigned client-direct uploads become available). **All five or nothing** — a partial set fail-closes to local disk with one logged warning. Optional `S3_PUBLIC_BASE` = stable public/CDN URL base. See §9. |
 | `PORT` / `HOSTNAME` | standalone runtime | `3000` / `0.0.0.0` defaults (set by the Docker image; `HOSTNAME=0.0.0.0` binds all interfaces). |
 
 Cookie policy is switched per request in `src/backend/lib/auth.ts`
@@ -483,3 +484,110 @@ git pull && bun install && bunx prisma generate && bun run build \
 CI guarantees the gate before this ever reaches production: lint, strict
 typecheck (build fails on TS errors — `ignoreBuildErrors` is gone), a real
 `next build`, and a real `docker build` on every PR.
+
+## 9. Object storage (S3 / R2 / MinIO)
+
+Photo evidence (site photos, delivery photos) used to live on the app
+server's local disk — fine for one box, broken the moment you run more than
+one instance behind a load balancer (instance A's `public/photos` is
+invisible to instance B). The upload module now has a **storage driver
+seam** (`src/backend/lib/storage/`) with two drivers:
+
+| Driver | Selected when | Files land | Public URL | Presigned flow |
+|---|---|---|---|---|
+| `local-disk` (default) | any of the five required `S3_*` values is unset/blank | `public/photos/<key>` on the app server | `/photos/<key>` (served by Next) | no — honest 409 from `/api/upload/presign` |
+| `s3-compat` | **all five** set: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | `s3://<bucket>/<key>` (path-style) | `S3_PUBLIC_BASE/<bucket>/<key>` when set; otherwise a presigned GET (7-day SigV4 maximum — see below) | yes |
+
+Fail-closed: a **partial** env set is treated as unset — one server warning
+naming the missing keys (names only, never values), local-disk behavior.
+`S3_ENDPOINT` examples: `https://s3.eu-central-1.amazonaws.com` (AWS),
+`https://<account>.r2.cloudflarestorage.com` (R2, region `auto`),
+`http://minio.internal:9000` (MinIO). SigV4 is implemented with
+`node:crypto` — no new dependencies.
+
+### 9.1 The two upload paths
+
+**Server-mediated (unchanged, works on every driver):** the client POSTs the
+photo to `/api/upload` as it always did; the route validates caps + magic
+numbers and writes through `getStorageDriver().put()`. With local-disk this
+is byte-identical to every prior release (same key shape `upp-*`, same
+`/photos/<key>` URL, same response contract). With the S3 driver the bytes
+land in the bucket and the response URL is the driver's public URL.
+
+**Presigned client-direct (new, S3 driver only):** the photo never detours
+through the app server — no ~5.4 MB base64 envelope per 4 MB photo:
+
+```
+client                    app                         object storage
+  │                        │                                │
+  │ POST /api/upload/presign                                │
+  │  { contentType,        │ mints server-generated key     │
+  │    sizeBytes,          │  upp-<ts>-<hex>.<ext>          │
+  │    category }          │ + SigV4 presigned PUT (5 min)  │
+  │◄───────────────────────┤ { uploadUrl, key, expiresSec,  │
+  │                        │   headers: {Content-Type} }    │
+  │                                                        │
+  │ PUT uploadUrl (bytes, Content-Type) ──────────────────►│ object stored
+  │                                                        │
+  │ POST /api/upload/confirm                               │
+  │  { key, category }     │ HEADs the object via the      │
+  │                        │ driver: exists? ≤ 4 MB?       │
+  │                        │ image content-type?           │
+  │                        │ → creates the Attachment row  │
+  │◄───────────────────────┤ { ok, attachment: { id,       │
+  │                        │   storageKey, fileName,       │
+  │                        │   category, reviewStatus } }  │
+```
+
+`/api/upload/presign` answers **409** on the local-disk driver with an
+honest error ("server-mediated upload only") instead of pretending.
+`/api/upload/confirm` verifies before it records: existence, the 4 MB cap,
+and the image `Content-Type` (whatever the client's PUT carried — the
+presign response told it exactly which header to send). The Attachment row
+is created at `reviewStatus: 'pending'`, exactly like every other upload
+path (humans review; AI never auto-approves).
+
+### 9.2 The presigned-URL expiry tradeoff (choose per deployment)
+
+`Attachment.storageKey` is the URL the frontend renders. With
+`S3_PUBLIC_BASE` set it is **stable forever** — set it whenever the bucket
+(or a CDN in front of it) is publicly readable. Without it, the driver's
+public URLs are **presigned GETs that expire after 7 days** (the SigV4
+maximum): rows recorded today stop resolving next week. That is an
+operational choice, not a bug to code around — but if you must run a fully
+private bucket, know that a replay-time re-signing seam (resolve
+`storageKey` → fresh presigned URL per render) is the documented follow-up,
+deliberately not built in this wave.
+
+### 9.3 Self-host local path (nothing to do)
+
+Single-box self-hosts keep the default: leave the whole `S3_*` block unset.
+Uploads write `public/photos/` exactly as before; in a **frozen production
+build** `public/` is snapshotted at build time, so runtime-written photos
+still need a persistent volume for that directory (the historical caveat —
+unchanged, and one more reason multi-instance deploys should switch to the
+S3 driver).
+
+### 9.4 Multi-instance note
+
+Running >1 app instance? Set the five `S3_*` values. The in-process rate
+limiter and login lockout still need their own shared store (see
+`src/backend/lib/rate-limit.ts` header), but file storage stops being the
+thing that breaks: every instance PUTs to and reads from the same bucket,
+and the client-direct presigned flow removes the upload bandwidth from the
+app tier entirely.
+
+### 9.5 Honest scope notes
+
+- **Document uploads** (`mode: 'document'`, `public/docs/`) are still
+  local-disk writes inside the documents service — deliberately not yet
+  driver-mediated, because document extraction READS the bytes back
+  (`extractDocument`); moving it needs a driver read seam, not just a put
+  seam. Parked follow-up.
+- The legacy `/api/upload` data-URL photo path creates **no Attachment row**
+  (historical contract — its URL is consumed by the AI photo flow); the
+  presigned flow is the one that records rows (that is the point of
+  `confirm`).
+- `confirm` is **not idempotent**: Attachment rows are append-only evidence
+  (same posture as the rest of the app); confirming one key twice records
+  two rows pointing at the same object.
