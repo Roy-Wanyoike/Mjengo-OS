@@ -2,9 +2,11 @@
 //
 // Pipeline: upload (validated bytes → public/docs/<server-generated name> +
 // Attachment row with category/mime/size/title/expiresAt provenance) →
-// extract (image scan → VLM via the lib/ai.ts seam; PDF → honest limitation,
-// no OCR library exists in this sandbox, structured only when the caller
-// supplies ocrTextHint) → human review (approve/reject + AuditEvent).
+// extract (image scan → VLM via the lib/ai.ts seam; PDF → server-side
+// text-layer extraction via lib/pdf-text.ts — issue #42 — with the
+// caller's ocrTextHint still taking precedence; scanned PDFs with no
+// text layer fail HONESTLY, no OCR exists) → human review
+// (approve/reject + AuditEvent).
 //
 // HONEST DESIGN RULES (spec §60 "Never silently overwrite official records"):
 //   - extractDocument writes ONLY to the Attachment row's own extraction
@@ -14,10 +16,12 @@
 //     reviewStatus === 'approved'.
 //   - A successful re-extraction resets reviewStatus to 'pending' (the data
 //     changed, so a prior approval no longer describes what is stored).
-//   - PDFs: this environment has no PDF text-extraction library and faking
-//     one would poison records — the route returns an explicit error telling
-//     the user to upload a scan/photo of the document or provide ocrTextHint
-//     (client-side text-layer extraction, wired for the future).
+//   - PDFs: the TEXT LAYER is extracted server-side (lib/pdf-text.ts, a
+//     compact best-effort parser — its header documents the honest coverage
+//     limits: no OCR, no scanned PDFs, no encrypted files, best-effort CID
+//     fonts). A PDF with NO usable text layer (a scan) still returns an
+//     explicit error telling the user to upload an image of the document or
+//     provide ocrTextHint — a faked extraction would poison records.
 //
 // File security (§53): the on-disk file name is ALWAYS server-generated
 // (user-controlled fileName only lands in the DB as a display string, after
@@ -31,6 +35,7 @@ import path from 'path'
 import { randomBytes } from 'crypto'
 import { db } from '@/backend/lib/db'
 import { llm, extractJson, visionMessage } from '@/backend/lib/ai'
+import { extractPdfText } from '@/backend/lib/pdf-text'
 import { logAudit } from '@/backend/lib/audit'
 import {
   isDocumentCategory,
@@ -236,21 +241,26 @@ function normalizeExtraction(parsed: unknown): { extraction: DocumentExtraction;
 
 export interface ExtractOptions {
   /**
-   * Future seam (§60): text extracted from a PDF's text layer ELSEWHERE
-   * (client-side lib, upstream OCR service). When absent, PDFs honestly
-   * fail — this sandbox has no PDF text-extraction library and a faked
-   * extraction would poison downstream records.
+   * §60 seam: text extracted from a PDF's text layer ELSEWHERE (client-side
+   * lib, upstream OCR service). When present it WINS — the caller's own
+   * extraction is trusted over the server's. When absent, PDFs get
+   * server-side text-layer extraction (lib/pdf-text.ts, issue #42); a PDF
+   * with no usable text layer (a scan) honestly fails rather than faking.
    */
   ocrTextHint?: string
 }
 
 /**
- * Extract structured data from an uploaded document image (or a PDF WITH an
- * ocrTextHint) and persist it to the Attachment row. Image path uses the
- * VLM seam (lib/ai.ts visionMessage — model 'glm-5v-turbo'); hint path uses
- * the chat-LLM seam (llm, jsonMode) — the seam does not return the chat
- * model id, so that path's provenance label is 'zai-chat-llm' (pipeline
- * label, not a model version — the VLM path records the seam's pinned model).
+ * Extract structured data from an uploaded document (image scan → VLM;
+ * PDF → text layer → chat LLM) and persist it to the Attachment row.
+ * Image path uses the VLM seam (lib/ai.ts visionMessage — model
+ * 'glm-5v-turbo'); PDF path uses the chat-LLM seam (llm, jsonMode) with
+ * the text from ocrTextHint when the caller supplies one, ELSE the
+ * server-side text-layer extraction (lib/pdf-text.ts, issue #42) — both
+ * feed the IDENTICAL downstream parse path. The seam does not return the
+ * chat model id, so that path's provenance label is 'zai-chat-llm'
+ * (pipeline label, not a model version — the VLM path records the seam's
+ * pinned model).
  *
  * Draft-only by design: writes only ocrText / extractedJson /
  * extractionConfidence / extractionModel (and resets a stale review).
@@ -272,13 +282,32 @@ export async function extractDocument(attachmentId: string, opts: ExtractOptions
   }
 
   if (mime === 'application/pdf') {
-    const hint = opts.ocrTextHint?.trim()
+    // The caller's own extraction (client-side text layer / upstream OCR)
+    // always WINS over the server's; only when absent do we run the
+    // server-side text-layer extraction (issue #42). Either way the text
+    // then flows through the IDENTICAL downstream parse path below.
+    let hint = opts.ocrTextHint?.trim()
     if (!hint) {
-      // HONEST LIMITATION — no OCR library in this sandbox. Do not fake it.
-      return {
-        ok: false,
-        error:
-          'PDF text extraction is not available in this environment — upload an image of the document, or provide ocrTextHint',
+      const extracted = extractPdfText(buf) // never throws
+      if (!extracted.ok) {
+        // HONEST LIMITATION — e.g. an encrypted PDF. Do not fake it.
+        return {
+          ok: false,
+          error:
+            `PDF text extraction failed (${extracted.reason}) — ` +
+            'upload an image of the document, or provide ocrTextHint',
+        }
+      }
+      hint = extracted.text.trim()
+      if (!hint) {
+        // HONEST LIMITATION — no text layer (a scan), and no OCR here.
+        // Same error shape the route has always returned for unusable PDFs.
+        return {
+          ok: false,
+          error:
+            'PDF has no extractable text layer (likely a scanned/image-only PDF) — ' +
+            'upload an image of the document, or provide ocrTextHint',
+        }
       }
     }
     const parsed = await llm(
