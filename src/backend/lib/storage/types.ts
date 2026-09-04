@@ -8,10 +8,14 @@
 // supports it). The factory lives in ./index.ts.
 //
 // KEY CONTRACT (mirrors the historical /api/upload photo key shape): a
-// storage key is a single flat segment like `upp-1712345678-abcd12.jpg` —
-// server-generated, never user-supplied. The DRIVER owns where it lands:
-//   · local-disk  → public/photos/<key>   (exactly today's file layout)
-//   · s3-compat   → s3://<bucket>/<key>   (path-style URLs)
+// storage key is either a single flat segment like `upp-1712345678-abcd12.jpg`
+// (the photo tree) or the SAME flat segment behind one allowlisted prefix,
+// `docs/<segment>` (the document tree, issue #37) — server-generated, never
+// user-supplied. The DRIVER owns where it lands:
+//   · local-disk  → public/photos/<key> / public/docs/<docs key>
+//                 (exactly today's file layouts)
+//   · s3-compat   → s3://<bucket>/<key>   (path-style URLs; documents under
+//                 the `docs/` prefix in the bucket)
 //
 // URL CONTRACT: `publicUrl(key)` is the string the app records and the
 // frontend renders (<img src=…>). For local-disk it is the stable path
@@ -42,11 +46,26 @@ export interface ObjectStat {
 }
 
 /**
+ * Result shape of the READ seam (issue #37 — "the storage driver seam handles
+ * photos but documents still bypass it"): the exact bytes plus whatever
+ * metadata the driver honestly knows (S3 GET headers; local-disk has only the
+ * extension map). `null` from read() means "no such object" — never a guess.
+ */
+export interface ObjectRead {
+  bytes: Buffer
+  /** Content type as the store reports it (S3) or the extension map (local) — null when unknown. */
+  contentType: string | null
+  sizeBytes: number
+}
+
+/**
  * The storage adapter. `presignPut` / `presignGet` are OPTIONAL capabilities
  * (local disk cannot presign — its files are already served by the Next
- * server); `statObject` is optional for the same reason anything is: a driver
- * that cannot verify an object's existence answers the confirm route with an
- * honest 409 instead of guessing.
+ * server); `statObject` / `read` / `keyFor` are optional for the same reason
+ * anything is: a driver that cannot verify an object's existence answers the
+ * confirm route with an honest 409 instead of guessing, and a driver that
+ * cannot read bytes back (or resolve a recorded URL to its key) leaves the
+ * document-extraction / re-sign callers with honest errors, never guesses.
  */
 export interface StorageAdapter {
   readonly id: 'local-disk' | 's3-compat'
@@ -62,6 +81,16 @@ export interface StorageAdapter {
   presignGet?(key: string, expiresSec: number): string
   /** Capability: existence + size + content-type probe for `key`. */
   statObject?(key: string): Promise<ObjectStat>
+  /** Capability (issue #37): read the stored bytes for `key` back. null = no such object. */
+  read?(key: string): Promise<ObjectRead | null>
+  /**
+   * Capability (issues #37 + #38): resolve a recorded `storageKey` (a
+   * publicUrl THIS driver minted, or a legacy local path shape it serves)
+   * back to the driver key it addresses. null = the value does not address
+   * an object this driver can serve (foreign URL shapes, unsupported legacy
+   * paths) — callers turn that into honest errors, never guesses.
+   */
+  keyFor?(storageKey: string): string | null
 }
 
 /**

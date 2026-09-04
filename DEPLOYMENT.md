@@ -490,13 +490,16 @@ typecheck (build fails on TS errors — `ignoreBuildErrors` is gone), a real
 Photo evidence (site photos, delivery photos) used to live on the app
 server's local disk — fine for one box, broken the moment you run more than
 one instance behind a load balancer (instance A's `public/photos` is
-invisible to instance B). The upload module now has a **storage driver
-seam** (`src/backend/lib/storage/`) with two drivers:
+invisible to instance B). The upload module has a **storage driver
+seam** (`src/backend/lib/storage/`) with two drivers, and since the driver
+**read/re-sign seam** landed, BOTH transport directions go through it:
+uploads (photos AND documents), extraction reads, and presigned-GET
+re-signing:
 
 | Driver | Selected when | Files land | Public URL | Presigned flow |
 |---|---|---|---|---|
-| `local-disk` (default) | any of the five required `S3_*` values is unset/blank | `public/photos/<key>` on the app server | `/photos/<key>` (served by Next) | no — honest 409 from `/api/upload/presign` |
-| `s3-compat` | **all five** set: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | `s3://<bucket>/<key>` (path-style) | `S3_PUBLIC_BASE/<bucket>/<key>` when set; otherwise a presigned GET (7-day SigV4 maximum — see below) | yes |
+| `local-disk` (default) | any of the five required `S3_*` values is unset/blank | `public/photos/<key>` + `public/docs/<key>` on the app server | `/photos/<key>` and `/docs/<key>` (served by Next) | no — honest 409 from `/api/upload/presign` and `/api/upload/re-sign` |
+| `s3-compat` | **all five** set: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | `s3://<bucket>/<key>` (path-style; documents under `docs/`) | `S3_PUBLIC_BASE/<bucket>/<key>` when set; otherwise a presigned GET (7-day SigV4 maximum — see below) | yes |
 
 Fail-closed: a **partial** env set is treated as unset — one server warning
 naming the missing keys (names only, never values), local-disk behavior.
@@ -547,6 +550,18 @@ presign response told it exactly which header to send). The Attachment row
 is created at `reviewStatus: 'pending'`, exactly like every other upload
 path (humans review; AI never auto-approves).
 
+**Document uploads are driver-mediated too (the former scope cut, closed):**
+`POST /api/upload { mode: 'document' }` passes the active driver into the
+documents service — local-disk writes the exact historical `public/docs/`
+layout (`docs/<name>` key, row `storageKey` `/docs/<name>`, byte-identical
+behavior), an S3-backed deployment PUTs the document into the bucket under
+`docs/` and records the driver's public URL. Extraction
+(`/api/ai/extract-document`) reads the bytes back through the same seam
+(the driver's `read`), so documents stored in the bucket extract exactly
+like local ones — including rows whose recorded URL is an expired presigned
+GET: the driver resolves the recorded key and mints a fresh short-lived URL
+for the read.
+
 ### 9.2 The presigned-URL expiry tradeoff (choose per deployment)
 
 `Attachment.storageKey` is the URL the frontend renders. With
@@ -554,10 +569,38 @@ path (humans review; AI never auto-approves).
 (or a CDN in front of it) is publicly readable. Without it, the driver's
 public URLs are **presigned GETs that expire after 7 days** (the SigV4
 maximum): rows recorded today stop resolving next week. That is an
-operational choice, not a bug to code around — but if you must run a fully
-private bucket, know that a replay-time re-signing seam (resolve
-`storageKey` → fresh presigned URL per render) is the documented follow-up,
-deliberately not built in this wave.
+operational choice, not a bug to code around — and it now has a
+**mitigation**:
+
+**`POST /api/upload/re-sign`** (session-guarded like the other upload
+routes, project-scoped): body `{ attachmentIds: string[] }` (1–50 cuid
+ids) → the route checks the caller can SEE each attachment the same way
+the photo replay path (`/api/project` → supply slice) does — client-role
+sessions are pinned to their own project (own rows and delivery-linked
+rows only; anything else is a fail-closed 403, and one bad id blocks the
+whole batch), owner roles mirror `/api/project`'s any-project posture —
+then resolves each row's recorded `storageKey` back to a driver key and
+mints a **fresh presigned GET (15 minutes)**:
+
+```json
+{ "ok": true, "expiresSec": 900, "urls": [{ "attachmentId": "…", "url": "https://…?X-Amz-Expires=900…" }] }
+```
+
+Honest failures instead of pretending: 409 on the local-disk driver (its
+public URLs never expire — there is nothing to re-sign), 404 naming
+unknown ids, 409 when a row's `storageKey` was written by a different
+storage backend (the local→S3 migration case — re-upload those files).
+The recorded `storageKey` is NEVER rewritten: Attachment rows are
+append-only evidence, the re-sign is transport-only, and the re-signed URL
+is deliberately short-lived because it is a bearer capability (a render
+window, not another week). With `S3_PUBLIC_BASE` set you do not need this
+endpoint at all — it still answers (the driver can presign either way), it
+is just pointless.
+
+**Known follow-up (honest scope):** the frontend does not call this endpoint
+yet — components render `storageKey` as-is, so a private-bucket deployment
+still needs the UI wiring (render-time re-sign for stale URLs) to fully
+benefit; the API seam itself is complete and pinned by tests.
 
 ### 9.3 Self-host local path (nothing to do)
 
@@ -579,11 +622,19 @@ app tier entirely.
 
 ### 9.5 Honest scope notes
 
-- **Document uploads** (`mode: 'document'`, `public/docs/`) are still
-  local-disk writes inside the documents service — deliberately not yet
-  driver-mediated, because document extraction READS the bytes back
-  (`extractDocument`); moving it needs a driver read seam, not just a put
-  seam. Parked follow-up.
+- **Document uploads** are driver-mediated (see §9.1): the local-disk layout
+  is byte-identical to the historical `public/docs/` write, S3-backed
+  deploys store documents in the bucket under `docs/`, and extraction reads
+  back through the driver seam. The land module's parcel documents
+  (`/documents/<projectId>/<name>` storage keys on `ParcelDocument` rows)
+  are a separate, older path and are deliberately untouched.
+- A row whose recorded `storageKey` was minted by a DIFFERENT driver than
+  the active one (local→S3 migration) honestly fails: re-sign answers 409,
+  extraction reports the stored file as missing. The fix is operational —
+  re-upload the affected files — not a guessed key.
+- The frontend wiring for `/api/upload/re-sign` (render-time re-sign of
+  stale private-bucket URLs) is the documented follow-up (§9.2); the API
+  seam itself is complete.
 - The legacy `/api/upload` data-URL photo path creates **no Attachment row**
   (historical contract — its URL is consumed by the AI photo flow); the
   presigned flow is the one that records rows (that is the point of

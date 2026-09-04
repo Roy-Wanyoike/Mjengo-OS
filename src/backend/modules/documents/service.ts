@@ -22,16 +22,21 @@
 // File security (§53): the on-disk file name is ALWAYS server-generated
 // (user-controlled fileName only lands in the DB as a display string, after
 // sanitizeFileName); the declared mime must match the decoded bytes' magic
-// number (sniffDocumentMime); size caps are enforced pre-write; the bucket
-// is the app's own public/docs tree (no external object storage in this
-// deployment — a signed-URL object store is the documented production seam).
+// number (sniffDocumentMime); size caps are enforced pre-write. The storage
+// site is the app's storage-driver seam (issue #37): the upload route passes
+// the active driver in, so local-disk keeps the exact public/docs layout and
+// S3-backed deploys land documents in the bucket. The driver-less default is
+// the historical direct write (kept for non-route callers and pinned by
+// byte-identity on the local-disk driver).
 
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, writeFile } from 'fs/promises'
 import path from 'path'
 import { randomBytes } from 'crypto'
 import { db } from '@/backend/lib/db'
 import { llm, extractJson, visionMessage } from '@/backend/lib/ai'
 import { logAudit } from '@/backend/lib/audit'
+import { getStorageDriver } from '@/backend/lib/storage'
+import type { StorageAdapter } from '@/backend/lib/storage'
 import {
   isDocumentCategory,
   sanitizeFileName,
@@ -89,10 +94,29 @@ export function sniffImageMime(buf: Buffer): 'image/png' | 'image/jpeg' | 'image
   return null
 }
 
-/** Absolute path for a public/docs storageKey (traversal stripped, defense in depth). */
-function docsPath(storageKey: string): string {
-  const safe = storageKey.replace(/^\/+/, '').replace(/\.\./g, '')
-  return path.join(process.cwd(), 'public', 'docs', path.basename(safe))
+// ---------------------------------------------------------------- read (driver)
+
+/**
+ * Issue #37 read seam: resolve the stored object's bytes through the ACTIVE
+ * storage driver (local-disk passthrough read or an S3 GET via the same
+ * presign machinery the writes use) instead of assuming the local FS. The
+ * row's recorded storageKey is turned back into a driver key by the driver
+ * itself (keyFor) — a value the active driver cannot address (a row written
+ * by a different backend, a foreign URL shape) reads as MISSING, honestly,
+ * never guessed. Driver read errors (network, permissions) surface the same
+ * way: the caller's error says "missing or unreadable", which is the truth.
+ */
+async function readStoredDocumentBytes(storageKey: string): Promise<Buffer | null> {
+  const driver = getStorageDriver()
+  if (typeof driver.keyFor !== 'function' || typeof driver.read !== 'function') return null
+  const key = driver.keyFor(storageKey)
+  if (!key) return null
+  try {
+    const stored = await driver.read(key)
+    return stored ? stored.bytes : null
+  } catch {
+    return null // unreadable is unreadable — the caller reports it honestly
+  }
 }
 
 // ---------------------------------------------------------------- save (upload)
@@ -109,6 +133,15 @@ export interface SaveDocumentInput {
   entityId?: string
   expiresAt?: Date
   uploadedBy: { name: string; role: string; email: string }
+  /**
+   * Issue #37 transport seam: write through the storage driver instead of
+   * the direct public/docs write. The local-disk driver keeps the exact
+   * historical layout (`docs/<name>` key → public/docs/<name>, storageKey
+   * `/docs/<name>`); an S3-backed deployment lands the bytes in the bucket
+   * under `docs/` and records the driver's publicUrl. Omitted → the
+   * historical direct write, byte-identical (non-route callers).
+   */
+  driver?: Pick<StorageAdapter, 'put' | 'publicUrl'>
 }
 
 export interface SavedDocument {
@@ -120,19 +153,29 @@ export interface SavedDocument {
 }
 
 /**
- * Persist a validated document: server-generated file name under
- * public/docs/ (mkdir on demand — the directory is runtime state, not a
- * committed tree), then the Attachment row with §60 provenance metadata.
- * Audit event lands on the project when one is linked (AuditEvent.projectId
- * is non-nullable — unlinked uploads have no audit row; their provenance
- * lives on the Attachment row itself).
+ * Persist a validated document: server-generated file name (doc-<ts>-<hex>.<ext>)
+ * written through the transport the caller chose — the storage driver when
+ * one is passed (issue #37; local-disk layout byte-identical to the direct
+ * write, S3-backed deploys store documents in the bucket) or the historical
+ * direct public/docs write — then the Attachment row with §60 provenance
+ * metadata. Audit event lands on the project when one is linked
+ * (AuditEvent.projectId is non-nullable — unlinked uploads have no audit row;
+ * their provenance lives on the Attachment row itself).
  */
 export async function saveDocument(input: SaveDocumentInput): Promise<SavedDocument> {
   const cleanName = sanitizeFileName(input.fileName)
-  const dir = path.join(process.cwd(), 'public', 'docs')
-  await mkdir(dir, { recursive: true }) // created on demand, never committed
   const diskName = `doc-${Date.now()}-${randomBytes(3).toString('hex')}.${MIME_EXT[input.mimeType]}`
-  await writeFile(path.join(dir, diskName), input.bytes)
+  let storageKey: string
+  if (input.driver) {
+    const key = `docs/${diskName}`
+    await input.driver.put(key, input.bytes, input.mimeType)
+    storageKey = input.driver.publicUrl(key)
+  } else {
+    const dir = path.join(process.cwd(), 'public', 'docs')
+    await mkdir(dir, { recursive: true }) // created on demand, never committed
+    await writeFile(path.join(dir, diskName), input.bytes)
+    storageKey = `/docs/${diskName}`
+  }
 
   const category = isDocumentCategory(input.category) ? input.category : 'other'
   const attachment = await db.attachment.create({
@@ -140,7 +183,7 @@ export async function saveDocument(input: SaveDocumentInput): Promise<SavedDocum
       entityType: input.entityType?.slice(0, 60) || 'document',
       entityId: input.entityId?.slice(0, 60) || 'unattached',
       fileName: cleanName,
-      storageKey: `/docs/${diskName}`,
+      storageKey,
       kind: `${category}_doc`,
       uploadedBy: input.uploadedBy.email,
       projectId: input.projectId ?? null,
@@ -259,7 +302,7 @@ export async function extractDocument(attachmentId: string, opts: ExtractOptions
   const attachment = await db.attachment.findUnique({ where: { id: attachmentId } })
   if (!attachment) return { ok: false, error: 'Attachment not found' }
 
-  const buf = await readFile(docsPath(attachment.storageKey)).catch(() => null)
+  const buf = await readStoredDocumentBytes(attachment.storageKey)
   if (!buf || buf.length === 0) {
     return { ok: false, error: 'Stored file is missing or unreadable — re-upload the document' }
   }
