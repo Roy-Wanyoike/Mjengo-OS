@@ -1086,7 +1086,8 @@ model JobRecord {
 }
 
 // Feature flags (spec §81): ai_progress, ai_voice, wallet, marketplace,
-// land_verification, low_data. DB-backed, cached in-process.
+// land_verification. DB-backed, cached in-process (low_data was removed —
+// task 9-a decision, see modules/intel/flags.ts).
 model FeatureFlag {
   id          String   @id @default(cuid())
   key         String   @unique

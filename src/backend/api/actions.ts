@@ -3,8 +3,12 @@ import { db } from '@/backend/lib/db'
 import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/backend/lib/mjengo'
 import { CLIENT_ACTIONS } from '@/shared/client-actions'
 import { publicRoute, safeError } from '@/backend/lib/route-kit'
-import { unauthorized, forbidden } from '@/backend/lib/guard'
+import { unauthorized, forbidden, type GuardSession } from '@/backend/lib/guard'
 import { kindForAction, withAuditContext } from '@/backend/lib/audit'
+import { requireFlagOn, type FlagKey } from '@/backend/modules/intel/flags'
+import { WALLET_ACTIONS } from '@/backend/actions/wallet'
+import { LAND_ACTIONS } from '@/backend/actions/land'
+import { SUPPLY_ACTIONS } from '@/backend/actions/supply'
 
 // Owner action endpoint — src/app/api/actions/route.ts is the shim.
 // · client-ROLE sessions may only dispatch CLIENT_ACTIONS (403 otherwise) and
@@ -29,6 +33,33 @@ import { kindForAction, withAuditContext } from '@/backend/lib/audit'
 // one endpoint every mutation flows through. Counted BEFORE the idempotency
 // replay — replays are still requests. In-process limiter — single-instance
 // honesty note in src/backend/lib/rate-limit.ts.
+//
+// FEATURE-FLAG FAMILY GATE (spec §81, task 9-a): the action families below
+// are the user-facing surfaces of a flaggable feature — dispatched through
+// this route by the money/finder/land tabs and by API clients. A flag OFF
+// closes its family's actions for NON-ADMIN sessions (admins bypass so they
+// can toggle and test; the UI hides the tab entry by the same rule). The
+// families and the honest boundaries (what each flag deliberately does NOT
+// gate — the escrow/milestone ladder, invoices, professionals, delivery
+// expense posting) are documented in src/backend/modules/intel/flags.ts.
+const FLAGGED_ACTION_FAMILIES: ReadonlyArray<{ actions: readonly string[]; flag: FlagKey }> = [
+  // wallet: the user-facing wallet & payment-request actions (money tab +
+  //   API clients). Internal ledger postings by other flows are NOT here.
+  { actions: WALLET_ACTIONS, flag: 'wallet' },
+  // land_verification: the parcels + title-search ladder only.
+  { actions: LAND_ACTIONS, flag: 'land_verification' },
+  // marketplace: the whole Finder supply loop (invoice.* is a separate
+  //   module that shares the tab and stays open).
+  { actions: SUPPLY_ACTIONS, flag: 'marketplace' },
+]
+
+/** The flag gate for one action type — null when the action is allowed. */
+async function actionFlagGate(type: string, session: GuardSession): Promise<NextResponse | null> {
+  for (const family of FLAGGED_ACTION_FAMILIES) {
+    if (family.actions.includes(type)) return requireFlagOn(family.flag, session)
+  }
+  return null
+}
 
 function auditContextFor(req: NextRequest, type: ActionType, payload: any) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
@@ -55,6 +86,14 @@ export const POST = publicRoute(
       shareToken?: string
     }
     if (!type) return NextResponse.json({ error: 'type required' }, { status: 400 })
+
+    // Feature-flag gate (spec §81, task 9-a) — BEFORE the idempotency replay
+    // and before any session/share branch: a disabled feature's endpoint is
+    // closed for non-admins, full stop (a replay would merely echo a stored
+    // response the feature now refuses; no money moves either way). A null
+    // session (share-token caller) is a non-admin and is gated too.
+    const flagDenied = await actionFlagGate(type, session)
+    if (flagDenied) return flagDenied
 
     // Canonical header is Idempotency-Key; the x-idempotency-key variant is
     // accepted too (clients/api-explorers send both spellings — dedupe either way).

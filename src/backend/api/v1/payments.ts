@@ -3,6 +3,7 @@ import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
 import { payPaymentRequest } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
+import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { paymentPayBody } from './schemas'
 import { mapServiceError, v1Err, V1_MUTATION_LIMIT } from './respond'
 
@@ -27,6 +28,11 @@ import { mapServiceError, v1Err, V1_MUTATION_LIMIT } from './respond'
  * posts a balanced double-entry ledger transaction; the legacy Transaction row
  * gains costCode + ledgerTxnId. Every financial transaction is audited via
  * applyAction-style trails (the service notifies + the caller can audit).
+ *
+ * Feature flag (spec §81, task 9-a): gated by `wallet` — OFF → 403 for
+ * non-admin sessions BEFORE the request is resolved or money moves (admins
+ * bypass; see flags.ts — internal ledger postings by other flows, e.g.
+ * invoice.pay, deliberately stay open while the flag is off).
  */
 export const POST = route(
   {
@@ -37,6 +43,11 @@ export const POST = route(
     onError: (e) => mapServiceError('payments POST', e, 'Payment failed'),
   },
   async (req, session, body) => {
+    // Feature flag (spec §81, task 9-a) — the uniform wallet gate, BEFORE the
+    // idempotency record, the request lookup and any money movement.
+    const flagDenied = await requireFlagOn('wallet', session)
+    if (flagDenied) return flagDenied
+
     const id = body.paymentRequestId ?? body.id ?? ''
 
     // Resolve the request FIRST so client-role sessions are pinned to their
