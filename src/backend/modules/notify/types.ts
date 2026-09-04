@@ -40,7 +40,15 @@ export interface NotifyOptions {
   channel?: string
   /** Honest channel state — defaults to 'logged' (in-app row, nothing sent externally). */
   deliveryStatus?: string
+  /**
+   * Additionally attempt a real SMS delivery to this number (E.164
+   * recommended). Only honored when an SMS provider is configured
+   * (NOTIFY_SMS_WEBHOOK_URL — see channels.ts); otherwise the row honestly
+   * stays 'logged' and nothing is sent. The attempt never throws into the
+   * caller — the outcome lands in deliveryStatus/deliveryDetail.
+   */
+  sms?: { to: string }
 }
 
-/** Delivery lifecycle of an external channel row (in-app 'logged' is terminal today). */
+/** Delivery lifecycle of an external channel row (in-app 'logged' is the default). */
 export type DeliveryStatus = 'logged' | 'sent' | 'failed'
