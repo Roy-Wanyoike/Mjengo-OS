@@ -92,11 +92,10 @@ Caddyfile
 # runtime photo uploads (POST /api/upload writes here — not repo content)
 /public/photos/upp-*
 
-# reports & sandbox-only docs (architecture roadmap lives locally);
-# published decision records stay tracked (docs/adr/ — see ADR 0001)
-docs/*
-!docs/adr/
-!docs/adr/**
+# sandbox-only docs (local reports/notes — published docs like docs/screenshots stay tracked)
+docs/reports/
+docs/*.local.md
+(docs(readme): recruiter-grade README with real app screenshots, MIT license, security policy)
 
 # sandbox environment scripts & template demos
 # (tests/ was previously ignored as sandbox scratch — it now holds the real
