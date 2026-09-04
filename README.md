@@ -17,6 +17,17 @@ evidence around what happened.* Reported vs verified, everywhere. The ledger
 never lies; AI never approves; payments are idempotent; closing stock is
 always derived.
 
+## Contents
+
+- [The product in one page](#the-product-in-one-page) · [Visual tour](#visual-tour)
+- [Demo accounts (seed data)](#demo-accounts-seed-data) · [Feature tour (the real tabs)](#feature-tour-the-real-tabs)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack) · [Quick start](#quick-start)
+- [Environment variables](#environment-variables) · [Security engineering](#security-engineering)
+- [i18n — English + Kiswahili](#i18n--english--kiswahili) · [Deployment](#deployment)
+- [CI/CD](#cicd) · [Honesty notes (deliberate)](#honesty-notes-deliberate)
+- [Project structure & docs](#project-structure--docs) · [License](#license)
+
 ## The product in one page
 
 | | |
@@ -155,7 +166,7 @@ flowchart TB
         AIS["AI skills seam<br/>src/backend/lib/ai.ts<br/>(z-ai SDK, backend-only)"]
     end
 
-    DB[("SQLite + Prisma 6<br/>60-model schema<br/>double-entry ledger")]
+    DB[("SQLite + Prisma 6<br/>61-model schema<br/>double-entry ledger")]
 
     U --> NEXT
     U -->|"/website"| REWRITE
@@ -184,7 +195,7 @@ src/
   mobile/       # phone-first shell: bottom nav, ≤5 tabs + More sheet + camera
   shared/       # isomorphic contracts: permissions matrix, CLIENT_ACTIONS allowlist
 mjengoos-website/  # marketing site (independent app, :3001, proxied at /website)
-prisma/            # schema.prisma (60 models), migrations/, seed chain
+prisma/            # schema.prisma (61 models), migrations/, seed chain
 ```
 
 Full module boundaries and the production migration roadmap
@@ -200,7 +211,7 @@ Full module boundaries and the production migration roadmap
 | UI | Tailwind CSS 4, shadcn/ui + Radix primitives, lucide icons, cmdk palette |
 | State | Zustand (app store + persisted offline outbox) |
 | Auth | NextAuth v4 — credentials provider, JWT session cookies, scrypt hashes |
-| Data | Prisma 6 + SQLite (60-model schema, SQL migrations, double-entry ledger) |
+| Data | Prisma 6 + SQLite (61-model schema, SQL migrations, double-entry ledger) |
 | Validation | Zod 4 on every mutating route |
 | AI | z-ai-web-dev-sdk behind a backend-only seam (vision, voice, anomaly) |
 | Runtime/tooling | Bun (install, seeds, dev), Node 20 for the production standalone server, Docker for self-host |
@@ -357,7 +368,7 @@ resume unchanged when billing is restored.
 | `src/mobile/` | Phone-first bottom nav |
 | `src/shared/` | Isomorphic contracts: `permissions.ts` role matrix, `client-actions.ts` allowlist |
 | `mjengoos-website/` | Marketing site (independent Next.js app, `:3001`, proxied at `/website`) |
-| `prisma/` | `schema.prisma` (60 models), `migrations/`, `seed.ts` + `seed-extras/` |
+| `prisma/` | `schema.prisma` (61 models), `migrations/`, `seed.ts` + `seed-extras/` |
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Build/run/test/deploy operations guide |
