@@ -45,6 +45,8 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `AUTH_TRUST_HOST` | behind proxy: yes (`1`) | Makes next-auth v4's `detectOrigin` honor the proxy's forwarded host/proto headers instead of silently pinning every origin to `NEXTAUTH_URL` (or `http://localhost:3000`). Harmless for direct localhost access — keep it set whenever a proxy is involved. |
 | `WEBSITE_ORIGIN` | with the marketing site | Rewrite target for `/website/*` — the origin of the `mjengoos-website/` Next.js app. Default `http://127.0.0.1:3001` (the site's own server in local dev); under docker-compose set `http://website:3001` (service DNS — `docker-compose.yml` does this for you). |
 | `TRUST_PROXY` | hardening: `1` behind a trusted proxy | When set, the app reads the client IP from the **rightmost** `X-Forwarded-For` value (the one appended by your trusted proxy) instead of the first, client-spoofable value. Leave unset when there is no appending proxy in front. |
+| `RATE_LIMIT_STORE` | multi-process: optional | `memory` (default — the historical in-process counters, exact for one process) or `sqlite` — one shared SQLite file per **host** so every process sees the same token buckets and login lockout (issue #33; needs `node` as the standalone runtime and one Docker COPY line, see §9.4). Any init failure logs one warning and stays in-memory. |
+| `RATE_LIMIT_SQLITE_PATH` | with `RATE_LIMIT_STORE=sqlite` | Path of the shared store file (default `db/ratelimit.db`, `file:` prefix tolerated). Keep it on the same persistent volume as `DATABASE_URL` — never point it at the Prisma database; it is disposable cache-like state. |
 | `MUTATION_ORIGIN_ALLOWLIST` | hardening: optional | When set (comma-separated origin list), JSON mutation requests are rejected unless their `Origin` header matches — CSRF defense-in-depth on top of cookies. |
 | `USSD_WEBHOOK_SECRET` | hardening: optional | When set, `/api/ussd` requires a valid HMAC signature derived from this shared secret on every request (authenticated gateway webhooks); unset = the documented demo posture. |
 | `JOBS_RUN_TOKEN` | scheduler: optional | Shared secret (`openssl rand -hex 32`) that lets an external scheduler authenticate `POST /api/jobs/run` with `Authorization: Bearer <token>` (no browser session needed — compose `jobs-tick` sidecar, systemd timer, any cron). Same value must reach the app and the scheduler. **Unset = the bearer path is fully disabled** (fail closed — the endpoint then answers only to contractor/admin sessions, exactly as before). See §7.3. |
@@ -353,6 +355,10 @@ server {
   `sqlite3 /srv/mjengo/custom.db ".backup '/srv/backups/mjengo-$(date +%F).db'"`
   — both produce a consistent snapshot; schedule it daily and keep the
   uploads volume in the same backup (photos are evidence).
+- **Rate-limit store file (`db/ratelimit.db`, only when
+  `RATE_LIMIT_STORE=sqlite`):** NOT part of backups — it is cache-like
+  counter state (WAL sidecar files included); deleting it while the app is
+  stopped simply resets everyone's limits and lockouts.
 - **Secrets:** generate `NEXTAUTH_SECRET` with `openssl rand -hex 32`; store
   it in your secret manager / `.env` on the host (never in git, never in the
   image). Changing it invalidates all sessions (users just sign in again).
@@ -570,12 +576,59 @@ S3 driver).
 
 ### 9.4 Multi-instance note
 
-Running >1 app instance? Set the five `S3_*` values. The in-process rate
-limiter and login lockout still need their own shared store (see
-`src/backend/lib/rate-limit.ts` header), but file storage stops being the
-thing that breaks: every instance PUTs to and reads from the same bucket,
-and the client-direct presigned flow removes the upload bandwidth from the
-app tier entirely.
+Running >1 app instance? Set the five `S3_*` values so file storage stops
+being the thing that breaks: every instance PUTs to and reads from the same
+bucket, and the client-direct presigned flow removes the upload bandwidth
+from the app tier entirely.
+
+The rate limiter and login lockout now have a real **single-host** answer
+(W3-b, issue #33) instead of an honest TODO: set
+
+```bash
+RATE_LIMIT_STORE=sqlite
+# optional, default shown; keep it next to custom.db on the same volume
+RATE_LIMIT_SQLITE_PATH=db/ratelimit.db
+```
+
+and every process on that host shares ONE SQLite store (WAL journal,
+busy-timeout, `BEGIN IMMEDIATE` around every read-modify-write): a bucket
+exhausted on instance A is exhausted on instance B, and the 5-strike login
+lockout trips no matter which process served the failures. The semantics
+are the same the in-memory default pins in tests — same key formats, same
+continuous token-bucket refill, same lockout lifecycle.
+
+Honest requirements and limits of that path:
+
+- **Runtime must be node** — the store is `better-sqlite3`, a native addon
+  the Bun runtime **crashes** on (verified on Bun 1.3.x). The Docker CMD
+  (`node server.js`) is fine; the loader detects Bun and falls back to
+  memory with one warning instead of crashing.
+- **Docker: one COPY line** (not added in this wave — the Dockerfile is
+  outside the feature's file ownership; the module is loaded dynamically
+  and therefore invisible to the bundler's standalone tracing):
+  `COPY --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3`
+  in the runner stage. Without it the app still boots — it logs one
+  fallback warning and stays in-memory. `bun install` in the builder
+  downloads the platform prebuild (prebuild-install; node:20-slim has no
+  compile toolchain, so a GitHub-releases-blocking proxy needs a mirrored
+  artifact).
+- **Same host only.** One shared file on one filesystem — put it on the
+  same volume as `DATABASE_URL` (default `db/ratelimit.db` → `/app/db/`
+  in Docker). Do **not** point it at the Prisma database; the file is
+  disposable (delete while stopped = reset all limits/lockouts) and is
+  deliberately excluded from backups.
+- **Fail-safe posture:** any init failure (module missing, unwritable
+  path, bad value) logs ONE warning and degrades to the in-memory default
+  — rate limiting never prevents boot. Runtime store failure fails OPEN
+  with a warning (an unavailable optional store must not wedge every
+  request behind 429s).
+
+**Multiple hosts** (a real load-balanced cluster, ≥2 machines): a shared
+SQLite file does not cross machines — that still needs the Redis
+implementation of the same store seams (`INCR`+`TTL`, or a Lua token
+bucket for the exact continuous-refill semantics), deliberately not built:
+no Redis dependency exists in this repo. Until then, an N-host deployment
+honestly means per-host shared state, not global state.
 
 ### 9.5 Honest scope notes
 

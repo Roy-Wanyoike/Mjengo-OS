@@ -59,6 +59,7 @@
     "@tanstack/react-query": "^5.82.0",
     "@tanstack/react-table": "^8.21.3",
     "ajv": "^8.20.0",
+    "better-sqlite3": "^12",
     "brace-expansion": "^5.0.9",
     "browserslist": "^4.28.8",
     "class-variance-authority": "^0.7.1",
