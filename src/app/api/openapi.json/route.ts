@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server'
  *
  * Hand-written but kept truthful field-for-field against the route code —
  * every documented path, parameter, body field, response field and status
- * code is produced by src/app/api/v1/** (this is the SDK-generation seam
+ * code is produced by src/backend/api/v1/** (reorg: src/app/api/v1/** are thin shims; this is the SDK-generation seam
  * listed in ARCHITECTURE.md's roadmap). 8 /api/v1 paths = the 8 v1 route
  * files, plus the two wave-3 app-level GETs added by W3-B: /api/audit
  * (admin audit log, spec §44) and /api/reports/budget-variance (QS report).

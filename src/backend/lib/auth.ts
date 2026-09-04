@@ -141,9 +141,11 @@ export function buildAuthOptions(secureCookies: boolean): NextAuthOptions {
         password: { label: 'Password', type: 'password' },
       },
       /**
-       * Credentials sign-in with brute-force lockout (W1-SEC, Doc A §52):
-       * 5 failures for the same (email + source IP) within 15 min → the
-       * account+IP pair is locked for 15 min — even a CORRECT password is
+       * Credentials sign-in with brute-force lockout (W1-SEC, Doc A §52;
+       * W-AUDIT #1 hardening): the failure counter is keyed PRIMARILY by
+       * EMAIL (5 failures within 15 min → 15-min lock even across rotating
+       * source IPs — the IP is only a secondary tracker so a distributed
+       * attack still gets per-pair throttling) — even a CORRECT password is
        * rejected during the window. Tracking is in-process (see
        * rate-limit.ts for the single-instance honesty note).
        *

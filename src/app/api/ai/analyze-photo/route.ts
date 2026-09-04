@@ -5,6 +5,7 @@ import { db } from '@/backend/lib/db'
 import { extractJson, visionMessage } from '@/backend/lib/ai'
 import { applyAction, getProjectPayload } from '@/backend/lib/mjengo'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
+import { safeErrorMessage } from '@/backend/lib/guard'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -118,6 +119,7 @@ Be conservative and evidence-based. If uncertain, lower the confidence.`
     })
   } catch (e) {
     console.error('[api/ai/analyze-photo]', e)
-    return NextResponse.json({ error: e instanceof Error ? e.message : 'Photo analysis failed' }, { status: 500 })
+    // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
+    return NextResponse.json({ error: safeErrorMessage(e, 'Photo analysis failed') }, { status: 500 })
   }
 }

@@ -1,5 +1,7 @@
 // /api/v1 response helpers (spec §64 API QUALITY — consistent errors,
-// pagination, rate limiting; B5-APIV1).
+// pagination, rate limiting; B5-APIV1). src/app/api/v1/respond.ts was the
+// old home — moved into src/backend/api/v1/ by the backend reorg (W-BACKEND);
+// the v1 route shims now re-export handlers from this directory.
 //
 // ERROR SHAPE (deliberate, kept consistent across the whole v1 surface):
 //   every error  → { error: string, field?: string [, retryAfterSec?] }
@@ -16,15 +18,14 @@
 //   401 no session (guard) · 403 role/tenant (guard + client pinning)
 //   404 unknown wallet / payment request (message-mapped — see below)
 //   422 structurally valid but nonsensical request (e.g. same-wallet transfer)
-//   429 rate limited (enforceRateLimit, per-principal token bucket)
+//   429 rate limited (enforceRateLimit via route-kit's rateLimit slot, per-principal token bucket)
 //   500 unexpected failure — generic honest message, details in server logs
 //   409 is NOT produced today: a repeated Idempotency-Key unconditionally
 //   replays the stored response (modules/wallet/http.ts withIdempotency)
 //   even when the payload differs — kept as-is (existing behavior), see the
 //   OpenAPI Idempotency-Key description.
 
-import { NextResponse, type NextRequest } from 'next/server'
-import { enforceRateLimit } from '@/backend/lib/rate-limit'
+import { NextResponse } from 'next/server'
 
 /** v1 error body: { error, field? } — one shape for every failure. */
 export function v1Err(status: number, error: string, field?: string): NextResponse {
@@ -60,15 +61,6 @@ export const V1_READ_LIMIT = 120
 /** Money mutations: 30 requests/min per principal — replayed idempotent
  *  requests count too (the limit fires before the replay, like every gate). */
 export const V1_MUTATION_LIMIT = 30
-
-/** 429 when the per-principal token bucket for this route is empty. */
-export async function v1Rate(
-  req: NextRequest,
-  bucket: string,
-  limit: number,
-): Promise<NextResponse | null> {
-  return enforceRateLimit(req, bucket, limit, 60_000)
-}
 
 // ---------------------------------------------------------------- pagination
 

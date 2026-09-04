@@ -63,6 +63,32 @@ export function sniffDocumentMime(buf: Buffer): DocumentMimeType | null {
   return null
 }
 
+/**
+ * Same magic-number approach for the LEGACY photo family (upload route's
+ * data:image/* path — W-AUDIT #4: it used to trust the declared MIME).
+ * Covers the four types that path accepts: PNG, JPEG, WebP (RIFF…WEBP) and
+ * GIF — or null when the bytes match none of them.
+ */
+export function sniffImageMime(buf: Buffer): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | null {
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return 'image/png'
+  }
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'image/jpeg'
+  }
+  if (
+    buf.length >= 12 &&
+    buf.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    buf.subarray(8, 12).toString('latin1') === 'WEBP'
+  ) {
+    return 'image/webp'
+  }
+  if (buf.length >= 6 && buf.subarray(0, 6).toString('latin1').startsWith('GIF8')) {
+    return 'image/gif'
+  }
+  return null
+}
+
 /** Absolute path for a public/docs storageKey (traversal stripped, defense in depth). */
 function docsPath(storageKey: string): string {
   const safe = storageKey.replace(/^\/+/, '').replace(/\.\./g, '')
