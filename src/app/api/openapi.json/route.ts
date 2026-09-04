@@ -14,7 +14,8 @@ import { NextResponse } from 'next/server'
  * wave-3 app-level GETs added by W3-B: /api/audit (admin audit log, spec
  * §44) and /api/reports/budget-variance (QS report).
  *
- * Honest facts baked into the text: simulated payment rails, KES-only money,
+ * Honest facts baked into the text: simulated-by-default payment rails (Daraja
+ * sandbox when env-configured), KES-only money,
  * ledger as source of truth, idempotent replays that never 409, single-instance
  * in-process rate buckets, and the one error shape { error, field? }.
  */
@@ -732,7 +733,7 @@ const spec = {
           method: { type: 'string', description: 'Payment method key, e.g. mpesa.' },
           provider: { type: 'string' },
           label: { type: 'string' },
-          integrationNote: { type: 'string', description: 'Honest per-rail integration state (simulated).' },
+          integrationNote: { type: 'string', description: 'Honest per-rail integration state (simulated by default; Daraja sandbox when env-configured).' },
         },
       },
       WalletTransactionsPage: {
@@ -791,7 +792,7 @@ const spec = {
           transactionId: { type: 'string', description: 'Legacy Transaction row id (carries ledgerTxnId + costCode).' },
           ledgerRef: { type: 'string' },
           balance: { type: 'number', description: 'Present for wallet (escrow) payments — escrow balance after spend.' },
-          providerNote: { type: 'string', description: 'Honest simulated-rail note.' },
+          providerNote: { type: 'string', description: 'Honest rail note (simulated by default; Daraja sandbox when env-configured).' },
         },
       },
       AuditEvent: auditEventSchema,

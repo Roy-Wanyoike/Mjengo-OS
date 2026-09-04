@@ -297,8 +297,9 @@ export interface RecapJobResult {
 /**
  * Daily 6 PM client recap shared core: writes the Recap row, then emits
  * 'recap.daily' — the event policy lands the notification-center row as an
- * HONEST in-app entry (channel in_app, deliveryStatus 'logged'): nothing is
- * sent on WhatsApp until a provider is wired.
+ * HONEST in-app entry (channel in_app, deliveryStatus 'logged'): external
+ * delivery is opt-in via the notify channel seam (NOTIFY_SMS_WEBHOOK_URL —
+ * see modules/notify/channels.ts) and is attempted only when configured.
  */
 export async function runDailyRecap(projectId?: string | null): Promise<RecapJobResult> {
   const digest = await buildProjectDigest(projectId)
