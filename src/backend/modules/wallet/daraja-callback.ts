@@ -33,6 +33,7 @@
 import { db } from '@/backend/lib/db'
 import { cashAccountForMethod, postLedgerTransactionInTx } from '@/backend/modules/ledger/service'
 import { notify } from '@/backend/modules/notify/service'
+import { phaseIdForMilestonePayment } from './service'
 import { getDarajaProvider } from './daraja'
 
 export const DARAJA_INTENT_KEY_PREFIX = 'daraja.intent:'
@@ -261,6 +262,12 @@ async function completeVerifiedIntent(cb: StkCallbackData): Promise<DarajaCallba
       ],
     })
 
+    // Phase cost-code (issue #39): same derivation as the in-app pay path — a
+    // request raised against a milestone pays that milestone's phase, derived
+    // + validated INSIDE the transaction (fail-closed on a foreign phase; no
+    // milestone linkage → null → the report estimates the row).
+    const phaseId = await phaseIdForMilestonePayment(tx, fresh.projectId, fresh.relatedEntityType, fresh.relatedEntityId)
+
     // Exactly ONE legacy Transaction row per ledger txn (idempotent link).
     const txnRow =
       (await tx.transaction.findFirst({ where: { ledgerTxnId: ledgerTxn.id } })) ??
@@ -272,6 +279,7 @@ async function completeVerifiedIntent(cb: StkCallbackData): Promise<DarajaCallba
           method: 'mpesa',
           reference: cb.receipt ? `MPESA-${cb.receipt}` : `MPESA-${checkoutRequestID.slice(-12)}`,
           costCode: 'payment_request',
+          phaseId,
           ledgerTxnId: ledgerTxn.id,
           note: `${fresh.requestCode} — ${fresh.description} (M-Pesa verified callback ${checkoutRequestID})`,
           date: new Date(),

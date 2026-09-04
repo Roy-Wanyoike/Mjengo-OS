@@ -39,6 +39,64 @@ export function nextPaymentRequestCode(): string {
 /** Roles that may decide / pay payment requests in-app (client + finance are the real queue). */
 const PR_ROLES = ['client', 'finance', 'admin', 'contractor', 'supervisor'] as const
 
+// ---------------- phase cost-code helpers (issue #39) ----------------
+
+/**
+ * Structural type both `db` and an in-transaction client satisfy — the phase
+ * lookup every money posting seam shares.
+ */
+type PhaseReader = {
+  phase: {
+    findFirst(args: { where: { id: string; projectId: string }; select?: { id: true } }): Promise<{ id: string } | null>
+  }
+}
+
+/**
+ * Validate a phase cost-code for a money posting (issue #39). Returns the
+ * phase id when the phase belongs to THIS project; null when no phase was
+ * referenced (absence of attribution is honest — the report estimates those
+ * rows); THROWS fail-closed when the phase exists outside the project — money
+ * is never posted with a foreign phase attribution. Money math untouched:
+ * this only stamps the attribution dimension on the legacy Transaction row.
+ */
+export async function resolvePostingPhaseId(
+  reader: PhaseReader,
+  projectId: string,
+  phaseId: string | null | undefined,
+): Promise<string | null> {
+  if (!phaseId || typeof phaseId !== 'string') return null
+  const phase = await reader.phase.findFirst({ where: { id: phaseId, projectId }, select: { id: true } })
+  if (!phase) {
+    throw new Error(`Phase ${phaseId} does not belong to this project — refusing to post money with a foreign phase cost-code`)
+  }
+  return phase.id
+}
+
+/**
+ * Milestone → phase cost-code for payment requests (issue #39): a request
+ * raised against a milestone (`relatedEntityType: 'milestone'`) pays that
+ * milestone's phase. Returns null when nothing is derivable (no milestone
+ * reference, unknown milestone, or a milestone without a phase) — those rows
+ * keep honest null attribution and the report estimates them; money is never
+ * blocked on missing attribution. A milestone whose phaseId is FOREIGN to the
+ * project fails closed (resolvePostingPhaseId).
+ */
+export async function phaseIdForMilestonePayment(
+  reader: PhaseReader & {
+    milestone: {
+      findFirst(args: { where: { id: string; projectId: string }; select: { phaseId: true } }): Promise<{ phaseId: string | null } | null>
+    }
+  },
+  projectId: string,
+  relatedEntityType: string | null,
+  relatedEntityId: string | null,
+): Promise<string | null> {
+  if (relatedEntityType !== 'milestone' || !relatedEntityId) return null
+  const milestone = await reader.milestone.findFirst({ where: { id: relatedEntityId, projectId }, select: { phaseId: true } })
+  if (!milestone) return null // honest: unattributable, never a blocked payment
+  return resolvePostingPhaseId(reader, projectId, milestone.phaseId)
+}
+
 // ---------------- in-tx posting helpers (shared by every money flow) ----------------
 
 /**
@@ -120,7 +178,7 @@ export async function spendEscrowInTx(
 export async function releaseMilestoneAtomic(
   projectId: string,
   input: {
-    milestone: { id: string; name: string; amount: number }
+    milestone: { id: string; name: string; amount: number; phaseId?: string | null }
     decider: DeciderIdentity
     note: string | null
   },
@@ -140,6 +198,10 @@ export async function releaseMilestoneAtomic(
       postedRole: decider.role,
       idempotencyKey: `milestone.release:${milestone.id}`,
     })
+    // Phase cost-code (issue #39): a milestone release is spend ON the
+    // milestone's phase — validated in-project INSIDE the transaction
+    // (fail-closed on a foreign phase; money math unchanged).
+    const phaseId = await resolvePostingPhaseId(tx, projectId, milestone.phaseId)
     // exactly ONE legacy row per release (idempotent on the ledger txn)
     const txnRow =
       (await tx.transaction.findFirst({ where: { ledgerTxnId: escrow.ledgerTxnId } })) ??
@@ -151,6 +213,7 @@ export async function releaseMilestoneAtomic(
           method: 'escrow',
           reference: `MJP-${milestone.id.slice(-6)}`,
           costCode: 'milestone',
+          phaseId,
           ledgerTxnId: escrow.ledgerTxnId,
           note: `${milestone.name} released to contractor — approved by ${decider.name}`,
           date: now,
@@ -317,6 +380,12 @@ export async function payPaymentRequest(projectId: string, p: any) {
             idempotencyKey: `payment.request:${fresh.id}`,
           })
 
+    // Phase cost-code (issue #39): a request raised against a milestone pays
+    // that milestone's phase — derived + validated INSIDE the transaction
+    // (fail-closed on a foreign phase). No milestone linkage → null (the
+    // report's documented estimate handles those rows honestly).
+    const phaseId = await phaseIdForMilestonePayment(tx, projectId, fresh.relatedEntityType, fresh.relatedEntityId)
+
     const txnRow =
       (await tx.transaction.findFirst({ where: { ledgerTxnId: spend.ledgerTxnId } })) ??
       (await tx.transaction.create({
@@ -327,6 +396,7 @@ export async function payPaymentRequest(projectId: string, p: any) {
           method,
           reference: p.reference ?? spend.ledgerRef,
           costCode,
+          phaseId,
           ledgerTxnId: spend.ledgerTxnId,
           note: `${fresh.requestCode} — ${fresh.description}`,
           date: new Date(),
@@ -519,6 +589,10 @@ export async function reverseTransaction(projectId: string, p: any) {
             amount: -txn.amount,
             method: txn.method,
             reference: reversalLedger.ref,
+            // Phase cost-code (issue #39): a reversal negates the SAME phase
+            // spend — the original row's code is copied so net attribution
+            // stays exact (money math untouched).
+            phaseId: txn.phaseId,
             ledgerTxnId: reversalLedger.id,
             note: `Reversal of ${txn.id.slice(-6)}: ${p.reason ?? 'correction'}`,
             date: new Date(),
@@ -542,6 +616,10 @@ export async function reverseTransaction(projectId: string, p: any) {
         amount: -txn.amount,
         method: txn.method,
         reference: reversal.ref,
+        // Phase cost-code (issue #39): same as the legacy branch — the
+        // reversal negates the original row's phase spend, so its code is
+        // copied (net attribution exact; null originals stay null).
+        phaseId: txn.phaseId,
         ledgerTxnId: reversal.id,
         note: `Reversal of ${txn.id.slice(-6)}: ${p.reason ?? 'correction'}`,
         date: new Date(),

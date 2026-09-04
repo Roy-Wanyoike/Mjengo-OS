@@ -214,7 +214,7 @@ const auditEventSchema = {
 
 const budgetVarianceSchema = {
   type: 'object',
-  required: ['project', 'phases', 'categories'],
+  required: ['project', 'phases', 'categories', 'phaseAttribution'],
   properties: {
     project: {
       type: 'object',
@@ -232,17 +232,20 @@ const budgetVarianceSchema = {
     phases: {
       type: 'array',
       description:
-        'HONEST: the Transaction model has no phaseId, so per-phase spent is milestone-exact where the schema ' +
-        'allows it and otherwise a budget-share ALLOCATION across started phases — Σ phases.spent equals ' +
-        'project.spent exactly (an allocation, not a measurement, until phase cost-codes land in the schema).',
+        'Three-tier attribution (issue #39): REAL phase cost-codes (Transaction.phaseId) count directly; ' +
+        'pre-code rows derive exactly through milestone linkage; the uncoded remainder is the documented ' +
+        'budget-share ALLOCATION — Σ phases.spent equals project.spent exactly, and phaseAttribution + ' +
+        'per-phase codedSpent state which mode produced each number.',
       items: {
         type: 'object',
-        required: ['id', 'name', 'budget', 'spent', 'variance', 'variancePct', 'progressPct', 'txCount', 'topTransactions'],
+        required: ['id', 'name', 'budget', 'spent', 'variance', 'variancePct', 'progressPct', 'txCount', 'codedSpent', 'codedTxnCount', 'topTransactions'],
         properties: {
           id: { type: 'string' },
           name: { type: 'string' },
           budget: { type: 'number' },
           spent: { type: 'number' },
+          codedSpent: { type: 'number', description: 'Real-code portion of spent (rows carrying this phase\'s Transaction.phaseId cost-code, issue #39); spent − codedSpent is the fallback attribution.' },
+          codedTxnCount: { type: 'integer', description: 'Transactions attributed via a real phase cost-code.' },
           variance: { type: 'number', description: 'budget − spent (positive = under budget).' },
           variancePct: { type: 'integer', description: 'round(variance / budget × 100); 0 when budget is 0.' },
           progressPct: { type: 'integer' },
@@ -262,6 +265,22 @@ const budgetVarianceSchema = {
             },
           },
         },
+      },
+    },
+    phaseAttribution: {
+      type: 'object',
+      required: ['mode', 'codedSpent', 'codedTxnCount', 'milestoneDerivedSpent', 'milestoneDerivedTxnCount', 'estimatedSpent', 'estimatedTxnCount'],
+      description:
+        'Honest mode statement (issue #39): which attribution produced the per-phase numbers. ' +
+        'codedSpent + milestoneDerivedSpent + estimatedSpent == project.spent and the three counts == every transaction.',
+      properties: {
+        mode: { type: 'string', enum: ['none', 'real', 'mixed', 'estimated'], description: "'none' (no spend) · 'real' (every row carries a phase cost-code) · 'mixed' (part coded, part fallback) · 'estimated' (nothing coded — legacy milestone derivation + budget-share estimate)." },
+        codedSpent: { type: 'number', description: 'Σ amounts attributed via a stored Transaction.phaseId (real codes).' },
+        codedTxnCount: { type: 'integer' },
+        milestoneDerivedSpent: { type: 'number', description: 'Σ amounts of uncoded rows attributed exactly via the legacy PaymentRequest→milestone→phase derivation.' },
+        milestoneDerivedTxnCount: { type: 'integer' },
+        estimatedSpent: { type: 'number', description: 'Σ amounts of uncoded rows spread by the budget-share estimate.' },
+        estimatedTxnCount: { type: 'integer' },
       },
     },
     categories: {

@@ -9,7 +9,8 @@
 //    from the payload `by` (F3). The sessionless share-link path falls back to
 //    the payload actor, exactly like the invoices module.
 //  - A release debits the escrow ledger account, credits project EXPENSE and
-//    writes a Transaction (type 'milestone', costCode 'milestone', ledgerTxnId)
+//    writes a Transaction (type 'milestone', costCode 'milestone', ledgerTxnId,
+//    and — when the milestone carries one — the phaseId cost-code, issue #39)
 //    — all in ONE db.$transaction with the balance checked inside it (F2).
 //  - escrow.topup posts CASH→ESCROW ledger rows and keeps the wallet
 //    projection in sync in the same transaction (the ledger is the source of
@@ -177,10 +178,11 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
 
       if (decision === 'approve') {
         // Atomic: milestone update + escrow debit + EXPENSE credit + Transaction
-        // row (costCode 'milestone' + ledgerTxnId), balance re-checked INSIDE the
-        // transaction (F2).
+        // row (costCode 'milestone' + ledgerTxnId + phaseId cost-code — the
+        // milestone's phase, validated in-project inside the transaction),
+        // balance re-checked INSIDE the transaction (F2).
         const released = await releaseMilestoneAtomic(projectId, {
-          milestone: { id: milestone.id, name: milestone.name, amount: milestone.amount },
+          milestone: { id: milestone.id, name: milestone.name, amount: milestone.amount, phaseId: milestone.phaseId },
           decider,
           note,
         })

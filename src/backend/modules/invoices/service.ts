@@ -35,7 +35,7 @@
 import { db } from '@/backend/lib/db'
 import { currentActor } from './session'
 import { computeLedgerConsistency, matchThreeWay } from './three-way'
-import { spendEscrowInTx, spendExternalInTx } from '@/backend/modules/wallet/service'
+import { resolvePostingPhaseId, spendEscrowInTx, spendExternalInTx } from '@/backend/modules/wallet/service'
 import { getProvider } from '@/backend/modules/wallet/providers'
 import type { LedgerCheck, ThreeWayReport } from './types'
 
@@ -391,13 +391,19 @@ async function loadOrderForMatch(orderId: string) {
 }
 
 /**
- * `invoice.pay` { id, method, reference?, costCode?, acknowledgeMismatch?, by? } — CLIENT/FINANCE only,
+ * `invoice.pay` { id, method, reference?, costCode?, phaseId?, acknowledgeMismatch?, by? } — CLIENT/FINANCE only,
  * APPROVED only. Writes exactly ONE Transaction ledger row (costCode + ledgerTxnId);
  * the posting goes through the PaymentProvider seam (spec §40 — simulated rail,
  * clearly labelled) and the double-entry ledger inside ONE db.$transaction with
  * the escrow balance re-checked inside it (F2). The 3-way check runs internally
  * and mismatched payments need the payer's explicit acknowledgeMismatch — the
  * human decision, recorded in the trail.
+ *
+ * Phase cost-code (issue #39): an OPTIONAL payload phaseId attributes the
+ * payment to one of the project's phases — the payer's real attribution at
+ * pay time, validated in-project BEFORE the provider is touched (foreign
+ * phase → honest 400-style error, money never moves). Absent → null: the
+ * reports module's documented estimate keeps handling the row.
  */
 export async function payInvoice(projectId: string, payload: Record<string, unknown>) {
   const invoice = await getInvoiceOrThrow(payload.id, projectId)
@@ -421,6 +427,14 @@ export async function payInvoice(projectId: string, payload: Record<string, unkn
     typeof payload.costCode === 'string' && payload.costCode.trim()
       ? payload.costCode.trim()
       : 'invoice'
+
+  // Phase cost-code (issue #39): the payer may attribute the payment to a
+  // phase of THIS project — validated fail-closed before the provider or the
+  // ledger is touched (a foreign phase never receives money attribution).
+  // Absent → null → the report's documented estimate fallback.
+  const phaseIdCandidate =
+    typeof payload.phaseId === 'string' && payload.phaseId.trim() ? payload.phaseId.trim() : null
+  const phaseId = await resolvePostingPhaseId(db, projectId, phaseIdCandidate)
 
   // ---- 3-way match gate: warn, human decides ----
   const report = await threeWayCheck(projectId, { id: invoice.id })
@@ -499,6 +513,7 @@ export async function payInvoice(projectId: string, payload: Record<string, unkn
           method,
           reference,
           costCode,
+          phaseId,
           ledgerTxnId: spend.ledgerTxnId,
           note: `${fresh.invoiceCode}${orderCode ? ` (${orderCode})` : ''} paid to ${supplierName} — recorded by ${by}`,
           date: now,
