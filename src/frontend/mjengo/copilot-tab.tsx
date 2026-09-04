@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
+import { useSession } from 'next-auth/react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import { PhotoAnalysisBody } from '@/frontend/mjengo/overview-tab'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/frontend/ui/card'
@@ -166,6 +167,7 @@ async function downscaleDataUrl(dataUrl: string, max = 1024, quality = 0.72): Pr
 function PhotoPanel({ online }: { online: boolean }) {
   const { data, dispatch, load } = useMjengo()
   const dataMode = useMjengo((s) => s.dataMode)
+  const { data: session } = useSession()
   const [preview, setPreview] = useState<string | null>(null)
   const [previewIsData, setPreviewIsData] = useState(false)
   const [phaseId, setPhaseId] = useState<string>('')
@@ -177,7 +179,11 @@ function PhotoPanel({ online }: { online: boolean }) {
   if (!data) return null
 
   // Feature flag (spec §81): ai_progress gates this whole panel's analysis.
-  const aiProgressOn = data.intel.flags?.ai_progress !== false
+  // Task 9-a: admins now bypass the flag (same rule the route enforces via
+  // requireFlagOn) so they can toggle & test — non-admins get the disabled
+  // button + honest note below.
+  const isAdmin = session?.user?.role === 'admin'
+  const aiProgressOn = isAdmin || data.intel.flags?.ai_progress !== false
   const saver = dataMode === 'data_saver'
 
   function pickSeeded(url: string, caption: string | null) {
@@ -397,6 +403,7 @@ function PhotoPanel({ online }: { online: boolean }) {
 
 function VoicePanel({ online }: { online: boolean }) {
   const { data, dispatch, load } = useMjengo()
+  const { data: session } = useSession()
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -409,6 +416,14 @@ function VoicePanel({ online }: { online: boolean }) {
   const audioFileRef = useRef<HTMLInputElement>(null)
 
   if (!data) return null
+
+  // Feature flag (spec §81, task 9-a): ai_voice gates the VOICE entry points
+  // (record / samples / audio upload — the /api/ai/voice-log route answers
+  // the uniform 403 for non-admins). Admins bypass (requireFlagOn rule) so
+  // they can toggle & test. Typed parsing ("Parse text" → /api/ai/parse-text)
+  // is a different route and deliberately NOT gated by this flag.
+  const isAdmin = session?.user?.role === 'admin'
+  const aiVoiceOn = isAdmin || data.intel.flags?.ai_voice !== false
 
   function startRecording() {
     if (!navigator.mediaDevices?.getUserMedia) { toast.error('Microphone not available in this browser'); return }
@@ -445,6 +460,7 @@ function VoicePanel({ online }: { online: boolean }) {
 
   async function runVoice(base64: string) {
     if (!online) { toast.error('Voice AI needs connectivity — toggle Online first'); return }
+    if (!aiVoiceOn) { toast.error('AI voice logging is disabled by feature flag (ai_voice)'); return }
     setBusy(true); setParsed(null); setConfirmed(false)
     try {
       const res = await fetch('/api/ai/voice-log', {
@@ -510,7 +526,8 @@ function VoicePanel({ online }: { online: boolean }) {
           <div className="flex flex-col items-center gap-3 rounded-xl border border-stone-200 bg-stone-50/60 p-6">
             <button
               onClick={recording ? stopRecording : startRecording}
-              disabled={busy}
+              disabled={busy || !aiVoiceOn}
+              title={!aiVoiceOn ? 'Disabled by feature flag (ai_voice)' : undefined}
               className={`w-20 h-20 rounded-full flex items-center justify-center transition-all focus:outline-none focus:ring-4 focus:ring-amber-300 ${recording ? 'bg-red-600 animate-pulse' : 'bg-amber-600 hover:bg-amber-700'}`}
               aria-label={recording ? 'Stop recording' : 'Start recording'}
             >
@@ -519,21 +536,27 @@ function VoicePanel({ online }: { online: boolean }) {
             <p className="text-sm text-stone-600 font-medium tabular-nums">
               {recording ? `Recording… ${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')} — tap to stop` : busy ? 'Transcribing & parsing…' : 'Tap to record a delivery note'}
             </p>
+            {!aiVoiceOn && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="status">
+                Voice logging is disabled by feature flag (ai_voice) — an admin can re-enable it from the
+                Settings icon in the header. Typed parsing below still works.
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col gap-2">
             <p className="text-xs font-medium text-stone-500">No mic? Try a sample voice note</p>
             <div className="flex gap-2 flex-wrap">
-              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy} onClick={() => void playSample('/audio/voice-cement-delivery.wav')}>
+              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy || !aiVoiceOn} title={!aiVoiceOn ? 'Disabled by feature flag (ai_voice)' : undefined} onClick={() => void playSample('/audio/voice-cement-delivery.wav')}>
                 <Play className="w-3.5 h-3.5" aria-hidden /> “20 bags cement + 5 wire — Karioke”
               </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy} onClick={() => void playSample('/audio/voice-sand-ballast.wav')}>
+              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy || !aiVoiceOn} title={!aiVoiceOn ? 'Disabled by feature flag (ai_voice)' : undefined} onClick={() => void playSample('/audio/voice-sand-ballast.wav')}>
                 <Play className="w-3.5 h-3.5" aria-hidden /> “12t sand + 5t ballast — Mwangaza”
               </Button>
             </div>
             <input ref={audioFileRef} type="file" accept="audio/*" className="sr-only" aria-label="Upload audio file"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) void processBlob(f) }} />
-            <Button variant="ghost" size="sm" className="gap-1.5 self-start text-stone-500" disabled={busy} onClick={() => audioFileRef.current?.click()}>
+            <Button variant="ghost" size="sm" className="gap-1.5 self-start text-stone-500" disabled={busy || !aiVoiceOn} title={!aiVoiceOn ? 'Disabled by feature flag (ai_voice)' : undefined} onClick={() => audioFileRef.current?.click()}>
               <FileAudio className="w-4 h-4" aria-hidden /> Upload an audio file instead
             </Button>
           </div>

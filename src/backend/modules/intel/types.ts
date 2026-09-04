@@ -239,8 +239,10 @@ export const EMPTY_INTEL_SLICE: IntelSlice = {
   suggestions: [],
   reliability: [],
   health: null,
+  // Keep in sync with FLAG_KEYS in ./flags.ts (low_data was removed —
+  // task 9-a decision, see the flags.ts header).
   flags: Object.fromEntries(
-    ['ai_progress', 'ai_voice', 'wallet', 'marketplace', 'land_verification', 'low_data'].map((k) => [k, true]),
+    ['ai_progress', 'ai_voice', 'wallet', 'marketplace', 'land_verification'].map((k) => [k, true]),
   ) as FlagMap,
 }
 

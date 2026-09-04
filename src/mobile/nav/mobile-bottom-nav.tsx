@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { Camera, MoreHorizontal, HardHat } from 'lucide-react'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/frontend/ui/sheet'
 import { usePermissions } from '@/shared/permissions'
-import { metaForAll, type TabMeta } from '@/frontend/mjengo/nav/tab-meta'
+import { useMjengo } from '@/frontend/hooks/use-mjengo'
+import { metaForAll, tabsVisibleForFlags, type TabMeta } from '@/frontend/mjengo/nav/tab-meta'
 import { useTablistKeyboard } from '@/frontend/mjengo/nav/use-tablist'
 import { useT } from '@/frontend/i18n/provider'
 import type { TabKey } from '@/frontend/mjengo/app'
@@ -18,7 +19,9 @@ import type { TabKey } from '@/frontend/mjengo/app'
  * where the desktop top strip takes over (header.tsx).
  *
  * Role visibility = src/shared/permissions.ts (client mirror of guard.ts);
- * the backend remains the authority.
+ * the backend remains the authority. Feature flags (spec §81, task 9-a): a
+ * flag OFF hides its gated tab (money / finder) for non-admin sessions — the
+ * same filter as the desktop strip (header.tsx) and app.tsx's tab snapping.
  */
 export function MobileBottomNav({
   tab,
@@ -27,12 +30,14 @@ export function MobileBottomNav({
   tab: TabKey
   onTabChange: (t: TabKey) => void
 }) {
-  const { tabs } = usePermissions()
+  const { tabs, role } = usePermissions()
+  const flags = useMjengo((s) => s.data?.intel?.flags)
   const t = useT()
   const [moreOpen, setMoreOpen] = useState(false)
   const { listRef, onKeyDown } = useTablistKeyboard<HTMLDivElement>()
 
-  const visible = tabs // never empty: unknown roles fail closed to ['overview']
+  // Never empty: unknown roles fail closed to ['overview']
+  const visible = tabsVisibleForFlags(tabs, flags, role)
   // Camera shares a cell with "More": cap primary tabs at 4 when either is
   // shown; otherwise 5 (task rule: ≤5 primary tabs for the role).
   const hasCamera = visible.includes('copilot')

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import { Header } from '@/frontend/mjengo/header'
@@ -31,6 +31,7 @@ import { CloudOff, RefreshCw, HardHat, Link2Off, TriangleAlert } from 'lucide-re
 import { Button } from '@/frontend/ui/button'
 import { toast } from 'sonner'
 import { usePermissions, tabsForRole, landingForRole } from '@/shared/permissions'
+import { tabsVisibleForFlags } from '@/frontend/mjengo/nav/tab-meta'
 
 export type TabKey =
   | 'overview' | 'site' | 'materials' | 'finder' | 'fundis' | 'money'
@@ -77,10 +78,24 @@ export function MjengoApp() {
   // The client surface (share link or logged-in client) keeps its existing
   // tab set regardless of session; owner roles are filtered by permissions.ts
   // (fail closed for unknown roles → Overview only).
+  // Feature flags (spec §81, task 9-a): a flag OFF additionally hides its
+  // gated tab (money / finder) for NON-ADMIN sessions on every surface —
+  // admins bypass so they can toggle & test (same rule the server routes
+  // enforce via requireFlagOn; flags arrive on the payload's intel slice).
   const isShareClient = viewMode === 'client' && Boolean(shareToken)
   // Client surface = share-link client (no login) OR a logged-in client-role user
   const isClientSurface = viewMode === 'client' && (Boolean(shareToken) || clientRole)
-  const surfaceTabs: readonly TabKey[] = isClientSurface ? tabsForRole('client') : roleTabs
+  const surfaceTabs: readonly TabKey[] = useMemo(
+    () => tabsVisibleForFlags(
+      isClientSurface ? tabsForRole('client') : roleTabs,
+      data?.intel?.flags,
+      sessionRole,
+    ),
+    // Stable identity across renders (the mjengo:tab listener effect keys on
+    // this array) — recompute only when the role tab set, the flags or the
+    // session role actually change.
+    [isClientSurface, roleTabs, data?.intel?.flags, sessionRole],
+  )
 
   // Boot: while signed OUT, a ?share=<token> link (or a previously used token)
   // opens the public client "Virtual Site Visit" with NO login. Signed-in users

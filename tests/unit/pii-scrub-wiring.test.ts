@@ -113,6 +113,14 @@ vi.mock('@/backend/lib/db', () => {
         return { ...row }
       },
     },
+    // 9-a (flag gating): /api/ai/voice-log now reads the ai_voice flag at the
+    // route level (requireFlagOn → FeatureFlag table). Empty rows = every
+    // flag defaults ON, so the PII assertions below exercise the normal
+    // (ungated) voice-log path exactly as before.
+    featureFlag: {
+      async upsert() {},
+      async findMany() { return [] },
+    },
   }
   return { db }
 })

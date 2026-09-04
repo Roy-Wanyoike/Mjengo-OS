@@ -3,6 +3,7 @@ import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
 import { walletWithBalance } from '@/backend/modules/wallet/service'
 import { jsonOk } from '@/backend/modules/wallet/http'
+import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { transactionsQuery, validateQuery, walletRef } from './schemas'
 import { mapServiceError, v1Err, V1_READ_LIMIT } from './respond'
 
@@ -32,6 +33,9 @@ type Ctx = { params: Promise<{ id: string }> }
  * used. Two honest deviations from the old service read: default page is 50
  * (was a hard take:100) and ordering gained a deterministic `id DESC`
  * tiebreak for txns sharing one timestamp.
+ *
+ * Feature flag (spec §81, task 9-a): gated by `wallet` — OFF → 403 for
+ * non-admin sessions (admins bypass; see flags.ts).
  */
 export const GET = route(
   {
@@ -40,7 +44,11 @@ export const GET = route(
     rateLimit: { bucket: 'v1.wallet.transactions', limit: V1_READ_LIMIT, windowMs: 60_000 },
     onError: (e) => mapServiceError('wallets/:id/transactions GET', e, 'Wallet transactions failed'),
   },
-  async (req, _session, _body, ctx: Ctx) => {
+  async (req, session, _body, ctx: Ctx) => {
+    // Feature flag (spec §81, task 9-a) — the uniform wallet gate.
+    const flagDenied = await requireFlagOn('wallet', session)
+    if (flagDenied) return flagDenied
+
     const { id } = await ctx.params
     const idRef = walletRef.safeParse(id)
     if (!idRef.success) return v1Err(400, idRef.error.issues[0].message, 'id')
