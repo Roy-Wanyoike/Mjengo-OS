@@ -183,3 +183,100 @@ describe('construction fails closed', () => {
     expect(() => driver({ secretAccessKey: '' })).toThrow(/S3_SECRET_ACCESS_KEY is empty/)
   })
 })
+
+describe('read — the GET seam (issue #37)', () => {
+  it('GETs a freshly presigned URL; exact bytes + reported content type + real byte count', async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4])
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array(bytes), { status: 200, headers: { 'content-type': 'image/png' } }),
+    )
+    expect(await driver().read!('docs/doc-1712345678-abcd12.png')).toEqual({
+      bytes,
+      contentType: 'image/png',
+      sizeBytes: bytes.length,
+    })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.method).toBe('GET')
+    expect(url.startsWith(`${ORIGIN}/mjengo-photos/docs/doc-1712345678-abcd12.png?`)).toBe(true)
+    expect(url).toContain('X-Amz-Expires=60') // short-lived: minted + consumed immediately
+  })
+
+  it('404 → null (a plain answer, not a throw — same posture as statObject)', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }))
+    expect(await driver().read!('upp-404-000000.png')).toBeNull()
+  })
+
+  it('other statuses → honest single-line, secret-free error', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }))
+    let err: Error | null = null
+    try {
+      await driver().read!('upp-1-abcdef.jpg')
+    } catch (e) {
+      err = e as Error
+    }
+    expect(err).toBeInstanceOf(Error)
+    expect(err!.message).toMatch(/s3-compat read failed for key "upp-1-abcdef\.jpg" \(HTTP 503 from mjengo\.test\.r2\.cloudflarestorage\.com\)/)
+    expect(err!.message).not.toContain('X-Amz-Signature')
+    expect(err!.message).not.toContain('test-secret-not-real')
+    expect(err!.message).not.toContain('\n')
+  })
+})
+
+describe('keyFor — the publicUrl inverse (issues #37 + #38)', () => {
+  it('resolves a publicBase URL back to the exact key (docs tree included)', () => {
+    const d = driver({ publicBase: 'https://cdn.example.com' })
+    for (const key of ['upp-1712345678-abcd12.jpg', 'docs/doc-1712345678-abcd12.pdf']) {
+      expect(d.keyFor!(d.publicUrl(key))).toBe(key)
+    }
+  })
+
+  it('resolves the no-base presigned GET form — the recorded (possibly EXPIRED) query string is irrelevant', () => {
+    const d = driver()
+    const key = 'upp-1712345678-abcd12.jpg'
+    const recorded = d.publicUrl(key) // a presigned GET, 7-day maximum
+    expect(recorded).toContain('X-Amz-Signature=')
+    expect(d.keyFor!(recorded)).toBe(key)
+  })
+
+  it('decodes percent-encoded key segments back to the raw key', () => {
+    const d = driver({ publicBase: 'https://cdn.example.com' })
+    expect(d.keyFor!(d.publicUrl('photos/my file.jpg'))).toBe('photos/my file.jpg')
+  })
+
+  it('a publicBase with its own path prefix resolves (base-path then bucket-path)', () => {
+    const d = driver({ publicBase: 'https://cdn.example.com/prefix' })
+    const url = d.publicUrl('upp-1-abcdef.jpg')
+    expect(url).toBe('https://cdn.example.com/prefix/mjengo-photos/upp-1-abcdef.jpg')
+    expect(d.keyFor!(url)).toBe('upp-1-abcdef.jpg')
+  })
+
+  it('local-path shapes and foreign origins → null (another backend\u2019s rows)', () => {
+    const d = driver({ publicBase: 'https://cdn.example.com' })
+    expect(d.keyFor!('/photos/upp-1-abcdef.jpg')).toBeNull()
+    expect(d.keyFor!('/docs/doc-1-abcdef12.pdf')).toBeNull()
+    expect(d.keyFor!('https://elsewhere.example/mjengo-photos/upp-1-abcdef.jpg')).toBeNull()
+    expect(d.keyFor!('not a url')).toBeNull()
+    expect(d.keyFor!('')).toBeNull()
+  })
+
+  it('traversal shapes refuse — dot segments collapse at URL parse, empty segments are null', () => {
+    const d = driver()
+    // %2E%2E / %2E are double/single dot segments: WHATWG URL parsing itself
+    // collapses them BEFORE keyFor looks (the second layer of defense is the
+    // segment check in keyFromObjectPath). After the collapse the bucket
+    // prefix is gone → honest null, never a resolvable traversal key.
+    expect(d.keyFor!(`${ORIGIN}/mjengo-photos/%2E%2E/secret`)).toBeNull()
+    // empty segments survive parsing and are refused explicitly
+    expect(d.keyFor!(`${ORIGIN}/mjengo-photos/a//b`)).toBeNull()
+    // a path that is only the bucket itself addresses no object
+    expect(d.keyFor!(`${ORIGIN}/mjengo-photos`)).toBeNull()
+    expect(d.keyFor!(`${ORIGIN}/mjengo-photos/`)).toBeNull()
+  })
+
+  it('a base-prefixed path that is NOT the base\u2019s prefix does not resolve', () => {
+    const d = driver({ publicBase: 'https://cdn.example.com/prefix' })
+    // 'prefix2/...' starts with the string 'prefix' but is a different path —
+    // after stripping, the bucket prefix no longer matches → honest null.
+    expect(d.keyFor!('https://cdn.example.com/prefix2/mjengo-photos/upp-1-abcdef.jpg')).toBeNull()
+  })
+})
