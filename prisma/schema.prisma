@@ -343,6 +343,7 @@ model Notification {
   channel        String    @default("in_app") // in_app, whatsapp, sms, push, email
   deliveryStatus String    @default("logged") // logged (in-app row only), sent, failed — honest channel state
   deliveredAt    DateTime? // when an external channel actually delivered
+  deliveryDetail String? // honest outcome detail from the channel attempt (HTTP status / timeout / skip reason); null = plain in-app row
   recipient      String? // e.g. client name/phone
   audienceRole   String? // role the notification targets (client, contractor, supervisor, finance...)
   read           Boolean   @default(false)
