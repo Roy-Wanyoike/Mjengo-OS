@@ -32,6 +32,18 @@ export function v1Err(status: number, error: string, field?: string): NextRespon
   return NextResponse.json({ error, ...(field ? { field } : {}) }, { status })
 }
 
+/**
+ * v1 success body: { ok: true, data, ...extra } — byte-identical to the
+ * wallet module's jsonOk (modules/wallet/http.ts), hoisted here for v1
+ * Phase B (projects + supply resources) so those routes do not import the
+ * wallet module just for the ok envelope. The wallet family keeps using
+ * jsonOk from its own module; the two must stay in sync (same spread, no
+ * extra keys).
+ */
+export function v1Ok(data: unknown, extra?: Record<string, unknown>): NextResponse {
+  return NextResponse.json({ ok: true, data, ...extra })
+}
+
 /** Service messages that mean "the addressed object does not exist (here)". */
 const NOT_FOUND_MESSAGES = new Set([
   'Wallet not found',
@@ -67,15 +79,17 @@ export const V1_MUTATION_LIMIT = 30
 export type Page<T> = { items: T[]; nextCursor: string | null; hasMore: boolean }
 
 /**
- * Keyset pagination for BOUNDED lists (wallet list): slice the full,
- * deterministically ordered array (unique `code` ascending → total order).
- * `cursor` is the wallet id of the last item of the previous page; a cursor
- * that is not in the (possibly filtered) list → 400 (honest: stale or wrong).
+ * Keyset pagination for BOUNDED lists (wallet list — and, since Phase B, the
+ * project / task / order / delivery lists): slice the full, deterministically
+ * ordered array. `cursor` is the id of the last item of the previous page; a
+ * cursor that is not in the (possibly filtered) list → 400 (honest: stale or
+ * wrong). `noun` renders the 400 message ("a wallet", "a task", "an order").
  */
-export function pageOf<T extends { id: string }>(
+export function pageOfKind<T extends { id: string }>(
   all: T[],
   limit: number,
-  cursor?: string,
+  cursor: string | undefined,
+  noun: string,
 ): { ok: true; page: Page<T> } | { ok: false; response: NextResponse } {
   let start = 0
   if (cursor) {
@@ -83,7 +97,7 @@ export function pageOf<T extends { id: string }>(
     if (idx === -1) {
       return {
         ok: false,
-        response: v1Err(400, 'Unknown cursor — it must be the id of a wallet in this list', 'cursor'),
+        response: v1Err(400, `Unknown cursor — it must be the id of ${noun} in this list`, 'cursor'),
       }
     }
     start = idx + 1
@@ -91,4 +105,13 @@ export function pageOf<T extends { id: string }>(
   const items = all.slice(start, start + limit)
   const hasMore = start + limit < all.length
   return { ok: true, page: { items, nextCursor: hasMore ? items[items.length - 1]?.id ?? null : null, hasMore } }
+}
+
+/** Wallet-list pagination — pageOfKind with the wallet noun (same message as before). */
+export function pageOf<T extends { id: string }>(
+  all: T[],
+  limit: number,
+  cursor?: string,
+): { ok: true; page: Page<T> } | { ok: false; response: NextResponse } {
+  return pageOfKind(all, limit, cursor, 'a wallet')
 }
