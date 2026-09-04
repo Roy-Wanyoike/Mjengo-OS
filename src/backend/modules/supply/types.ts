@@ -13,10 +13,10 @@
 import type {
   Supplier, CatalogItem, MaterialRequest, MaterialRequestLine,
   ApprovalRule, Approval, Quote, QuoteLine, PurchaseOrder, PurchaseOrderLine,
-  OrderDelivery, OrderDeliveryLine,
+  OrderDelivery, OrderDeliveryLine, DeliveryPhoto, Attachment,
 } from '@prisma/client'
 
-export type { ApprovalRule, Approval, Quote, QuoteLine, PurchaseOrder, PurchaseOrderLine, OrderDelivery, OrderDeliveryLine } from '@prisma/client'
+export type { ApprovalRule, Approval, Quote, QuoteLine, PurchaseOrder, PurchaseOrderLine, OrderDelivery, OrderDeliveryLine, DeliveryPhoto, Attachment } from '@prisma/client'
 
 // ---- domain enums ----
 
@@ -49,8 +49,19 @@ export interface QuoteDetail extends Quote {
   lines?: QuoteLine[]
 }
 
+/**
+ * One linked evidence photo on a delivery (see the DeliveryPhoto model):
+ * `attachment.storageKey` is the URL the UI replays (same /api/upload storage
+ * site photos and documents use). `deliveryLineId` scopes the photo to one
+ * inspected line's count — the DISCREPANCY evidence; null = whole-delivery.
+ */
+export interface DeliveryPhotoWithAttachment extends DeliveryPhoto {
+  attachment: Attachment
+}
+
 export interface DeliveryWithLines extends OrderDelivery {
   lines: OrderDeliveryLine[]
+  photos: DeliveryPhotoWithAttachment[]
 }
 
 export interface OrderWithDetail extends PurchaseOrder {
