@@ -72,6 +72,12 @@ model Phase {
   progressManual Int? // manual override; falls back to tasks average
   tasks          Task[]
   photos         SitePhoto[]
+  // Real phase cost-codes on money (issue #39): transactions the posting seam
+  // KNEW the phase for carry the link here (milestone releases, milestone
+  // payment requests, payer-attributed invoice payments). Null = no real
+  // attribution (legacy rows, wages, unattributed expenses) — the reports
+  // module falls back to its documented budget-share estimate for those.
+  codedTransactions Transaction[] @relation("TransactionPhase")
 }
 
 model Task {
@@ -230,6 +236,16 @@ model Transaction {
   method      String   @default("mpesa") // mpesa, cash, bank, card, wallet
   reference   String?
   costCode    String? // finance cost-code dimension (spec §36)
+  // Phase cost-code (issue #39) — REAL attribution stamped by the posting seam
+  // when the money action KNOWS the phase (milestone → its phase; invoice.pay /
+  // payment payloads that reference a phase; reversals copy the original row).
+  // Nullable on purpose: legacy rows and non-phase spend (wages, unattributed
+  // expenses) stay null and the reports module estimates those by budget share.
+  // Deleting a phase releases its codes to null (SetNull) — spend falls back to
+  // the documented estimate instead of dangling. Money math is untouched: this
+  // is an attribution dimension, amounts/ledger/balances are byte-identical.
+  phaseId     String?
+  phase       Phase?   @relation("TransactionPhase", fields: [phaseId], references: [id], onDelete: SetNull)
   ledgerTxnId String? // link to the double-entry LedgerTransaction (unique per txn)
   note        String?
   date        DateTime

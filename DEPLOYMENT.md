@@ -86,6 +86,17 @@ The database ships **empty** — seed the demo data next.
   not read `_prisma_migrations` — but **once a real deployment exists, change
   the schema only via new migrations** (`bunx prisma migrate dev --name x`
   locally, commit the generated SQL, `migrate deploy` in production).
+- **`Transaction.phaseId` (issue #39, phase cost-codes)** is the latest
+  additive schema change: a nullable column + FK to `Phase` (`SetNull` on
+  phase delete), zero data migration. Legacy rows and non-phase spend
+  (wages, unattributed expenses) legitimately stay `null` — the
+  budget-variance report then attributes them by its documented budget-share
+  estimate, while money posted through seams that KNOW the phase (milestone
+  releases, milestone payment requests, payer-attributed `invoice.pay`)
+  carries a real code and counts directly. The report's
+  `phaseAttribution.mode` (`real` / `mixed` / `estimated`) states which mode
+  produced the numbers. Apply via the path above; money math is untouched
+  (amounts, ledger double-entry, balances — this is attribution only).
 - Seeding does NOT run automatically in any path; run it explicitly (§4.2).
 
 ### 4.2 Seed chain (exact order)
