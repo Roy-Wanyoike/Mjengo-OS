@@ -32,12 +32,24 @@ import { safeErrorMessage } from '@/backend/lib/guard'
 //      · same payload re-queued under a new item id, for actions whose replay is
 //        semantically a no-op (attendance / task state / flags / decided money
 //        rows) → payload-fingerprint dedupe below → one apply, both items synced.
+//   4. ENTITY VERSIONS (issue "Outbox conflict metadata + entity versions"):
+//      Task and Attendance rows carry `version` (bumped by EVERY applier that
+//      mutates them — online /api/actions, USSD and offline sync flushes share
+//      the appliers). An outbox item whose payload carries the client's known
+//      `baseVersion` for the row it mutates is REJECTED 'stale-version' when
+//      baseVersion < current version: per-item result { status: 'REJECTED',
+//      reason: 'stale-version', serverVersion, baseVersion, suggestion:
+//      'keep-server' }. Equal or absent baseVersion applies exactly as today
+//      (legacy last-write-wins stays for clients that never stamp one); the
+//      remediation is re-sending with a fresh baseVersion, or an explicit
+//      human 'keep-mine' (force) per rule 2 — never a silent overwrite.
 //
 // Conflict detection happens as READ-ONLY prisma pre-checks BEFORE applyAction
-// runs (lib/mjengo.ts appliers are untouched — read-only to this route), so a
-// conflicted item is never half-applied and produces no audit event. Financial
-// rows without a natural key (references/ids) cannot be compared against a
-// prior application — they fall through to the normal appliers, exactly as today.
+// runs (the appliers apply + bump `version`; the conflict decision stays
+// read-only in this route), so a conflicted item is never half-applied and
+// produces no audit event. Financial rows without a natural key
+// (references/ids) cannot be compared against a prior application — they fall
+// through to the normal appliers, exactly as today.
 
 interface QueuedAction {
   id: string
@@ -53,10 +65,125 @@ type ConflictRule = 'server-wins' | 'human-decides'
 type SyncItemResult =
   | { id: string; ok: true }
   | { id: string; ok: false; error: string }
-  | { id: string; ok: false; conflict: true; reason: string; rule: ConflictRule }
+  | {
+      id: string
+      ok: false
+      conflict: true
+      reason: string
+      rule: ConflictRule
+      /**
+       * Entity-version rejection metadata (issue "Outbox conflict metadata +
+       * entity versions") — present ONLY on reason 'stale-version' rejections.
+       * Additive/optional: older clients keep reading reason + rule as before.
+       */
+      status?: 'REJECTED'
+      /** The row's current server version (what the client must re-base onto). */
+      serverVersion?: number
+      /** The version the client's edit was authored against (proved stale). */
+      baseVersion?: number
+      /** Deterministic remediation default — the SERVER version stands. */
+      suggestion?: 'keep-server'
+    }
 
 /** Pre-check verdict: a conflict (with its rule + human-readable reason), an identical replay, or nothing. */
 type Precheck = { rule: ConflictRule; reason: string } | { silent: true } | null
+
+/** Stale-entity-version verdict (issue "Outbox conflict metadata + entity versions"). */
+type StaleVersion = { entity: 'task' | 'attendance'; baseVersion: number; serverVersion: number }
+
+/** Task mutations whose appliers bump Task.version (lib/mjengo.ts). */
+const VERSIONED_TASK_TYPES = new Set<string>([
+  'task.update', 'task.assign', 'task.block', 'task.unblock', 'task.complete', 'task.verify',
+])
+
+/** Attendance mutations whose appliers bump Attendance.version (mjengo.ts / trust.ts). */
+const VERSIONED_ATTENDANCE_TYPES = new Set<string>([
+  'attendance.checkin', 'attendance.setStatus', 'attendance.exception', 'attendance.record', 'attendance.override',
+])
+
+/** A client baseVersion is only honest when it is a positive integer — anything else counts as absent. */
+function clientBaseVersion(v: unknown): number | null {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : null
+}
+
+function isIsoDate(v: unknown): v is string {
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+}
+
+/**
+ * READ-ONLY stale-version pre-check: compares the action's payload
+ * baseVersion (top-level for single-row actions, per-record for the bulk
+ * muster roll) against the current row version. Absent/equal → null (applies
+ * as today); older → the numbers for the REJECTED result.
+ */
+async function detectStaleVersion(projectId: string, action: QueuedAction): Promise<StaleVersion | null> {
+  const p = action.payload ?? {}
+
+  if (VERSIONED_TASK_TYPES.has(action.type) && p.id) {
+    const baseVersion = clientBaseVersion(p.baseVersion)
+    if (baseVersion === null) return null
+    const task = await db.task.findFirst({
+      where: { id: String(p.id), phase: { projectId } },
+      select: { version: true },
+    })
+    if (task && baseVersion < task.version) {
+      return { entity: 'task', baseVersion, serverVersion: task.version }
+    }
+    return null
+  }
+
+  if (VERSIONED_ATTENDANCE_TYPES.has(action.type)) {
+    // attendance.override targets the row id; the others target (workerId, date).
+    if (action.type === 'attendance.override') {
+      const baseVersion = clientBaseVersion(p.baseVersion)
+      if (baseVersion === null || !p.id) return null
+      const att = await db.attendance.findFirst({
+        where: { id: String(p.id), projectId },
+        select: { version: true },
+      })
+      if (att && baseVersion < att.version) {
+        return { entity: 'attendance', baseVersion, serverVersion: att.version }
+      }
+      return null
+    }
+    if (action.type === 'attendance.record') {
+      // Bulk muster roll: each record may carry its own baseVersion for the
+      // worker's today-row; the FIRST stale record rejects the item.
+      let records = p.records
+      if (typeof records === 'string') {
+        try { records = JSON.parse(records) } catch { records = null }
+      }
+      if (!Array.isArray(records)) return null
+      for (const r of records) {
+        const baseVersion = clientBaseVersion(r?.baseVersion)
+        const workerId = String(r?.workerId ?? '')
+        if (baseVersion === null || !workerId) continue
+        const att = await db.attendance.findFirst({
+          where: { workerId, date: todayEAT(), projectId },
+          select: { version: true },
+        })
+        if (att && baseVersion < att.version) {
+          return { entity: 'attendance', baseVersion, serverVersion: att.version }
+        }
+      }
+      return null
+    }
+    // Single-row day actions: checkin / setStatus / exception.
+    const baseVersion = clientBaseVersion(p.baseVersion)
+    if (baseVersion === null || !p.workerId) return null
+    const date = isIsoDate(p.date) ? p.date : todayEAT()
+    const att = await db.attendance.findFirst({
+      where: { workerId: String(p.workerId), date, projectId },
+      select: { version: true },
+    })
+    if (att && baseVersion < att.version) {
+      return { entity: 'attendance', baseVersion, serverVersion: att.version }
+    }
+    return null
+  }
+
+  return null
+}
 
 /** The financial family: re-applies with different values are server-wins conflicts (§41). */
 const FINANCIAL_TYPES = new Set<string>([
@@ -433,7 +560,30 @@ export const POST = route(
           continue
         }
 
-        // (3) READ-ONLY conflict pre-check (§41): explain, then apply the
+        // (3) READ-ONLY entity-version pre-check (issue "Outbox conflict
+        // metadata + entity versions"): baseVersion older than the row's
+        // version proves the item was authored against an older row —
+        // REJECTED with the server version + keep-server suggestion. Runs
+        // BEFORE applyAction so a rejected item is never half-applied; force
+        // ('keep-mine') still applies it as an explicit human decision (§41
+        // rule 2), and a re-send with a fresh baseVersion applies cleanly.
+        const stale = await detectStaleVersion(itemProjectId ?? '', action)
+        if (stale && !action.force) {
+          results.push({
+            id: action.id,
+            ok: false,
+            conflict: true,
+            status: 'REJECTED',
+            reason: 'stale-version',
+            rule: 'human-decides',
+            serverVersion: stale.serverVersion,
+            baseVersion: stale.baseVersion,
+            suggestion: 'keep-server',
+          })
+          continue
+        }
+
+        // (4) READ-ONLY conflict pre-check (§41): explain, then apply the
         // deterministic rule — or offer the human a decision. Never a silent
         // overwrite. Runs BEFORE applyAction so a conflict never half-applies.
         const pre = await detectConflict(itemProjectId ?? '', action)
@@ -455,7 +605,7 @@ export const POST = route(
           }
         }
 
-        // (4) Apply — exactly once, with the item's idemKey + fingerprint recorded.
+        // (5) Apply — exactly once, with the item's idemKey + fingerprint recorded.
         const actorPayload = isClient
           ? { ...(action.payload ?? {}), __actor: session.user.name, __role: 'client' }
           : { ...(action.payload ?? {}), __actor: session.user.name, __role: session.user.role }

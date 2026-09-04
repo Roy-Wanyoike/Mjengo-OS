@@ -96,6 +96,12 @@ model Task {
   blockedReason  String? // why work stopped — required when a task is blocked
   verifiedAt     DateTime? // when the completed work was verified
   verifiedByName String? // who verified (name snapshot — honest + simple)
+  // Offline-sync entity version (issue "Outbox conflict metadata + entity
+  // versions"): bumped by EVERY applier that mutates the row (online
+  // /api/actions, USSD and offline /api/sync flushes share the appliers). An
+  // outbox item whose payload carries baseVersion < version is REJECTED
+  // 'stale-version' by /api/sync — never a silent last-write-wins overwrite.
+  version Int @default(1)
 }
 
 model Worker {
@@ -143,6 +149,11 @@ model Attendance {
   overrideLog     String? // JSON array of {at, by, from, to, reason} — append-only, never erased
   recordedBy      String? // who created this record (name/role)
   createdAt       DateTime  @default(now())
+  // Offline-sync entity version (issue "Outbox conflict metadata + entity
+  // versions"): same contract as Task.version — bumped by every applier that
+  // mutates the day-row (check-in/out, status, exceptions, overrides, payroll
+  // paid stamp), checked against payload baseVersion by /api/sync.
+  version         Int       @default(1)
 }
 
 model Material {

@@ -11,6 +11,7 @@ import { Avatar, AvatarFallback } from '@/frontend/ui/avatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/frontend/ui/popover'
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from '@/frontend/ui/sheet'
 import { ProjectSwitcher } from '@/frontend/mjengo/project-switcher'
+import { SyncOutboxPanel } from '@/frontend/mjengo/sync-outbox-panel'
 import {
   Wifi, CloudOff, HardHat, RefreshCw, CheckCheck, Share2, Bell, LogOut,
   Landmark, FileDiff, MessageSquare, TriangleAlert, BellRing,
@@ -810,7 +811,7 @@ export function Header({
 }) {
   const {
     data, projects, activeProjectId, switchProject, viewMode, shareToken, clientRole,
-    online, setOnline, outbox, syncing, syncNow, lastSyncAt,
+    online, setOnline, outbox, lastSyncAt,
   } = useMjengo()
   const { tabs: roleTabs } = usePermissions()
   const t = useT()
@@ -927,22 +928,10 @@ export function Header({
                   <span className="text-xs font-medium w-12 hidden sm:inline">{online ? t('header.online') : t('header.offlineSim')}</span>
                 </div>
 
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={online || outbox.length === 0 || syncing}
-                  onClick={() => void syncNow()}
-                  aria-label={t('header.aria.sync')}
-                  className="gap-1.5 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white relative"
-                >
-                  <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden />
-                  <span className="hidden sm:inline">{syncing ? t('header.syncing') : t('header.sync')}</span>
-                  {outbox.length > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-stone-950 text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center" aria-label={t('header.aria.queuedActions', { count: outbox.length })}>
-                      {outbox.length}
-                    </span>
-                  )}
-                </Button>
+                {/* Sync control + per-item outbox sheet (issue "Outbox
+                    conflict metadata + entity versions"): the historical flush
+                    button, now opening the queue with conflict resolution. */}
+                <SyncOutboxPanel />
                 {lastSyncAt && online && outbox.length === 0 && (
                   <span className="hidden md:flex items-center gap-1 text-[11px] text-stone-500">
                     <CheckCheck className="w-3.5 h-3.5 text-emerald-500" aria-hidden /> {t('header.synced')}
