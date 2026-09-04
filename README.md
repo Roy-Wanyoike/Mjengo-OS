@@ -330,11 +330,15 @@ resume unchanged when billing is restored.
 
 ## Honesty notes (deliberate)
 
-- Payment rails are **simulated** (labeled in the UI). The ledger, approval
-  workflow, idempotency and reversal mechanics are real; M-Pesa Daraja and
-  bank sandboxes plug into the `PaymentProvider` seam when licensing allows.
-- Notification channels beyond in-app are **delivery-log stubs** — rows say
-  `deliveryStatus: logged`; nothing pretends to have sent an SMS/WhatsApp.
+- Payment rails default to **simulated** (labeled in the UI): the ledger,
+  approval workflow, idempotency and reversal mechanics are real. A M-Pesa
+  Daraja **sandbox** provider ships behind the `PaymentProvider` seam and
+  activates only when its env credentials are set — no licensed rail is
+  claimed, and no real money moves.
+- Notifications are in-app by default; an opt-in SMS webhook seam
+  (`NOTIFY_SMS_WEBHOOK_URL`) delivers to a gateway you configure, with
+  rows honestly recording `sent`/`failed` + delivery detail — nothing
+  pretends to have sent when no provider is configured.
 - Land verification records evidence; it never claims government
   confirmation. Supplier verification is a platform ladder, never conflated
   with state licensing.
