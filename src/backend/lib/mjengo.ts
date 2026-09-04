@@ -890,6 +890,10 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
           data.verifiedByName = null
         }
       }
+      // Entity version (outbox conflict metadata): every mutation of a
+      // versioned row bumps it — online edits and offline sync flushes share
+      // this applier, so both bump. /api/sync rejects stale baseVersions.
+      data.version = existing.version + 1
       const task = await db.task.update({ where: { id }, data })
       return { id: task.id }
     }
@@ -897,20 +901,20 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
     case 'task.assign': {
       const { id, assignedToId } = payload
       if (!id) throw new Error('task id required')
-      await taskInProject(id, projectId) // scoping + existence
+      const existing = await taskInProject(id, projectId) // scoping + existence
       let workerId: string | null = null
       if (assignedToId !== null && assignedToId !== undefined && assignedToId !== '') {
         workerId = String(assignedToId)
         await assertWorkerInProject(workerId, projectId)
       }
-      const task = await db.task.update({ where: { id }, data: { assignedToId: workerId } })
+      const task = await db.task.update({ where: { id }, data: { assignedToId: workerId, version: existing.version + 1 } })
       return { id: task.id, assignedToId: workerId }
     }
 
     case 'task.block': {
       const { id, reason, blockedById } = payload
       if (!id) throw new Error('task id required')
-      await taskInProject(id, projectId) // scoping + existence
+      const existing = await taskInProject(id, projectId) // scoping + existence
       if (typeof reason !== 'string' || !reason.trim()) {
         throw new Error('A block reason is required — record why work stopped')
       }
@@ -920,6 +924,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
         await assertDependencyOk(id, depId, projectId)
         data.blockedById = depId
       }
+      data.version = existing.version + 1
       const task = await db.task.update({ where: { id }, data })
       return { id: task.id }
     }
@@ -933,6 +938,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
         // work resumes where it left off
         data.status = existing.progress > 0 ? 'in_progress' : 'pending'
       }
+      data.version = existing.version + 1
       const task = await db.task.update({ where: { id }, data })
       return { id: task.id }
     }
@@ -952,7 +958,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
           throw new Error(`Cannot complete "${existing.title}" — it depends on "${blocker.title}", which is not done yet`)
         }
       }
-      const task = await db.task.update({ where: { id }, data: { status: 'done', progress: 100 } })
+      const task = await db.task.update({ where: { id }, data: { status: 'done', progress: 100, version: existing.version + 1 } })
       return { id: task.id }
     }
 
@@ -974,7 +980,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
       }
       const task = await db.task.update({
         where: { id },
-        data: { verifiedAt: new Date(), verifiedByName: actor.name?.trim() || actor.role },
+        data: { verifiedAt: new Date(), verifiedByName: actor.name?.trim() || actor.role, version: existing.version + 1 },
       })
       return { id: task.id, verifiedBy: task.verifiedByName }
     }
@@ -1073,9 +1079,9 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
           },
         })
       } else if (toggle === 'out' && !att.checkOut) {
-        att = await db.attendance.update({ where: { id: att.id }, data: { checkOut: new Date() } })
+        att = await db.attendance.update({ where: { id: att.id }, data: { checkOut: new Date(), version: att.version + 1 } })
       } else if (toggle === 'in' && !att.checkIn) {
-        att = await db.attendance.update({ where: { id: att.id }, data: { checkIn: new Date(), status: 'present', wage: worker.dailyRate } })
+        att = await db.attendance.update({ where: { id: att.id }, data: { checkIn: new Date(), status: 'present', wage: worker.dailyRate, version: att.version + 1 } })
       }
       return { id: att.id }
     }
@@ -1105,7 +1111,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
         }
         att = await db.attendance.update({
           where: { id: att.id },
-          data: { status, wage, overrideLog: JSON.stringify(overrideLog) },
+          data: { status, wage, overrideLog: JSON.stringify(overrideLog), version: att.version + 1 },
         })
       }
       return { id: att.id }
@@ -1416,7 +1422,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
       const posted = await db.$transaction(async (tx) => {
         const paid = await tx.attendance.updateMany({
           where: { id: { in: gate.unpaid.map((u) => u.id) } },
-          data: { paid: true },
+          data: { paid: true, version: { increment: 1 } }, // payroll stamps are row mutations too
         })
         void paid
         const spend = await spendExternalInTx(tx, projectId, {

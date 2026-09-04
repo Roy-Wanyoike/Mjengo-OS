@@ -105,6 +105,7 @@ export async function applyTrustAction(type: string, payload: any, projectId: st
               status, wage,
               overrideLog: JSON.stringify(overrideLog),
               method: 'manager', verification, recordedBy,
+              version: existing.version + 1, // entity version (outbox conflict metadata)
             },
           })
         }
@@ -153,6 +154,7 @@ export async function applyTrustAction(type: string, payload: any, projectId: st
             exceptionNote: typeof note === 'string' && note.trim() ? note.trim() : existing.exceptionNote,
             evidence: JSON.stringify(merged),
             method: 'manager',
+            version: existing.version + 1, // entity version (outbox conflict metadata)
           },
         })
       }
@@ -183,6 +185,7 @@ export async function applyTrustAction(type: string, payload: any, projectId: st
         status: to,
         wage: wageFor(to, worker?.dailyRate ?? 0),
         overrideLog: JSON.stringify(overrideLog), // full history + new entry
+        version: att.version + 1, // entity version (outbox conflict metadata)
       }
       // A manager override is reported evidence — except excused, which resolves
       // the exception as a sanctioned absence without pay.
@@ -230,7 +233,7 @@ export async function applyTrustAction(type: string, payload: any, projectId: st
 
       await db.attendance.updateMany({
         where: { id: { in: unpaid.map((u) => u.id) } },
-        data: { paid: true },
+        data: { paid: true, version: { increment: 1 } }, // payroll stamps are row mutations too
       })
       const paidWorkers = await db.worker.findMany({ where: { id: { in: unpaid.map((u) => u.workerId) } } })
       await db.transaction.create({
