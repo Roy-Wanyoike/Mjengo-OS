@@ -19,7 +19,9 @@ emits a **standalone** server (`output: "standalone"` → `.next/standalone/
 server.js`) that runs with `node` (or `bun`), so a self-host deployment is
 one process + one SQLite file + one uploads directory — no message queue, no
 external services. Background jobs run in-process (`POST /api/jobs/run` is
-the cron hook); the AI routes call z-ai-web-dev-sdk from the backend only.
+the cron hook — drained on a schedule by a token-authenticated scheduler:
+compose sidecar / systemd timer / any cron, §7.3); the AI routes call
+z-ai-web-dev-sdk from the backend only.
 
 ## 2. Prerequisites
 
@@ -45,6 +47,7 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `TRUST_PROXY` | hardening: `1` behind a trusted proxy | When set, the app reads the client IP from the **rightmost** `X-Forwarded-For` value (the one appended by your trusted proxy) instead of the first, client-spoofable value. Leave unset when there is no appending proxy in front. |
 | `MUTATION_ORIGIN_ALLOWLIST` | hardening: optional | When set (comma-separated origin list), JSON mutation requests are rejected unless their `Origin` header matches — CSRF defense-in-depth on top of cookies. |
 | `USSD_WEBHOOK_SECRET` | hardening: optional | When set, `/api/ussd` requires a valid HMAC signature derived from this shared secret on every request (authenticated gateway webhooks); unset = the documented demo posture. |
+| `JOBS_RUN_TOKEN` | scheduler: optional | Shared secret (`openssl rand -hex 32`) that lets an external scheduler authenticate `POST /api/jobs/run` with `Authorization: Bearer <token>` (no browser session needed — compose `jobs-tick` sidecar, systemd timer, any cron). Same value must reach the app and the scheduler. **Unset = the bearer path is fully disabled** (fail closed — the endpoint then answers only to contractor/admin sessions, exactly as before). See §7.3. |
 | `PORT` / `HOSTNAME` | standalone runtime | `3000` / `0.0.0.0` defaults (set by the Docker image; `HOSTNAME=0.0.0.0` binds all interfaces). |
 
 Cookie policy is switched per request in `src/backend/lib/auth.ts`
@@ -193,7 +196,7 @@ cp .env.example .env     # set NEXTAUTH_SECRET (+ NEXTAUTH_URL only if fixed dom
 docker compose up -d --build
 ```
 
-`docker-compose.yml` (single-node self-host, **two services**):
+`docker-compose.yml` (single-node self-host, **three services**):
 
 - **`app`** — the webapp on `3000:3000`, `restart: unless-stopped`, env from
   `.env` **except** `DATABASE_URL` which is pinned to the named volume
@@ -207,6 +210,13 @@ docker compose up -d --build
   3001 only** (not published — it is reached through the app's rewrite),
   named volume `website-data` for contact-form submissions, healthcheck
   probing `/website` with node's `fetch`.
+- **`jobs-tick`** — a busybox sidecar (no app code) that POSTs
+  `http://app:3000/api/jobs/run` every 5 minutes with
+  `Authorization: Bearer $JOBS_RUN_TOKEN`, draining the background-job
+  queue on a schedule. Enabled by setting `JOBS_RUN_TOKEN` in `.env`
+  (unset → the app fails the bearer calls closed and every tick logs a
+  401); `docker compose logs jobs-tick` is its health signal. Full
+  contract: §7.3.
 
 After `up -d --build`: the product is at `http://localhost:3000` and the
 marketing site at `http://localhost:3000/website` — one origin, the site's
@@ -346,6 +356,119 @@ server {
   it in your secret manager / `.env` on the host (never in git, never in the
   image). Changing it invalidates all sessions (users just sign in again).
   Do not expose the SQLite file or `db/` via the proxy.
+
+### 7.3 Background jobs scheduler
+
+Background jobs (anomaly scan, weekly digest, ledger reconciliation,
+overdue check — `src/backend/modules/jobs/service.ts`) are drained by
+`POST /api/jobs/run`. Nothing inside the app schedules that call — the
+drain is deliberately an HTTP endpoint so any scheduler can own the
+cadence. Pick **one** of the wirings below; they all just POST the
+endpoint on an interval.
+
+**The token.** A scheduler cannot hold a NextAuth session, so the
+endpoint accepts a machine credential *in addition to* the
+contractor/admin session (both paths stay live; the session path is
+byte-identical to the pre-token behavior):
+
+```bash
+curl -X POST https://your-host.example/api/jobs/run \
+  -H "Authorization: Bearer $JOBS_RUN_TOKEN" \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+`JOBS_RUN_TOKEN` is a shared secret generated with
+`openssl rand -hex 32`; the same value must reach the app **and** the
+scheduler. **Unset = the bearer path is disabled entirely** — no default
+token, no fallback: the endpoint then answers only to contractor/admin
+sessions, exactly as before. A presented-but-invalid token gets
+`401 {"error":"Invalid jobs token"}` (the secret itself is never echoed
+back).
+
+**Option A — docker compose sidecar (`jobs-tick`).** The compose stack
+ships a busybox sidecar that POSTs `http://app:3000/api/jobs/run` over
+the compose network (no proxy, no TLS needed) every 5 minutes. Enable it
+by setting `JOBS_RUN_TOKEN` in `.env`: the app reads it via `env_file`,
+the sidecar via compose interpolation — one file feeds both sides.
+`docker compose up -d`, then watch it with
+`docker compose logs jobs-tick`: a tick logs only failures (successful
+drains are silent, like a cron); what actually ran is visible in the
+Intel "Background jobs" card or via `GET /api/jobs/run`. Without the
+token the sidecar still runs but every tick fails closed with a logged
+401 — its startup banner explains the fix. Cadence: 5 minutes
+(`sleep 300`), 50× under the endpoint's 10/min rate limit.
+
+**Option B — systemd timer (bare-metal self-host).** `deploy/systemd/`
+ships the pair `mjengo-jobs.service` + `mjengo-jobs.timer` (plus
+`mjengo-jobs.env.example`):
+
+```bash
+install -D -m 0644 deploy/systemd/mjengo-jobs.service /etc/systemd/system/
+install -D -m 0644 deploy/systemd/mjengo-jobs.timer   /etc/systemd/system/
+install -D -m 0600 deploy/systemd/mjengo-jobs.env.example /etc/mjengo/jobs.env
+# edit /etc/mjengo/jobs.env (URL + JOBS_RUN_TOKEN), then:
+systemctl daemon-reload && systemctl enable --now mjengo-jobs.timer
+```
+
+`OnCalendar=*:0/5` fires on the 5-minute grid (same cadence as the
+compose sidecar) with `Persistent=true` — a host that was down fires one
+catch-up drain on the next boot, which is safe (see idempotency below).
+`curl -fsS` turns a 401/5xx into a failed unit: `journalctl -u
+mjengo-jobs.service` shows both the failure and each drain's
+`{ok, ran, results}` reply. The secret lives only in the root-only
+`/etc/mjengo/jobs.env` (chmod 600), never in the tracked unit files.
+
+**Option C — any external cron.** Anything that can POST with a header
+works: a host crontab, cron-job.org, a GitHub Actions scheduled
+workflow, a k8s CronJob:
+
+```bash
+*/5 * * * * curl -fsS -X POST https://your-host.example/api/jobs/run \
+  -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' -d '{}'
+```
+
+**Vercel Cron caveat:** it only issues GET requests (its `CRON_SECRET`
+can add a bearer header, but the method is fixed) while the drain is
+POST-only by design — on Vercel you would need a thin GET wrapper route
+(not shipped) or an external POST-capable scheduler.
+
+**Security model.**
+
+- The token is a shared secret that grants, for this one endpoint, what
+  a contractor/admin session grants there: enqueueing and draining jobs.
+  It grants **no read access** — `GET /api/jobs/run` stays session-only.
+  Treat it like a password: 64-hex random, no default, never in git (it
+  lives in `.env`/process env and the scheduler's config only).
+- Comparison is constant-time (`crypto.timingSafeEqual` over
+  length-matched buffers — `src/backend/lib/jobs-token.ts`). Comparing
+  lengths first leaks the token's *length* (not its content) to a timing
+  observer: the standard trade-off of that approach.
+- The endpoint stays rate-limited: valid bearer calls pass through the
+  same 10 runs/min bucket as session calls (for token calls the bucket
+  key is the caller's IP-derived principal — the compose sidecar's
+  direct internal call carries no cookie and no `x-forwarded-for`, so it
+  lands in the shared `anon` bucket; 1 tick / 5 min leaves 50× headroom).
+  Invalid tokens 401 before the bucket, exactly as session 401s always
+  did.
+- Repeated/overlapping ticks are safe — jobs are idempotent from the
+  scheduler's perspective (`src/backend/modules/jobs/service.ts`): a
+  drain only picks `queued`/`retrying` rows whose `runAt` is due;
+  `done`/`failed` rows are never re-run; a failed handler retries with
+  exponential backoff (2 → 8 → 30 min) and lands terminally `failed`
+  after 3 attempts, keeping `lastError` on the row (the row itself is
+  the dead letter). A missed or duplicated tick costs queue latency,
+  never double work — modulo the narrow find-then-update race covered by
+  service.ts's "single drain process" honesty note, which the 5-minute
+  cadence (with 90–150 s call timeouts) makes practically unreachable.
+  Note the scheduler also drives *retries*: without it, a `retrying` row
+  waits for the next manual drain.
+- **Rotation:** generate a new value → put it in the app's env and
+  restart the app (`docker compose up -d` recreates app + sidecar; for
+  systemd, edit `/etc/mjengo/jobs.env` and restart the app unit) → the
+  next tick uses it. A few 401s during the swap are harmless — rows wait
+  in the queue. Rotate on suspected leak or staff turnover; there is no
+  automatic expiry (add a calendar reminder, or wrap the token in your
+  secret manager's rotation if you use one).
 
 ## 8. Updating a deployment
 

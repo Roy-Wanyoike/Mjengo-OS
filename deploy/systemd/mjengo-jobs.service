@@ -1,0 +1,51 @@
+# MjengoOS — background-job drain trigger (the service half of the
+# systemd timer pair; mjengo-jobs.timer owns the cadence).
+#
+# Runs one POST /api/jobs/run call against the deployed app so the
+# JobRecord queue (anomaly scan, weekly digest, reconciliation, overdue
+# check) drains on a schedule instead of waiting for a signed-in user to
+# open the Intel "Background jobs" card.
+#
+# A scheduled unit cannot hold a NextAuth session, so the endpoint's
+# machine-credential path is used: when the app server sets
+# JOBS_RUN_TOKEN, `Authorization: Bearer <token>` authenticates the call
+# (constant-time checked). Without a token on the server the bearer path
+# is disabled (fail closed) and every run 401s — curl -f then fails and
+# the journal says so.
+#
+# INSTALL (root, from a repo checkout):
+#   install -D -m 0644 deploy/systemd/mjengo-jobs.service /etc/systemd/system/
+#   install -D -m 0644 deploy/systemd/mjengo-jobs.timer   /etc/systemd/system/
+#   install -D -m 0600 deploy/systemd/mjengo-jobs.env.example /etc/mjengo/jobs.env
+#   # edit /etc/mjengo/jobs.env: set JOBS_RUN_TOKEN (openssl rand -hex 32),
+#   #   the SAME value the app's .env carries, and MJENGO_JOBS_URL
+#   systemctl daemon-reload
+#   systemctl enable --now mjengo-jobs.timer    # the TIMER, not the service
+#
+# Verify:  systemctl list-timers 'mjengo-jobs*'
+#          journalctl -u mjengo-jobs.service   # each drain's JSON reply
+
+[Unit]
+Description=MjengoOS background-job drain (POST /api/jobs/run)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The secret never lives in this (git-tracked) unit — only in the
+# root-only EnvironmentFile (chmod 600).
+EnvironmentFile=/etc/mjengo/jobs.env
+# Default drain target; the EnvironmentFile may override it.
+Environment=MJENGO_JOBS_URL=http://127.0.0.1:3000
+# The endpoint drains up to 10 jobs per call (its own maxDuration is
+# 120s) — leave headroom for slow handlers.
+TimeoutStartSec=180
+SyslogIdentifier=mjengo-jobs
+# -f: a 401/4xx/5xx exit code lands in the journal (fail closed, never
+# silently green); -sS: no progress bar, errors still shown; the drain's
+# JSON reply ({ok, ran, results}) goes to stdout → the journal.
+ExecStart=/usr/bin/curl -fsS --max-time 150 -X POST \
+  -H "Authorization: Bearer ${JOBS_RUN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{}' \
+  ${MJENGO_JOBS_URL}/api/jobs/run
