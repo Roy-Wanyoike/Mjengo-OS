@@ -48,6 +48,8 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `MUTATION_ORIGIN_ALLOWLIST` | hardening: optional | When set (comma-separated origin list), JSON mutation requests are rejected unless their `Origin` header matches — CSRF defense-in-depth on top of cookies. |
 | `USSD_WEBHOOK_SECRET` | hardening: optional | When set, `/api/ussd` requires a valid HMAC signature derived from this shared secret on every request (authenticated gateway webhooks); unset = the documented demo posture. |
 | `JOBS_RUN_TOKEN` | scheduler: optional | Shared secret (`openssl rand -hex 32`) that lets an external scheduler authenticate `POST /api/jobs/run` with `Authorization: Bearer <token>` (no browser session needed — compose `jobs-tick` sidecar, systemd timer, any cron). Same value must reach the app and the scheduler. **Unset = the bearer path is fully disabled** (fail closed — the endpoint then answers only to contractor/admin sessions, exactly as before). See §7.3. |
+| `DARAJA_RECONCILE_AFTER_MIN` / `_INTERVAL_MIN` / `_MAX_AGE_MIN` | Daraja sweep: optional | Tuning for the `wallet.reconcile` job (pending STK-intent reconciliation, §7.3): probe intents once they are `AFTER` minutes old (default 2), re-probe every `INTERVAL` minutes (default 5, matching the scheduler tick), stop probing past `MAX_AGE` minutes (default 60 — the intent stays PENDING, never an invented failure/credit). Invalid values warn and fall back to defaults; all-unset = defaults, and with no Daraja env no intents exist so the sweep does nothing. |
+| `DARAJA_ALLOWED_IPS` | Daraja webhook: optional | Comma-separated IPv4 CIDRs (and/or bare IPs), e.g. `196.201.214.0/24` — when set, the STK callback route rejects requests whose resolved client IP (x-forwarded-for per `TRUST_PROXY`) matches no entry with 403 **before the body is parsed**; unresolvable IPs are rejected too (fail closed). Unset = the documented posture (unguessable secret path + query-API reconciliation). IPv6 = exact-literal match only (no IPv6 CIDR). Invalid entries are logged and ignored, but a set value with zero valid entries denies **all** traffic. Only sound behind a proxy you control that forwards `x-forwarded-for` (`TRUST_PROXY=1`). |
 | `S3_ENDPOINT` + 4 more | object storage: optional | The five `S3_*` values (`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) switch photo uploads from local disk to an S3/R2/MinIO-compatible bucket (presigned client-direct uploads become available). **All five or nothing** — a partial set fail-closes to local disk with one logged warning. Optional `S3_PUBLIC_BASE` = stable public/CDN URL base. See §9. |
 | `PORT` / `HOSTNAME` | standalone runtime | `3000` / `0.0.0.0` defaults (set by the Docker image; `HOSTNAME=0.0.0.0` binds all interfaces). |
 
@@ -470,6 +472,29 @@ POST-only by design — on Vercel you would need a thin GET wrapper route
   in the queue. Rotate on suspected leak or staff turnover; there is no
   automatic expiry (add a calendar reminder, or wrap the token in your
   secret manager's rotation if you use one).
+
+**Daraja pending-intent reconciliation (`wallet.reconcile`).** The drain
+also carries the M-Pesa STK safety net (issue #34): an STK initiation
+whose Safaricom callback never arrives would leave the payment intent
+pending forever, so every pending initiation seeds a `wallet.reconcile`
+job row (due at `DARAJA_RECONCILE_AFTER_MIN`, default 2 min) and each
+sweep re-probes unsettled intents every `DARAJA_RECONCILE_INTERVAL_MIN`
+(default 5) until they settle or pass `DARAJA_RECONCILE_MAX_AGE_MIN`
+(default 60). The sweep re-drives the **same callback processor** the
+real webhook uses — it never posts money through a second path: the
+query API (`stkpushquery`) is still the gate, the dedupe is still
+`CheckoutRequestID` + the durable `daraja.callback:<id>` record + the
+ledger idempotency key, so a sweep racing a late callback is always a
+no-op on the losing side. Unmapped query results keep the intent
+pending (never a credit); past max-age the intent stays pending and the
+payment request stays approved for a re-initiation. With the whole
+Daraja block unset, no intents exist and the sweep seeds nothing — the
+default deployment is unchanged. Watch it in the jobs card or
+`GET /api/jobs/run` (result JSON: scanned / probed / credited /
+unverified / followUpAt). The webhook route itself accepts an optional
+source-IP allowlist (`DARAJA_ALLOWED_IPS`, see §3) checked before the
+body is parsed — the unguessable path + query-API reconciliation remain
+the always-on integrity model.
 
 ## 8. Updating a deployment
 

@@ -27,6 +27,7 @@ import {
 import { notify } from '@/backend/modules/notify/service'
 import { getProvider, type PaymentMethod } from './providers'
 import { recordDarajaIntent } from './daraja-callback'
+import { seedDarajaReconcileSweep } from './daraja-reconcile'
 import { currentActor, type DeciderIdentity } from './session'
 
 let prCounter = 0
@@ -277,6 +278,12 @@ export async function payPaymentRequest(projectId: string, p: any) {
         initiatedBy: paidBy,
         initiatedByRole: paidByRole,
       })
+      // Issue #34: seed the jobs-module reconciliation sweep for this
+      // intent (runAt = now + DARAJA_RECONCILE_AFTER_MIN). If Safaricom's
+      // callback is missed, the sweep re-drives the same callback processor
+      // (query-API-verified) instead of leaving the intent pending forever.
+      // Best-effort — see daraja-reconcile.ts.
+      await seedDarajaReconcileSweep()
     } catch (e) {
       // Best-effort row — the callback completes the payment only when the
       // intent exists; a missing row means an honest operator fix-up, never

@@ -35,7 +35,8 @@ import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // In-memory Prisma stub: ledger tables (posting core), paymentRequest,
-// transaction + idempotencyRecord (wallet flows). __state exposes the tables.
+// transaction + idempotencyRecord (wallet flows) + jobRecord (the pending
+// path's wallet.reconcile seed). __state exposes the tables.
 vi.mock('@/backend/lib/db', () => {
   const state = {
     seq: 0,
@@ -45,6 +46,7 @@ vi.mock('@/backend/lib/db', () => {
     paymentRequests: new Map<string, Record<string, unknown>>(),
     transactions: new Map<string, Record<string, unknown>>(),
     idempotency: new Map<string, Record<string, unknown>>(),
+    jobs: new Map<string, Record<string, unknown>>(),
     reset() {
       state.accounts.clear()
       state.txns.clear()
@@ -52,6 +54,7 @@ vi.mock('@/backend/lib/db', () => {
       state.paymentRequests.clear()
       state.transactions.clear()
       state.idempotency.clear()
+      state.jobs.clear()
       state.seq = 0
     },
   }
@@ -170,12 +173,32 @@ vi.mock('@/backend/lib/db', () => {
       return { ...r }
     },
   }
+  // jobRecord (minimal): the pending-initiation path seeds a delayed
+  // wallet.reconcile sweep row (issue #34) — the stub records it so the
+  // existing intent pin can also assert the seed.
+  const jobRecord = {
+    async create({ data }: { data: Record<string, unknown> }) {
+      const j: Record<string, unknown> = { id: nid('job'), status: 'queued', ...data }
+      state.jobs.set(j.id as string, j)
+      return { ...j }
+    },
+    async findFirst({ where }: { where: { type?: string; status?: { in: string[] } } }) {
+      return (
+        [...state.jobs.values()].find(
+          (j) =>
+            (!where.type || j.type === where.type) &&
+            (!where.status || where.status.in.includes(j.status as string)),
+        ) ?? null
+      )
+    },
+  }
   const db = {
     ledgerAccount,
     ledgerTransaction,
     paymentRequest,
     transaction,
     idempotencyRecord,
+    jobRecord,
     async $transaction(fn: (tx: typeof db) => unknown) {
       return fn(db)
     },
@@ -219,6 +242,7 @@ function getState() {
     paymentRequests: Map<string, Record<string, unknown>>
     transactions: Map<string, Record<string, unknown>>
     idempotency: Map<string, Record<string, unknown>>
+    jobs: Map<string, Record<string, unknown>>
     reset: () => void
   }
 }
@@ -781,6 +805,13 @@ describe('payPaymentRequest with a pending provider initiation', () => {
     expect(state.txns.size).toBe(0)
     expect(state.paymentRequests.get(PR_ID)?.status).toBe('approved')
     expect(notify).not.toHaveBeenCalled()
+    // issue #34: the pending path also seeds a delayed wallet.reconcile sweep
+    // job (drained by the /api/jobs/run scheduler cycle) — one queued row,
+    // due ~2 min out (the default DARAJA_RECONCILE_AFTER_MIN).
+    const sweepRows = [...state.jobs.values()].filter((j) => j.type === 'wallet.reconcile')
+    expect(sweepRows).toHaveLength(1)
+    expect(sweepRows[0].status).toBe('queued')
+    expect((sweepRows[0].runAt as Date).getTime()).toBeGreaterThan(Date.now())
   })
 })
 
