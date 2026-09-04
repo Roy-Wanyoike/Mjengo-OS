@@ -144,10 +144,16 @@ describe('login lockout (5 failures / 15 min, per email+IP)', () => {
     expect(state.msLeft).toBeGreaterThan(0)
   })
 
-  it('the lock is keyed to (email, IP) — a different IP is a different tracker', () => {
+  it('dual-tracked: the lock is keyed by email AND by (email, IP) — distributed guessing still locks the account', () => {
+    // 5 failures for one account from ONE IP trip BOTH trackers: the account
+    // is locked (email key — defeats distributed password-guessing across
+    // IPs) and the (email|IP) pair is locked.
     for (let i = 0; i < LOGIN_FAILURE_LIMIT; i++) recordLoginFailure('c@x.co', '10.1.0.3')
     expect(checkLoginLockout('c@x.co', '10.1.0.3').locked).toBe(true)
-    expect(checkLoginLockout('c@x.co', '10.1.0.4').locked).toBe(false)
+    // Same account, different IP: still locked via the email-keyed tracker.
+    expect(checkLoginLockout('c@x.co', '10.1.0.4').locked).toBe(true)
+    // A DIFFERENT account from the same IP: a different (email|IP) pair and a
+    // different email key — not locked (the lock never leaks across accounts).
     expect(checkLoginLockout('d@x.co', '10.1.0.3').locked).toBe(false)
   })
 
