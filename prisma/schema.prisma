@@ -687,8 +687,18 @@ model OrderDelivery {
   receivedAt   DateTime?
   receivedBy   String? // who confirmed receipt on the ground
   note         String? // delivery note (ground truth)
-  photoUrls    String              @default("[]") // JSON array of evidence photo URLs (spec §34)
-  photoCount   Int                 @default(0) // evidence photos attached (count mirror)
+  // Spec §34 sketched photo evidence as a JSON array of URLs — never wired.
+  // REAL photo evidence (issue "Photo attachments on delivery verification")
+  // rides the DeliveryPhoto join below: one row per /api/upload Attachment
+  // linked at receive time (the same storage site photos and documents use —
+  // Attachment.storageKey serves the bytes). Column kept for row compatibility;
+  // nothing reads it.
+  photoUrls    String              @default("[]") // superseded — see DeliveryPhoto
+  // Denormalized mirror of the DeliveryPhoto rows linked to THIS delivery
+  // (recomputed by receiveDelivery — an honest count of real attachments; a
+  // client-supplied count is ignored). Seeded/legacy rows may carry a count
+  // with no links (the pre-photo-link era) — the UI says so honestly.
+  photoCount   Int                 @default(0) // count of linked DeliveryPhoto rows
   gpsLat       Float?
   gpsLng       Float?
   createdAt    DateTime            @default(now())
@@ -701,6 +711,7 @@ model OrderDelivery {
   departedAt   DateTime?
   arrivedAt    DateTime?
   lines        OrderDeliveryLine[]
+  photos       DeliveryPhoto[]
 }
 
 // Per-line physical count: ordered vs received → discrepancy records.
@@ -715,6 +726,31 @@ model OrderDeliveryLine {
   qtyRejected Float             @default(0) // explicitly rejected on inspection (spec §34)
   damageNote  String? // damage/condition observations
   condition   String            @default("ok") // ok, damaged, partial — inspection result
+  photos      DeliveryPhoto[]
+}
+
+// Delivery evidence photo link (issue "Photo attachments on delivery
+// verification"). delivery.receive accepts attachment ids from PRIOR
+// /api/upload calls (document mode, category 'other', entityType
+// 'order_delivery') and links them here — the §30 SavedSupplier join style:
+// a plain FK pair + @@unique, no new linkage idiom. Line-scoped rows
+// (deliveryLineId set) are the DISCREPANCY evidence for that inspected line;
+// a null scope means whole-delivery evidence. unique(deliveryId, attachmentId)
+// makes linking IDEMPOTENT — createMany skipDuplicates can never double a
+// link, which is what "re-verify must not duplicate links" pins on.
+model DeliveryPhoto {
+  id             String             @id @default(cuid())
+  deliveryId     String
+  delivery       OrderDelivery      @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  attachmentId   String
+  attachment     Attachment         @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
+  deliveryLineId String? // null = whole-delivery evidence; set = evidence for that line's count/inspection
+  deliveryLine   OrderDeliveryLine? @relation(fields: [deliveryLineId], references: [id], onDelete: Cascade)
+  attachedBy     String // name snapshot of who linked it (receive's receivedBy)
+  createdAt      DateTime           @default(now())
+
+  @@unique([deliveryId, attachmentId])
+  @@index([deliveryLineId])
 }
 
 // ---------------- MjengoOS v2 — Invoices (module: invoices) ----------------
@@ -987,7 +1023,7 @@ model Attachment {
   entityId   String
   fileName   String
   storageKey String // /uploads/... or /photos/... path
-  kind       String? // delivery_photo, quote_doc, invoice_doc...
+  kind       String? // delivery_photo (linked via DeliveryPhoto), quote_doc, invoice_doc...
   uploadedBy String
   projectId  String?
   project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -1008,6 +1044,7 @@ model Attachment {
   reviewStatus        String    @default("pending") // pending | approved | rejected
   reviewedBy          String?
   reviewedAt          DateTime?
+  deliveryPhotos      DeliveryPhoto[]
 }
 
 // ---------------- MjengoOS v3 — Platform: events, jobs, flags, health (module: events/jobs) ----------------

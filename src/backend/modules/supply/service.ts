@@ -26,7 +26,8 @@
 //     by name match with quote-price fallback, PO-YYYY-000NNN codes, then
 //     send → confirm (simulated supplier) → dispatch → receive
 //   - delivery receive: PHYSICAL GROUND TRUTH (§13) — per-line ordered vs
-//     received, photos count, GPS, note; ANY short line → 'discrepancy'
+//     received, evidence photos (real Attachment links, see receiveDelivery),
+//     GPS, note; ANY short line → 'discrepancy'
 //     (flagged for review, never an accusation) + client & contractor
 //     notifications; payment release stays gated by the invoices module's
 //     3-way match. DOCUMENTED CHOICE: a short delivery still completes the
@@ -916,10 +917,137 @@ export async function closeOrder(projectId: string, payload: Record<string, unkn
 
 // ---------------- delivery verification (Finder §13 — ground truth) ----------------
 
+/** Honest cap on one receive's photo set (uploads are rate-limited 10/min; payloads stay sane). */
+const MAX_DELIVERY_PHOTOS = 24
+
+/** Validated photo refs for one receive — attachment ids from PRIOR /api/upload calls. */
+export interface DeliveryPhotoRefs {
+  /** Whole-delivery evidence attachment ids. */
+  delivery: string[]
+  /** orderLineId → that line's evidence attachment ids (discrepancy photos). */
+  byOrderLine: Map<string, string[]>
+}
+
+/**
+ * Validate the photo refs a receive payload carries. Fail-closed: every id
+ * must exist, be an IMAGE attachment, and belong to THIS project (a foreign
+ * project's file is never silently attached) — throws BEFORE any delivery
+ * rows are written, so an invalid photo set records nothing. An id referenced
+ * both whole-delivery AND on a line is treated as line-scoped (the more
+ * specific reading wins; one photo = one link row).
+ */
+export async function collectDeliveryPhotoRefs(
+  projectId: string,
+  payload: Record<string, unknown>,
+  rawLines: unknown[],
+): Promise<DeliveryPhotoRefs> {
+  const ids = new Set<string>()
+  const byOrderLine = new Map<string, string[]>()
+  const addAll = (raw: unknown, orderLineId?: string) => {
+    if (raw === undefined || raw === null) return
+    if (!Array.isArray(raw)) {
+      throw new Error('photoIds must be an array of attachment ids from /api/upload')
+    }
+    for (const item of raw) {
+      const id = str(item)
+      if (!id) throw new Error('photoIds must be an array of attachment ids from /api/upload')
+      ids.add(id)
+      if (orderLineId) {
+        const list = byOrderLine.get(orderLineId) ?? []
+        if (!list.includes(id)) list.push(id)
+        byOrderLine.set(orderLineId, list)
+      }
+    }
+  }
+  addAll(payload.photoIds)
+  for (const item of rawLines) {
+    const rec = (item ?? {}) as Record<string, unknown>
+    addAll(rec.photoIds, str(rec.orderLineId) ?? undefined)
+  }
+
+  const refs: DeliveryPhotoRefs = { delivery: [], byOrderLine }
+  if (ids.size === 0) return refs
+  if (ids.size > MAX_DELIVERY_PHOTOS) {
+    throw new Error(`At most ${MAX_DELIVERY_PHOTOS} evidence photos per delivery — got ${ids.size}`)
+  }
+  const rows = await db.attachment.findMany({ where: { id: { in: [...ids] } } })
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  for (const id of ids) {
+    const row = byId.get(id)
+    if (!row) {
+      throw new Error(`Photo attachment ${id} not found — upload it via /api/upload before recording the delivery`)
+    }
+    if (row.projectId !== projectId) {
+      throw new Error(`Photo attachment ${id} belongs to another project — evidence must be uploaded for this one`)
+    }
+    if (!row.mimeType || !row.mimeType.startsWith('image/')) {
+      throw new Error(`Attachment ${id} (${row.mimeType ?? 'unknown type'}) is not a photo — evidence must be a PNG or JPEG image`)
+    }
+  }
+  const lineScoped = new Set<string>()
+  for (const list of byOrderLine.values()) for (const id of list) lineScoped.add(id)
+  refs.delivery = [...ids].filter((id) => !lineScoped.has(id))
+  return refs
+}
+
+/**
+ * Link validated photo attachments to a delivery as DeliveryPhoto rows —
+ * IDEMPOTENT by construction: already-linked ids are filtered out before the
+ * write and the @@unique(deliveryId, attachmentId) index backstops a
+ * concurrent race, so replaying the same ids links nothing new (what
+ * "re-verify must not duplicate links" pins on). Line-scoped refs land with
+ * deliveryLineId pointing at the freshly written OrderDeliveryLine row
+ * (discrepancy evidence); whole-delivery refs land with a null scope.
+ * Returns the delivery's TOTAL linked photo rows — the honest count that
+ * photoCount mirrors.
+ */
+export async function linkDeliveryPhotos(
+  deliveryId: string,
+  refs: DeliveryPhotoRefs,
+  lineIdByOrderLineId: Map<string, string>,
+  attachedBy: string,
+): Promise<number> {
+  // One row per attachment id: a line scope (more specific) overrides a
+  // whole-delivery scope for the same photo.
+  const scoped = new Map<string, string | null>()
+  for (const id of refs.delivery) scoped.set(id, null)
+  for (const [orderLineId, attachmentIds] of refs.byOrderLine) {
+    const deliveryLineId = lineIdByOrderLineId.get(orderLineId) ?? null
+    for (const id of attachmentIds) scoped.set(id, deliveryLineId)
+  }
+  // Idempotency: SQLite's createMany has no skipDuplicates, so the rows
+  // already linked to THIS delivery are filtered out BEFORE the write, and a
+  // concurrent duplicate (unique index DeliveryPhoto_deliveryId_attachmentId_key)
+  // is tolerated — the first link wins, a replay links nothing new.
+  const alreadyLinked = await db.deliveryPhoto.findMany({
+    where: { deliveryId },
+    select: { attachmentId: true },
+  })
+  const linkedIds = new Set(alreadyLinked.map((r) => r.attachmentId as string))
+  const toCreate = [...scoped]
+    .filter(([attachmentId]) => !linkedIds.has(attachmentId))
+    .map(([attachmentId, deliveryLineId]) => ({
+      deliveryId,
+      attachmentId,
+      deliveryLineId,
+      attachedBy,
+    }))
+  if (toCreate.length > 0) {
+    try {
+      await db.deliveryPhoto.createMany({ data: toCreate })
+    } catch (e) {
+      if (!String(e).includes('Unique constraint')) throw e
+      // Lost a concurrent race for the same (delivery, attachment) pair —
+      // the other writer's link stands; ours is a duplicate by definition.
+    }
+  }
+  return await db.deliveryPhoto.count({ where: { deliveryId } })
+}
+
 /**
  * `delivery.receive` { deliveryId, lines: [{ orderLineId, qtyReceived,
- * qtyRejected?, damageNote?, condition? }], note?, gpsLat?, gpsLng?,
- * photoCount? } — per-line physical counts + inspection + evidence.
+ * qtyRejected?, damageNote?, condition?, photoIds? }], note?, photoIds?,
+ * gpsLat?, gpsLng? } — per-line physical counts + inspection + evidence.
  * Accepts a truck that is DISPATCHED (§26 leg skipped — back-compat) or
  * ARRIVED (the driver leg ran: assign → dispatch → transit → arrive).
  * ANY qtyReceived < qtyOrdered → OrderDelivery 'discrepancy' ("Ordered X ·
@@ -937,8 +1065,28 @@ export async function closeOrder(projectId: string, payload: Record<string, unkn
  * CatalogItem.stockQty is clamped = max(0, stockQty − qtyOrdered) for the
  * line's catalog item (supplier + name match; skipped silently when the
  * supplier's catalog has no such item — some POs price off quotes).
- * TODO(photos): photoCount is an integer count for v1 — real photo attach
- * lands with object storage (roadmap A-5).
+ *
+ * EVIDENCE PHOTOS (issue "Photo attachments on delivery verification") —
+ * the same flow site photos use, one step earlier: the receive dialog
+ * uploads each photo FIRST via POST /api/upload (document mode → a file
+ * under public/docs/ + an Attachment row stamped entityType 'order_delivery'
+ * / entityId = deliveryId), then submits the returned attachment ids with
+ * the verification:
+ *   · payload.photoIds — whole-delivery evidence (the truck, the gate, the note)
+ *   · payload.lines[].photoIds — that line's evidence; a short/damaged line's
+ *     photos become the DISCREPANCY evidence (DeliveryPhoto.deliveryLineId
+ *     points at the per-line count row, so the discrepancy report and banner
+ *     can pull exactly those photos).
+ * Everything is validated fail-closed BEFORE any delivery rows are written
+ * (ids exist, belong to THIS project, are image attachments), then linked as
+ * DeliveryPhoto rows — idempotently (linkDeliveryPhotos: pre-filtered writes
+ * + the @@unique(deliveryId, attachmentId) index backstop), so replaying the
+ * same ids links nothing new. photoCount is a
+ * DENORMALIZED MIRROR of the linked rows, recomputed here from real links —
+ * a client-supplied count is ignored (a typed number was never evidence;
+ * legacy count-only rows predate this flow and the UI labels them honestly).
+ * Replay: loadSupplySlice ships the links (+attachments) on every delivery —
+ * the order card renders them exactly like the site-photo strip.
  */
 export async function receiveDelivery(projectId: string, payload: Record<string, unknown>) {
   const deliveryId = str(payload.deliveryId)
@@ -999,7 +1147,11 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
   }
 
   const note = str(payload.note)
-  const photoCount = Math.max(0, Math.round(Number(payload.photoCount ?? 0)) || 0)
+  // Evidence photos: validate the attachment refs fail-closed BEFORE any
+  // rows are written (an invalid photo set records nothing). payload.photoCount
+  // (the legacy typed number) is deliberately IGNORED — the honest count is
+  // recomputed from the real DeliveryPhoto links below.
+  const photoRefs = await collectDeliveryPhotoRefs(projectId, payload, rawLines)
   const gpsLat = optNum(payload.gpsLat)
   const gpsLng = optNum(payload.gpsLng)
   const actor = await currentActor()
@@ -1017,6 +1169,17 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
       condition: r.condition,
     })),
   })
+
+  // ---- Evidence photo links (issue "Photo attachments on delivery verification"):
+  // map orderLineId → the fresh OrderDeliveryLine row so line-scoped photos
+  // ride the exact per-line count record, then link (idempotent) and take the
+  // honest count. Runs BEFORE the status update so photoCount mirrors reality.
+  let linkedPhotoCount = 0
+  if (photoRefs.delivery.length > 0 || photoRefs.byOrderLine.size > 0) {
+    const lineRows = await db.orderDeliveryLine.findMany({ where: { deliveryId: delivery.id } })
+    const lineIdByOrderLineId = new Map(lineRows.map((r) => [r.orderLineId as string, r.id as string]))
+    linkedPhotoCount = await linkDeliveryPhotos(delivery.id, photoRefs, lineIdByOrderLineId, receivedBy)
+  }
 
   // ---- Site Store posting (spec §33/§34): movements + catalog stock clamp ----
   const inventoryResult = await postDeliveryToInventory(
@@ -1051,33 +1214,55 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
         receivedAt: now,
         receivedBy,
         note: fullNote,
-        photoCount,
+        photoCount: linkedPhotoCount,
         gpsLat,
         gpsLng,
       },
     })
     await db.purchaseOrder.update({ where: { id: delivery.order.id }, data: { status: 'delivered' } })
 
-    const body = `${orderCode} (${supplierName}): ${autoSummary}. Photos: ${photoCount}. Reconcile with the supplier before releasing payment.`
+    const body = `${orderCode} (${supplierName}): ${autoSummary}. Photos: ${linkedPhotoCount}. Reconcile with the supplier before releasing payment.`
     await notify(projectId, 'delivery.discrepancy', `Delivery discrepancy: ${orderCode}`, body, 'client', null)
     await notify(projectId, 'delivery.discrepancy', `Delivery discrepancy: ${orderCode}`, body, 'contractor', null)
-    return { id: delivery.id, orderId: delivery.order.id, status: 'discrepancy', shortLines: short.length, inventory: inventoryResult }
+    return {
+      id: delivery.id,
+      orderId: delivery.order.id,
+      status: 'discrepancy',
+      shortLines: short.length,
+      photosLinked: linkedPhotoCount,
+      inventory: inventoryResult,
+    }
   }
 
   await db.orderDelivery.update({
     where: { id: delivery.id },
-    data: { status: 'received', receivedAt: now, receivedBy, note: note ?? 'All lines received in full', photoCount, gpsLat, gpsLng },
+    data: {
+      status: 'received',
+      receivedAt: now,
+      receivedBy,
+      note: note ?? 'All lines received in full',
+      photoCount: linkedPhotoCount,
+      gpsLat,
+      gpsLng,
+    },
   })
   await db.purchaseOrder.update({ where: { id: delivery.order.id }, data: { status: 'delivered' } })
   await notify(
     projectId,
     'delivery.received',
     `Delivery received: ${orderCode}`,
-    `${supplierName} delivered in full — verified on the ground by ${receivedBy}${photoCount ? ` with ${photoCount} photo(s)` : ''}.`,
+    `${supplierName} delivered in full — verified on the ground by ${receivedBy}${linkedPhotoCount ? ` with ${linkedPhotoCount} photo(s)` : ''}.`,
     'contractor',
     null,
   )
-  return { id: delivery.id, orderId: delivery.order.id, status: 'received', shortLines: 0, inventory: inventoryResult }
+  return {
+    id: delivery.id,
+    orderId: delivery.order.id,
+    status: 'received',
+    shortLines: 0,
+    photosLinked: linkedPhotoCount,
+    inventory: inventoryResult,
+  }
 }
 
 /**

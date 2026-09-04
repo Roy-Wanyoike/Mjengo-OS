@@ -61,7 +61,7 @@ export const SUPPLY_ACTIONS = [
   'order.dispatch', // { orderId } — dispatch creates an OrderDelivery (DISPATCHED)
   'order.cancel', // { id, reason } — cancel with reason (from SENT/CONFIRMED)
   'order.close', // { id, note? } — close after verified delivery (from DELIVERED)
-  'delivery.receive', // { deliveryId, lines: [{ orderLineId, qtyReceived, qtyRejected?, damageNote?, condition? }], note?, photoCount?, gpsLat?, gpsLng? } — per-line counts + inspection → discrepancy + Site Store movements
+  'delivery.receive', // { deliveryId, lines: [{ orderLineId, qtyReceived, qtyRejected?, damageNote?, condition?, photoIds?: string[] }], note?, photoIds?: string[], gpsLat?, gpsLng? } — per-line counts + inspection → discrepancy + Site Store movements. photoIds are Attachment ids from PRIOR /api/upload calls (photoRefs validated + linked as DeliveryPhoto rows; photoCount is derived — a client count is ignored)
   'delivery.dispatch', // { deliveryId, note? } — update dispatch info
   'rule.upsert', // { id?, minAmount, maxAmount?, approverRole, priority?, active? } — approval policy (§11)
   'rule.delete', // { id } — remove an approval rule

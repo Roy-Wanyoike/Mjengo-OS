@@ -2,10 +2,12 @@
 
 // One purchase order card (Finder §12-§13): lines, totals, lifecycle buttons
 // Send → Confirm (supplier, simulated) → Dispatch → Receive delivery → Close,
-// deliveries with per-line ground truth, and the DISCREPANCY banner when a
-// short count is on record ("flagged for review", never an accusation).
-// Confirmed orders hint "Invoice →" — the invoices section sits below on
-// this tab and handles the money end.
+// deliveries with per-line ground truth + EVIDENCE PHOTOS (real Attachment
+// links recorded at receive — replayed with the site-photo rendering via
+// delivery-photos.tsx), and the DISCREPANCY banner when a short count is on
+// record ("flagged for review", never an accusation) with that line's
+// evidence photos beside the counts. Confirmed orders hint "Invoice →" — the
+// invoices section sits below on this tab and handles the money end.
 
 import { useState } from 'react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
@@ -20,6 +22,7 @@ import type { ActionType } from '@/backend/lib/mjengo'
 import type { OrderWithDetail } from '@/backend/modules/supply/types'
 import { dateShort } from '@/frontend/lib/format'
 import { DeliveryStatusBadge, OrderStatusBadge, fmtQty, formatKes } from './bits'
+import { DeliveryPhotos, LinePhotoThumbs } from './delivery-photos'
 import { DeliveryReceiveDialog } from './delivery-receive-dialog'
 
 export function OrderCard({
@@ -150,6 +153,18 @@ export function OrderCard({
         {deliveries.map((d) => {
           const shortLines = d.lines.filter((l) => l.qtyReceived < l.qtyOrdered)
           const totalMissing = shortLines.reduce((s, l) => s + (l.qtyOrdered - l.qtyReceived), 0)
+          // Evidence photos: line-scoped rows (deliveryLineId) are the
+          // discrepancy/inspection evidence for that line; the rest are
+          // whole-delivery photos. Legacy rows may carry a photoCount with no
+          // links — the count line below says so honestly.
+          const linePhotoRows = d.lines
+            .map((l) => ({
+              lineId: l.id,
+              name: order.lines.find((ol) => ol.id === l.orderLineId)?.name ?? 'line',
+              photos: d.photos.filter((p) => p.deliveryLineId === l.id),
+            }))
+            .filter((r) => r.photos.length > 0)
+          const generalPhotos = d.photos.filter((p) => p.deliveryLineId === null)
           return (
             <div key={d.id} className={`space-y-2 rounded-lg border p-3 ${d.status === 'discrepancy' ? 'border-orange-200 bg-orange-50/60' : 'border-stone-200 bg-stone-50/60'}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -178,13 +193,18 @@ export function OrderCard({
                   <p className="pt-1.5 text-[11px] text-stone-500">
                     Client + contractor notified · payment release stays gated by the invoices 3-way match — a human reconciles with the supplier.
                   </p>
+                  {linePhotoRows.map((r) => (
+                    <LinePhotoThumbs key={r.lineId} photos={r.photos} lineName={r.name} />
+                  ))}
                 </div>
               )}
               {d.status === 'received' && d.note && <p className="text-xs italic text-stone-500">{d.note}</p>}
               {(d.photoCount > 0 || (d.gpsLat !== null && d.gpsLng !== null)) && (
                 <p className="flex flex-wrap items-center gap-3 text-[11px] text-stone-500">
-                  {d.photoCount > 0 && (
-                    <span className="flex items-center gap-1"><Camera className="h-3 w-3" aria-hidden /> {d.photoCount} photo{d.photoCount === 1 ? '' : 's'} on file</span>
+                  {d.photoCount > 0 && d.photos.length === 0 && (
+                    <span className="flex items-center gap-1">
+                      <Camera className="h-3 w-3" aria-hidden /> {d.photoCount} photo{d.photoCount === 1 ? '' : 's'} on record — count only, no files attached
+                    </span>
                   )}
                   {d.gpsLat !== null && d.gpsLng !== null && (
                     <span className="flex items-center gap-1 tabular-nums">
@@ -194,6 +214,11 @@ export function OrderCard({
                   )}
                 </p>
               )}
+              {/* whole-delivery evidence photos — the site-photo rendering */}
+              <DeliveryPhotos photos={generalPhotos} />
+              {/* line-scoped evidence on a clean receive (no discrepancy banner) */}
+              {d.status !== 'discrepancy' &&
+                linePhotoRows.map((r) => <LinePhotoThumbs key={r.lineId} photos={r.photos} lineName={r.name} />)}
             </div>
           )
         })}

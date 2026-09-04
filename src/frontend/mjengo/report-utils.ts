@@ -156,16 +156,35 @@ export function buildProcurementReportCSV(p: ProjectPayload): string {
 
   rows.push({ A: '', B: '', C: '', D: '', E: '', F: '', G: '', H: '' })
   rows.push({ A: 'DELIVERY DISCREPANCIES (received vs ordered)', B: '', C: '', D: '', E: '', F: '', G: '', H: '' })
-  rows.push({ A: 'Order', B: 'Line', C: 'Ordered', D: 'Received', E: 'Short', F: '', G: '', H: '' })
+  rows.push({ A: 'Order', B: 'Line', C: 'Ordered', D: 'Received', E: 'Short', F: 'Evidence photos', G: '', H: '' })
   let discrepancies = 0
   for (const o of p.supply.orders) {
     // OrderDeliveryLine carries quantities only — line names live on the PO lines.
     const lineNames = new Map(o.lines.map((l) => [l.id, l.name]))
     for (const d of o.deliveries) {
+      // Line-scoped DeliveryPhoto links are the discrepancy evidence for
+      // exactly that line's count (issue "Photo attachments on delivery
+      // verification") — referenced here by relation, like the banner does.
+      const photosByLine = new Map<string, number>()
+      for (const ph of d.photos) {
+        if (ph.deliveryLineId) {
+          photosByLine.set(ph.deliveryLineId, (photosByLine.get(ph.deliveryLineId) ?? 0) + 1)
+        }
+      }
       for (const l of d.lines) {
         if (d.status === 'discrepancy' || l.qtyReceived < l.qtyOrdered) {
           discrepancies += 1
-          rows.push({ A: o.orderCode, B: lineNames.get(l.orderLineId) ?? `line ${l.orderLineId}`, C: l.qtyOrdered, D: l.qtyReceived, E: Math.round(l.qtyOrdered - l.qtyReceived), F: '', G: '', H: '' })
+          const photoCount = photosByLine.get(l.id) ?? 0
+          rows.push({
+            A: o.orderCode,
+            B: lineNames.get(l.orderLineId) ?? `line ${l.orderLineId}`,
+            C: l.qtyOrdered,
+            D: l.qtyReceived,
+            E: Math.round(l.qtyOrdered - l.qtyReceived),
+            F: photoCount > 0 ? `${photoCount} photo${photoCount === 1 ? '' : 's'}` : '',
+            G: '',
+            H: '',
+          })
         }
       }
     }

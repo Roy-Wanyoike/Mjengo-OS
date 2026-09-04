@@ -2,13 +2,25 @@
 
 // Delivery receive dialog (Finder §13/§34 — the physical ground-truth moment).
 // Per-line ordered vs received counts + INSPECTION (rejected qty, condition
-// ok/damaged/partial, damage note), photo count, GPS capture via
+// ok/damaged/partial, damage note), EVIDENCE PHOTOS, GPS capture via
 // navigator.geolocation with a manual lat/lng fallback, and a note. ANY short
 // line becomes a DISCREPANCY (flagged for review, never an accusation); the
 // server writes the per-line OrderDeliveryLine rows, posts the Site Store
 // ledger (net received → 'received' movement, rejected → 'damaged'/'returned')
-// and notifies client + contractor. TODO(photos): v1 records a count — real
-// photo attach lands with object storage (roadmap A-5).
+// and notifies client + contractor.
+//
+// EVIDENCE PHOTOS (issue "Photo attachments on delivery verification") — the
+// same flow site photos use, one step earlier: each file uploads NOW via
+// POST /api/upload (document mode → Attachment row stamped entityType
+// 'order_delivery' / entityId = this delivery; PNG or JPEG, 8 MB cap, category
+// 'other' — none of the named document categories fits an evidence photo, so
+// that is the honest label). The returned attachment ids ride the
+// delivery.receive payload: whole-delivery photos in photoIds, a flagged
+// line's photos in that line's photoIds — the server validates + links them
+// (DeliveryPhoto rows; line photos become the discrepancy evidence) and
+// photoCount becomes the honest count of links (the old typed-number field is
+// gone — a number was never evidence). Offline, uploads wait for a connection
+// (honest note below) while the counts + inspection still record.
 //
 // The form body is a keyed inner component: fresh per-line counts initialize
 // from the PO lines each time a delivery is opened (no prop-syncing effects).
@@ -31,6 +43,26 @@ const CONDITIONS = [
   { value: 'partial', label: 'Partial' },
   { value: 'damaged', label: 'Damaged' },
 ] as const
+
+/** One uploaded evidence photo — the /api/upload response (id + preview URL). */
+interface UploadedPhoto {
+  id: string
+  fileName: string
+  storageKey: string
+}
+
+/** Read a File as standard base64 (no data: prefix — the upload contract). */
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result)
+      resolve(result.slice(result.indexOf(',') + 1))
+    }
+    reader.onerror = () => reject(new Error('Could not read the file'))
+    reader.readAsDataURL(file)
+  })
+}
 
 export function DeliveryReceiveDialog({
   order, deliveryId, open, onOpenChange,
@@ -77,11 +109,13 @@ function DeliveryReceiveForm({
     return initial
   })
   const [note, setNote] = useState('')
-  const [photoCount, setPhotoCount] = useState('2')
+  const [photos, setPhotos] = useState<UploadedPhoto[]>([])
+  const [linePhotos, setLinePhotos] = useState<Record<string, UploadedPhoto[]>>({})
+  const [uploading, setUploading] = useState(false)
   const [gps, setGps] = useState('')
   const [locating, setLocating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const busy = actionBusy !== null || saving
+  const busy = actionBusy !== null || saving || uploading
   const offlineNote = `Saved on-device — queued (${outbox.length})`
 
   const shortPreview = order.lines.filter((l) => {
@@ -110,6 +144,69 @@ function DeliveryReceiveForm({
     )
   }
 
+  /**
+   * Upload one evidence photo NOW via the existing /api/upload document mode
+   * (files land under public/docs/, an Attachment row is stamped entityType
+   * 'order_delivery' / entityId = this delivery). The returned id is submitted
+   * with the verification — the server links it at receive time.
+   */
+  async function uploadPhoto(file: File, lineId?: string, lineName?: string) {
+    if (!online) {
+      toast.info('Photos need a connection to upload — record the delivery now; attach photos when you are back online')
+      return
+    }
+    if (file.type !== 'image/png' && file.type !== 'image/jpeg') {
+      toast.error('Evidence photos must be PNG or JPEG')
+      return
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error('Photo is over the 8 MB upload limit')
+      return
+    }
+    setUploading(true)
+    try {
+      const contentBase64 = await readAsBase64(file)
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'document',
+          fileName: file.name,
+          mimeType: file.type,
+          contentBase64,
+          // Honest category: an evidence photo is none of the named document
+          // categories (contract/drawing/permit/receipt/boq/invoice/quote).
+          category: 'other',
+          title: lineName ? `${lineName} — delivery evidence (${order.orderCode})` : `${order.orderCode} — delivery evidence`,
+          projectId: order.projectId,
+          entityType: 'order_delivery',
+          entityId: deliveryId,
+        }),
+      })
+      const json = (await res.json().catch(() => null)) as {
+        attachment?: { id: string; fileName: string; storageKey: string }
+        error?: string
+      } | null
+      if (!res.ok || !json?.attachment) {
+        toast.error(json?.error ?? 'Photo upload failed — nothing was recorded')
+        return
+      }
+      const photo: UploadedPhoto = {
+        id: json.attachment.id,
+        fileName: json.attachment.fileName,
+        storageKey: json.attachment.storageKey,
+      }
+      if (lineId) setLinePhotos((m) => ({ ...m, [lineId]: [...(m[lineId] ?? []), photo] }))
+      else setPhotos((p) => [...p, photo])
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  function onFiles(files: FileList | null, lineId?: string, lineName?: string) {
+    for (const file of Array.from(files ?? [])) void uploadPhoto(file, lineId, lineName)
+  }
+
   async function save() {
     const lines = order.lines.map((l) => ({
       orderLineId: l.id,
@@ -130,16 +227,25 @@ function DeliveryReceiveForm({
       .split(',')
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isFinite(n))
+    const photoIds = photos.map((p) => p.id)
+    const linesWithPhotos = lines.map((l) => {
+      const ids = linePhotos[l.orderLineId]?.map((p) => p.id) ?? []
+      return ids.length > 0 ? { ...l, photoIds: ids } : l
+    })
     setSaving(true)
     const ok = await dispatch('delivery.receive', {
       deliveryId,
-      lines,
+      lines: linesWithPhotos,
       note: note.trim() || undefined,
-      photoCount: Number(photoCount) > 0 ? Math.round(Number(photoCount)) : 0,
+      ...(photoIds.length > 0 ? { photoIds } : {}),
       ...(Number.isFinite(lat) && Number.isFinite(lng) ? { gpsLat: lat, gpsLng: lng } : {}),
     }, `Delivery received: ${order.orderCode}`)
     setSaving(false)
     if (ok) {
+      const attachedPhotos = photoIds.length + Object.values(linePhotos).reduce((s, list) => s + list.length, 0)
+      if (attachedPhotos > 0) {
+        toast.success(`${attachedPhotos} evidence photo${attachedPhotos === 1 ? '' : 's'} attached to the delivery record`)
+      }
       const anyShort = shortPreview.length > 0
       if (anyShort) {
         toast.warning(
@@ -241,6 +347,37 @@ function DeliveryReceiveForm({
                   aria-label={`Damage note for ${line.name}`}
                   className="h-8 text-xs"
                 />
+                {/* Photo evidence for THIS line — shown when it is flagged
+                    (damaged / rejected / short): these photos become the
+                    discrepancy evidence tied to this line's count. */}
+                {(damagedLine || short) && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(linePhotos[line.id] ?? []).map((ph) => (
+                      <span key={ph.id} className="relative h-10 w-14 overflow-hidden rounded-md border border-orange-200">
+                        <img src={ph.storageKey} alt={ph.fileName} className="h-full w-full object-cover" />
+                        <button
+                          type="button"
+                          className="absolute inset-x-0 bottom-0 flex items-center justify-center bg-stone-950/60 text-[9px] font-medium text-white hover:bg-rose-600"
+                          aria-label={`Remove ${ph.fileName} from this line`}
+                          onClick={() => setLinePhotos((m) => ({ ...m, [line.id]: (m[line.id] ?? []).filter((x) => x.id !== ph.id) }))}
+                        >
+                          remove
+                        </button>
+                      </span>
+                    ))}
+                    <label className="flex h-10 cursor-pointer items-center gap-1 rounded-md border border-dashed border-orange-300 px-2 text-[10px] font-medium text-orange-700 hover:border-orange-400 hover:text-orange-800">
+                      {uploading ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Camera className="h-3 w-3" aria-hidden />}
+                      photo evidence
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg"
+                        className="sr-only"
+                        aria-label={`Add damage photo for ${line.name}`}
+                        onChange={(e) => { onFiles(e.target.files, line.id, line.name); e.target.value = '' }}
+                      />
+                    </label>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -260,24 +397,54 @@ function DeliveryReceiveForm({
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="recv-photos">Evidence photos</Label>
-            <Input id="recv-photos" type="number" inputMode="numeric" min={0} value={photoCount} onChange={(e) => setPhotoCount(e.target.value)} />
+        <div className="space-y-1.5">
+          <Label>Evidence photos</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            {photos.map((ph) => (
+              <span key={ph.id} className="relative h-14 w-20 overflow-hidden rounded-lg border border-stone-200">
+                <img src={ph.storageKey} alt={ph.fileName} className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  className="absolute inset-x-0 bottom-0 bg-stone-950/60 py-0.5 text-[9px] font-medium text-white hover:bg-rose-600"
+                  aria-label={`Remove ${ph.fileName}`}
+                  onClick={() => setPhotos((p) => p.filter((x) => x.id !== ph.id))}
+                >
+                  remove
+                </button>
+              </span>
+            ))}
+            <label className="flex h-14 w-20 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg border border-dashed border-stone-300 text-[10px] font-medium text-stone-500 hover:border-amber-400 hover:text-amber-600">
+              {uploading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Camera className="h-4 w-4" aria-hidden />}
+              Add photo
+              <input
+                type="file"
+                accept="image/png,image/jpeg"
+                multiple
+                className="sr-only"
+                aria-label="Add whole-delivery evidence photos"
+                onChange={(e) => { onFiles(e.target.files); e.target.value = '' }}
+              />
+            </label>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="recv-gps">GPS coordinates</Label>
-            <div className="flex gap-1.5">
-              <Input id="recv-gps" value={gps} onChange={(e) => setGps(e.target.value)} placeholder="-1.2921, 36.8219" className="tabular-nums" />
-              <Button
-                type="button" variant="outline" className="h-9 w-10 shrink-0 p-0"
-                onClick={captureLocation} disabled={locating}
-                aria-label="Capture current GPS location"
-                title="Capture current GPS location"
-              >
-                {locating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Locate className="h-4 w-4" aria-hidden />}
-              </Button>
-            </div>
+          <p className="text-[11px] text-stone-500">
+            {online
+              ? 'Each photo uploads now and attaches when you record the delivery — a real file on the record, not a count.'
+              : 'Offline — photos upload when you are back online; the counts and inspection still record now.'}
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="recv-gps">GPS coordinates</Label>
+          <div className="flex gap-1.5">
+            <Input id="recv-gps" value={gps} onChange={(e) => setGps(e.target.value)} placeholder="-1.2921, 36.8219" className="tabular-nums" />
+            <Button
+              type="button" variant="outline" className="h-9 w-10 shrink-0 p-0"
+              onClick={captureLocation} disabled={locating}
+              aria-label="Capture current GPS location"
+              title="Capture current GPS location"
+            >
+              {locating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Locate className="h-4 w-4" aria-hidden />}
+            </Button>
           </div>
         </div>
         {gps && (
