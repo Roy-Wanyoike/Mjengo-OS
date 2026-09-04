@@ -223,8 +223,17 @@ bunx prisma migrate deploy    # production path — or: bunx prisma db push
 bun run dev                   # → http://localhost:3000
 ```
 
-The database ships **empty** — seed the demo data (order matters;
-`seed.ts` creates the rows the extras reference):
+The database ships **empty** — seed the demo data. One command runs the
+whole chain in dependency order (an `intel` re-run is folded in after
+`money`, which wipes the notification kinds `intel.ts` owns):
+
+```bash
+bun run seed   # = seed.ts + users → tasks → domain → evidence → money
+               #   → intel (re-run) → trust — fail-fast, with step notes
+```
+
+The individual steps, if you want partial re-seeds (each extras script
+wipes only its own models — partial re-seeds are safe):
 
 ```bash
 bun prisma/seed.ts                    # base: 3 demo projects, phases, tasks,
@@ -239,7 +248,6 @@ bun prisma/seed-extras/money.ts       # escrow, milestones, ledger, payment requ
 bun prisma/seed-extras/trust.ts       # attendance trust history + PINs
 ```
 
-Every extras script wipes only its own models — partial re-seeds are safe.
 Then sign in with a demo account above. Scripts: `bun run lint`,
 `bunx tsc --noEmit`, `bun run db:push`, `bun run site:dev` (marketing site),
 `bun run build` / `start` (standalone production server).
