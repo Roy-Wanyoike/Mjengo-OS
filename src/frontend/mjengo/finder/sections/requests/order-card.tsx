@@ -4,8 +4,8 @@
 // Send → Confirm (supplier, simulated) → Dispatch → Receive delivery → Close,
 // deliveries with per-line ground truth, and the DISCREPANCY banner when a
 // short count is on record ("flagged for review", never an accusation).
-// Confirmed orders hint "Invoice →" — the invoices section (agent 2-d) sits
-// below on this tab and handles the money end.
+// Confirmed orders hint "Invoice →" — the invoices section sits below on
+// this tab and handles the money end.
 
 import { useState } from 'react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
@@ -198,7 +198,7 @@ export function OrderCard({
           )
         })}
 
-        {/* invoice hint (2-d's section handles the money end) */}
+        {/* invoice hint — the invoices section below handles the money end */}
         {['confirmed', 'delivering', 'delivered', 'closed'].includes(order.status) && (
           <p className="flex items-center gap-1.5 text-[11px] text-stone-500">
             <ReceiptText className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />

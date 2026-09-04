@@ -1,6 +1,6 @@
 'use client'
 
-// Land & Property — parcels section (agent 2-a). Parcel grid → inline detail
+// Land & Property — parcels section. Parcel grid → inline detail
 // (timeline, documents, registry searches with the consistency verdict,
 // Property Passport) + the honest "what MjengoOS does NOT do" block.
 

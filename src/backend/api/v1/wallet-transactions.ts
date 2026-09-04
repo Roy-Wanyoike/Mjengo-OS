@@ -26,9 +26,9 @@ type Ctx = { params: Promise<{ id: string }> }
  * array key stays `transactions` rather than a new `items` key: the money-tab
  * UI does not call /api/v1; consumers are API clients).
  *
- * Route-layer implementation (modules/wallet/service.ts is read-only for this
- * agent): wallet + derived balance come from walletWithBalance (service), the
- * transaction page is read here with the same filters/mapping the service
+ * Route-layer implementation (modules/wallet/service.ts is left untouched —
+ * wallet + derived balance come from its walletWithBalance): the transaction
+ * page is read here with the same filters/mapping the service
  * used. Two honest deviations from the old service read: default page is 50
  * (was a hard take:100) and ordering gained a deterministic `id DESC`
  * tiebreak for txns sharing one timestamp.

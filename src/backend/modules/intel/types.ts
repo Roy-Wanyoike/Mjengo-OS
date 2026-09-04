@@ -18,7 +18,7 @@ export type FindingSeverity = 'info' | 'warning' | 'critical'
 
 /**
  * One rule hit inside RiskAssessment.findings (JSON string array).
- * Written by the risk engine (2-e); v1 seed rows carried a single `detail`
+ * Written by the risk engine; v1 seed rows carried a single `detail`
  * line — parseRiskFindings normalizes both shapes into this interface.
  */
 export interface RiskFinding {

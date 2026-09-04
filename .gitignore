@@ -92,8 +92,11 @@ Caddyfile
 # runtime photo uploads (POST /api/upload writes here — not repo content)
 /public/photos/upp-*
 
-# reports & sandbox-only docs (architecture roadmap lives locally)
-docs/
+# reports & sandbox-only docs (architecture roadmap lives locally);
+# published decision records stay tracked (docs/adr/ — see ADR 0001)
+docs/*
+!docs/adr/
+!docs/adr/**
 
 # sandbox environment scripts & template demos
 tests/

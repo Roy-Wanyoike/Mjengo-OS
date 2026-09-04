@@ -1,6 +1,6 @@
 'use client'
 
-// Land & Property — professionals directory section (agent 2-b).
+// Land & Property — professionals directory section.
 //
 // The trusted-directory workflow: filter the global directory (category /
 // county / verification level / name), record honest credential checks (who

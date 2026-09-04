@@ -1,8 +1,8 @@
 'use client'
 
-// Land & Property tab (placeholder — agent 2-a replaces parcels-section, 2-b
-// replaces professionals-section; this file stays the composition root).
-// Sections: parcels + professionals directory.
+// Land & Property tab — composition root: renders the parcels and
+// professionals sections from ./land/sections/ (parcel grid + detail, the
+// professionals trusted directory).
 
 import { ParcelsSection } from '@/frontend/mjengo/land/sections/parcels-section'
 import { ProfessionalsSection } from '@/frontend/mjengo/land/sections/professionals-section'

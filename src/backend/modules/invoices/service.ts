@@ -1,4 +1,4 @@
-// Invoices module — service layer (agent 2-d).
+// Invoices module — service layer.
 //
 // Supplier invoice lifecycle, called from src/backend/actions/invoices.ts:
 //   - create/update draft invoices (from a PO or standalone); every total is

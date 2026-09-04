@@ -1,6 +1,6 @@
 'use client'
 
-// Finder search section (agent 2-c) — "Find Materials Near This Site"
+// Finder search section — "Find Materials Near This Site"
 // (Finder spec §3/§6): material + qty + radius + delivery day → the landed-cost
 // comparison table with weighted ranking.
 //
@@ -9,8 +9,9 @@
 // algorithm, no drift. The site coordinates come from the first parcel with
 // coords (data.land.parcels, createdAt order — same as the server); no parcel
 // → Nairobi default. On the owner surface each explicit search is ALSO
-// dispatched so it lands in the Bias-Free Ledger (2-d's threeWayCheck
-// pattern); the client surface reads only (its dispatches are blocked
+// dispatched so it lands in the Bias-Free Ledger (the same audited-run
+// pattern as the invoices module's three-way check); the client surface
+// reads only (its dispatches are blocked
 // upstream by the client-actions allowlist). Search inputs live in the
 // finder-link store so the dashboard's "Find remaining" can prefill them
 // without prop syncing.
@@ -98,8 +99,8 @@ export function SearchSection() {
     )
     setRows(result.rows)
 
-    // Owner surface: audit the run through the registered action (2-d's
-    // threeWayCheck pattern — explicit runs land in the Bias-Free Ledger).
+    // Owner surface: audit the run through the registered action (explicit
+    // runs land in the Bias-Free Ledger).
     if (isSiteTeam) {
       setSearching(true)
       const ok = await dispatch('supply.compare', {
