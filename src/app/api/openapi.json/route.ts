@@ -8,9 +8,11 @@ import { NextResponse } from 'next/server'
  * Hand-written but kept truthful field-for-field against the route code —
  * every documented path, parameter, body field, response field and status
  * code is produced by src/backend/api/v1/** (reorg: src/app/api/v1/** are thin shims; this is the SDK-generation seam
- * listed in ARCHITECTURE.md's roadmap). 8 /api/v1 paths = the 8 v1 route
- * files, plus the two wave-3 app-level GETs added by W3-B: /api/audit
- * (admin audit log, spec §44) and /api/reports/budget-variance (QS report).
+ * listed in ARCHITECTURE.md's roadmap). 14 /api/v1 paths = the 8 v1 wallet/
+ * payment route files + the 6 read-only Phase B files (task 10-a: projects
+ * list/detail/tasks/deliveries + supply orders list/detail), plus the two
+ * wave-3 app-level GETs added by W3-B: /api/audit (admin audit log, spec
+ * §44) and /api/reports/budget-variance (QS report).
  *
  * Honest facts baked into the text: simulated payment rails, KES-only money,
  * ledger as source of truth, idempotent replays that never 409, single-instance
@@ -149,7 +151,9 @@ const unauthorizedResponse = {
 const forbiddenResponse = {
   description:
     'Signed in but the role is not permitted (guard): finance+admin own the wallet routes; payments allow finance/admin/client. ' +
-    'Body { error: "Not permitted for role \\"<role>\\"" } — or, for a client paying another project\'s request, { error: "Not permitted for this project" }.',
+    'Body { error: "Not permitted for role \\"<role>\\"" } — or, for a client paying another project\'s request, { error: "Not permitted for this project" } ' +
+    '— or, while the `wallet` feature flag is OFF, { error: "Feature disabled by feature flag (wallet)…" } for non-admin sessions ' +
+    '(admins bypass so they can toggle and test; spec §81).',
   content: { 'application/json': { schema: errorSchema } },
 }
 const rateLimitedResponse = {
@@ -296,6 +300,353 @@ const reportRateLimitedResponse = {
   content: { 'application/json': { schema: rateErrorSchema } },
 }
 
+// ---- Phase B (task 10-a) schema fragments: projects + supply reads ----
+
+/** Project id path param (cuid). */
+const projectIdPathParam = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', minLength: 1, maxLength: 40 },
+  description: 'Project id (cuid).',
+}
+
+/** PurchaseOrder id OR orderCode path param. */
+const orderIdPathParam = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', minLength: 2, maxLength: 40, pattern: '^[A-Za-z0-9_-]{2,40}$' },
+  description: 'PurchaseOrder id (cuid) OR human orderCode (e.g. PO-2026-000012) — the route resolves both.',
+}
+
+/** Exact status filter (per-resource enum). */
+const statusParam = (enumValues: string[], of: string) => ({
+  name: 'status',
+  in: 'query',
+  required: false,
+  schema: { type: 'string', enum: enumValues },
+  description: `Exact ${of} filter. Applies BEFORE pagination — a cursor that falls out of the filtered list → 400.`,
+})
+
+const searchParam = {
+  name: 'q',
+  in: 'query',
+  required: false,
+  schema: { type: 'string', minLength: 1, maxLength: 100 },
+  description: 'Free-text search on project name/client (contains, ASCII case-insensitive, evaluated in-memory over the list).',
+}
+
+const projectsForbiddenResponse = {
+  description:
+    'Signed in but not permitted: client-role sessions are pinned to their OWN project — a foreign project → ' +
+    '{ error: "Not permitted for this project" } (the same pin /api/v1/payments applies). HONEST SCOPE NOTE: no feature ' +
+    'flag gates the projects resource — none of the five flags (ai_progress, ai_voice, wallet, marketplace, ' +
+    'land_verification) names the projects surface, so gating it by an unrelated flag would be dishonest.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const supplyForbiddenResponse = {
+  description:
+    'Not permitted: (a) a client-role session pinned to a foreign project → { error: "Not permitted for this project" }, ' +
+    'or (b) the `marketplace` feature flag is OFF → { error: "Feature disabled by feature flag (marketplace)…" } for ' +
+    'non-admin sessions (admins bypass so they can toggle and test; spec §81 — the same uniform gate the wallet flag ' +
+    'applies to the v1 wallet family, and the webapp mirrors by hiding the Finder tab for non-admins). Body shape { error }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const projectNotFoundResponse = {
+  description: 'Unknown project. Body { error: "Project not found" }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const orderNotFoundResponse = {
+  description: 'Unknown purchase order. Body { error: "Order not found" }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const projectListItemSchema = {
+  type: 'object',
+  description:
+    'The lightweight roster row — the SAME getProjectsList() derivation the webapp project switcher renders ' +
+    '(no new money math in /api/v1).',
+  required: [
+    'id', 'name', 'client', 'clientType', 'location', 'status', 'startDate', 'targetDate',
+    'budgetTotal', 'budgetSpent', 'progressPct', 'dayCount', 'fundisCount', 'unackedAlerts', 'photoCount',
+  ],
+  properties: {
+    id: { type: 'string', description: 'Project id (cuid) — the pagination cursor value.' },
+    name: { type: 'string' },
+    client: { type: 'string' },
+    clientType: { type: 'string', enum: ['diaspora', 'local', 'company'] },
+    location: { type: 'string' },
+    status: { type: 'string', description: 'active | completed | on_hold (the column is free-form — other values stay visible unfiltered and never match a filter).' },
+    startDate: { type: 'string', format: 'date-time' },
+    targetDate: { type: 'string', format: 'date-time' },
+    budgetTotal: { type: 'number', description: 'Σ Phase.budget — the cost-plan rollup (KES).' },
+    budgetSpent: { type: 'number', description: 'Σ Transaction.amount (flat, KES).' },
+    progressPct: { type: 'integer', description: 'Budget-weighted phase progress (lib/mjengo overallProgress).' },
+    dayCount: { type: 'integer', description: 'Days since startDate (min 1).' },
+    fundisCount: { type: 'integer' },
+    unackedAlerts: { type: 'integer' },
+    photoCount: { type: 'integer' },
+  },
+}
+
+const taskSummarySchema = {
+  type: 'object',
+  description: 'One task of the project (Task management v2 fields included — priority, assignment, blockers, verification).',
+  required: [
+    'id', 'phaseId', 'phaseName', 'title', 'status', 'progress', 'priority', 'dueDate', 'assignedToId',
+    'blockedById', 'blockedReason', 'verifiedAt', 'verifiedByName', 'version', 'createdAt', 'updatedAt',
+  ],
+  properties: {
+    id: { type: 'string', description: 'Task id (cuid) — the pagination cursor value.' },
+    phaseId: { type: 'string' },
+    phaseName: { type: ['string', 'null'] },
+    title: { type: 'string' },
+    status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'blocked'] },
+    progress: { type: 'integer', description: '0-100.' },
+    priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
+    dueDate: { type: ['string', 'null'], format: 'date-time' },
+    assignedToId: { type: ['string', 'null'], description: 'Worker id when assigned.' },
+    blockedById: { type: ['string', 'null'], description: 'Task id of the blocker when blocked.' },
+    blockedReason: { type: ['string', 'null'] },
+    verifiedAt: { type: ['string', 'null'], format: 'date-time', description: 'When the completed work was verified.' },
+    verifiedByName: { type: ['string', 'null'] },
+    version: { type: 'integer', description: 'Offline-sync entity version — bumped by every applier that mutates the row.' },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const projectDetailSchema = {
+  type: 'object',
+  description:
+    'One project + its honest summary. Every number is an EXISTING aggregation: ProjectSummary (getProjectPayload) ' +
+    'and procurementTotals (the pure module the Finder dashboard consumes, wired identically) — no new money math. ' +
+    'HONEST OMISSION: project.shareToken is deliberately NOT exposed (a bearer capability for share links, not a data field).',
+  required: ['project', 'progressPct', 'dayCount', 'daysRemaining', 'budget', 'procurement', 'tasks', 'phases'],
+  properties: {
+    project: {
+      type: 'object',
+      required: ['id', 'name', 'client', 'clientType', 'location', 'status', 'budget', 'startDate', 'targetDate', 'createdAt', 'updatedAt'],
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        client: { type: 'string' },
+        clientType: { type: 'string', enum: ['diaspora', 'local', 'company'] },
+        location: { type: 'string' },
+        status: { type: 'string', description: 'active | completed | on_hold (free-form column).' },
+        budget: { type: 'number', description: 'The contract budget field (Project.budget); the cost-plan rollup is budget.total below.' },
+        startDate: { type: 'string', format: 'date-time' },
+        targetDate: { type: 'string', format: 'date-time' },
+        createdAt: { type: 'string', format: 'date-time' },
+        updatedAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    progressPct: { type: 'integer', description: 'Budget-weighted phase progress.' },
+    dayCount: { type: 'integer' },
+    daysRemaining: { type: 'integer' },
+    budget: {
+      type: 'object',
+      required: ['total', 'spent', 'spentPct', 'plannedSpendPct', 'spendVsPlanDeltaPct'],
+      properties: {
+        total: { type: 'number', description: 'Σ Phase.budget (KES).' },
+        spent: { type: 'number', description: 'Σ Transaction.amount (KES, flat).' },
+        spentPct: { type: 'integer' },
+        plannedSpendPct: { type: 'integer', description: 'Linear plan by elapsed days.' },
+        spendVsPlanDeltaPct: { type: 'integer', description: 'spend minus plan as % of budget (positive = over plan).' },
+      },
+    },
+    procurement: {
+      type: 'object',
+      description: 'The Finder §20 dashboard tile math over the project supply slice (same numbers as the webapp tiles).',
+      required: ['required', 'purchased', 'committed', 'remaining', 'pendingRequests', 'pendingApprovals', 'ordersInTransit', 'discrepancies'],
+      properties: {
+        required: { type: 'number', description: 'Σ estimates of submitted/approved/converted requests (KES).' },
+        purchased: { type: 'number', description: 'Σ totals of delivered/closed orders (KES).' },
+        committed: { type: 'number', description: 'Σ totals of sent/confirmed/delivering orders (KES) — the budget-vs-committed dimension.' },
+        remaining: { type: 'number', description: 'required − purchased, floored at 0.' },
+        pendingRequests: { type: 'integer' },
+        pendingApprovals: { type: 'integer' },
+        ordersInTransit: { type: 'integer' },
+        discrepancies: { type: 'integer', description: 'Deliveries whose status is "discrepancy".' },
+      },
+    },
+    tasks: {
+      type: 'object',
+      required: ['total', 'pending', 'inProgress', 'done', 'blocked'],
+      properties: {
+        total: { type: 'integer' },
+        pending: { type: 'integer' },
+        inProgress: { type: 'integer' },
+        done: { type: 'integer' },
+        blocked: { type: 'integer' },
+      },
+    },
+    phases: { type: 'integer', description: 'Phase count.' },
+  },
+}
+
+const deliveryVerificationSchema = {
+  type: 'object',
+  description:
+    'One delivery-verification record (OrderDelivery) against a purchase order. HONEST SCOPE: evidence photos are ' +
+    'referenced by ATTACHMENT ID ONLY — /api/v1 serves no photo bytes and no storage URLs; fetch the bytes through ' +
+    'the app\'s own storage seam, not this API.',
+  required: [
+    'id', 'orderId', 'orderCode', 'status', 'dispatchedAt', 'receivedAt', 'receivedBy', 'note',
+    'driverName', 'driverPhone', 'vehicleReg', 'etaAt', 'departedAt', 'arrivedAt', 'gpsLat', 'gpsLng',
+    'photoCount', 'photos', 'lines', 'shortLines', 'createdAt',
+  ],
+  properties: {
+    id: { type: 'string', description: 'OrderDelivery id (cuid) — the pagination cursor value.' },
+    orderId: { type: 'string' },
+    orderCode: { type: 'string', description: 'The owning purchase order code, e.g. PO-2026-000012.' },
+    status: { type: 'string', enum: ['dispatched', 'in_transit', 'arrived', 'received', 'discrepancy'] },
+    dispatchedAt: { type: ['string', 'null'], format: 'date-time' },
+    receivedAt: { type: ['string', 'null'], format: 'date-time', description: 'When the site team confirmed receipt (ground truth).' },
+    receivedBy: { type: ['string', 'null'] },
+    note: { type: ['string', 'null'], description: 'Receive-time note; receiveDelivery writes an honest auto-summary when lines come up short.' },
+    driverName: { type: ['string', 'null'] },
+    driverPhone: { type: ['string', 'null'] },
+    vehicleReg: { type: ['string', 'null'] },
+    etaAt: { type: ['string', 'null'], format: 'date-time' },
+    departedAt: { type: ['string', 'null'], format: 'date-time' },
+    arrivedAt: { type: ['string', 'null'], format: 'date-time' },
+    gpsLat: { type: ['number', 'null'] },
+    gpsLng: { type: ['number', 'null'] },
+    photoCount: { type: 'integer', description: 'Denormalized mirror of the linked DeliveryPhoto rows — recomputed by receiveDelivery, never client-supplied.' },
+    photos: {
+      type: 'array',
+      description: 'Evidence-photo refs — attachment IDS ONLY (no bytes/URLs in v1).',
+      items: {
+        type: 'object',
+        required: ['attachmentId', 'deliveryLineId', 'attachedBy', 'createdAt'],
+        properties: {
+          attachmentId: { type: 'string', description: '/api/upload Attachment id — the id IS the reference; v1 does not serve the photo.' },
+          deliveryLineId: { type: ['string', 'null'], description: 'Line-scoped evidence (the discrepancy record) or null = whole-delivery evidence.' },
+          attachedBy: { type: 'string' },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+    },
+    lines: {
+      type: 'array',
+      description: 'Per-line physical counts: ordered vs received vs rejected (spec §34).',
+      items: {
+        type: 'object',
+        required: ['id', 'orderLineId', 'name', 'unit', 'qtyOrdered', 'qtyReceived', 'qtyRejected', 'condition', 'damageNote', 'short'],
+        properties: {
+          id: { type: 'string' },
+          orderLineId: { type: 'string' },
+          name: { type: ['string', 'null'], description: 'PO line material name (joined in-memory).' },
+          unit: { type: ['string', 'null'] },
+          qtyOrdered: { type: 'number' },
+          qtyReceived: { type: 'number' },
+          qtyRejected: { type: 'number', description: 'Explicitly rejected on inspection.' },
+          condition: { type: 'string', enum: ['ok', 'damaged', 'partial'] },
+          damageNote: { type: ['string', 'null'] },
+          short: { type: 'boolean', description: 'qtyReceived < qtyOrdered — receiveDelivery\'s exact short-line predicate (the same check that sets the delivery status to "discrepancy").' },
+        },
+      },
+    },
+    shortLines: { type: 'integer', description: 'Count of lines received short of the ordered quantity.' },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const supplyOrderSummarySchema = {
+  type: 'object',
+  description: 'One purchase order summary (the list item; the detail head adds lines + delivery records).',
+  required: [
+    'id', 'orderCode', 'status', 'supplierId', 'supplierName', 'requestCode', 'subtotal', 'deliveryFee', 'total',
+    'paymentSource', 'createdByRole', 'note', 'deliveryCount', 'createdAt', 'updatedAt',
+  ],
+  properties: {
+    id: { type: 'string', description: 'PurchaseOrder id (cuid) — the pagination cursor value.' },
+    orderCode: { type: 'string', description: 'Human order code, e.g. PO-2026-000012.' },
+    status: { type: 'string', enum: ['draft', 'pending_approval', 'approved', 'sent', 'confirmed', 'delivering', 'delivered', 'closed', 'cancelled'] },
+    supplierId: { type: 'string' },
+    supplierName: { type: 'string', description: 'Supplier.businessName (joined).' },
+    requestCode: { type: ['string', 'null'], description: 'The originating material request code, when the order came from one.' },
+    subtotal: { type: 'number', description: 'KES.' },
+    deliveryFee: { type: 'number', description: 'KES.' },
+    total: { type: 'number', description: 'Landed total, KES.' },
+    paymentSource: { type: 'string', enum: ['client', 'contractor', 'project_wallet', 'finance'] },
+    createdByRole: { type: 'string', description: 'Role that placed the order.' },
+    note: { type: ['string', 'null'] },
+    deliveryCount: { type: 'integer', description: 'OrderDelivery records against this order.' },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const supplyOrderDetailSchema = {
+  type: 'object',
+  description:
+    'One purchase order with its lines and delivery-verification records. Read via a route-layer include ' +
+    '(the supply module\'s public read is the whole-project slice — there is no single-order service read; the ' +
+    'wallet-transactions precedent).',
+  required: [
+    'id', 'orderCode', 'status', 'supplierId', 'supplierName', 'requestCode', 'subtotal', 'deliveryFee', 'total',
+    'paymentSource', 'createdByRole', 'note', 'deliveryCount', 'createdAt', 'updatedAt', 'lines', 'deliveries',
+  ],
+  properties: {
+    ...supplyOrderSummarySchema.properties,
+    lines: {
+      type: 'array',
+      description: 'The ordered lines (paperwork side of the 3-way match).',
+      items: {
+        type: 'object',
+        required: ['id', 'name', 'unit', 'qty', 'unitPrice', 'lineTotal'],
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          unit: { type: 'string' },
+          qty: { type: 'number' },
+          unitPrice: { type: 'number', description: 'KES.' },
+          lineTotal: { type: 'number', description: 'KES.' },
+        },
+      },
+    },
+    deliveries: {
+      type: 'array',
+      description: 'Delivery-verification records (physical ground truth), newest first.',
+      items: { $ref: '#/components/schemas/DeliveryVerification' },
+    },
+  },
+}
+
+/** 200 shape of every Phase B list endpoint (the /api/audit page style). */
+const listOkResponse = (items: object, cursorOf: string) => ({
+  description: `ok: true. data = the current page; nextCursor is null on the last page, else the ${cursorOf} to pass as ?cursor. hasMore mirrors nextCursor.`,
+  content: {
+    'application/json': {
+      schema: {
+        type: 'object',
+        required: ['ok', 'data', 'nextCursor', 'hasMore'],
+        properties: {
+          ok: { const: true },
+          data: { type: 'array', items },
+          nextCursor: { type: ['string', 'null'] },
+          hasMore: { type: 'boolean' },
+        },
+      },
+    },
+  },
+})
+
+/** 400 for the Phase B GET family (query validation, not body). */
+const readBadRequestResponse = {
+  description:
+    'Validation failure (zod strictObject on the QUERY): unknown key (listed by name — typo protection), ' +
+    'bad limit/cursor, ill-typed status/q, or a missing required param (projectId on /api/v1/supply/orders). ' +
+    'Body { error, field? }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
 // ---- the document ------------------------------------------------------------
 
 const spec = {
@@ -304,8 +655,9 @@ const spec = {
     title: 'MjengoOS API v1',
     version: '1.0.0',
     description:
-      'REST v1 surface of MjengoOS (spec §38 wallets / §57 payments): wallet accounts, derived balances, ' +
-      'double-entry ledger reads, money movement and payment execution.\n\n' +
+      'REST v1 surface of MjengoOS: wallet accounts, derived balances, double-entry ledger reads, money movement ' +
+      'and payment execution (spec §38 wallets / §57 payments), plus the Phase B READ-ONLY projects + supply ' +
+      'resources (project roster, honest summaries, task lists, purchase orders and delivery verification).\n\n' +
       '**Honest scope notes** — money is KES-only; the payment provider rails are SIMULATED (each response ' +
       'carries an honest integrationNote; a real Daraja/bank provider plugs into the same seam); balances are ' +
       'always derived from ledger entries, never stored.\n\n' +
@@ -318,13 +670,17 @@ const spec = {
       '(replayed: true) and never 409.\n\n' +
       '**Pagination** — limit (1-200, default 50) + id cursor; responses carry nextCursor/hasMore.\n\n' +
       'This document is served unauthenticated at /api/openapi.json and is the SDK-generation seam ' +
-      '(ARCHITECTURE.md roadmap). It covers exactly the 8 /api/v1 route paths, plus the two wave-3 ' +
-      'app-level GETs: /api/audit (admin audit log, spec §44) and /api/reports/budget-variance (QS report).',
+      '(ARCHITECTURE.md roadmap). It covers exactly the 14 /api/v1 route paths — the wallet + payment surface plus ' +
+      'the Phase B READ-ONLY projects + supply resources (projects list/detail/tasks/deliveries, supply orders ' +
+      'list/detail — no mutations outside the money family) — and the two wave-3 app-level GETs: /api/audit ' +
+      '(admin audit log, spec §44) and /api/reports/budget-variance (QS report).',
   },
   servers: [{ url: '/', description: 'Same-origin (the app that rendered this document).' }],
   tags: [
     { name: 'wallets', description: 'Wallet accounts, balances and ledger transactions (finance/admin).' },
     { name: 'payments', description: 'Payment execution for approved payment requests (finance/admin/client).' },
+    { name: 'projects', description: 'Read-only project roster, honest summaries and task lists (any signed-in role; client-role sessions pinned to their own project).' },
+    { name: 'supply', description: 'Read-only procurement reads: purchase orders and delivery verification (any signed-in role, client pinned; gated by the marketplace flag for non-admins).' },
     { name: 'audit', description: 'Admin audit-log reads — the append-only event ledger (admin only, spec §44).' },
     { name: 'reports', description: 'QS / cost-plan reports: budget variance per phase and category (contractor, admin, supervisor, qs).' },
   ],
@@ -440,12 +796,19 @@ const spec = {
       },
       AuditEvent: auditEventSchema,
       BudgetVarianceReport: budgetVarianceSchema,
+      ProjectListItem: projectListItemSchema,
+      ProjectDetail: projectDetailSchema,
+      TaskSummary: taskSummarySchema,
+      DeliveryVerification: deliveryVerificationSchema,
+      SupplyOrderSummary: supplyOrderSummarySchema,
+      SupplyOrderDetail: supplyOrderDetailSchema,
     },
   },
   paths: {
     '/api/v1/wallets': {
       get: {
         tags: ['wallets'],
+        operationId: 'listWallets',
         summary: 'List wallets (paginated) or the provider-rail surface',
         description:
           'Every wallet with its ledger-derived balance, ordered by code. With ?providers=1 returns the payment-rail ' +
@@ -488,6 +851,7 @@ const spec = {
       },
       post: {
         tags: ['wallets'],
+        operationId: 'createWallet',
         summary: 'Create a wallet',
         description:
           'Creates a WalletAccount + its backing liability ledger account (code WALLET:W-nnnn). Project wallets need ' +
@@ -525,6 +889,7 @@ const spec = {
     '/api/v1/wallets/{id}': {
       get: {
         tags: ['wallets'],
+        operationId: 'getWallet',
         summary: 'Get one wallet (id or code)',
         description: 'Wallet with its ledger-derived balance. Rate limit: 120/min per principal.',
         security,
@@ -543,6 +908,7 @@ const spec = {
     '/api/v1/wallets/{id}/balance': {
       get: {
         tags: ['wallets'],
+        operationId: 'getWalletBalance',
         summary: 'Derived balance of a wallet',
         description: 'The balance computed from the backing account\'s debit/credit entries (never stored). Rate limit: 120/min.',
         security,
@@ -561,6 +927,7 @@ const spec = {
     '/api/v1/wallets/{id}/transactions': {
       get: {
         tags: ['wallets'],
+        operationId: 'listWalletTransactions',
         summary: 'Ledger transactions of a wallet (cursor-paginated)',
         description:
           'Double-entry transactions touching the wallet\'s backing account, newest first (occurredAt DESC, id DESC ' +
@@ -583,6 +950,7 @@ const spec = {
     '/api/v1/wallets/{id}/deposit': {
       post: {
         tags: ['wallets'],
+        operationId: 'depositWallet',
         summary: 'Deposit cash into a wallet',
         description:
           'Debits the cash rail (CASH_MPESA/CASH_BANK), credits WALLET:<code> — one db transaction; the returned balance ' +
@@ -622,6 +990,7 @@ const spec = {
     '/api/v1/wallets/{id}/transfer': {
       post: {
         tags: ['wallets'],
+        operationId: 'transferWallet',
         summary: 'Transfer between wallets',
         description:
           'Debits the source WALLET account, credits the destination, balance re-checked INSIDE the transaction ' +
@@ -666,6 +1035,7 @@ const spec = {
     '/api/v1/wallets/{id}/withdraw': {
       post: {
         tags: ['wallets'],
+        operationId: 'withdrawWallet',
         summary: 'Withdraw from a wallet to a cash rail',
         description:
           'Debits WALLET:<code>, credits the cash rail; balance re-checked INSIDE the transaction (overdraft → 400). ' +
@@ -705,6 +1075,7 @@ const spec = {
     '/api/v1/payments': {
       post: {
         tags: ['payments'],
+        operationId: 'payPaymentRequest',
         summary: 'Pay an approved payment request',
         description:
           'Pays an APPROVED PaymentRequest through the provider seam (simulated rails) and posts a balanced double-entry ' +
@@ -743,9 +1114,202 @@ const spec = {
         },
       },
     },
+    '/api/v1/projects': {
+      get: {
+        tags: ['projects'],
+        operationId: 'listProjects',
+        summary: 'List projects (role-scoped, cursor-paginated)',
+        description:
+          'The lightweight project roster — the same getProjectsList() rows the webapp project switcher renders ' +
+          '(budgetTotal = Σ Phase.budget, budgetSpent = Σ Transaction.amount, progressPct = budget-weighted phase ' +
+          'progress; no new money math in /api/v1). GUARD: any signed-in session; a CLIENT-role session sees exactly ' +
+          'its own project (a client with no pinned project sees an empty list — never the portfolio), every other ' +
+          'role sees the whole portfolio — the webapp /api/projects guard, mirrored. No feature flag gates this ' +
+          'resource (none of the five flags names it). ?q= searches name/client (contains, ASCII case-insensitive, ' +
+          'in-memory); ?status= filters to one of the documented values (the column is free-form — undocumented ' +
+          'values stay visible unfiltered). Filters apply BEFORE pagination — a cursor that falls out of the filtered ' +
+          'list → 400. Ordered createdAt ASC (the service order). Rate limit: 120/min per principal.',
+        security,
+        parameters: [
+          searchParam,
+          statusParam(['active', 'completed', 'on_hold'], 'project status'),
+          limitParam,
+          cursorParam('a project id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/ProjectListItem' }, 'project id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: projectsForbiddenResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}': {
+      get: {
+        tags: ['projects'],
+        operationId: 'getProject',
+        summary: 'One project with its honest summary',
+        description:
+          'Project core + honest summary: progressPct, dayCount/daysRemaining, the budget view (total = Σ Phase.budget, ' +
+          'spent = Σ Transaction.amount, plan deltas), the procurement view (committed = Σ totals of ' +
+          'sent/confirmed/delivering orders — the budget-vs-committed dimension) and task counts by status. Every ' +
+          'figure is an EXISTING aggregation: ProjectSummary from getProjectPayload (the webapp main read) plus the ' +
+          'pure procurementTotals module wired exactly like the Finder dashboard tiles — zero new money math. HONEST ' +
+          'OMISSION: shareToken is never exposed (it is a bearer capability for share links, not a data field). ' +
+          'GUARD: any signed-in role; client-role sessions pinned to their own project (resolve-first, pin-second — ' +
+          'a foreign id → 403); unknown id → 404. Heavyweight read (the full payload aggregation). No feature flag ' +
+          'gates this resource. Rate limit: 120/min per principal.',
+        security,
+        parameters: [projectIdPathParam],
+        responses: {
+          200: { description: 'ok: true, data = ProjectDetail.', ...json(ok({ $ref: '#/components/schemas/ProjectDetail' })) },
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: projectsForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/tasks': {
+      get: {
+        tags: ['projects'],
+        operationId: 'listProjectTasks',
+        summary: 'Task list of a project (cursor-paginated)',
+        description:
+          'Every task of the project with its phase, priority, assignment, blocker and verification fields. Data comes ' +
+          'from getProjectPayload\'s phases read (phases order ASC, tasks createdAt ASC — the same query the webapp ' +
+          'payload runs); the page is ordered (createdAt ASC, id ASC) for a deterministic keyset. ?status= ' +
+          '(pending|in_progress|done|blocked) filters BEFORE pagination — a cursor that falls out of the filtered ' +
+          'list → 400. GUARD: any signed-in role; client-role sessions pinned to their own project (foreign → 403); ' +
+          'unknown project → 404. No feature flag gates this resource. Rate limit: 120/min per principal.',
+        security,
+        parameters: [
+          projectIdPathParam,
+          statusParam(['pending', 'in_progress', 'done', 'blocked'], 'task status'),
+          limitParam,
+          cursorParam('a task id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/TaskSummary' }, 'task id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: projectsForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/deliveries': {
+      get: {
+        tags: ['supply'],
+        operationId: 'listProjectDeliveries',
+        summary: 'Delivery verification records of a project (cursor-paginated)',
+        description:
+          'Every OrderDelivery against every purchase order of the project — the supply loop\'s physical ground ' +
+          'truth: status (dispatched → in_transit → arrived → received | discrepancy), the §26 driver leg, per-line ' +
+          'ordered vs received vs rejected counts with inspection condition, and discrepancy flags (shortLines = ' +
+          'receiveDelivery\'s exact short-line predicate). EVIDENCE PHOTOS are referenced by ATTACHMENT ID ONLY — ' +
+          'no photo bytes and no storage URLs are served by /api/v1; fetch them through the app\'s own storage seam. ' +
+          'FEATURE FLAG (spec §81): gated by `marketplace` — OFF → 403 for non-admin sessions (admins bypass), the ' +
+          'same uniform gate the v1 wallet family applies for `wallet`. GUARD: any signed-in role; client-role ' +
+          'sessions pinned to their own project (foreign → 403); unknown project → 404. ?status= filters BEFORE ' +
+          'pagination (a cursor that falls out → 400). Ordered (createdAt DESC, id DESC). Rate limit: 120/min per ' +
+          'principal.',
+        security,
+        parameters: [
+          projectIdPathParam,
+          statusParam(['dispatched', 'in_transit', 'arrived', 'received', 'discrepancy'], 'delivery status'),
+          limitParam,
+          cursorParam('a delivery id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/DeliveryVerification' }, 'delivery id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: supplyForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/supply/orders': {
+      get: {
+        tags: ['supply'],
+        operationId: 'listSupplyOrders',
+        summary: 'Purchase orders of one project (cursor-paginated)',
+        description:
+          'The purchase orders of ONE project — loadSupplySlice(projectId), the supply module\'s public read (the ' +
+          'exact procurement network the webapp Finder tab renders), projected to order summaries with supplier name, ' +
+          'landed totals and delivery counts. FEATURE FLAG (spec §81): gated by `marketplace` — OFF → 403 for ' +
+          'non-admin sessions (admins bypass). GUARD: any signed-in role; client-role sessions pinned to their own ' +
+          'project (a foreign projectId → 403, the v1 payments precedent). projectId is REQUIRED — the Finder surface ' +
+          'is project-scoped (absent → 400; unknown → 404 — no default-project guessing, mirroring the ' +
+          'budget-variance report). ?status= filters to one of the nine PurchaseOrder statuses BEFORE pagination (a ' +
+          'cursor that falls out → 400). Ordered (createdAt DESC, id DESC). Rate limit: 120/min per principal.',
+        security,
+        parameters: [
+          {
+            name: 'projectId',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 40 },
+            description: 'The project whose orders to list. Required — absent → 400; unknown → 404.',
+          },
+          statusParam(
+            ['draft', 'pending_approval', 'approved', 'sent', 'confirmed', 'delivering', 'delivered', 'closed', 'cancelled'],
+            'purchase-order status',
+          ),
+          limitParam,
+          cursorParam('a purchase-order id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/SupplyOrderSummary' }, 'purchase-order id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: supplyForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/supply/orders/{id}': {
+      get: {
+        tags: ['supply'],
+        operationId: 'getSupplyOrder',
+        summary: 'One purchase order with lines and delivery records',
+        description:
+          'One purchase order (id OR orderCode) with its ordered lines (the paperwork side of the 3-way match) and its ' +
+          'delivery-verification records (per-line counts, inspection condition, photo refs as attachment ids only). ' +
+          'Read via a route-layer include — the supply module\'s public read is the whole-project slice and no ' +
+          'single-order service read exists (the wallet-transactions precedent; the module stays untouched). ' +
+          'FEATURE FLAG (spec §81): gated by `marketplace` — OFF → 403 for non-admin sessions (admins bypass). ' +
+          'GUARD: resolve-first, pin-second (the v1 payments precedent) — the order resolves by id or orderCode, then ' +
+          'a client-role session must be pinned to the order\'s own project (else 403). Unknown order → 404. ' +
+          'Pagination does not apply (one object). Rate limit: 120/min per principal.',
+        security,
+        parameters: [orderIdPathParam],
+        responses: {
+          200: { description: 'ok: true, data = SupplyOrderDetail.', ...json(ok({ $ref: '#/components/schemas/SupplyOrderDetail' })) },
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: supplyForbiddenResponse,
+          404: orderNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
     '/api/audit': {
       get: {
         tags: ['audit'],
+        operationId: 'listAuditEvents',
         summary: 'Audit log with filters (admin-only, cursor-paginated)',
         description:
           'Admin → Audit Logs (spec §44): the read side of the append-only Bias-Free Ledger — every dispatched ' +
@@ -809,6 +1373,7 @@ const spec = {
     '/api/reports/budget-variance': {
       get: {
         tags: ['reports'],
+        operationId: 'getBudgetVarianceReport',
         summary: 'Budget variance report (QS surface: cost plan vs actuals per phase/category)',
         description:
           'QS surface — "BOQ / Cost Plan / Variations / Actual Cost / Forecast / Budget Variance". ' +
