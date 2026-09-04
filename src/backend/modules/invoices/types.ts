@@ -97,5 +97,5 @@ export const EMPTY_INVOICES_SLICE: InvoicesSlice = {
   },
 }
 
-// Re-exported for convenience in the service/repository layers (agent 2-d).
+// Re-exported for convenience in the service/repository layers.
 export type { PurchaseOrder, Supplier }

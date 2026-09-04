@@ -12,7 +12,7 @@ TypeScript strict) application whose UI is one client-rendered page
 share-link views) talking to guarded API routes under `src/app/api/**`
 (NextAuth v4 credentials + JWT session cookies, role guards, rate limits,
 idempotency). Persistence is **Prisma 6 + SQLite** (single file at
-`DATABASE_URL`) with a 39-model schema, a double-entry ledger and
+`DATABASE_URL`) with a 60-model schema, a double-entry ledger and
 `_prisma_migrations` bookkeeping. File uploads (site photos, documents) are
 written to `public/photos/` and `public/docs/` on local disk. `next build`
 emits a **standalone** server (`output: "standalone"` → `.next/standalone/
@@ -70,7 +70,7 @@ The database ships **empty** — seed the demo data next.
 
 - **`bunx prisma migrate deploy`** — the production path. Applies
   `prisma/migrations/` in order and records them in `_prisma_migrations`.
-  Baseline: `0_init` (the entire 39-model schema, generated from
+  Baseline: `0_init` (the entire 60-model schema, generated from
   `prisma/schema.prisma`). Safe, additive, never drops data.
 - **`bunx prisma db push`** (or `bun run db:push`) — the prototyping path
   used while the schema is still moving: pushes `schema.prisma` straight to

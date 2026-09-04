@@ -3,7 +3,7 @@
 // loadNotifySlice(projectId) loads the project's recent notifications +
 // unread count. The project payload already carries `notifications` (take 60);
 // this loader exists for the notify service and any notification-center
-// endpoint agent 2-e adds (kinds, filters, mark-read are actions, not queries).
+// endpoint added later (kinds, filters, mark-read are actions, not queries).
 
 import { db } from '@/backend/lib/db'
 import type { NotifySlice } from './types'

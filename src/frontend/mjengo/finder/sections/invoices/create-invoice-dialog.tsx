@@ -42,7 +42,7 @@ interface Props {
   }) => void
 }
 
-/** Billable POs — anything not cancelled (2-c's flow may keep them at any stage). */
+/** Billable POs — anything not cancelled (POs may rest at any supply-flow stage). */
 const BILLABLE_ORDER_STATUSES = ['approved', 'sent', 'confirmed', 'delivering', 'delivered', 'closed']
 
 export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChange, onCreate }: Props) {

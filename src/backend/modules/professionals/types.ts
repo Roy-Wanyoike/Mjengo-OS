@@ -6,8 +6,8 @@
 // render assignments. verificationState is an honest 0-6 ladder — never a
 // government certification claim.
 //
-// Agent 2-b: storage keeps the F-1/seed convention (lowercase snake_case
-// strings in the plain-text Prisma columns). Action payloads may send the
+// Storage keeps the seed convention (lowercase snake_case strings in the
+// plain-text Prisma columns). Action payloads may send the
 // UPPER_SNAKE spec form (SURVEYOR, DOCUMENT_REVIEW, INVITED…) — the service
 // normalizes both. Labels here are the single source for the UI.
 

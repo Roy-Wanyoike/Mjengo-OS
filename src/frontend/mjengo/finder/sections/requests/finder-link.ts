@@ -1,13 +1,13 @@
 'use client'
 
-// Cross-section link for the Finder tab (agent 2-c). finder-tab.tsx is the
-// frozen composition root (sections are siblings, no shared props), so the
+// Cross-section link store for the Finder tab. finder-tab.tsx is the
+// composition root (sections are siblings, no shared props), so the
 // hand-offs ride this tiny zustand store instead:
 //   · search-section "Add to Project Order" → requests-section create dialog
 //   · dashboard BOQ "Find remaining"        → search-section inputs (the
 //     search inputs LIVE here — no props-to-state syncing effects needed)
-// Consumed by the sections that own the receiving UI; everything stays within
-// agent 2-c's file ownership.
+// Consumed by the sections that own the receiving UI; the store stays local
+// to the Finder tab's sections.
 
 import { create } from 'zustand'
 

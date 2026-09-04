@@ -3,8 +3,8 @@
 // Price alert chip (Finder §17/§20 — read-only): 30-day delta for a material
 // from the intel module's PricePoints (seeded data), computed with the pure
 // priceDelta() the module shares. Read-only by design — trends belong to the
-// Intel tab (agent 2-e); this chip surfaces the headline number next to
-// purchasing decisions.
+// Intel tab; this chip surfaces the headline number next to purchasing
+// decisions.
 
 import { TrendingDown, TrendingUp } from 'lucide-react'
 import { Badge } from '@/frontend/ui/badge'

@@ -1,4 +1,4 @@
-// Supply & procurement (MjengoOS Finder) module — service layer (agent 2-c).
+// Supply & procurement (MjengoOS Finder) module — service layer.
 //
 // The Find → Compare → Request → Approve → Order → Deliver → Verify loop,
 // called from src/backend/actions/supply.ts (thin actions, fat services — the

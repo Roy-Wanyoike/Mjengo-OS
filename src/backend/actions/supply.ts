@@ -4,7 +4,7 @@
 // success — never log manually here.
 //
 // House rules (Finder spec):
-//  - A request NEVER charges the wallet — payment flows through invoices (2-d).
+//  - A request NEVER charges the wallet — payment flows through the invoices module.
 //  - The approval-rules engine (project-configurable, spec §11) decides WHICH
 //    ROLE approves; under-limit may auto-approve, over-limit chains
 //    supervisor → contractor → client → finance.

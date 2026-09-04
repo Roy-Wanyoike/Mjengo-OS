@@ -11,7 +11,7 @@ export const CLIENT_ACTIONS: readonly ActionType[] = [
   'comment.add',
   'notification.read',
   'notification.readAll',
-  // Invoice lifecycle (2-d): the client decides submitted invoices and
+  // Invoice lifecycle: the client decides submitted invoices and
   // records payments — Finder spec §8-§10 ("client pays invoices"). Draft
   // work (create/update/submit) stays site-team.
   'invoice.decide',

@@ -2,7 +2,7 @@
 // already carries `notifications`, so this module powers the service layer and
 // future notification-center endpoints instead of adding a payload field).
 //
-// Kinds are open strings; the center (agent 2-e) groups them with icons and
+// Kinds are open strings; the notification center groups them with icons and
 // filters. audienceRole targets who should act; readAt is the read timestamp.
 
 import type { Notification } from '@prisma/client'
@@ -24,7 +24,7 @@ export type AudienceRole = 'client' | 'contractor' | 'supervisor' | 'finance' | 
 
 // ---- slice shapes ----
 
-/** The notify slice — used by the notify service + notification center (2-e). */
+/** The notify slice — used by the notify service + notification center. */
 export interface NotifySlice {
   notifications: Notification[]
   unreadCount: number
