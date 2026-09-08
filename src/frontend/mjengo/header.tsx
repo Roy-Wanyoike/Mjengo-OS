@@ -929,9 +929,13 @@ export function Header({
             {!isShareClient && (
               <>
                 {/* Connectivity toggle — SIMULATES field connectivity; real
-                    browser online/offline events are followed separately */}
+                    browser online/offline events are followed separately.
+                    Hidden below sm: at 375px the 7-pill row measured 398px
+                    and this demo affordance is the widest non-essential pill
+                    (the offline banner + outbox panel still surface state;
+                    re-enable from a wider viewport). */}
                 <div
-                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-stone-900 border border-stone-800"
+                  className="hidden sm:flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-stone-900 border border-stone-800"
                   title={t('header.simNote')}
                 >
                   {online ? (
