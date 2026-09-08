@@ -60,6 +60,9 @@ model Project {
   domainEvents       DomainEvent[]
   jobRecords         JobRecord[]
   healthSnapshots    ProjectHealth[]
+  // Wave 4 (W4-1): diaspora evidence draw packs — immutable proof bundles
+  // frozen at milestone release, served through the share link.
+  drawPacks          DrawPack[]
 }
 
 model Phase {
@@ -314,6 +317,9 @@ model Milestone {
   decisionNote     String?
   releasedAt       DateTime?
   createdAt        DateTime  @default(now())
+  // W4-1: the evidence pack frozen at release (null until the milestone is
+  // released — one-to-one, DB-enforced by DrawPack.milestoneId UNIQUE).
+  drawPack         DrawPack?
 }
 
 // Variation orders: plan changes that move the budget — client approves on web
@@ -331,6 +337,39 @@ model VariationOrder {
   decisionNote String?
   decidedAt    DateTime?
   createdAt    DateTime  @default(now())
+}
+
+// DrawPack (issue W4-1) — immutable, hash-stamped evidence bundle frozen at
+// the moment a milestone is released (milestone.decide → approve). ONE row
+// per milestone, ever: `milestoneId` is UNIQUE at the schema level and the
+// release status ladder is single-shot, so a second pack can never exist.
+// IMUTABILITY CONTRACT (mirrors the MjengoScore/RiskAssessment append-only
+// precedent, stricter): the row is written ONCE — no service function updates
+// or deletes a pack, the model has no @updatedAt, and the migration is a
+// single CREATE TABLE. `contentHash` = SHA-256 over the canonical JSON of the
+// pack content (src/backend/modules/drawpack/service.ts), so a diaspora
+// client can re-verify a forwarded bundle offline. The pack is a PROJECTION,
+// never money: the ledger transaction it cites stays the source of truth and
+// creating a pack moves nothing. `mjengoScore` is NULL when no score was
+// computed at release — honest, never a fake 0.
+model DrawPack {
+  id                String    @id @default(cuid())
+  milestoneId       String    @unique // exactly one pack per milestone — DB-enforced
+  milestone         Milestone @relation(fields: [milestoneId], references: [id])
+  projectId         String
+  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestoneName     String // frozen at decision time
+  amount            Float // KES released (frozen)
+  currency          String    @default("KES")
+  ledgerRef         String // frozen ledger transaction ref of the release (LX-…)
+  ledgerTxnId       String // frozen ledger transaction id
+  evidencePhotoIds  String    @default("[]") // JSON array of SitePhoto ids — frozen proof-of-work set
+  variationsOpen    String    @default("[]") // JSON snapshot: variation orders awaiting the client at decision time
+  attendanceSummary String // JSON: attendance counts for the request→decide window
+  mjengoScore       String? // JSON snapshot { score, confidence, ruleVersion, computedAt } — null when not computed
+  contentHash       String // SHA-256 hex over canonical JSON of the pack content
+  schemaVersion     Int       @default(1)
+  createdAt         DateTime  @default(now())
 }
 
 // Contextual photo commenting — client pins a question on a site photo

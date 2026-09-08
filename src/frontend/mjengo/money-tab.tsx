@@ -16,8 +16,11 @@ import { Textarea } from '@/frontend/ui/textarea'
 import type { ProjectPayload } from '@/backend/lib/mjengo'
 import type { PaymentRequestRow } from '@/backend/modules/wallet/types'
 import { EMPTY_FINANCE_SLICE } from '@/backend/modules/wallet/types'
+import type { DrawPackLink } from '@/backend/modules/drawpack/service'
+import { DrawPackViewer } from '@/frontend/mjengo/draw-pack-viewer'
+import { useT } from '@/frontend/i18n/provider'
 import {
-  Banknote, BookOpen, Camera, Check, CheckCheck, Hourglass, ImageOff, Lock, Minus, Plus, Send, ShieldCheck, TrendingUp, Wallet, X,
+  Banknote, BookOpen, Camera, Check, CheckCheck, FileCheck2, Hourglass, ImageOff, Lock, Minus, Plus, Send, ShieldCheck, TrendingUp, Wallet, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, dateShort } from '@/frontend/lib/format'
@@ -201,8 +204,13 @@ function EscrowConsistencyChip({ escrow }: { escrow: NonNullable<ProjectPayload[
 export function MoneyTab() {
   const { data, dispatch, online, outbox, viewMode, actionBusy, clientRole, shareToken } = useMjengo()
   const { data: session } = useSession()
+  const t = useT()
   const sessionRole = String(session?.user?.role ?? '')
   const busy = actionBusy !== null
+
+  // W4-1: the immutable evidence pack of a released milestone, opened in the
+  // DrawPackViewer (fetched read-only through the share token).
+  const [packTarget, setPackTarget] = useState<DrawPackLink | null>(null)
 
   // top-up dialog
   const [topupOpen, setTopupOpen] = useState(false)
@@ -277,6 +285,14 @@ export function MoneyTab() {
     .filter((m) => m.status === 'released')
     .reduce((s, m) => s + m.amount, 0)
   const pendingCount = data.milestones.filter((m) => m.status === 'release_requested').length
+
+  // W4-1 draw packs: link rows ride on the payload (stale persisted payloads
+  // pre-W4-1 may lack them — fall back to empty until the next refresh).
+  const drawPacks = data.drawPacks ?? []
+  const packFor = (milestoneId: string) => drawPacks.find((p) => p.milestoneId === milestoneId) ?? null
+  // The token that serves the pack: the share-link session's own token, or
+  // the project's token on owner/preview surfaces (the payload carries it).
+  const packToken = shareToken ?? data.project.shareToken
 
   const photoById = (id: string) => data.photos.find((p) => p.id === id)
   const phaseName = (phaseId: string | null) =>
@@ -435,6 +451,9 @@ export function MoneyTab() {
 
   return (
     <div className="space-y-6">
+      {/* W4-1 print isolation — only #draw-pack-print-root is visible on paper */}
+      <style>{`@media print { body * { visibility: hidden !important; } #draw-pack-print-root, #draw-pack-print-root * { visibility: visible !important; } #draw-pack-print-root { position: fixed !important; inset: 0 !important; overflow: visible !important; background: white !important; } }`}</style>
+
       {/* KPI row */}
       <section className="grid grid-cols-2 gap-4 lg:grid-cols-4" aria-label="MjengoPay KPIs">
         <Card className="border-stone-200 shadow-sm">
@@ -557,6 +576,24 @@ export function MoneyTab() {
                             {m.decidedAt ? ` · ${dateShort(m.decidedAt)}` : ''}
                             {m.decisionNote ? ` — “${m.decisionNote}”` : ''}
                           </p>
+                        )}
+
+                        {/* W4-1: the immutable evidence pack of this release —
+                            the frozen bundle a diaspora client keeps/forwards,
+                            served read-only through the share token. */}
+                        {m.status === 'released' && packFor(m.id) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="min-h-11 gap-1.5 border-amber-200 bg-amber-50/50 text-amber-900 hover:bg-amber-50 hover:text-amber-900"
+                            onClick={() => setPackTarget(packFor(m.id))}
+                            aria-label={t('drawPack.aria', { milestone: m.name })}
+                          >
+                            <FileCheck2 className="h-4 w-4" aria-hidden /> {t('drawPack.view')}
+                            <span className="hidden font-mono text-[10px] text-amber-700 sm:inline">
+                              {formatKES(packFor(m.id)!.amount)} · {packFor(m.id)!.ledgerRef}
+                            </span>
+                          </Button>
                         )}
 
                         {/* evidence photos */}
@@ -1399,6 +1436,17 @@ export function MoneyTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ---------------- W4-1: evidence draw pack viewer ---------------- */}
+      {packTarget && packToken && (
+        <DrawPackViewer
+          open
+          onClose={() => setPackTarget(null)}
+          packId={packTarget.id}
+          shareToken={packToken}
+          milestoneName={packTarget.milestoneName}
+        />
+      )}
     </div>
   )
 }

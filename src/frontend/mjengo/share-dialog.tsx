@@ -38,7 +38,7 @@ export function ShareDialog({ open, onOpenChange, shareUrl, previewing, onPrevie
             Share with client
           </DialogTitle>
           <DialogDescription>
-            Your client gets a read-only live view: photo evidence, progress, budget position — no editing.
+            Your client gets a read-only live view: photo evidence, progress, budget position — no editing. Every released milestone also carries an immutable evidence pack (W4-1) they can view, print and forward with the hash verified.
           </DialogDescription>
         </DialogHeader>
 
@@ -75,7 +75,7 @@ export function ShareDialog({ open, onOpenChange, shareUrl, previewing, onPrevie
             </Button>
             <p className="text-[11px] text-stone-400 flex items-start gap-1.5">
               <Share2 className="w-3 h-3 mt-0.5 shrink-0" aria-hidden />
-              Send this over WhatsApp or email. Regenerating invalidates the old link.
+              Send this over WhatsApp or email. Regenerating invalidates the old link — and every draw pack it could open (the pack is served through the same token).
             </p>
           </div>
 

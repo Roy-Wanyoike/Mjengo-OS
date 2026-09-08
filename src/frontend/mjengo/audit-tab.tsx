@@ -71,7 +71,7 @@ const AUDIT_KINDS: readonly string[] = [
   'worker', 'alert', 'photo', 'project', 'expense', 'transaction', 'share',
   'escrow', 'milestone', 'variation', 'comment', 'notification', 'site_map',
   'inventory', 'boq', 'payment', 'wallet', 'ledger', 'auth', 'export', 'action',
-  'mjengo_score',
+  'mjengo_score', 'draw_pack',
 ]
 
 /** Actor roles seen in the audit trail: platform roles + system/AI writers. */
