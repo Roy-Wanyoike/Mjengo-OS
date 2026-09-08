@@ -165,6 +165,11 @@ export function summarizeAction(type: string, payload: any, result: any): string
     case 'wallet.transfer': return `Wallet transfer KSh ${p.amount} ${result?.from ?? ''} → ${result?.to ?? ''}`
     case 'transaction.reverse': return `Transaction REVERSED — ${p.reason ?? 'correction'} (ledger ${result?.ledgerRef ?? ''})`
     case 'ledger.post': return `Manual journal posted (ledger ${result?.ref ?? ''})`
+    // Intel module
+    case 'risk.recompute': return `Risk score recomputed: ${result?.overallScore ?? '?'}/100 (${result?.findingsCount ?? 0} findings, rules v${String(result?.ruleVersion ?? '1').replace(/^v/, '')})`
+    case 'score.recompute': return result?.score === null || result?.score === undefined
+      ? `MjengoScore recomputed — no score yet (only ${result?.componentsCount ?? 0} of 6 components have data; describes, humans decide)`
+      : `MjengoScore recomputed: ${result.score}/100 (confidence ${result?.confidence ?? 'low'} · ${result?.componentsCount ?? '?'} of 6 components · describes, humans decide)`
     default: return `Action: ${type}`
   }
 }
@@ -179,6 +184,7 @@ export function kindForAction(type: string): string {
     variation: 'variation', comment: 'comment', notification: 'notification', zone: 'site_map',
     payroll: 'wage',
     inventory: 'inventory', boq: 'boq', payment: 'payment', wallet: 'wallet', ledger: 'ledger',
+    score: 'mjengo_score', // MjengoScore recomputes (risk/digest/price/reliability stay 'action' — unchanged history semantics)
   }
   return map[prefix] ?? 'action'
 }
