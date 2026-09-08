@@ -50,6 +50,13 @@ export const GET = route(
         ? projects.filter((p) => p.id === session.user.projectId)
         : []
     }
+    // W5-3 supplier pin: a supplier serves projects, it does not browse them —
+    // the honest empty list (never the buyer portfolio; the client-without-a-
+    // project precedent). Their own rows are the /api/v1/supply + invoice
+    // families, which row-pin to their supplierId.
+    if (session.user.role === 'supplier') {
+      projects = []
+    }
     if (q.data.status) {
       projects = projects.filter((p) => p.status === q.data.status)
     }

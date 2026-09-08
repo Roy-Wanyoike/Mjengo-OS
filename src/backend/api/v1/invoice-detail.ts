@@ -3,7 +3,7 @@ import { route } from '@/backend/lib/route-kit'
 import { threeWayCheck } from '@/backend/modules/invoices/service'
 import { invoiceDetailQuery, invoiceRef, validateQuery } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied } from './scope'
+import { clientProjectDenied, supplierSessionId } from './scope'
 
 // /api/v1/invoices/:id (Phase C, read-only — the money-governance family) —
 // src/app/api/v1/invoices/[id]/route.ts is the shim.
@@ -35,7 +35,10 @@ const iso = (v: Date | null): string | null => (v ? v.toISOString() : null)
  * ROLE SCOPING: resolve first, pin second (the v1 payments precedent) — the
  * id (cuid) OR invoiceCode (e.g. INV-2026-000031) resolves the invoice, then
  * a client-role session must be pinned to the invoice's own project (else
- * 403 'Not permitted for this project'). Unknown invoice → 404.
+ * 403 'Not permitted for this project'). Unknown invoice → 404. SUPPLIER
+ * sessions (W5-3) get the strictest pin: a foreign supplier's invoice
+ * answers the SAME 404 'Invoice not found' as an unknown id —
+ * indistinguishable from a miss; no link → 403 fail closed.
  *
  * DATA: the detail row is read here with the loadInvoicesSlice include
  * (lines + supplier + order — the wallet-transactions precedent: the
@@ -64,6 +67,13 @@ export const GET = route(
     if (!invoice) return v1Err(404, 'Invoice not found')
     const denied = clientProjectDenied(session, invoice.projectId)
     if (denied) return denied
+    // W5-3 supplier row pin: a foreign supplier's invoice answers EXACTLY like
+    // an unknown id (same 404 body). No link → fail-closed 403.
+    const supplierId = supplierSessionId(session)
+    if (session.user.role === 'supplier') {
+      if (!supplierId) return v1Err(403, 'Supplier account has no supplier linked')
+      if (invoice.supplierId !== supplierId) return v1Err(404, 'Invoice not found')
+    }
 
     // The 3-way verdict — the invoices module's own read-only check (the
     // exact function /api/actions invoice.threeWayCheck runs; recomputed

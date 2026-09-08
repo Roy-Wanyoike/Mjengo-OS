@@ -21,6 +21,7 @@ interface DemoAccount {
 const DEMO_ACCOUNTS: DemoAccount[] = [
   { email: 'contractor@mjengo.os', password: 'mjengo2026', role: 'contractor', hintKey: 'login.demo.contractor' },
   { email: 'client@mjengo.os', password: 'mjengo2026', role: 'client', hintKey: 'login.demo.client' },
+  { email: 'supplier@mjengo.os', password: 'supplier2026', role: 'supplier', hintKey: 'login.demo.supplier' },
   { email: 'admin@mjengo.os', password: 'admin2026', role: 'admin', hintKey: 'login.demo.admin' },
   { email: 'finance@mjengo.os', password: 'mjengo2026', role: 'finance', hintKey: 'login.demo.finance' },
   { email: 'supervisor@mjengo.os', password: 'mjengo2026', role: 'supervisor', hintKey: 'login.demo.supervisor' },

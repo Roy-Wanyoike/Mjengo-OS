@@ -37,10 +37,15 @@ export const GET = route(
   async (_req, session) => {
     const projects = await getProjectsList()
     // Client-role sessions see exactly their own project — never the portfolio.
+    // W5-3 supplier sessions see an EMPTY list — never the portfolio (the same
+    // honest empty answer a client without a pinned project gets; the supplier
+    // surface is /api/supplier, which scopes to their own rows).
     const scoped =
       session.user.role === 'client' && session.user.projectId
         ? projects.filter((p) => p.id === session.user.projectId)
-        : projects
+        : session.user.role === 'supplier'
+          ? []
+          : projects
     return NextResponse.json({ ok: true, projects: scoped })
   },
 )

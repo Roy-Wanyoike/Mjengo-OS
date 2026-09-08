@@ -16,10 +16,12 @@
 // SUBMITTED client-band / CONVERTED); quotes for the converted request from
 // 3 suppliers with different landed costs (one multi-line with validity +
 // terms); PO-2026-000012 DELIVERING (dispatched) + PO-2026-000009 DELIVERED
-// with a 48-of-50 discrepancy; Site Store inventory history (cement/ballast/
-// river sand/steel: opening + received + consumed + damaged + transfer); one
-// approved BOQ ("Nyumba Yangu — QS estimate v1") + one draft; one saved
-// supplier on the project shortlist. Rows are looked up by NAME (never ids).
+// with a 48-of-50 discrepancy + PO-2026-000013 SENT awaiting supplier
+// confirmation (W5-3 — the supplier portal's demo journey); Site Store
+// inventory history (cement/ballast/river sand/steel: opening + received +
+// consumed + damaged + transfer); one approved BOQ ("Nyumba Yangu — QS
+// estimate v1") + one draft; one saved supplier on the project shortlist.
+// Rows are looked up by NAME (never ids).
 
 import { PrismaClient } from '@prisma/client'
 import { seedInvoices } from './invoices'
@@ -496,6 +498,32 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
     },
   })
 
+  // PO-2026-000013 — SENT (awaiting supplier confirmation — W5-3: the
+  // supplier portal's demo journey: Nairobi Hardware logs in, sees this order
+  // under "awaiting your confirmation", confirms it, then dispatches it).
+  const po13 = await db.purchaseOrder.create({
+    data: {
+      orderCode: 'PO-2026-000013',
+      projectId: p1.id,
+      requestId: null, // direct order (no material request)
+      supplierId: nairobiHardware.id,
+      subtotal: 181500, // 3000 stones ×55 + 200 blocks ×75
+      deliveryFee: 3500,
+      total: 185000,
+      status: 'sent',
+      paymentSource: 'client',
+      createdByRole: 'contractor',
+      note: 'Direct order — walling package. Awaiting supplier confirmation from the portal.',
+      createdAt: daysAgo(1, 9),
+    },
+  })
+  await db.purchaseOrderLine.createMany({
+    data: [
+      { orderId: po13.id, name: 'Machine-cut stones (9")', unit: 'piece', qty: 3000, unitPrice: 55, lineTotal: 165000 },
+      { orderId: po13.id, name: 'Concrete blocks (6" hollow)', unit: 'block', qty: 200, unitPrice: 75, lineTotal: 15000 },
+    ],
+  })
+
   // ---------------- BOQs (spec §28) ----------------
   const boqV1 = await db.boq.create({
     data: {
@@ -610,7 +638,7 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
     catalogItems: catalogCount,
     requests: 4,
     quotes: 5,
-    orders: 2,
+    orders: 3,
     boqs: 2,
     inventoryItems: 5,
     movements: 13,
@@ -618,8 +646,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   console.log(
     `seedSupply: ${counts.suppliers} suppliers, ${counts.catalogItems} catalog items (§29 metadata), 5 approval rules, ` +
       `${counts.requests} requests (incl. client-band MR-1045), ${counts.quotes} quotes (1 multi-line w/ validity+terms, 1 expired), ` +
-      `${counts.orders} POs (1 delivering, 1 delivered w/ discrepancy), ${counts.boqs} BOQs (1 approved, 1 draft), ` +
-      `1 saved supplier, ${counts.inventoryItems} stock lines / ${counts.movements} movements${opts.reseedInvoices ? ', invoices reseeded' : ''}`,
+      `${counts.orders} POs (1 delivering, 1 delivered w/ discrepancy, 1 sent awaiting supplier confirmation — W5-3), ` +
+      `${counts.boqs} BOQs (1 approved, 1 draft), 1 saved supplier, ${counts.inventoryItems} stock lines / ${counts.movements} movements` +
+      `${opts.reseedInvoices ? ', invoices reseeded' : ''}`,
   )
 }
 

@@ -508,6 +508,9 @@ async function detectConflict(projectId: string, action: QueuedAction): Promise<
  *    is rejected per-item, the payload refresh returns only their project, and
  *    the projects list is scoped to it (a foreign probe is indistinguishable
  *    from a miss: plain per-item failure / empty response, never foreign data)
+ *  · supplier-role sessions (W5-3): 403 — the SupplierPortal dispatches
+ *    online-only (the share-client posture) and owns NO outbox, so nothing of
+ *    theirs can ever arrive here; fail closed rather than re-implement the pin
  *
  * Route-kit folds the auth guard + 30 flushes/min rate limit (S-SEC: sync
  * batches many actions per request, so without it the per-request 60/min
@@ -524,6 +527,14 @@ export const POST = route(
   async (req, session, body) => {
     const { actions, projectId } = body as { actions?: QueuedAction[]; projectId?: string }
     if (!Array.isArray(actions)) return NextResponse.json({ error: 'actions[] required' }, { status: 400 })
+
+    // W5-3: supplier sessions never own an outbox — the SupplierPortal
+    // dispatches online-only (like the share client view) and its actions go
+    // through POST /api/actions. Fail closed here: a crafted flush cannot
+    // reach the shared supplier gate through this route.
+    if (session.user.role === 'supplier') {
+      return NextResponse.json({ ok: false, error: 'Not permitted for role "supplier"' }, { status: 403 })
+    }
 
     const isClient = session.user.role === 'client'
     // Resolve the client's pinned project once (null → honest empty sync below).

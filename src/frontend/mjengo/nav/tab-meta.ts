@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, ListChecks, Boxes, PackageSearch, Users, Wallet, Landmark,
-  Camera, ScrollText, Radar, Sparkles, Phone, Settings,
+  Camera, ScrollText, Radar, Sparkles, Phone, Settings, Truck,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { TabKey } from '@/frontend/mjengo/app'
@@ -38,6 +38,10 @@ export const TAB_META: readonly TabMeta[] = [
   { key: 'ussd', label: 'nav.ussd', shortLabel: 'nav.short.ussd', icon: Phone },
   { key: 'audit', label: 'nav.audit', shortLabel: 'nav.short.audit', icon: ScrollText },
   { key: 'settings', label: 'nav.settings', shortLabel: 'nav.short.settings', icon: Settings },
+  // W5-3: the supplier-role surface (SupplierPortal renders it full-screen —
+  // the meta entry keeps the tab universe and the permission matrix in sync:
+  // 'supplier' is in ALL_TABS and ONLY the supplier role's tab list).
+  { key: 'supplier', label: 'nav.supplier', shortLabel: 'nav.short.supplier', icon: Truck },
 ]
 
 /** Metadata for one tab id (always found — every TabKey is in TAB_META). */

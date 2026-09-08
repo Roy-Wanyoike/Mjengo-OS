@@ -138,3 +138,44 @@ describe('landing tabs land inside the visible surface', () => {
     expect(landingForRole(null)).toBe('overview')
   })
 })
+
+// ------------------------------------------------------------- W5-3 supplier
+// The supplier surface is the dedicated SupplierPortal — the matrix row is
+// the CLIENT MIRROR of the server boundary (the 403s on /api/project,
+// /api/sync and the v1 project reads). Fail closed: exactly the 'supplier'
+// tab + settings, never a client/contractor tab.
+
+describe('supplier surface is the scoped portal — no client/contractor tabs (W5-3)', () => {
+  it('sees exactly the Supplier tab + Settings', () => {
+    expect(tabsForRole('supplier')).toEqual(['supplier', 'settings'])
+  })
+
+  it('cannot reach ANY tab the site team or client uses', () => {
+    const supplierTabs = new Set(tabsForRole('supplier'))
+    for (const tab of ALL_TABS) {
+      if (tab === 'supplier' || tab === 'settings') continue
+      expect(supplierTabs.has(tab), `supplier must not see tab "${tab}"`).toBe(false)
+    }
+  })
+
+  it('cannot boot the owner app, manage flags, run finance/payments, create projects or share links', () => {
+    expect(can('supplier', 'owner.app')).toBe(false)
+    expect(can('supplier', 'flags.manage')).toBe(false)
+    expect(can('supplier', 'finance.queue')).toBe(false)
+    expect(can('supplier', 'payments.execute')).toBe(false)
+    expect(can('supplier', 'project.create')).toBe(false)
+    expect(can('supplier', 'share.link')).toBe(false)
+    expect(OWNER_ROLES).not.toContain('supplier')
+  })
+
+  it('lands on the Supplier portal tab', () => {
+    expect(landingForRole('supplier')).toBe('supplier')
+    expect(ROLE_TABS.supplier).toContain('supplier')
+  })
+
+  it('the supplier tab is supplier-ONLY — no other role sees it', () => {
+    for (const role of KNOWN_ROLES.filter((r) => r !== 'supplier')) {
+      expect(tabsForRole(role), `role "${role}" must not see the supplier portal tab`).not.toContain('supplier')
+    }
+  })
+})

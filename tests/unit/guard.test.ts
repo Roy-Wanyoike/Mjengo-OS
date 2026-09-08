@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   FINANCE_ROLES, KNOWN_ROLES as GUARD_KNOWN, OWNER_ROLES as GUARD_OWNER,
-  PAYMENT_ROLES, isInternalError, safeErrorMessage,
+  PAYMENT_ROLES, sessionSupplierId, isInternalError, safeErrorMessage,
 } from '@/backend/lib/guard'
 import { KNOWN_ROLES, OWNER_ROLES, can, isKnownRole } from '@/shared/permissions'
 
@@ -51,6 +51,41 @@ describe('capability projections track the guard allowlists', () => {
     for (const role of KNOWN_ROLES) {
       expect(can(role, 'owner.app')).toBe(GUARD_OWNER.includes(role))
     }
+  })
+})
+
+// ------------------------------------------- W5-3: the supplier role + its pin
+
+describe('supplier role: known, never an owner (W5-3)', () => {
+  it('is in KNOWN_ROLES on BOTH sides (fail closed stays intact)', () => {
+    expect(GUARD_KNOWN).toContain('supplier')
+    expect(KNOWN_ROLES).toContain('supplier')
+    expect(isKnownRole('supplier')).toBe(true)
+  })
+
+  it('is deliberately ABSENT from OWNER_ROLES on both sides — the SupplierPortal is its surface', () => {
+    expect(GUARD_OWNER).not.toContain('supplier')
+    expect(OWNER_ROLES).not.toContain('supplier')
+  })
+})
+
+describe('sessionSupplierId — the supplier-role tenant pin (mirrors the client projectId pin)', () => {
+  const sessionOf = (role: string, supplierId: string | null) =>
+    ({ user: { id: 'u1', email: 'u@t.dev', name: 'U', role, projectId: null, supplierId } }) as const
+
+  it('returns the session-stamped id for a linked supplier', () => {
+    expect(sessionSupplierId(sessionOf('supplier', 'sup-1') as never)).toBe('sup-1')
+  })
+
+  it('trims whitespace (a blank stamp is no stamp)', () => {
+    expect(sessionSupplierId(sessionOf('supplier', '  ') as never)).toBe(null)
+    expect(sessionSupplierId(sessionOf('supplier', null) as never)).toBe(null)
+  })
+
+  it('is null for every other role even when a supplierId copy is present (fail closed)', () => {
+    expect(sessionSupplierId(sessionOf('contractor', 'sup-1') as never)).toBe(null)
+    expect(sessionSupplierId(sessionOf('client', 'sup-1') as never)).toBe(null)
+    expect(sessionSupplierId(sessionOf('admin', 'sup-1') as never)).toBe(null)
   })
 })
 
