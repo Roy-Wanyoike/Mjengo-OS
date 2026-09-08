@@ -18,6 +18,7 @@ import { spendExternalInTx, reverseTransaction as reverseTransactionService } fr
 import { getProvider } from '@/backend/modules/wallet/providers'
 import { currentActor } from '@/backend/modules/wallet/session'
 import { INTEL_ACTIONS, applyIntelAction } from '@/backend/actions/intel'
+import { AI_ACTIONS, applyAiAction } from '@/backend/actions/ai'
 import { loadLandSlice } from '@/backend/modules/land/repository'
 import { loadProfessionalsSlice } from '@/backend/modules/professionals/repository'
 import { loadSupplySlice } from '@/backend/modules/supply/repository'
@@ -400,6 +401,9 @@ const TEAM_ROLES: readonly string[] = ['contractor', 'admin']
 /** Team-roster actions gated above (§33). */
 const TEAM_ACTIONS: readonly string[] = ['team.add', 'team.update', 'team.remove']
 
+/** Roles that may run an AI draw review (W6-1) — clients read notes via the share link. */
+const AI_REVIEW_ROLES: readonly string[] = ['contractor', 'admin']
+
 /** §33 professional roles a roster entry may carry. */
 const PROJECT_TEAM_ROLES: readonly string[] = ['contractor', 'supervisor', 'qs', 'architect', 'engineer', 'surveyor', 'client_rep']
 
@@ -555,6 +559,7 @@ export type ActionType =
   | (typeof INTEL_ACTIONS)[number]
   | (typeof INVENTORY_ACTIONS)[number]
   | (typeof WALLET_ACTIONS)[number]
+  | (typeof AI_ACTIONS)[number]
 
 export async function applyAction(type: ActionType, payload: any, projectIdArg?: string): Promise<any> {
   // Project resolution: explicit projectId arg > payload.projectId > first project
@@ -578,6 +583,14 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
   if (TEAM_ACTIONS.includes(type) && !TEAM_ROLES.includes(effectiveRole)) {
     throw new Error(
       `Only a contractor or admin may manage the project team roster — "${effectiveRole}" is not permitted (spec §33)`,
+    )
+  }
+  // W6-1: AI reviews are advisory-only, but they still cost provider calls
+  // and wear the platform's name — contractor/admin only (the client's read
+  // surface is the share link; supervisors/finance stay on the human paths).
+  if ((AI_ACTIONS as readonly string[]).includes(type) && !AI_REVIEW_ROLES.includes(effectiveRole)) {
+    throw new Error(
+      `Only a contractor or admin may run an AI draw review — "${effectiveRole}" is not permitted. Clients read review notes through their share link.`,
     )
   }
   // §24 client-direct ordering: a client (or share-link) caller may reach the
@@ -623,6 +636,8 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
     result = await applyInvoiceAction(type, cleanPayload, projectId)
   } else if ((INTEL_ACTIONS as readonly string[]).includes(type)) {
     result = await applyIntelAction(type, cleanPayload, projectId)
+  } else if ((AI_ACTIONS as readonly string[]).includes(type)) {
+    result = await applyAiAction(type, cleanPayload, projectId)
   } else if ((INVENTORY_ACTIONS as readonly string[]).includes(type)) {
     result = await applyInventoryAction(type, cleanPayload, projectId)
   } else if ((WALLET_ACTIONS as readonly string[]).includes(type)) {

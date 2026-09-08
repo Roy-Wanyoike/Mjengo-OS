@@ -21,17 +21,20 @@ import { useCallback, useEffect, useState } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/frontend/ui/dialog'
 import { Button } from '@/frontend/ui/button'
 import { Badge } from '@/frontend/ui/badge'
-import { Copy, FileCheck2, Gauge, Printer, ShieldCheck, TrendingUp, Users } from 'lucide-react'
+import { Copy, FileCheck2, Gauge, Printer, ShieldCheck, Sparkles, TrendingUp, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { useT } from '@/frontend/i18n/provider'
 import { formatKES } from '@/frontend/lib/format'
 import type { DrawPackDetail } from '@/backend/modules/drawpack/service'
+import type { AiReviewNoteDetail } from '@/backend/modules/ai/draw-review'
 
 /** GET /api/share?token&drawPack response (shape pinned by the route). */
 interface DrawPackResponse {
   ok: boolean
   pack: DrawPackDetail
   photos: Array<{ id: string; url: string; caption: string | null }>
+  /** W6-1: the pack's LATEST AI review note (advisory, read-only; null when never run). */
+  aiReview: AiReviewNoteDetail | null
   project: { name: string; client: string; location: string | null; status: string }
 }
 
@@ -214,6 +217,60 @@ export function DrawPackViewer({ open, onClose, packId, shareToken, milestoneNam
               ) : (
                 <p className="rounded-md border border-dashed border-stone-300 bg-stone-50 px-3 py-2 text-xs italic text-stone-500">
                   {t('drawPack.scoreNotComputed')}
+                </p>
+              )}
+            </section>
+
+            {/* W6-1: AI review note — advisory only. Deliberately NOT part of the
+                printable record: the paper bundle is the frozen verified pack;
+                an AI's description never rides it (AI describes, humans decide). */}
+            <section aria-label={t('aiReview.title')} className="space-y-2" data-testid="draw-pack-ai-review">
+              <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">
+                <Sparkles className="h-3.5 w-3.5 text-amber-600" aria-hidden /> {t('aiReview.title')}
+              </h4>
+              {pack.aiReview ? (
+                <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50/40 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className="border-0 bg-amber-100 text-amber-900 hover:bg-amber-100">{t(`aiReview.verdict.${pack.aiReview.verdict === 'consistent' || pack.aiReview.verdict === 'escalate' ? pack.aiReview.verdict : 'advisory'}`)}</Badge>
+                    <Badge variant="outline" className="text-[10px]">{t('aiReview.confidenceLabel')}: {t(`aiReview.confidence.${pack.aiReview.confidence === 'medium' || pack.aiReview.confidence === 'high' ? pack.aiReview.confidence : 'low'}`)}</Badge>
+                  </div>
+                  {pack.aiReview.summary && <p className="text-xs leading-relaxed text-stone-700">{pack.aiReview.summary}</p>}
+                  {pack.aiReview.findings.length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {pack.aiReview.findings.map((f, i) => (
+                        <li key={i} className="flex items-start gap-2 rounded-md border border-stone-200 bg-white px-2.5 py-1.5 text-xs">
+                          <span
+                            aria-hidden
+                            className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
+                              f.severity === 'critical' ? 'bg-rose-500' : f.severity === 'warning' ? 'bg-amber-500' : 'bg-stone-300'
+                            }`}
+                          />
+                          <span className="min-w-0">
+                            <span className="font-medium text-stone-600">{f.category}</span>
+                            <span className="text-stone-400"> · {t(`aiReview.severity.${f.severity}`)}</span>
+                            <span className="block text-stone-700">{f.text}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-stone-400">{t('aiReview.findingsNone')}</p>
+                  )}
+                  <p className="text-[11px] text-stone-400">
+                    {t('aiReview.providerLine', {
+                      provider: pack.aiReview.modelLabel,
+                      date: new Date(pack.aiReview.createdAt).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' }),
+                      version: pack.aiReview.ruleVersion,
+                    })}
+                  </p>
+                  <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2 text-[11px] leading-relaxed text-stone-500">
+                    <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
+                    {t('aiReview.honesty')}
+                  </p>
+                </div>
+              ) : (
+                <p className="rounded-md border border-dashed border-stone-300 bg-stone-50 px-3 py-2 text-xs italic text-stone-500">
+                  {t('aiReview.notRun')}
                 </p>
               )}
             </section>

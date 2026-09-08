@@ -4,6 +4,7 @@ import { db } from '@/backend/lib/db'
 import { applyAction, getProjectPayload, type ActionType } from '@/backend/lib/mjengo'
 import { publicRoute, safeError, genericError, zodIssueResponse } from '@/backend/lib/route-kit'
 import { getDrawPackForShare } from '@/backend/modules/drawpack/service'
+import { loadLatestAiReviewNote } from '@/backend/modules/ai/draw-review'
 
 // Public "Virtual Site Visit" endpoint — src/app/api/share/route.ts is the shim.
 // Diaspora clients arrive via a revocable share token (`/?share=<token>`), no
@@ -66,6 +67,12 @@ const shareBodySchema = z.strictObject({
  * be re-verified offline after forwarding) plus the printable view data
  * (project identity + current evidence photo rows). Pack fetches share this
  * route's existing share.get 30/min bucket by construction.
+ *
+ * W6-1: the draw-pack branch ALSO serves the pack's LATEST AI review note
+ * (`aiReview`, null when none was ever run) through the same token — the
+ * advisory note rides the exact same revocation, 404 mapping and 30/min
+ * bucket as the pack it belongs to. Read-only: the share surface dispatches
+ * nothing, and a note never gates the pack (AI describes, humans decide).
  */
 export const GET = publicRoute(
   {
@@ -82,17 +89,20 @@ export const GET = publicRoute(
     if (!project) {
       return NextResponse.json({ error: 'Invalid or expired link' }, { status: 404 })
     }
-    // W4-1: the drawPack branch — frozen bundle for a released milestone.
+    // W4-1: the drawPack branch — frozen bundle for a released milestone
+    // (W6-1: + its latest AI review note, advisory, read-only).
     const drawPackId = req.nextUrl.searchParams.get('drawPack')
     if (drawPackId) {
       const found = await getDrawPackForShare(project.id, drawPackId)
       if (!found) {
         return NextResponse.json({ error: 'Draw pack not found' }, { status: 404 })
       }
+      const aiReview = await loadLatestAiReviewNote(found.pack.id)
       return NextResponse.json({
         ok: true,
         pack: found.pack,
         photos: found.photos,
+        aiReview,
         project: {
           name: project.name,
           client: project.client,

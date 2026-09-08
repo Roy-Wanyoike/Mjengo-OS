@@ -50,6 +50,14 @@ import { fileURLToPath } from 'node:url'
 import { NextRequest } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// W6-1: the share GET now imports the AI draw-review module (which imports
+// the provider seam → z-ai-web-dev-sdk). The SDK is mocked like every other
+// suite — the real SDK/network is never touched; the pack tests never run
+// reviews, so the mock functions are never even called.
+vi.mock('z-ai-web-dev-sdk', () => ({
+  default: { create: vi.fn(async () => ({})) },
+}))
+
 vi.mock('@/backend/lib/db', () => {
   type Row = Record<string, unknown>
 
@@ -68,6 +76,8 @@ vi.mock('@/backend/lib/db', () => {
     ledgerTxns: [] as Row[],
     ledgerEntries: [] as Row[],
     transactions: new Map<string, Row>(),
+    // W6-1: AI review notes (read-only seam for the share GET's aiReview branch).
+    aiReviewNotes: new Map<string, Row>(),
     auditEvents: [] as Row[],
     notifications: [] as Row[],
     /** Mutation counters — the "projection, never money" assertions. */
@@ -335,6 +345,15 @@ vi.mock('@/backend/lib/db', () => {
         return { ...row }
       },
     },
+    // W6-1: the read seam the share GET's aiReview branch needs. Read-only +
+    // append-only by construction (create/findFirst ONLY — the immutability
+    // idiom); the pack tests never run reviews, so this stays empty.
+    aiReviewNote: {
+      async findFirst({ where }: { where: Row }) {
+        const rows = [...state.aiReviewNotes.values()].filter((r) => matches(r, where))
+        return rows[0] ? { ...rows[0] } : null
+      },
+    },
   }
   return { db }
 })
@@ -371,6 +390,7 @@ function stateType() {
     ledgerTxns: Array<Record<string, unknown>>
     ledgerEntries: Array<Record<string, unknown>>
     transactions: Map<string, Record<string, unknown>>
+    aiReviewNotes: Map<string, Record<string, unknown>>
     auditEvents: Array<Record<string, unknown>>
     notifications: Array<Record<string, unknown>>
     createCounts: {
@@ -824,6 +844,25 @@ describe('GET /api/share?token&drawPack — packs ride the EXISTING token gate',
     const res = await shareGet(req(`?drawPack=${packId}`, '198.51.100.8'), undefined)
     expect(res.status).toBe(400)
     expect((await res.json()).error).toBe('Share token required')
+  })
+
+  it('W6-1: the response carries the aiReview key — null when no review ever ran', async () => {
+    const res = await shareGet(req('?token=tok-1&drawPack=' + packId, '198.51.100.14'), undefined)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.aiReview).toBeNull()
+
+    // A planted latest note (the ai module's row shape) rides the SAME token.
+    state.aiReviewNotes.set('arn-1', {
+      id: 'arn-1', drawPackId: packId, projectId: P1, providerId: 'zai', modelLabel: 'Z AI (z-ai-web-dev-sdk)',
+      ruleVersion: 1, verdict: 'advisory', summary: 'Evidence consistent; one blurry photo', confidence: 'medium',
+      findings: JSON.stringify([{ category: 'evidence', severity: 'warning', text: 'one blurry photo' }]),
+      inputsHash: 'b'.repeat(64), reviewedBy: null, reviewedAt: null, decisionNote: null, createdAt: new Date('2026-02-06T09:00:00Z'),
+    })
+    const res2 = await shareGet(req('?token=tok-1&drawPack=' + packId, '198.51.100.15'), undefined)
+    const body2 = (await res2.json()) as Record<string, any>
+    expect(body2.aiReview).toMatchObject({ id: 'arn-1', verdict: 'advisory', confidence: 'medium' })
+    expect(body2.aiReview.reviewedBy).toBeNull() // human decision columns unwritten
+    expect(body2.aiReview.findings).toHaveLength(1)
   })
 
   it('pack fetches count in the existing share.get 30/min bucket — the 31st → 429 + Retry-After', async () => {

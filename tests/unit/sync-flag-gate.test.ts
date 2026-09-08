@@ -181,6 +181,7 @@ import { FLAGGED_ACTION_FAMILIES, actionFlagGate, actionFlagGateMessage } from '
 import { WALLET_ACTIONS } from '@/backend/actions/wallet'
 import { LAND_ACTIONS } from '@/backend/actions/land'
 import { SUPPLY_ACTIONS } from '@/backend/actions/supply'
+import { AI_ACTIONS } from '@/backend/actions/ai'
 import { POST as syncPost } from '@/app/api/sync/route'
 import { POST as sharePost } from '@/app/api/share/route'
 import { applyAction } from '@/backend/lib/mjengo'
@@ -255,16 +256,20 @@ afterEach(() => {
 // ---------------------------------------------------- the ONE shared gate table
 
 describe('lib/action-flag-gate — the ONE definition both routes enforce', () => {
-  it('FLAGGED_ACTION_FAMILIES maps exactly the three families to their flags', () => {
+  it('FLAGGED_ACTION_FAMILIES maps exactly the four families to their flags', () => {
     expect(FLAGGED_ACTION_FAMILIES).toEqual([
       { actions: WALLET_ACTIONS, flag: 'wallet' },
       { actions: LAND_ACTIONS, flag: 'land_verification' },
       { actions: SUPPLY_ACTIONS, flag: 'marketplace' },
+      // W6-1: the user-facing AI analysis actions — ai.drawReview today —
+      // behind the DEFAULT-OFF `ai` flag (same enforcement, both routes).
+      { actions: AI_ACTIONS, flag: 'ai' },
     ])
     // Spot checks that the family lists are the live module ones, not copies:
     expect(WALLET_ACTIONS).toContain('payment.pay')
     expect(LAND_ACTIONS).toContain('parcel.create')
     expect(SUPPLY_ACTIONS).toContain('supplier.upsert')
+    expect(AI_ACTIONS).toContain('ai.drawReview')
   })
 
   it('a NON-flagged action short-circuits to allowed WITHOUT reading the flag table', async () => {

@@ -35,6 +35,7 @@ import { requireFlagOn, type FlagKey } from '@/backend/modules/intel/flags'
 import { WALLET_ACTIONS } from '@/backend/actions/wallet'
 import { LAND_ACTIONS } from '@/backend/actions/land'
 import { SUPPLY_ACTIONS } from '@/backend/actions/supply'
+import { AI_ACTIONS } from '@/backend/actions/ai'
 
 export const FLAGGED_ACTION_FAMILIES: ReadonlyArray<{ actions: readonly string[]; flag: FlagKey }> = [
   // wallet: the user-facing wallet & payment-request actions (money tab +
@@ -45,6 +46,15 @@ export const FLAGGED_ACTION_FAMILIES: ReadonlyArray<{ actions: readonly string[]
   // marketplace: the whole Finder supply loop (invoice.* is a separate
   //   module that shares the tab and stays open).
   { actions: SUPPLY_ACTIONS, flag: 'marketplace' },
+  // ai (W6-1, DEFAULT OFF): the user-facing AI analysis actions — today
+  //   ai.drawReview (the advisory draw-pack review); Wave-6 siblings (the
+  //   authenticity screen, the trust digest) join this family as they land.
+  //   Enforced here so POST /api/actions answers the uniform 403 AND
+  //   /api/sync enforces the same gate per outbox item (the S1 discipline);
+  //   admins bypass (FLAG_BYPASS_ROLES) so they can toggle and test. The
+  //   provider seam itself is flag-gated too (resolveAiProvider returns null
+  //   while off) — this family is the action-surface half of the same switch.
+  { actions: AI_ACTIONS, flag: 'ai' },
 ]
 
 /** Structural session shape — deliberately NOT guard.ts's GuardSession (no import cycle). */

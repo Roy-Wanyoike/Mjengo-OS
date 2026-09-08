@@ -26,15 +26,22 @@
 //                         provider.ts returns null unless this flag is on, so
 //                         every Wave-6 AI feature (AI draw review, site
 //                         assistant, voice reports) gates on it through the
-//                         shared provider. NO route or action family is
-//                         wired to it yet — Wave-6 features add their own
-//                         requireFlagOn('ai', …) call sites. Unlike the five
-//                         legacy flags, this one is DEFAULT OFF (see
-//                         FLAG_DEFAULTS): the AI surface ships dark and an
+//                         shared provider. Since W6-1 the flag ALSO gates the
+//                         AI_ACTIONS family (ai.drawReview) in BOTH
+//                         lib/action-flag-gate.ts routes — POST /api/actions
+//                         answers the uniform 403 and /api/sync enforces the
+//                         same gate per outbox item (the S1 discipline);
+//                         admins bypass so they can toggle and test. The
+//                         pre-existing /api/ai routes (analyze-photo,
+//                         voice-log) keep their own older flags
+//                         (ai_progress / ai_voice) — unchanged. DEFAULT OFF
+//                         (FLAG_DEFAULTS): the AI surface ships dark and an
 //                         admin turns it on deliberately (the popover, or
-//                         the DB row). The pre-existing /api/ai routes
-//                         (analyze-photo, voice-log) keep their own older
-//                         flags (ai_progress / ai_voice) — unchanged.
+//                         the DB row). BOUNDARY (honest): this flag does NOT
+//                         gate the release ladder or any ledger posting —
+//                         the advisory note is written AFTER money moved and
+//                         gates nothing; clients read notes through the share
+//                         link regardless of this flag.
 //   · ai_progress       → POST /api/ai/analyze-photo (the Copilot photo-
 //                         analysis route) + the Copilot "Analyze with vision
 //                         AI" button. The button was always gated; the route
