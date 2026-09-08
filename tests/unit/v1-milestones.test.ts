@@ -542,7 +542,7 @@ describe('GET /api/v1/projects/:id/milestones — rate limit (120/min per princi
 // ---------------------------------------------------------------- OpenAPI
 
 describe('GET /api/openapi.json — Phase C milestone + escrow paths', () => {
-  it('serves the five new money-governance paths; /api/v1 now counts 19 paths', async () => {
+  it('serves the five money-governance paths; /api/v1 now counts 27 paths (Phase D added 8)', async () => {
     const res = await openapiGet()
     expect(res.status).toBe(200)
     const doc = (await res.json()) as Record<string, any>
@@ -556,7 +556,7 @@ describe('GET /api/openapi.json — Phase C milestone + escrow paths', () => {
       expect(Object.keys(doc.paths)).toContain(path)
     }
     const v1Paths = Object.keys(doc.paths).filter((p) => p.startsWith('/api/v1'))
-    expect(v1Paths.length).toBe(19)
+    expect(v1Paths.length).toBe(27)
   })
 
   it('matching operationIds + tags for the milestone/escrow ops', async () => {

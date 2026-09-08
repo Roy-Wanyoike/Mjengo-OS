@@ -324,6 +324,90 @@ export const invoiceDetailQuery = z.strictObject({})
 /** GET /api/v1/projects/:id/escrow — no query params (unknown keys rejected). */
 export const projectEscrowQuery = z.strictObject({})
 
+// ---------------------------------------------------------------- Phase D (workers / attendance / tasks / suppliers / parcels / intel)
+
+/**
+ * Worker id (cuid) — workers carry no human code (unlike wallets/POs/invoices),
+ * so the honest bound is the generic 1-40-char id shape.
+ */
+export const workerIdRef = z
+  .string('worker id must be a string')
+  .min(1, 'worker id must not be empty')
+  .max(40, 'worker id must be at most 40 characters')
+
+/** Task id (cuid) — tasks carry no human code either. */
+export const taskIdRef = z
+  .string('task id must be a string')
+  .min(1, 'task id must not be empty')
+  .max(40, 'task id must be at most 40 characters')
+
+/**
+ * Attendance status filter — the four values the schema column comment
+ * documents (present, absent, half_day, excused). A stored value the enum
+ * lacks stays visible unfiltered and never matches a filter (same convention
+ * as projectStatusFilter).
+ */
+export const attendanceStatusFilter = z.enum(['present', 'absent', 'half_day', 'excused'], {
+  error: 'status must be one of present, absent, half_day, excused',
+})
+
+/**
+ * Attendance date filter — the column is a plain YYYY-MM-DD string (EAT
+ * calendar day), so the honest filter is an exact-day match. No range syntax,
+ * no partial dates.
+ */
+export const attendanceDateRef = z
+  .string('date must be a string')
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be a calendar day in YYYY-MM-DD form')
+
+/** Worker active filter — the one Worker boolean column (live vs inactive roster split). */
+export const workerActiveFilter = z.enum(['true', 'false'], {
+  error: 'active must be "true" or "false"',
+})
+
+/** Land parcel status filter (the three documented LandParcel.status values). */
+export const parcelStatusFilter = z.enum(['searching', 'verified', 'flagged'], {
+  error: 'status must be one of searching, verified, flagged',
+})
+
+/** GET /api/v1/projects/:id/workers query. */
+export const projectWorkersQuery = z.strictObject({
+  active: workerActiveFilter.optional(),
+  ...listQuery,
+})
+
+/** GET /api/v1/projects/:id/attendance query. */
+export const projectAttendanceQuery = z.strictObject({
+  workerId: workerIdRef.optional(),
+  status: attendanceStatusFilter.optional(),
+  date: attendanceDateRef.optional(),
+  ...listQuery,
+})
+
+/** GET /api/v1/workers/:id — no query params (unknown keys rejected). */
+export const workerDetailQuery = z.strictObject({})
+
+/** GET /api/v1/tasks/:id — no query params (unknown keys rejected). */
+export const taskDetailQuery = z.strictObject({})
+
+/** GET /api/v1/projects/:id/suppliers query. */
+export const projectSuppliersQuery = z.strictObject({
+  q: searchText.optional(),
+  ...listQuery,
+})
+
+/** GET /api/v1/projects/:id/parcels query. */
+export const projectParcelsQuery = z.strictObject({
+  status: parcelStatusFilter.optional(),
+  ...listQuery,
+})
+
+/** GET /api/v1/projects/:id/intel — no query params (unknown keys rejected). */
+export const projectIntelQuery = z.strictObject({})
+
+/** GET /api/v1/projects/:id/budget-variance — no query params (unknown keys rejected). */
+export const projectBudgetVarianceQuery = z.strictObject({})
+
 // ---------------------------------------------------------------- parse helpers
 
 export type Parsed<T> = { ok: true; data: T } | { ok: false; response: NextResponse }
