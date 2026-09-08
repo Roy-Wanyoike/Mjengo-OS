@@ -757,6 +757,14 @@ describe('non-influence: score rows change no action outcomes anywhere', () => {
       // query, never a write) as prompt context for the advisory note. The
       // model describes; the frozen row decides what the note can claim.
       'src/backend/modules/ai/draw-review.ts',
+      // W6-2 trust digest: the engine READS the two latest score rows
+      // (findMany take:2, never writes) to state the score + delta in the
+      // deterministic digest text — the delta is row math, displayed, never
+      // an influence on any action (the W4-1 read-only-allowlist precedent).
+      'src/backend/modules/ai/trust-digest.ts',
+      // W6-2 trust digest section — display wiring only (prose mentions the
+      // score delta; no score query, no logic).
+      'src/frontend/mjengo/intel/sections/trust-digest-section.tsx',
       // v1 Phase D intel digest: the route READS the latest score row for the
       // read-only REST surface (same findFirst display pattern as draw packs);
       // it cannot recompute, gate or influence the score.

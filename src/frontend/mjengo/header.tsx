@@ -16,7 +16,7 @@ import {
   Wifi, CloudOff, HardHat, RefreshCw, CheckCheck, Share2, Bell, LogOut,
   Landmark, FileDiff, MessageSquare, TriangleAlert, BellRing,
   Flag, Truck, Package, UserCheck, ClipboardCheck, FileText, ReceiptText, TrendingUp, Newspaper, ShieldAlert,
-  Search, ChevronDown, Settings, Check, Loader2, X, Command,
+  Search, ChevronDown, Settings, Check, Loader2, X, Command, Volume2,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { Notification } from '@prisma/client'
@@ -57,6 +57,7 @@ const NOTIFICATION_KINDS: Record<string, { label: string; Icon: LucideIcon; tint
   'price.alert': { label: 'Price', Icon: TrendingUp, tint: 'text-amber-600' },
   'digest.weekly': { label: 'Digest', Icon: Newspaper, tint: 'text-stone-500' },
   'risk.flagged': { label: 'Risk', Icon: ShieldAlert, tint: 'text-red-600' },
+  'trust.digest': { label: 'Trust digest', Icon: Volume2, tint: 'text-emerald-600' }, // W6-2
 }
 
 function kindMeta(kind: string) {
@@ -70,7 +71,7 @@ const KIND_GROUPS: Array<{ key: string; labelKey: string; kinds: string[] }> = [
   { key: 'orders', labelKey: 'notif.group.orders', kinds: ['order.sent', 'order.confirmed', 'quote.received'] },
   { key: 'deliveries', labelKey: 'notif.group.deliveries', kinds: ['delivery.dispatched', 'delivery.discrepancy'] },
   { key: 'invoices', labelKey: 'notif.group.invoices', kinds: ['invoice.submitted', 'invoice.decided', 'invoice.disputed', 'invoice.paid'] },
-  { key: 'intel', labelKey: 'notif.group.intel', kinds: ['price.alert', 'digest.weekly', 'risk.flagged'] },
+  { key: 'intel', labelKey: 'notif.group.intel', kinds: ['price.alert', 'digest.weekly', 'risk.flagged', 'trust.digest'] },
   { key: 'money', labelKey: 'notif.group.money', kinds: ['milestone', 'variation'] },
   { key: 'site', labelKey: 'notif.group.site', kinds: ['recap', 'comment', 'attendance', 'anomaly', 'share', 'system'] },
 ]

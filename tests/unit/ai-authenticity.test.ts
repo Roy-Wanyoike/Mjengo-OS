@@ -1169,9 +1169,13 @@ describe('non-influence: insight/hash rows change no action outcomes', () => {
     const root = fileURLToPath(new URL('../../src', import.meta.url))
     // Absolute paths, the mjengo-score allowlist idiom.
     const allowlist = new Set(
-      ['src/backend/modules/ai/authenticity.ts'].map((p) =>
-        fileURLToPath(new URL(`../../${p}`, import.meta.url)),
-      ),
+      [
+        'src/backend/modules/ai/authenticity.ts',
+        // W6-2 trust digest: READS the insights table (findMany count, never
+        // writes) for the digest's advisory AI-flags count — row math,
+        // displayed, never an influence on any action.
+        'src/backend/modules/ai/trust-digest.ts',
+      ].map((p) => fileURLToPath(new URL(`../../${p}`, import.meta.url))),
     )
     const offenders: string[] = []
     for (const file of walk(root)) {

@@ -38,34 +38,50 @@ const sdk = vi.hoisted(() => ({
   chatCreate: vi.fn(),
   visionCreate: vi.fn(),
   asrCreate: vi.fn(),
+  ttsCreate: vi.fn(),
 }))
 
 vi.mock('z-ai-web-dev-sdk', () => ({
   default: { create: sdk.create },
 }))
 
-import { resetAiSdkCache, resolveAiProvider, ZaiProvider } from '@/backend/modules/ai/provider'
+import { resetAiSdkCache, resolveAiProvider, ZaiProvider, chunkTextForTts, parseWavBuffer, buildWavBuffer } from '@/backend/modules/ai/provider'
 import type { AiProvider } from '@/backend/modules/ai/types'
 
 /** The fake instance create() resolves to (the surface the provider uses). */
 const fakeInstance = () => ({
   chat: { completions: { create: sdk.chatCreate, createVision: sdk.visionCreate } },
-  audio: { asr: { create: sdk.asrCreate } },
+  audio: { asr: { create: sdk.asrCreate }, tts: { create: sdk.ttsCreate } },
 })
 
 const CHAT_OK = { choices: [{ message: { content: '  the model answer  ' } }] }
 const VISION_OK = { choices: [{ message: { content: 'walling at 68 percent' } }] }
 const ASR_OK = { text: '  amelewa bags ishirini ya cement  ' }
 
+/** A tiny valid PCM WAV (44-byte header + `bytes` of payload). */
+function fakeWav(bytes: number, opts?: { sampleRate?: number; channels?: number; bits?: number }): Buffer {
+  const sampleRate = opts?.sampleRate ?? 8000
+  const channels = opts?.channels ?? 1
+  const bits = opts?.bits ?? 16
+  const data = Buffer.alloc(bytes)
+  for (let i = 0; i < bytes; i++) data[i] = i % 251 // non-zero, deterministic
+  return buildWavBuffer({ audioFormat: 1, channels, sampleRate, bitsPerSample: bits }, data)
+}
+
+/** Wrap WAV bytes in the raw fetch Response the TTS API documents. */
+const wavResponse = (buf: Buffer) => new Response(buf, { headers: { 'content-type': 'audio/wav' } })
+
 beforeEach(() => {
   sdk.create.mockReset()
   sdk.chatCreate.mockReset()
   sdk.visionCreate.mockReset()
   sdk.asrCreate.mockReset()
+  sdk.ttsCreate.mockReset()
   sdk.create.mockResolvedValue(fakeInstance())
   sdk.chatCreate.mockResolvedValue(CHAT_OK)
   sdk.visionCreate.mockResolvedValue(VISION_OK)
   sdk.asrCreate.mockResolvedValue(ASR_OK)
+  sdk.ttsCreate.mockImplementation(async () => wavResponse(fakeWav(320))) // a FRESH Response per call (a body is single-use)
   resetAiSdkCache() // drop the module singleton between tests
 })
 
@@ -335,5 +351,190 @@ describe('transcribe()', () => {
     const pending = provider.transcribe('data:audio/webm;base64,QUJD')
     await vi.advanceTimersByTimeAsync(8_000)
     expect(await pending).toEqual({ ok: false, error: 'AI transcription timed out after 8s' })
+  })
+})
+
+/** speak() — text-to-speech of caller-held deterministic text (W6-2). */
+describe('speak()', () => {
+  it('success → { ok: true, audioBase64, mimeType } that round-trips to a parseable WAV', async () => {
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    const res = await provider.speak('Habari. This week your money built the ring beam.')
+    expect(res?.ok).toBe(true)
+    if (res?.ok) {
+      expect(res.mimeType).toBe('audio/wav')
+      const buf = Buffer.from(res.audioBase64, 'base64')
+      expect(buf.length).toBeGreaterThan(44)
+      const wav = parseWavBuffer(buf)
+      expect(wav).not.toBeNull()
+      expect(wav?.data.length).toBe(320)
+      expect(wav?.audioFormat).toBe(1)
+    }
+  })
+
+  it('forwards the documented request shape (input, voice, speed, wav, stream:false); opts override voice/speed', async () => {
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    await provider.speak('One short sentence.', { voice: 'tongtong', speed: 1.5 })
+    expect(sdk.ttsCreate).toHaveBeenCalledWith({
+      input: 'One short sentence.',
+      voice: 'tongtong',
+      speed: 1.5,
+      response_format: 'wav',
+      stream: false,
+    })
+  })
+
+  it('defaults: the clear/standard voice, speed 1.0', async () => {
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    await provider.speak('Default voice and speed.')
+    const body = sdk.ttsCreate.mock.calls[0][0] as { voice: string; speed: number }
+    expect(body.voice).toBe('kazi')
+    expect(body.speed).toBe(1.0)
+  })
+
+  it('empty / whitespace text → { ok: false } without contacting the SDK', async () => {
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    expect((await provider.speak(''))?.ok).toBe(false)
+    expect((await provider.speak('   '))?.ok).toBe(false)
+    expect(sdk.ttsCreate).not.toHaveBeenCalled()
+  })
+
+  it('speed outside the 0.5–2.0 API range → { ok: false } without contacting the SDK', async () => {
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    expect((await provider.speak('hello', { speed: 4 }))?.ok).toBe(false)
+    expect((await provider.speak('hello', { speed: 0.1 }))?.ok).toBe(false)
+    expect((await provider.speak('hello', { speed: Number.NaN }))?.ok).toBe(false)
+    expect(sdk.ttsCreate).not.toHaveBeenCalled()
+  })
+
+  it('text longer than the 1024-char request cap is CHUNKED at sentence boundaries — one SDK call per chunk, every input ≤1000, nothing dropped', async () => {
+    const sentence = 'Mjengo score imepanda kwa tano kwa sababu ya ushahidi mpya. ' // ~60 chars
+    const longText = sentence.repeat(30).trim() // ~1800 chars → 2 chunks
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    const res = await provider.speak(longText)
+    expect(res?.ok).toBe(true)
+    expect(sdk.ttsCreate.mock.calls.length).toBeGreaterThanOrEqual(2)
+    const inputs = sdk.ttsCreate.mock.calls.map((c) => (c[0] as { input: string }).input)
+    for (const input of inputs) expect(input.length).toBeLessThanOrEqual(1_000)
+    // No sentence dropped: the chunks re-glue to the source text (mod whitespace).
+    expect(inputs.join(' ').replace(/\s+/g, ' ').trim()).toBe(longText.replace(/\s+/g, ' ').trim())
+  })
+
+  it('multi-chunk audio is MERGED into ONE WAV: one header, PCM payloads concatenated', async () => {
+    const a = fakeWav(100)
+    const b = fakeWav(60)
+    sdk.ttsCreate
+      .mockImplementationOnce(async () => wavResponse(a))
+      .mockImplementationOnce(async () => wavResponse(b))
+    const sentence = 'Sentence one here. '
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    const res = await provider.speak(sentence.repeat(80).trim()) // ~1500 chars → 2+ chunks
+    expect(sdk.ttsCreate.mock.calls.length).toBeGreaterThanOrEqual(2)
+    if (!res?.ok) throw new Error('expected ok')
+    const merged = parseWavBuffer(Buffer.from(res.audioBase64, 'base64'))
+    expect(merged).not.toBeNull()
+    expect(merged?.data.length).toBe(160) // 100 + 60 — both payloads present
+  })
+
+  it('ANY chunk failure fails the WHOLE call — partial audio is never returned (a missing sentence would misrepresent the text)', async () => {
+    sdk.ttsCreate
+      .mockImplementationOnce(async () => wavResponse(fakeWav(100)))
+      .mockRejectedValueOnce(new Error('API request failed with status 503: overloaded for key sk-tts-77'))
+    const sentence = 'Sentence one here. '
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    const res = await provider.speak(sentence.repeat(80).trim())
+    expect(res?.ok).toBe(false)
+    if (!res?.ok) {
+      expect(res.error).toContain('HTTP 503')
+      expect(res.error).not.toContain('sk-tts-77') // leak-free
+    }
+  })
+
+  it('a non-audio content-type response → { ok: false } leak-free, never fake audio', async () => {
+    sdk.ttsCreate.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'quota exceeded', key: 'sk-9' }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    const res = await provider.speak('hello')
+    expect(res?.ok).toBe(false)
+    if (!res?.ok) expect(res.error).not.toContain('quota exceeded')
+  })
+
+  it('audio-declared but non-WAV bytes → { ok: false } (RIFF magic is verified, not trusted)', async () => {
+    sdk.ttsCreate.mockResolvedValueOnce(
+      new Response(Buffer.from('not a wav at all, just bytes'), {
+        headers: { 'content-type': 'audio/wav' },
+      }),
+    )
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    expect((await provider.speak('hello'))?.ok).toBe(false)
+  })
+
+  it('chunks with INCONSISTENT PCM formats are refused, not stitched', async () => {
+    sdk.ttsCreate
+      .mockImplementationOnce(async () => wavResponse(fakeWav(100, { sampleRate: 8000 })))
+      .mockImplementationOnce(async () => wavResponse(fakeWav(100, { sampleRate: 16000 })))
+    const sentence = 'Sentence one here. '
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    const res = await provider.speak(sentence.repeat(80).trim())
+    expect(res?.ok).toBe(false)
+    if (!res?.ok) expect(res.error).toContain('inconsistent audio formats')
+  })
+
+  it('a failed create() (no .z-ai-config) → null — "AI unavailable", never a throw', async () => {
+    sdk.create.mockRejectedValueOnce(new Error('Configuration file not found or invalid.'))
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    expect(await provider.speak('hello')).toBeNull()
+    expect(sdk.ttsCreate).not.toHaveBeenCalled()
+  })
+
+  it('a call that never settles fails honestly after the 8s cap (per chunk)', async () => {
+    vi.useFakeTimers()
+    sdk.ttsCreate.mockReturnValueOnce(new Promise(() => {}))
+    const provider = resolveAiProvider({ ai: true }) as AiProvider
+    const pending = provider.speak('hello')
+    await vi.advanceTimersByTimeAsync(8_000)
+    expect(await pending).toEqual({ ok: false, error: 'AI speech timed out after 8s' })
+  })
+})
+
+/** The pure TTS helpers — the chunker and the WAV parser/builder contracts. */
+describe('TTS helpers (pure)', () => {
+  it('chunkTextForTts: short text → ONE chunk; whole sentences never split mid-sentence', () => {
+    const chunks = chunkTextForTts('One. Two. Three.', 1000)
+    expect(chunks).toEqual(['One. Two. Three.'])
+  })
+
+  it('chunkTextForTts: packs sentences up to the cap; every chunk ≤ cap; nothing lost', () => {
+    const text = Array.from({ length: 40 }, (_, i) => `Sentence number ${i + 1} here.`).join(' ')
+    const chunks = chunkTextForTts(text, 120)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(120)
+    expect(chunks.join(' ')).toBe(text)
+  })
+
+  it('chunkTextForTts: a single over-long sentence splits at word boundaries', () => {
+    const text = 'word '.repeat(60).trim() // 300 chars, one "sentence"
+    const chunks = chunkTextForTts(text, 100)
+    expect(chunks.length).toBeGreaterThanOrEqual(3)
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(100)
+    expect(chunks.join(' ')).toBe(text)
+  })
+
+  it('chunkTextForTts: empty text → no chunks (the caller fails honestly upstream)', () => {
+    expect(chunkTextForTts('   ', 100)).toEqual([])
+  })
+
+  it('parseWavBuffer ↔ buildWavBuffer round-trip; non-PCM and garbage → null, never a throw', () => {
+    const wav = fakeWav(64, { sampleRate: 44_100, channels: 2, bits: 16 })
+    const parsed = parseWavBuffer(wav)
+    expect(parsed).toMatchObject({ audioFormat: 1, channels: 2, sampleRate: 44_100, bitsPerSample: 16 })
+    expect(parsed?.data.length).toBe(64)
+    expect(parseWavBuffer(Buffer.alloc(12))).toBeNull()
+    expect(parseWavBuffer(Buffer.from('RIFF____WAVEjunkjunkjunk'))).toBeNull()
+    // A WAV whose fmt declares non-PCM (audioFormat 0) is refused honestly.
+    const nonPcm = buildWavBuffer({ audioFormat: 3, channels: 1, sampleRate: 8000, bitsPerSample: 16 }, Buffer.alloc(8))
+    expect(parseWavBuffer(nonPcm)).toBeNull()
   })
 })

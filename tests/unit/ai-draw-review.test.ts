@@ -708,7 +708,7 @@ describe('permissions: contractor/admin run it; everyone else is refused', () =>
   it.each(['client', 'supervisor', 'finance', 'qs', 'share_client'] as const)(
     'role %s → refused by the applyAction role gate (no row, no SDK contact)',
     async (role) => {
-      await expect(runAction({ drawPackId: 'dp-1' }, role)).rejects.toThrow(/Only a contractor or admin may run an AI draw review/)
+      await expect(runAction({ drawPackId: 'dp-1' }, role)).rejects.toThrow(/Only a contractor or admin may run an AI review action/)
       expect(sdk.create).toHaveBeenCalledTimes(0)
       expect(state.aiReviewNotes.size).toBe(0)
     },
@@ -816,6 +816,10 @@ describe('non-influence: note rows change no action outcomes anywhere', () => {
     const root = fileURLToPath(new URL('../../src', import.meta.url))
     const allowlist = new Set([
       'src/backend/modules/ai/draw-review.ts', // the module (writes + reads)
+      // W6-2 trust digest: READS the notes table (findMany count, never
+      // writes) for the digest's advisory AI-flags count — row math,
+      // displayed, never an influence on any action.
+      'src/backend/modules/ai/trust-digest.ts',
       'src/backend/actions/ai.ts', // action registration + dispatch
       'src/backend/lib/audit.ts', // audit kind map + ledger one-liner only — no reads
       'src/backend/lib/mjengo.ts', // ActionType registration + role gate — dispatch wiring only

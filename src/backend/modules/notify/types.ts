@@ -18,6 +18,8 @@ export type NotificationKind =
   | 'invoice.paid' | 'price.alert' | 'digest.weekly' | 'risk.flagged'
   // v3 platform kinds (domain-event bus + background jobs, F-PLATFORM):
   | 'project.delayed' | 'attendance.absent' | 'budget.alert' | 'ledger.reconciled'
+  // W6-2 diaspora trust digest (event policy 'digest.trust'):
+  | 'trust.digest'
 
 export type NotificationChannel = 'in_app' | 'whatsapp' | 'sms' | 'push'
 export type AudienceRole = 'client' | 'contractor' | 'supervisor' | 'finance' | 'all'

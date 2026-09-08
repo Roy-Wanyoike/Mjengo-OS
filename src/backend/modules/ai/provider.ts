@@ -1,5 +1,5 @@
 import ZAI from 'z-ai-web-dev-sdk'
-import type { AiChatMessage, AiProvider, AiTextResult } from './types'
+import type { AiAudioResult, AiChatMessage, AiProvider, AiTextResult } from './types'
 
 // AI module — the ZaiProvider implementation + flag resolution (provider.ts).
 //
@@ -35,6 +35,15 @@ import type { AiChatMessage, AiProvider, AiTextResult } from './types'
 //     result. error carries the HTTP status (three digits, extracted with
 //     a strict regex) when the SDK surfaced one, else the error CLASS name
 //     only (same hygiene as notify/channels.ts).
+//   · SPEAK (W6-2, the one rendering exception the types.ts header
+//     documents): text-to-speech over zai.audio.tts.create. The SDK
+//     returns the RAW fetch Response — this provider owns arrayBuffer(),
+//     the non-audio content-type check, RIFF/WAVE parsing, sentence
+//     chunking under the API's 1024-char request cap (packed to 1000) and
+//     the PCM merge into ONE WAV. The input text is always CALLER-HELD
+//     deterministic prose (the trust digest); the model never authors
+//     what is spoken. WAV (not mp3): merging linear PCM is byte-mechanical
+//     with no re-encoding, so the concatenation is honest by construction.
 //   · RESOLUTION (the notify getSmsProvider pattern, flag-flavored):
 //     resolveAiProvider(flags) is synchronous and cheap — it constructs a
 //     fresh ZaiProvider when flags.ai === true and returns null otherwise.
@@ -49,6 +58,22 @@ const AI_CALL_TIMEOUT_MS = 8_000
 
 /** Vision model — the same one the existing photo-analysis path uses (lib/ai.ts). */
 const VISION_MODEL = 'glm-5v-turbo'
+
+/**
+ * TTS (W6-2) — the default voice for speak(). 'kazi' is the SDK's
+ * clear/standard voice (its skill docs list it alongside 'tongtong', 'jam',
+ * 'xiaochen'); a digest read aloud wants plain clarity, and callers can
+ * override per call through speak(text, { voice }).
+ */
+const DEFAULT_TTS_VOICE = 'kazi'
+
+/**
+ * Hard per-request input cap documented by the TTS API: 1024 characters.
+ * speak() chunks at 1000 to leave headroom under the cap (the chunker
+ * packs whole sentences up to this length before a hard word-boundary
+ * split — see chunkTextForTts).
+ */
+const MAX_TTS_CHUNK_CHARS = 1_000
 
 // ── the module-level SDK singleton ───────────────────────────────────────────
 
@@ -134,6 +159,168 @@ function extractBase64(audioDataUrl: string): string | null {
   return s // already bare base64
 }
 
+// ── TTS helpers (W6-2) ───────────────────────────────────────────────────────
+
+/**
+ * Split text into chunks of whole sentences, each at most `maxChars` (the
+ * TTS API caps ONE request at 1024 characters — the caller passes 1000 to
+ * leave headroom). Sentences break on . ! ? … and newlines. A single
+ * sentence longer than the cap is hard-split at word boundaries (and, in
+ * the pathological no-space case, by raw length) — the text is
+ * deterministic platform-composed prose, so a mid-word cut cannot corrupt
+ * a figure, but the chunker still avoids it.
+ */
+export function chunkTextForTts(text: string, maxChars: number): string[] {
+  const src = text.trim()
+  if (!src) return []
+  if (maxChars < 1) return [src]
+  // Sentence split: keep the terminator with the sentence.
+  const sentences = src.match(/[^.!?\n]+[.!?]*\s*|\n+/g) ?? [src]
+  const chunks: string[] = []
+  let current = ''
+  const flush = () => {
+    const t = current.trim()
+    if (t) chunks.push(t)
+    current = ''
+  }
+  for (const sentence of sentences.map((s) => (s.endsWith('\n') ? s.trim() + ' ' : s))) {
+    const piece = sentence.trim()
+    if (!piece) continue
+    if (piece.length > maxChars) {
+      // Flush what we have, then hard-split the over-long sentence at word
+      // boundaries (last resort: raw length).
+      flush()
+      let words = piece.split(/(\s+)/) // keep separators so gluing preserves spacing
+      let part = ''
+      for (const w of words) {
+        if ((part + w).trim().length > maxChars && part.trim()) {
+          chunks.push(part.trim())
+          part = w.trimStart()
+        } else {
+          part += w
+        }
+        // A single word longer than the cap (pathological) — cut it raw.
+        while (part.length > maxChars) {
+          chunks.push(part.slice(0, maxChars))
+          part = part.slice(maxChars)
+        }
+      }
+      if (part.trim()) chunks.push(part.trim())
+      words = []
+      continue
+    }
+    if ((current + ' ' + piece).trim().length > maxChars) flush()
+    current = current ? `${current} ${piece}` : piece
+  }
+  flush()
+  return chunks
+}
+
+/** One parsed PCM WAV — the minimal shape the concatenator needs. */
+interface WavFormat {
+  audioFormat: number // 1 = PCM (the only form this provider merges)
+  channels: number
+  sampleRate: number
+  bitsPerSample: number
+  data: Buffer // the PCM payload
+}
+
+/**
+ * Parse a RIFF/WAVE buffer into its PCM payload + format, or null when it
+ * is not a WAV we can honestly merge (missing RIFF/WAVE magic, no fmt/data
+ * chunk, or non-PCM audio format). Defensive by construction: the TTS API
+ * documents wav output, but a proxy/gateway could hand back anything — a
+ * non-audio body is an honest failure, never a throw, never fake audio.
+ */
+export function parseWavBuffer(buf: Buffer): WavFormat | null {
+  try {
+    if (!buf || buf.length < 12) return null
+    if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') return null
+    let offset = 12
+    let fmt: { audioFormat: number; channels: number; sampleRate: number; bitsPerSample: number } | null = null
+    let data: Buffer | null = null
+    while (offset + 8 <= buf.length) {
+      const chunkId = buf.toString('ascii', offset, offset + 4)
+      const chunkSize = buf.readUInt32LE(offset + 4)
+      const body = buf.subarray(offset + 8, offset + 8 + chunkSize)
+      if (chunkId === 'fmt ' && chunkSize >= 16) {
+        fmt = {
+          audioFormat: body.readUInt16LE(0),
+          channels: body.readUInt16LE(2),
+          sampleRate: body.readUInt32LE(4),
+          bitsPerSample: body.readUInt16LE(14),
+        }
+      } else if (chunkId === 'data') {
+        data = Buffer.from(body)
+      }
+      // RIFF chunks are word-aligned: walk the declared size, padded to even.
+      offset += 8 + chunkSize + (chunkSize % 2)
+    }
+    if (!fmt || !data) return null
+    if (fmt.audioFormat !== 1) return null // only linear PCM merges mechanically
+    if (data.length === 0) return null
+    return { ...fmt, data }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Build ONE canonical 44-byte-header PCM WAV from a format + concatenated
+ * payload (the inverse of parseWavBuffer — used by speak() to hand the
+ * caller a single playable object).
+ */
+export function buildWavBuffer(fmt: Omit<WavFormat, 'data'>, data: Buffer): Buffer {
+  const byteRate = fmt.sampleRate * fmt.channels * (fmt.bitsPerSample / 8)
+  const blockAlign = fmt.channels * (fmt.bitsPerSample / 8)
+  const header = Buffer.alloc(44)
+  header.write('RIFF', 0, 'ascii')
+  header.writeUInt32LE(36 + data.length, 4)
+  header.write('WAVE', 8, 'ascii')
+  header.write('fmt ', 12, 'ascii')
+  header.writeUInt32LE(16, 16) // PCM fmt chunk size
+  header.writeUInt16LE(fmt.audioFormat, 20)
+  header.writeUInt16LE(fmt.channels, 22)
+  header.writeUInt32LE(fmt.sampleRate, 24)
+  header.writeUInt32LE(byteRate, 28)
+  header.writeUInt16LE(blockAlign, 32)
+  header.writeUInt16LE(fmt.bitsPerSample, 34)
+  header.write('data', 36, 'ascii')
+  header.writeUInt32LE(data.length, 40)
+  return Buffer.concat([header, data])
+}
+
+/**
+ * Read a TTS API response (the raw fetch Response the SDK returns) into a
+ * parsed WAV, or an honest failure reason: a non-audio content-type when
+ * the response declares one, a failed body read, or an unparseable/not-PCM
+ * body. Never throws.
+ */
+async function responseToWav(
+  response: unknown,
+): Promise<{ ok: true; wav: WavFormat } | { ok: false; reason: string }> {
+  const res = response as { arrayBuffer?: unknown; headers?: { get?: (name: string) => string | null } } | null
+  if (!res || typeof res.arrayBuffer !== 'function') {
+    return { ok: false, reason: 'TTS response was not a readable Response' }
+  }
+  const contentType = typeof res.headers?.get === 'function' ? res.headers.get('content-type') ?? '' : ''
+  if (contentType && !/^audio\//i.test(contentType)) {
+    // The response SAYS it is not audio — believe it, never ship the body.
+    return { ok: false, reason: 'TTS response content-type was not audio' }
+  }
+  let bytes: ArrayBuffer
+  try {
+    bytes = await res.arrayBuffer()
+  } catch {
+    return { ok: false, reason: 'TTS response body could not be read' }
+  }
+  const buf = Buffer.from(new Uint8Array(bytes))
+  if (buf.length === 0) return { ok: false, reason: 'TTS response was empty' }
+  const wav = parseWavBuffer(buf)
+  if (!wav) return { ok: false, reason: 'TTS response was not a parseable PCM WAV' }
+  return { ok: true, wav }
+}
+
 // ── the provider ─────────────────────────────────────────────────────────────
 
 /**
@@ -212,16 +399,89 @@ export class ZaiProvider implements AiProvider {
     })
   }
 
+  async speak(text: string, opts?: { voice?: string; speed?: number }): Promise<AiAudioResult | null> {
+    const raw = typeof text === 'string' ? text.trim() : ''
+    if (!raw) {
+      // Caller bug, reported honestly — the SDK is not contacted.
+      return { ok: false, error: 'AI speech called with empty text — nothing sent' }
+    }
+    const speed = typeof opts?.speed === 'number' ? opts.speed : 1.0
+    if (!Number.isFinite(speed) || speed < 0.5 || speed > 2.0) {
+      return { ok: false, error: 'AI speech speed must be between 0.5 and 2.0 — nothing sent' }
+    }
+    const voice =
+      typeof opts?.voice === 'string' && opts.voice.trim() ? opts.voice.trim() : DEFAULT_TTS_VOICE
+
+    // ONE request per sentence-packed chunk (the API caps a request at 1024
+    // characters — the chunker packs to 1000). ANY chunk failure fails the
+    // whole call: partial audio would silently drop sentences out of the
+    // deterministic text the caller holds, and the digest must be read whole
+    // or not at all.
+    const chunks = chunkTextForTts(raw, MAX_TTS_CHUNK_CHARS)
+    const wavs: WavFormat[] = []
+    for (const chunk of chunks) {
+      const res = await this.attemptRaw('AI speech', async (zai) => {
+        const response: unknown = await zai.audio.tts.create({
+          input: chunk,
+          voice,
+          speed,
+          response_format: 'wav',
+          stream: false, // required for wav/mp3 — we want the full body
+        })
+        const wav = await responseToWav(response)
+        if (!wav.ok) {
+          // Honest failure surfaced as a THROW inside the attempt so it lands
+          // in the same leak-free { ok: false, error } mapping below.
+          throw new Error(wav.reason)
+        }
+        return wav.wav
+      })
+      if (res === null) return null // SDK unavailable — no attempt was possible
+      if (!res.ok) return { ok: false, error: res.error }
+      wavs.push(res.value)
+    }
+    if (!wavs.length) {
+      return { ok: false, error: 'AI speech produced no audio chunks' }
+    }
+    // Merge: every chunk must carry the SAME PCM format — the API renders one
+    // voice at one rate, so a mismatch is an anomaly we refuse to stitch.
+    const first = wavs[0]
+    const mismatched = wavs.find(
+      (w) =>
+        w.audioFormat !== first.audioFormat ||
+        w.channels !== first.channels ||
+        w.sampleRate !== first.sampleRate ||
+        w.bitsPerSample !== first.bitsPerSample,
+    )
+    if (mismatched) {
+      return { ok: false, error: 'AI speech chunks carried inconsistent audio formats — not stitched' }
+    }
+    const merged = buildWavBuffer(
+      {
+        audioFormat: first.audioFormat,
+        channels: first.channels,
+        sampleRate: first.sampleRate,
+        bitsPerSample: first.bitsPerSample,
+      },
+      Buffer.concat(wavs.map((w) => w.data)),
+    )
+    return { ok: true, audioBase64: merged.toString('base64'), mimeType: 'audio/wav' }
+  }
+
   /**
-   * THE honesty core — the one path every method shares:
+   * THE honesty core (generic) — the one path every method shares:
    *   1. resolve the SDK singleton; a failed create() (no/invalid config)
    *      returns null — the provider is UNAVAILABLE, not "failed";
    *   2. race the SDK call against the 8s cap — timeout fails honestly;
-   *   3. an empty model answer fails honestly (never fake an analysis);
+   *   3. an empty answer fails honestly (never fake an analysis);
    *   4. ANY throw is caught and mapped to a leak-free { ok: false, error };
    *   5. the timer always clears (no dangling handle holds the process).
    */
-  private async attempt(label: string, run: (zai: ZAI) => Promise<string>): Promise<AiTextResult | null> {
+  private async attemptRaw<T>(
+    label: string,
+    run: (zai: ZAI) => Promise<T>,
+    isEmpty: (value: T) => boolean = (v) => !v,
+  ): Promise<{ ok: true; value: T } | { ok: false; error: string } | null> {
     let zai: ZAI
     try {
       zai = await getZaiSdk()
@@ -241,16 +501,26 @@ export class ZaiProvider implements AiProvider {
       if (raced === TIMED_OUT) {
         return { ok: false, error: `${label} timed out after ${AI_CALL_TIMEOUT_MS / 1000}s` }
       }
-      if (!raced) {
+      if (isEmpty(raced)) {
         return { ok: false, error: `${label} returned an empty response` }
       }
-      return { ok: true, text: raced }
+      return { ok: true, value: raced }
     } catch (err) {
       // Never throw into the caller; error CLASS / HTTP status only.
       return { ok: false, error: `${label} failed (${describeError(err)})` }
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
+  }
+
+  /**
+   * THE honesty core — the text-result twin of attemptRaw (chat/vision/
+   * transcribe): identical discipline, mapped onto the AiTextResult shape.
+   */
+  private async attempt(label: string, run: (zai: ZAI) => Promise<string>): Promise<AiTextResult | null> {
+    const res = await this.attemptRaw(label, run)
+    if (res === null) return null
+    return res.ok ? { ok: true, text: res.value } : { ok: false, error: res.error }
   }
 }
 
