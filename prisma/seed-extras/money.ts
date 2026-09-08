@@ -62,6 +62,8 @@ async function main() {
   await db.notification.deleteMany()
   await db.paymentRequest.deleteMany()
   await db.variationOrder.deleteMany()
+  // DrawPack pins milestones (one per release) — wipe packs before milestones
+  await db.drawPack.deleteMany()
   await db.milestone.deleteMany()
   await db.escrowWallet.deleteMany()
   await db.ledgerEntry.deleteMany()
