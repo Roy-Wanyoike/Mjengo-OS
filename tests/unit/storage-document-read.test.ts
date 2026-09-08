@@ -438,14 +438,18 @@ describe('extractDocument — the driver read seam (issue #37)', () => {
     expect(result).toEqual({ ok: false, error: 'Stored file is missing or unreadable — re-upload the document' })
   })
 
-  it('PDF without ocrTextHint → the honest environment limitation, unchanged', async () => {
+  it('PDF without ocrTextHint → server-side text-layer extraction attempt, honest parse failure on a malformed PDF', async () => {
+    // Since feat/pdf-text-extraction, extraction is AVAILABLE server-side
+    // (pdf-text.ts) — the old "not available in this environment" branch is
+    // gone. A pretend/malformed PDF now fails parsing honestly; a real
+    // text-layer PDF extracts (pinned in extract-document-pdf.test.ts).
     setStorageDriverForTests(LOCAL_DRIVER)
     const pdf = Buffer.from('%PDF-1.4 pretend document')
     await LOCAL_DRIVER.put('docs/doc-1712345678-abcd12.pdf', pdf, 'application/pdf')
     seedRow({ id: 'att_1', storageKey: '/docs/doc-1712345678-abcd12.pdf', mimeType: 'application/pdf', reviewStatus: 'pending' })
     expect(await extractDocument('att_1')).toEqual({
       ok: false,
-      error: 'PDF text extraction is not available in this environment — upload an image of the document, or provide ocrTextHint',
+      error: 'PDF text extraction failed (no readable objects (malformed PDF)) — upload an image of the document, or provide ocrTextHint',
     })
     expect(visionMessageMock).not.toHaveBeenCalled()
   })
