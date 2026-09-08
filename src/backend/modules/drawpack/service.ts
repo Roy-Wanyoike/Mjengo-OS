@@ -30,10 +30,17 @@
 //    inputs → identical hash, so a recomputation of the same inputs can be
 //    checked against the frozen row. Timestamps of pack CREATION (id,
 //    createdAt) are deliberately OUTSIDE the hashed content.
+//  · ADVISORY SCREEN, NEVER A GATE (W6-3) — after the pack is frozen and
+//    audited, a post-freeze hook runs the evidence authenticity screen
+//    (dHash duplicates + vision phase-consistency, modules/ai/
+//    authenticity.ts). It NEVER fails the pack or the release — failures
+//    are logged + audited ('ai_screen') and swallowed; the `ai` flag OFF
+//    makes the whole screen a silent no-op. Insight rows gate nothing.
 
 import { createHash } from 'node:crypto'
 import { db } from '@/backend/lib/db'
 import { logAudit } from '@/backend/lib/audit'
+import { runPostFreezeAuthenticityScreen } from '@/backend/modules/ai/authenticity'
 
 /** Bump when the pack content shape changes — old rows keep their version. */
 export const DRAW_PACK_SCHEMA_VERSION = 1
@@ -338,6 +345,28 @@ export async function createDrawPackForRelease(
       },
       { entity: 'DrawPack', entityId: row.id },
     )
+
+    // W6-3 POST-FREEZE HOOK — the evidence authenticity screen (dHash
+    // duplicates + vision phase-consistency), advisory only. The pack row
+    // and its audit event are already written; the release committed long
+    // before this function was entered. The hook NEVER FAILS the pack or
+    // the release (it catches everything internally and logs/audits
+    // 'ai_screen' failed); flag OFF → it no-ops silently by design. The
+    // try/catch here is belt-and-braces so no future edit to the screen can
+    // change what this function returns — the pack detail flows back
+    // unchanged whatever happens below.
+    try {
+      await runPostFreezeAuthenticityScreen(projectId, {
+        id: row.id,
+        milestoneId: input.milestoneId,
+        milestoneName: input.milestoneName,
+        evidencePhotoIds: content.evidencePhotoIds,
+        createdAt: row.createdAt,
+      })
+    } catch (e) {
+      console.error('[draw-pack] authenticity screen hook failed after freeze (advisory only — the pack stands)', e)
+    }
+
     return detailFromRow(row)
   } catch (e) {
     // Money already moved — the release stands. Record the failure loudly.

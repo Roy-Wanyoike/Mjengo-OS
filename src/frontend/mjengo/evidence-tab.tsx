@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { format, formatDistanceToNow } from 'date-fns'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import type { ProjectPayload } from '@/backend/lib/mjengo'
@@ -12,11 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import {
   Truck, Banknote, UserCheck, Flag, FileDiff, Wallet, Camera, MessageSquare, HardHat, Receipt,
   Package, Link, ListChecks, Layers, ArrowLeftRight, Map, Bell, TriangleAlert,
-  ScrollText, FileDown, CheckCheck, ShieldCheck, Loader2,
+  ScrollText, FileDown, CheckCheck, ShieldCheck, Loader2, Fingerprint,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES } from '@/frontend/lib/format'
+import { useT } from '@/frontend/i18n/provider'
 
 // ---------------- Ledger kind metadata (mirrors lib/audit kindForAction values) ----------------
 
@@ -225,6 +226,265 @@ async function generatePdfReport(data: ProjectPayload): Promise<string> {
   return filename
 }
 
+// ---------------- Evidence authenticity (W6-3) ----------------
+
+/** One advisory insight row (mirror of modules/ai/authenticity.ts view shape). */
+interface InsightRow {
+  id: string
+  targetType: string
+  targetId: string
+  packId: string | null
+  kind: string
+  source: string
+  severity: string
+  confidence: string | null
+  detail: Record<string, unknown>
+  createdAt: string
+}
+
+interface ScreenResponse {
+  ok?: boolean
+  insights?: InsightRow[]
+  error?: string
+  outcome?: {
+    ran?: boolean
+    hashed?: number
+    duplicateInsights?: number
+    vision?: { insights?: number; skipped?: string | null }
+  }
+}
+
+/** Source badge: rule-computed (dhash) vs model-computed (vision) — the labeling honesty property. */
+function SourceBadge({ source, kind, confidence }: { source: string; kind: string; confidence: string | null }) {
+  const t = useT()
+  const isRule = source === 'dhash'
+  const kindLabel =
+    kind === 'duplicate' ? t('auth.badge.duplicate')
+      : kind === 'phase_mismatch' ? t('auth.badge.phase')
+        : kind === 'render_suspect' ? t('auth.badge.render')
+          : kind
+  return (
+    <Badge
+      variant="outline"
+      className={isRule ? 'gap-1 border-stone-200 bg-stone-100 text-stone-600' : 'gap-1 border-violet-200 bg-violet-50 text-violet-700'}
+    >
+      <Fingerprint className="w-3 h-3" aria-hidden /> {kindLabel} · {isRule ? t('auth.badge.rule') : t('auth.badge.ai')}
+      {!isRule && confidence ? ` · ${t('auth.confidence', { level: confidence })}` : ''}
+    </Badge>
+  )
+}
+
+/** One finding line, composed from the structured detail (deterministic, i18n'd). */
+function insightText(t: ReturnType<typeof useT>, row: InsightRow): string {
+  const d = row.detail ?? {}
+  const distance = typeof d.hammingDistance === 'number' ? d.hammingDistance : 0
+  if (row.kind === 'duplicate') {
+    const match = typeof d.match === 'string' ? d.match : ''
+    if (match === 'cross_pack') {
+      return t('auth.dup.crossPack', {
+        milestone: typeof d.matchedMilestoneName === 'string' && d.matchedMilestoneName
+          ? d.matchedMilestoneName
+          : t('auth.dup.priorPack'),
+        distance,
+      })
+    }
+    if (match === 'within_pack') return t('auth.dup.withinPack', { distance })
+    return t('auth.dup.history', {
+      photo: typeof d.matchedPhotoId === 'string' ? d.matchedPhotoId.slice(-6) : '—',
+      distance,
+    })
+  }
+  if (row.kind === 'phase_mismatch') {
+    return t('auth.phase.detail', {
+      shown: typeof d.phaseShown === 'string' ? d.phaseShown : 'unknown',
+      claimed: typeof d.phaseClaimed === 'string' ? d.phaseClaimed : '—',
+    })
+  }
+  if (row.kind === 'render_suspect') {
+    const tells = Array.isArray(d.tells)
+      ? d.tells.filter((x): x is string => typeof x === 'string')
+      : typeof d.tell === 'string' ? [d.tell] : []
+    return t('auth.render.detail', { tell: tells.join(' · ') || '—' })
+  }
+  return typeof d.observation === 'string' ? d.observation : row.kind
+}
+
+/**
+ * The W6-3 evidence authenticity section — dHash duplicate flags + vision
+ * phase-consistency flags over the project's evidence photos. ADVISORY ONLY
+ * (the honesty band says it in both languages); the whole section rides the
+ * `ai` feature flag (flag OFF → hidden, per the single-switch design), and
+ * the "Run authenticity screen" button is site-team only (clients read the
+ * findings — transparency for the payer, controls for the builder).
+ */
+function AuthenticitySection({
+  projectId,
+  aiFlag,
+  isClient,
+  photos,
+}: {
+  projectId: string | null
+  aiFlag: boolean
+  isClient: boolean
+  photos: ProjectPayload['photos']
+}) {
+  const t = useT()
+  const [rows, setRows] = useState<InsightRow[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadRows = useCallback(async () => {
+    if (!projectId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/ai/authenticity-screen?projectId=${encodeURIComponent(projectId)}`, { cache: 'no-store' })
+      if (res.status === 403 || res.status === 401) {
+        // Flag flipped off / session expired between render and fetch — the
+        // section hides on the next payload; here it just stays empty.
+        setRows([])
+        return
+      }
+      const json = (await res.json()) as ScreenResponse
+      if (!json.ok || !json.insights) {
+        setError(json.error ?? t('auth.error'))
+        return
+      }
+      setRows(json.insights)
+    } catch {
+      setError(t('auth.error'))
+    } finally {
+      setLoading(false)
+    }
+  }, [projectId, t])
+
+  // Fetch the advisory rows once the flag is on and we have a project.
+  useEffect(() => {
+    if (!aiFlag || !projectId) return
+    void loadRows()
+  }, [aiFlag, projectId, loadRows])
+
+  async function runScreen() {
+    if (!projectId) return
+    setRunning(true)
+    try {
+      const res = await fetch('/api/ai/authenticity-screen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+      })
+      const json = (await res.json()) as ScreenResponse
+      if (!res.ok || !json.ok) {
+        toast.error(json.error ?? t('auth.error'))
+        return
+      }
+      setRows(json.insights ?? [])
+      const outcome = json.outcome
+      if (outcome?.ran) {
+        toast.success(t('auth.ran', {
+          hashed: outcome.hashed ?? 0,
+          duplicates: outcome.duplicateInsights ?? 0,
+          vision: outcome.vision?.insights ?? 0,
+        }))
+        const skipped = outcome.vision?.skipped
+        if (skipped) toast.info(`${t('auth.ranSkipped')} (${skipped})`)
+      } else {
+        // Honest no-op (flag off between render and run, or no photos).
+        toast.info(t('auth.emptyAfter'))
+      }
+    } catch {
+      toast.error(t('auth.error'))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  if (!aiFlag) return null // the single `ai` switch hides the whole section
+
+  return (
+    <Card className="border-stone-200 shadow-sm">
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-stone-900">
+              <Fingerprint className="w-5 h-5 text-amber-600" aria-hidden /> {t('auth.title')}
+            </CardTitle>
+            <CardDescription>{t('auth.desc')}</CardDescription>
+          </div>
+          {!isClient && projectId && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 gap-1.5"
+              disabled={running || loading}
+              aria-label={t('auth.run')}
+              onClick={() => void runScreen()}
+            >
+              {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden /> : <Fingerprint className="w-3.5 h-3.5" aria-hidden />}
+              {running ? t('auth.running') : t('auth.run')}
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {/* The honesty band — this flag never gates anything. */}
+        <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" role="note">
+          {t('auth.honesty')}
+        </p>
+        {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
+        {loading && rows === null && <p className="py-6 text-center text-sm text-stone-500">{t('auth.loading')}</p>}
+        {!loading && rows !== null && rows.length === 0 && !error && (
+          <div className="flex flex-col items-center justify-center gap-2 py-10 text-center" role="status">
+            <ShieldCheck className="w-8 h-8 text-stone-300" aria-hidden />
+            <p className="text-sm text-stone-500">{t('auth.empty')}</p>
+          </div>
+        )}
+        {rows !== null && rows.length > 0 && (
+          <ul className="max-h-96 overflow-y-auto pr-2 space-y-2 list-none" aria-label={t('auth.title')}>
+            {rows.map((row) => {
+              const photo = photos.find((p) => p.id === row.targetId)
+              const matchedPhoto = row.kind === 'duplicate' && typeof row.detail.matchedPhotoId === 'string'
+                ? photos.find((p) => p.id === row.detail.matchedPhotoId)
+                : null
+              const sev = row.severity === 'critical' ? 'bg-red-600' : row.severity === 'warning' ? 'bg-amber-500' : 'bg-stone-400'
+              return (
+                <li key={row.id} className="flex gap-3 rounded-lg border border-stone-200 bg-white p-3">
+                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${sev}`} role="img" aria-label={`${row.severity}`} />
+                  {photo ? (
+                    <img
+                      src={photo.url}
+                      alt={photo.caption ?? t('auth.title')}
+                      className="h-14 w-20 shrink-0 rounded-md border border-stone-200 object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <span className="flex h-14 w-20 shrink-0 items-center justify-center rounded-md border border-stone-200 bg-stone-50" aria-hidden>
+                      <Camera className="h-5 w-5 text-stone-300" />
+                    </span>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <SourceBadge source={row.source} kind={row.kind} confidence={row.confidence} />
+                      {matchedPhoto && (
+                        <span className="text-[11px] text-stone-400">{t('auth.dup.matches')}: {matchedPhoto.caption ?? matchedPhoto.id.slice(-6)}</span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm text-stone-700 break-words">{insightText(t, row)}</p>
+                    <p className="text-[11px] text-stone-400 tabular-nums" title={format(new Date(row.createdAt), 'd MMM yyyy, HH:mm')}>
+                      {formatDistanceToNow(new Date(row.createdAt), { addSuffix: true })}
+                    </p>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 // ---------------- Component ----------------
 
 export function EvidenceTab() {
@@ -242,6 +502,7 @@ export function EvidenceTab() {
   const alerts = data.alerts
   const busy = actionBusy !== null
   const isClient = viewMode === 'client' // clients see the ledger + anomalies; PDF/ack are site-team tools
+  const aiFlag = data.intel.flags.ai // W6-3: the single `ai` switch gates the authenticity section
 
   async function downloadPdf() {
     if (!data) return
@@ -327,6 +588,14 @@ export function EvidenceTab() {
           )}
         </CardContent>
       </Card>
+
+      {/* ---------- a2) Evidence authenticity (W6-3, flag-gated) ---------- */}
+      <AuthenticitySection
+        projectId={data.project.id}
+        aiFlag={aiFlag}
+        isClient={isClient}
+        photos={data.photos}
+      />
 
       {/* ---------- b) Anomaly feed ---------- */}
       <Card className="border-stone-200 shadow-sm">

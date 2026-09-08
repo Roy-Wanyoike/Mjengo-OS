@@ -73,6 +73,7 @@ const AUDIT_KINDS: readonly string[] = [
   'inventory', 'boq', 'payment', 'wallet', 'ledger', 'auth', 'export', 'action',
   'mjengo_score', 'draw_pack',
   'ai_review', // W6-1: AI draw review appends (advisory notes — humans decide)
+  'ai_screen', // W6-3: evidence authenticity screen (advisory flags — humans decide)
 ]
 
 /** Actor roles seen in the audit trail: platform roles + system/AI writers. */

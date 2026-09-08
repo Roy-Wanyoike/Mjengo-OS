@@ -31,11 +31,19 @@
 //                         lib/action-flag-gate.ts routes — POST /api/actions
 //                         answers the uniform 403 and /api/sync enforces the
 //                         same gate per outbox item (the S1 discipline);
-//                         admins bypass so they can toggle and test. The
-//                         pre-existing /api/ai routes (analyze-photo,
-//                         voice-log) keep their own older flags
-//                         (ai_progress / ai_voice) — unchanged. DEFAULT OFF
-//                         (FLAG_DEFAULTS): the AI surface ships dark and an
+//                         admins bypass so they can toggle and test. W6-3
+//                         wires its own call sites: POST/GET
+//                         /api/ai/authenticity-screen (route legs) and the
+//                         evidence-authenticity post-freeze hook in
+//                         drawpack/service.ts (gated inside
+//                         modules/ai/authenticity.ts — the whole screen,
+//                         deterministic dHash half included, rides this ONE
+//                         switch). Further Wave-6 features add their own
+//                         requireFlagOn('ai', …) call sites. The pre-existing
+//                         /api/ai routes (analyze-photo, voice-log) keep
+//                         their own older flags (ai_progress / ai_voice) —
+//                         unchanged. DEFAULT OFF (FLAG_DEFAULTS): the AI
+//                         surface ships dark and an
 //                         admin turns it on deliberately (the popover, or
 //                         the DB row). BOUNDARY (honest): this flag does NOT
 //                         gate the release ladder or any ledger posting —
