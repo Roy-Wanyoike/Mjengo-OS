@@ -1081,7 +1081,15 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
             workerId, projectId, date: today, checkIn: new Date(), status: 'present',
             method: payload.method || 'app', wage: worker.dailyRate,
             verification: 'verified', // worker-initiated check-in carries device evidence
-            evidence: JSON.stringify([payload.method === 'ussd' ? 'ussd' : payload.method === 'kiosk_pin' ? 'pin' : 'device', 'device']),
+            // W4-3: worker-initiated WhatsApp check-in carries 'whatsapp'
+            // evidence (mirrors the 'ussd' stamp — never 'device').
+            evidence: JSON.stringify([
+              payload.method === 'ussd' ? 'ussd'
+                : payload.method === 'kiosk_pin' ? 'pin'
+                  : payload.method === 'whatsapp' ? 'whatsapp'
+                    : 'device',
+              'device',
+            ]),
           },
         })
       } else if (toggle === 'out' && !att.checkOut) {
