@@ -16,7 +16,8 @@
 // STATUS CODES:
 //   400 zod validation / bad cursor / business-rule message (service, honest)
 //   401 no session (guard) · 403 role/tenant (guard + client pinning)
-//   404 unknown wallet / payment request (message-mapped — see below)
+//   404 unknown wallet / payment request / milestone / invoice
+//       (message-mapped — see below)
 //   422 structurally valid but nonsensical request (e.g. same-wallet transfer)
 //   429 rate limited (enforceRateLimit via route-kit's rateLimit slot, per-principal token bucket)
 //   500 unexpected failure — generic honest message, details in server logs
@@ -49,6 +50,10 @@ const NOT_FOUND_MESSAGES = new Set([
   'Wallet not found',
   'Wallet belongs to a different project',
   'Payment request not found',
+  // Phase C (money governance): the money.ts / invoices.ts service variants —
+  // scoped to a project, e.g. from threeWayCheck's getInvoiceOrThrow.
+  'Milestone not found in this project',
+  'Invoice not found in this project',
 ])
 
 /**
