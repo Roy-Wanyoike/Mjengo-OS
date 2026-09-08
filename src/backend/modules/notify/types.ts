@@ -42,10 +42,12 @@ export interface NotifyOptions {
   deliveryStatus?: string
   /**
    * Additionally attempt a real SMS delivery to this number (E.164
-   * recommended). Only honored when an SMS provider is configured
-   * (NOTIFY_SMS_WEBHOOK_URL — see channels.ts); otherwise the row honestly
-   * stays 'logged' and nothing is sent. The attempt never throws into the
-   * caller — the outcome lands in deliveryStatus/deliveryDetail.
+   * recommended). Only honored when an SMS provider is configured — the
+   * webhook gateway (NOTIFY_SMS_WEBHOOK_URL) or the direct Africa's Talking
+   * pair (AT_API_KEY + AT_USERNAME); see channels.ts for the precedence and
+   * the credential tradeoff. Otherwise the row honestly stays 'logged' and
+   * nothing is sent. The attempt never throws into the caller — the outcome
+   * lands in deliveryStatus/deliveryDetail.
    *
    * Recipient preference gate (issue #36): pass `userId` when the call site
    * knows WHICH app user it is texting — notify() consults that user's

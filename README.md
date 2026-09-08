@@ -346,10 +346,13 @@ resume unchanged when billing is restored.
   Daraja **sandbox** provider ships behind the `PaymentProvider` seam and
   activates only when its env credentials are set — no licensed rail is
   claimed, and no real money moves.
-- Notifications are in-app by default; an opt-in SMS webhook seam
-  (`NOTIFY_SMS_WEBHOOK_URL`) delivers to a gateway you configure, with
-  rows honestly recording `sent`/`failed` + delivery detail — nothing
-  pretends to have sent when no provider is configured.
+- Notifications are in-app by default; SMS is optional and comes in two
+  honest flavors behind the same provider seam — a generic webhook
+  (`NOTIFY_SMS_WEBHOOK_URL`, credentials stay in your gateway) or a direct
+  Africa's Talking provider (`AT_API_KEY` + `AT_USERNAME`, the API key
+  lives in app env — the documented tradeoff). Either way rows honestly
+  record `sent`/`failed` + delivery detail — nothing pretends to have
+  sent when no provider is configured.
 - Land verification records evidence; it never claims government
   confirmation. Supplier verification is a platform ladder, never conflated
   with state licensing.

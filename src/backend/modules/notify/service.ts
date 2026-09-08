@@ -20,8 +20,10 @@
 //   · The in-app row is the source of truth and is written FIRST, exactly as
 //     before — title/body/kind/audienceRole semantics unchanged.
 //   · When a caller passes opts.sms AND an SMS provider is configured
-//     (channels.ts → NOTIFY_SMS_WEBHOOK_URL), notify() additionally attempts
-//     one real webhook send and records the outcome honestly via
+//     (channels.ts: NOTIFY_SMS_WEBHOOK_URL first — the generic gateway — else
+//     the AT_API_KEY + AT_USERNAME pair for the direct Africa's Talking
+//     provider), notify() additionally attempts one real provider send and
+//     records the outcome honestly via
 //     markDelivered(): 'sent' (deliveredAt stamped) or 'failed' (leak-free
 //     detail in deliveryDetail). The attempt NEVER throws into the caller.
 //   · With no provider configured, nothing external is contacted — every row
@@ -58,10 +60,10 @@ import type { NotifyOptions } from './types'
  *
  * deliveryStatus defaults to 'logged' — an honest in-app row exists; no
  * external provider has been contacted. Passing opts.sms additionally
- * attempts a real SMS delivery WHEN a provider is configured
- * (NOTIFY_SMS_WEBHOOK_URL): the row then records the real outcome
- * ('sent'/'failed' + deliveryDetail) via markDelivered(). The SMS attempt is
- * additive — it can never break or delay-fail the in-app row.
+ * attempts a real SMS delivery WHEN a provider is configured (webhook URL or
+ * Africa's Talking env pair — see channels.ts): the row then records the
+ * real outcome ('sent'/'failed' + deliveryDetail) via markDelivered(). The
+ * SMS attempt is additive — it can never break or delay-fail the in-app row.
  *
  * When opts.sms carries a userId, the recipient's recorded notification
  * preferences gate the attempt first (see the module header): a kind they
@@ -190,7 +192,7 @@ async function attemptSmsDelivery(id: string, input: ChannelSendInput, userId?: 
     const provider = getSmsProvider()
     if (!provider) {
       // Fail-closed: nothing configured → nothing sent — say so honestly.
-      await markDelivered(id, 'logged', 'SMS requested but no provider configured (NOTIFY_SMS_WEBHOOK_URL unset) — nothing sent')
+      await markDelivered(id, 'logged', 'SMS requested but no provider configured (NOTIFY_SMS_WEBHOOK_URL or AT_API_KEY+AT_USERNAME unset) — nothing sent')
       return
     }
     const result = await provider.send(input)
