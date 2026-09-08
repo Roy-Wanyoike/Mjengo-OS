@@ -63,6 +63,9 @@ model Project {
   // Wave 4 (W4-1): diaspora evidence draw packs — immutable proof bundles
   // frozen at milestone release, served through the share link.
   drawPacks          DrawPack[]
+  // Wave 6 (W6-3): advisory authenticity findings (dHash duplicates + vision
+  // phase-consistency) — append-only, decision fields never written in Wave 6.
+  aiInsights         AiInsight[]
 }
 
 model Phase {
@@ -1213,4 +1216,52 @@ model ProjectHealth {
   computedAt DateTime @default(now())
   overall    Int      @default(0) // 0-100 (higher = healthier)
   dimensions String   @default("[]") // JSON: [{key, score, grade, summary}]
+}
+
+// PhotoHash (W6-3 evidence authenticity screen) — the 64-bit dHash of a
+// SitePhoto's stored bytes, computed at draw-pack freeze or on the on-demand
+// backfill run. APPEND-ONLY like MjengoScore: no Wave-6 code path updates or
+// deletes a row (a photo's perceptual fingerprint is immutable history); the
+// photoId UNIQUE constraint makes the backfill idempotent (second screen run
+// → cache hit, nothing recomputed). Deliberately a PLAIN photoId/packId
+// column, not FK relations: the house rule for parallel-wave schema work is
+// append-at-end model blocks (no edits to the existing SitePhoto/DrawPack
+// blocks), and packs are themselves never deleted so nothing dangles.
+model PhotoHash {
+  id         String   @id @default(cuid())
+  photoId    String   @unique // the SitePhoto whose bytes were hashed
+  projectId  String // scoping for cross-pack comparison queries
+  storageKey String // the SitePhoto.url the bytes were resolved from (driver keyFor input)
+  hashHex    String // 16-char dHash (lib/perceptual-hash.ts) — pure math, deterministic
+  width      Int? // photo pixel width at hash time (honest null when unknown)
+  height     Int? // photo pixel height at hash time (honest null when unknown)
+  packId     String? // the DrawPack whose freeze computed this row (null = on-demand/backfill run)
+  computedAt DateTime @default(now())
+}
+
+// AiInsight (W6-3 evidence authenticity screen) — one ADVISORY finding from
+// the screen: a dHash duplicate hit (source 'dhash', rule-computed,
+// deterministic) or a vision phase-consistency/render-tell flag (source
+// 'vision', model-computed, confidence-labeled). APPEND-ONLY, and the
+// human-decision columns (decidedBy/decision/decidedAt) are present-but-NULL
+// BY CONTRACT: AI describes and flags, it NEVER approves — the decide action
+// is an explicit Wave-7 follow-up, and no Wave-6 code path writes these
+// columns (grep-pinned in tests/unit/ai-authenticity.test.ts). Insight rows
+// gate nothing: no action outcome, no score, no money path reads them.
+model AiInsight {
+  id         String    @id @default(cuid())
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  targetType String // 'site_photo' | 'draw_pack'
+  targetId   String // the SitePhoto / DrawPack the finding is about
+  packId     String? // the pack context the finding was made in (null = on-demand run)
+  kind       String // 'duplicate' | 'phase_mismatch' | 'render_suspect'
+  source     String // 'dhash' (rule, deterministic) | 'vision' (model, confidence-labeled)
+  severity   String    @default("warning") // info, warning, critical
+  detail     String // JSON: the structured finding (matched photo/pack, hamming distance, phase shown…)
+  confidence String? // low | medium | high — vision rows only (null on dhash rows: rules carry no confidence)
+  decidedBy  String? // HUMAN decision fields — Wave-7 follow-up, no Wave-6 code path writes them
+  decision   String? // 'confirmed' | 'dismissed' | … — set only by the (future) decide action
+  decidedAt  DateTime?
+  createdAt  DateTime  @default(now())
 }

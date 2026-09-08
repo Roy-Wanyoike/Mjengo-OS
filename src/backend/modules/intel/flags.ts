@@ -26,8 +26,13 @@
 //                         provider.ts returns null unless this flag is on, so
 //                         every Wave-6 AI feature (AI draw review, site
 //                         assistant, voice reports) gates on it through the
-//                         shared provider. NO route or action family is
-//                         wired to it yet — Wave-6 features add their own
+//                         shared provider. W6-3 wires its own call sites:
+//                         POST/GET /api/ai/authenticity-screen (route legs)
+//                         and the evidence-authenticity post-freeze hook in
+//                         drawpack/service.ts (gated inside
+//                         modules/ai/authenticity.ts — the whole screen,
+//                         deterministic dHash half included, rides this ONE
+//                         switch). Further Wave-6 features add their own
 //                         requireFlagOn('ai', …) call sites. Unlike the five
 //                         legacy flags, this one is DEFAULT OFF (see
 //                         FLAG_DEFAULTS): the AI surface ships dark and an
