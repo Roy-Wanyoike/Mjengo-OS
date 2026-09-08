@@ -585,12 +585,13 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
       `Only a contractor or admin may manage the project team roster — "${effectiveRole}" is not permitted (spec §33)`,
     )
   }
-  // W6-1: AI reviews are advisory-only, but they still cost provider calls
-  // and wear the platform's name — contractor/admin only (the client's read
-  // surface is the share link; supervisors/finance stay on the human paths).
+  // W6-1/W6-2: AI actions are advisory-only, but they still cost provider
+  // calls and wear the platform's name — contractor/admin only (the client's
+  // read surface is the share link; supervisors/finance stay on the human
+  // paths).
   if ((AI_ACTIONS as readonly string[]).includes(type) && !AI_REVIEW_ROLES.includes(effectiveRole)) {
     throw new Error(
-      `Only a contractor or admin may run an AI draw review — "${effectiveRole}" is not permitted. Clients read review notes through their share link.`,
+      `Only a contractor or admin may run an AI review action — "${effectiveRole}" is not permitted. Clients read AI output through their share link.`,
     )
   }
   // §24 client-direct ordering: a client (or share-link) caller may reach the

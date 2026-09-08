@@ -172,11 +172,17 @@ export function summarizeAction(type: string, payload: any, result: any): string
       : `MjengoScore recomputed: ${result.score}/100 (confidence ${result?.confidence ?? 'low'} · ${result?.componentsCount ?? '?'} of 6 components · describes, humans decide)`
     // AI module (W6-1) — advisory only, humans decide
     case 'ai.drawReview': return `AI draw review appended: verdict ${result?.verdict ?? 'advisory'} (confidence ${result?.confidence ?? 'low'} · ${result?.findingsCount ?? 0} finding(s) · advisory only, humans decide)`
+    // AI module (W6-2) — deterministic text + TTS voice note, humans decide
+    case 'ai.trustDigest': return `Trust digest appended (${result?.lang ?? 'en'}): ${result?.textHash?.slice(0, 12) ?? '?'} (audio ${result?.audioStatus ?? 'unavailable'} · every number is a ledger row · AI reads it aloud, it never decides)`
     default: return `Action: ${type}`
   }
 }
 
 export function kindForAction(type: string): string {
+  // W6-2: the trust-digest action lands under its own kind ('ai_digest' —
+  // the wave6-plan's audit kind) while the rest of the ai.* family keeps
+  // the W6-1 'ai_review' kind (unchanged history semantics).
+  if (type === 'ai.trustDigest') return 'ai_digest'
   const prefix = type.split('.')[0]
   const map: Record<string, string> = {
     task: 'task', phase: 'phase', delivery: 'delivery', consumption: 'material',

@@ -70,6 +70,10 @@ model Project {
   // Wave 6 (W6-3): advisory authenticity findings (dHash duplicates + vision
   // phase-consistency) — append-only, decision fields never written in Wave 6.
   aiInsights         AiInsight[]
+  // Wave 6 (W6-2): the weekly bilingual trust digests — deterministic row-
+  // composed text + optional TTS voice note, append-only, served through the
+  // share link.
+  trustDigests       TrustDigest[]
 }
 
 model Phase {
@@ -1310,4 +1314,39 @@ model AiInsight {
   decision   String? // 'confirmed' | 'dismissed' | … — set only by the (future) decide action
   decidedAt  DateTime?
   createdAt  DateTime  @default(now())
+}
+
+// TrustDigest (W6-2 diaspora trust digest) — one weekly "what your money
+// did" digest row per (project, language): DETERMINISTIC text composed
+// purely from rows (releases + ledger refs from DrawPack, evidence photo
+// count, the two latest MjengoScore rows for the delta, advisory AI flag
+// counts from AiReviewNote/AiInsight, budget pace from Transaction sums) —
+// ZERO model-authored figures; the model's only role is TTS: SPEAKING the
+// deterministic text via the AiProvider.speak() seam. `textHash` = SHA-256
+// over the canonical JSON of the exact rows composed from, so identical
+// rows produce a byte-identical text + hash (the inputsHash discipline).
+// AUDIO HONESTY: audioBase64 is NULL when the voice note was never
+// attempted (flag on but provider unavailable) or attempted and failed —
+// audioStatus says which ('unavailable' | 'failed' | 'ready') and audioError
+// carries the leak-free reason; the TEXT is the product and never degrades
+// on audio failure. APPEND-ONLY (the MjengoScore/AiReviewNote discipline):
+// no Wave-6 code path updates or deletes a digest row — regenerating
+// appends a new row (latest per (projectId, lang) wins in the read
+// surfaces); there is deliberately no updated-at column.
+model TrustDigest {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lang        String // 'en' | 'sw' — one digest row per language per window
+  windowStart DateTime // inclusive start of the rows window (now − sinceDays)
+  windowEnd   DateTime // inclusive end (the generation moment)
+  text        String // the deterministic bilingual digest text (the product)
+  textHash    String // SHA-256 over canonical JSON of the exact rows composed from
+  audioBase64 String? // null = never synthesized or failed — honest, never a fake
+  audioMime   String? // 'audio/wav' when audioBase64 is present
+  audioStatus String   @default("unavailable") // unavailable | failed | ready
+  audioError  String? // leak-free reason when the synthesis failed
+  providerId  String? // which AI voiced it (null = no attempt was possible)
+  ruleVersion Int      @default(1) // DIGEST_RULE_VERSION — the template contract
+  createdAt   DateTime @default(now())
 }

@@ -26,11 +26,16 @@
 //     Features that persist AI output must label it as AI-derived and keep
 //     the human decision path explicit (the ledger never lies in either
 //     direction: no AI row ever pretends to be a verified fact).
-//   · ANALYSIS ONLY: chat (text completion), vision (image analysis) and
-//     transcribe (speech-to-text) are describe-the-evidence capabilities.
-//     Image generation and text-to-speech are deliberately NOT on this seam
-//     — creating content is a different trust conversation than analyzing
-//     it, and this foundation stays on the analysis side.
+//   · ANALYSIS + ONE NARROW RENDERING EXCEPTION (W6-2 amendment, logged in
+//     the worklog): chat (text completion), vision (image analysis) and
+//     transcribe (speech-to-text) are describe-the-evidence capabilities;
+//     speak (text-to-speech) is the single deliberate addition — it renders
+//     TEXT THE CALLER ALREADY HOLDS as audio. speak() invents nothing: the
+//     input is always deterministic, row-composed text (the W6-2 trust
+//     digest); feeding model output back in as fact stays forbidden, and
+//     image generation still has no home on this seam — creating content is
+//     a different trust conversation than analyzing it, and reading
+//     platform-authored text aloud is rendering, not authorship.
 //
 // The AiTextResult contract (three honest states, never a throw):
 //   { ok: true, text }   — the model answered; text is trimmed and non-empty.
@@ -55,6 +60,26 @@ export interface AiChatMessage {
 
 /** The honest outcome of one AI analysis attempt — never thrown, always returned. */
 export type AiTextResult = { ok: true; text: string } | { ok: false; error: string }
+
+/**
+ * The honest outcome of one speech-rendering attempt (W6-2) — the same
+ * three-state discipline as AiTextResult, never a throw:
+ *   { ok: true; audioBase64; mimeType } — the exact caller-held text rendered
+ *       as audio bytes, base64-encoded (the caller wraps it in a data: URL or
+ *       serves it with the honest content type). ONE concatenated container,
+ *       not a per-chunk array: the provider chunks internally at sentence
+ *       boundaries (the API caps a request at 1024 chars) and merges the PCM
+ *       payloads into a single WAV, so a caller plays exactly one object and
+ *       a missing sentence is impossible by construction (any chunk failure
+ *       fails the whole call honestly — partial audio would misrepresent the
+ *       record it reads).
+ *   { ok: false, error }                — an attempt WAS made and failed
+ *       honestly (SDK error, timeout, non-audio response, unparseable WAV).
+ *   null                                — the provider itself is unavailable.
+ */
+export type AiAudioResult =
+  | { ok: true; audioBase64: string; mimeType: 'audio/wav' | 'audio/mpeg' }
+  | { ok: false; error: string }
 
 /**
  * The AI provider seam — the interface every Wave-6 AI feature codes
@@ -87,4 +112,14 @@ export interface AiProvider {
    * seam takes bytes the caller already holds, not remote fetches.
    */
   transcribe(audioDataUrl: string): Promise<AiTextResult | null>
+  /**
+   * Text-to-speech (W6-2, the one rendering exception documented in the
+   * module header): renders text the CALLER ALREADY HOLDS as audio. The
+   * input is deterministic platform-composed text (the trust digest) —
+   * never model output, never a prompt the model answers. Blank text or a
+   * speed outside the 0.5–2.0 API range fails honestly without contacting
+   * the SDK. Chunks at sentence boundaries under the 1024-char API cap and
+   * concatenates the PCM payloads into ONE WAV (see AiAudioResult).
+   */
+  speak(text: string, opts?: { voice?: string; speed?: number }): Promise<AiAudioResult | null>
 }

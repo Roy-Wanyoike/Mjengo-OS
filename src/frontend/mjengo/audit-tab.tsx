@@ -74,6 +74,7 @@ const AUDIT_KINDS: readonly string[] = [
   'mjengo_score', 'draw_pack',
   'ai_review', // W6-1: AI draw review appends (advisory notes — humans decide)
   'ai_screen', // W6-3: evidence authenticity screen (advisory flags — humans decide)
+  'ai_digest', // W6-2: diaspora trust digest generations (text + voice — humans decide)
 ]
 
 /** Actor roles seen in the audit trail: platform roles + system/AI writers. */

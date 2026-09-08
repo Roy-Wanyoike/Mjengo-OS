@@ -5,6 +5,7 @@ import { applyAction, getProjectPayload, type ActionType } from '@/backend/lib/m
 import { publicRoute, safeError, genericError, zodIssueResponse } from '@/backend/lib/route-kit'
 import { getDrawPackForShare } from '@/backend/modules/drawpack/service'
 import { loadLatestAiReviewNote } from '@/backend/modules/ai/draw-review'
+import { serveTrustDigestForShare } from '@/backend/modules/ai/trust-digest'
 
 // Public "Virtual Site Visit" endpoint — src/app/api/share/route.ts is the shim.
 // Diaspora clients arrive via a revocable share token (`/?share=<token>`), no
@@ -73,6 +74,11 @@ const shareBodySchema = z.strictObject({
  * advisory note rides the exact same revocation, 404 mapping and 30/min
  * bucket as the pack it belongs to. Read-only: the share surface dispatches
  * nothing, and a note never gates the pack (AI describes, humans decide).
+ *
+ * W6-2: `&trustDigest=latest[&lang=en|sw][&audio=1]` serves the project's
+ * LATEST trust digest row read-only (see the branch comment below) — the
+ * deterministic weekly text, its honest audio state, and (on explicit
+ * audio=1) an on-demand voice-note render.
  */
 export const GET = publicRoute(
   {
@@ -103,6 +109,36 @@ export const GET = publicRoute(
         pack: found.pack,
         photos: found.photos,
         aiReview,
+        project: {
+          name: project.name,
+          client: project.client,
+          location: project.location,
+          status: project.status,
+        },
+      })
+    }
+    // W6-2: the trustDigest branch — the latest weekly digest for one
+    // language (default en), read-only through the SAME revocable token
+    // (the plan's `?token&trustDigest=latest[&lang=sw&audio=1]` shape).
+    // READING is not flag-gated (the W6-1 boundary: a client reads AI
+    // output through their share link regardless of the flag); the ON-DEMAND
+    // audio render (`audio=1`) resolves the provider inside the module, so
+    // the SDK is never contacted while the flag is off. Rendered-on-demand
+    // audio is returned in THIS response only (the row is append-only —
+    // regenerate to persist). Fetches share this route's existing share.get
+    // 30/min bucket by construction; no digest exists yet → digest: null
+    // (the honest empty state, not an error).
+    const trustDigestParam = req.nextUrl.searchParams.get('trustDigest')
+    if (trustDigestParam) {
+      if (trustDigestParam !== 'latest') {
+        return NextResponse.json({ error: 'Only trustDigest=latest is supported' }, { status: 400 })
+      }
+      const lang = req.nextUrl.searchParams.get('lang') === 'sw' ? 'sw' : 'en'
+      const renderAudio = req.nextUrl.searchParams.get('audio') === '1'
+      const digest = await serveTrustDigestForShare(project.id, { lang, renderAudio })
+      return NextResponse.json({
+        ok: true,
+        digest,
         project: {
           name: project.name,
           client: project.client,

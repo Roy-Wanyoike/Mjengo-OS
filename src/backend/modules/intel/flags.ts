@@ -38,7 +38,17 @@
 //                         drawpack/service.ts (gated inside
 //                         modules/ai/authenticity.ts — the whole screen,
 //                         deterministic dHash half included, rides this ONE
-//                         switch). Further Wave-6 features add their own
+//                         switch). W6-2 adds its three call sites, all
+//                         gated on this same switch: the ai.trustDigest
+//                         ACTION (AI_ACTIONS family, so POST /api/actions
+//                         + /api/sync enforce it), the digest.trust JOB
+//                         (the engine's own flag check — jobs carry no
+//                         session) and the share GET trustDigest branch's
+//                         ON-DEMAND audio render (resolveAiProvider inside
+//                         modules/ai/trust-digest.ts — reading an existing
+//                         digest row through a share token is NOT gated,
+//                         the W6-1 read boundary, but no SDK call happens
+//                         while the flag is off). Further Wave-6 features add their own
 //                         requireFlagOn('ai', …) call sites. The pre-existing
 //                         /api/ai routes (analyze-photo, voice-log) keep
 //                         their own older flags (ai_progress / ai_voice) —
