@@ -51,23 +51,49 @@ Run the same gates CI runs:
 ```bash
 bun run lint          # eslint — 0 errors, 0 warnings
 bunx tsc --noEmit     # strict typecheck, 0 errors
-bun run test          # vitest — the full unit suite
+bun run test          # vitest — the full unit suite (1,100+ tests / 43 files)
 ```
 
-All three must pass locally; CI runs them again on every push/PR. Touching
-the marketing site (`mjengoos-website/`)? Also run `bun run site:lint` and
-`bun run site:typecheck`.
+All three must pass locally. CI re-runs lint and the strict typecheck on
+every push/PR and adds a real production build (it does not run the vitest
+suite — that's the local gate, and every merge to `main` re-ran it in full).
+Touching the marketing site (`mjengoos-website/`)? Also run `bun run
+site:lint` and `bun run site:typecheck`.
 
 ## Pull requests
 
 - **Small and single-purpose** — one branch, one concern. If the diff sprawls,
   split it into stacked PRs.
+- **Tests land with the code, in the same branch** — new behavior is pinned
+  by new tests before it merges (the suite grew 495 → 1,100+ tests across
+  the release waves; every merge re-ran the full suite).
 - **Linked to an issue** — open or comment on one first, so the *why* is
   recorded before the *how*.
 - **Left open for review** — every change lands through a reviewed, CI-gated
   PR; don't expect direct commits to `main`.
 - **Honest scope** — state what works, what's simulated and what's deferred.
   This repo's culture is *reported vs verified, everywhere*; PRs follow it.
+
+## Parallel work (waves & worktrees)
+
+Several features are often built at once, in isolation, then merged
+sequentially — that is how waves 3–5 were built. The working method:
+
+- Build each feature in its own **git worktree** off `main`
+  (`git worktree add ../wt-<task> -b feat/<name>`), so parallel branches
+  never step on each other's working files.
+- **One feature owns one file area** per wave — the branch plan keeps file
+  ownership disjoint (e.g. only one branch touches `schema.prisma`, only one
+  touches the i18n dictionaries).
+- When two branches must touch the same file, **append at the end** — new
+  i18n keys go at the bottom of the dictionary files under a comment header,
+  which keeps the merge conflict trivial.
+- Re-run the full gate (lint + typecheck + tests) in the worktree before
+  committing; merge with `--no-ff` and re-run the whole suite once more on
+  `main` after the merge.
+- External services only ever appear as **honest seams** (env-gated,
+  fail-closed): no feature needs outside credentials to build or test, and
+  nothing pretends to be live when it isn't.
 
 ## Security
 
