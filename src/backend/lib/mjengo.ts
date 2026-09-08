@@ -23,6 +23,7 @@ import { loadProfessionalsSlice } from '@/backend/modules/professionals/reposito
 import { loadSupplySlice } from '@/backend/modules/supply/repository'
 import { loadInvoicesSlice } from '@/backend/modules/invoices/repository'
 import { loadIntelSlice } from '@/backend/modules/intel/repository'
+import { loadDrawPacks, type DrawPackLink } from '@/backend/modules/drawpack/service'
 import type { LandSlice } from '@/backend/modules/land/types'
 import type { ProfessionalsSlice } from '@/backend/modules/professionals/types'
 import type { SupplySlice } from '@/backend/modules/supply/types'
@@ -109,6 +110,10 @@ export interface ProjectPayload {
   inventory: InventorySlice
   boq: BoqSlice
   finance: FinanceSlice
+  // W4-1: link rows for the immutable evidence draw packs (released
+  // milestones link their pack through these; full packs come from the share
+  // GET drawPack branch).
+  drawPacks: DrawPackLink[]
 }
 
 export interface ProjectListItem {
@@ -201,7 +206,7 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
     : await db.project.findFirst({ orderBy: { createdAt: 'asc' } })
   if (!project) return null
 
-  const [phases, workers, materials, deliveries, consumptions, photos, alerts, transactions, recaps, escrow, milestones, variations, zones, notifications, auditEvents, photoComments, inventory, boq, finance] =
+  const [phases, workers, materials, deliveries, consumptions, photos, alerts, transactions, recaps, escrow, milestones, variations, zones, notifications, auditEvents, photoComments, inventory, boq, finance, drawPacks] =
     await Promise.all([
       db.phase.findMany({ where: { projectId: project.id }, orderBy: { order: 'asc' }, include: { tasks: { orderBy: { createdAt: 'asc' } } } }),
       db.worker.findMany({ where: { projectId: project.id }, orderBy: { name: 'asc' }, include: { attendances: { orderBy: { date: 'desc' } } } }),
@@ -222,6 +227,10 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
       loadInventorySlice(project.id),
       loadBoqSlice(project.id),
       loadFinanceSlice(project.id),
+      // W4-1: link rows only — the immutable packs themselves are served by
+      // GET /api/share?token=<t>&drawPack=<id> (the frozen bundle, hash and
+      // printable view data), never embedded in the live payload.
+      loadDrawPacks(project.id),
     ])
 
   const today = todayStr()
@@ -372,6 +381,7 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
     inventory,
     boq,
     finance,
+    drawPacks,
   }
 }
 

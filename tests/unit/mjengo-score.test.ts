@@ -746,6 +746,12 @@ describe('non-influence: score rows change no action outcomes anywhere', () => {
       'src/backend/lib/audit.ts', // kind map + ledger one-liner only — no reads
       'src/frontend/mjengo/intel/sections/score-section.tsx',
       'src/frontend/mjengo/intel-tab.tsx', // mounts the section — display wiring only
+      // W4-1 draw packs: the module READS the latest score row (findFirst,
+      // never writes) to freeze the honest at-release citation into the pack;
+      // the viewer only DISPLAYS the frozen snapshot. Read-only — the pack
+      // cannot recompute, gate or influence the score (W3-3 follow-up note).
+      'src/backend/modules/drawpack/service.ts',
+      'src/frontend/mjengo/draw-pack-viewer.tsx',
       // display strings only — dictionary values, no logic, cannot influence actions
       'src/frontend/i18n/dicts/en.ts',
       'src/frontend/i18n/dicts/sw.ts',

@@ -3,11 +3,13 @@ import { z } from 'zod'
 import { db } from '@/backend/lib/db'
 import { applyAction, getProjectPayload, type ActionType } from '@/backend/lib/mjengo'
 import { publicRoute, safeError, genericError, zodIssueResponse } from '@/backend/lib/route-kit'
+import { getDrawPackForShare } from '@/backend/modules/drawpack/service'
 
 // Public "Virtual Site Visit" endpoint — src/app/api/share/route.ts is the shim.
 // Diaspora clients arrive via a revocable share token (`/?share=<token>`), no
-// auth. GET boots the read-mostly client view; POST is strictly limited to the
-// client-decision allowlist.
+// auth. GET boots the read-mostly client view (and, with &drawPack=<id>,
+// serves one immutable W4-1 evidence pack read-only); POST is strictly limited
+// to the client-decision allowlist.
 //
 // Rate limit (P3 review item, W3-B): the route stays PUBLIC (the token IS the
 // auth) but both verbs now enforce a 30/min per-IP bucket so scripted token
@@ -52,7 +54,19 @@ const shareBodySchema = z.strictObject({
   payload: z.record(z.string(), z.unknown(), 'payload must be an object').optional(),
 })
 
-/** GET /api/share?token=... → project payload for the client link. */
+/** GET /api/share?token=... → project payload for the client link.
+ *
+ * W4-1 draw packs: GET /api/share?token=...&drawPack=<id> serves ONE frozen
+ * evidence bundle read-only through the SAME revocable token (no new auth
+ * surface): the token lookup above stays the gate, a revoked/regenerated
+ * token 404s with the standard share error before the pack is even queried,
+ * and a pack id that is unknown — or belongs to a DIFFERENT project — 404s
+ * identically (no cross-project probing). The response carries the pack
+ * JSON (with the canonical `content` string so the SHA-256 contentHash can
+ * be re-verified offline after forwarding) plus the printable view data
+ * (project identity + current evidence photo rows). Pack fetches share this
+ * route's existing share.get 30/min bucket by construction.
+ */
 export const GET = publicRoute(
   {
     scope: 'api/share GET',
@@ -67,6 +81,25 @@ export const GET = publicRoute(
     const project = await db.project.findUnique({ where: { shareToken: token } })
     if (!project) {
       return NextResponse.json({ error: 'Invalid or expired link' }, { status: 404 })
+    }
+    // W4-1: the drawPack branch — frozen bundle for a released milestone.
+    const drawPackId = req.nextUrl.searchParams.get('drawPack')
+    if (drawPackId) {
+      const found = await getDrawPackForShare(project.id, drawPackId)
+      if (!found) {
+        return NextResponse.json({ error: 'Draw pack not found' }, { status: 404 })
+      }
+      return NextResponse.json({
+        ok: true,
+        pack: found.pack,
+        photos: found.photos,
+        project: {
+          name: project.name,
+          client: project.client,
+          location: project.location,
+          status: project.status,
+        },
+      })
     }
     const data = await getProjectPayload(project.id)
     if (!data) {
