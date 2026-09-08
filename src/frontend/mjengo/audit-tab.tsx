@@ -72,6 +72,7 @@ const AUDIT_KINDS: readonly string[] = [
   'escrow', 'milestone', 'variation', 'comment', 'notification', 'site_map',
   'inventory', 'boq', 'payment', 'wallet', 'ledger', 'auth', 'export', 'action',
   'mjengo_score', 'draw_pack',
+  'ai_review', // W6-1: AI draw review appends (advisory notes — humans decide)
 ]
 
 /** Actor roles seen in the audit trail: platform roles + system/AI writers. */

@@ -63,6 +63,10 @@ model Project {
   // Wave 4 (W4-1): diaspora evidence draw packs — immutable proof bundles
   // frozen at milestone release, served through the share link.
   drawPacks          DrawPack[]
+  // Wave 6 (W6-1): AI draw review notes — advisory, append-only, never a
+  // decision (AI flags, humans decide — the columns for the human verdict
+  // exist and stay null until a human writes them).
+  aiReviewNotes      AiReviewNote[]
 }
 
 model Phase {
@@ -370,6 +374,9 @@ model DrawPack {
   contentHash       String // SHA-256 hex over canonical JSON of the pack content
   schemaVersion     Int       @default(1)
   createdAt         DateTime  @default(now())
+  // W6-1: the append-only AI review notes over this frozen pack (advisory
+  // only — the pack itself never changes).
+  aiReviewNotes     AiReviewNote[]
 }
 
 // Contextual photo commenting — client pins a question on a site photo
@@ -1213,4 +1220,43 @@ model ProjectHealth {
   computedAt DateTime @default(now())
   overall    Int      @default(0) // 0-100 (higher = healthier)
   dimensions String   @default("[]") // JSON: [{key, score, grade, summary}]
+}
+
+// W6-1 — AI draw review note: a confidence-labeled ADVISORY review of one
+// frozen DrawPack (vision pass over its capped evidence-photo set + an LLM
+// cross-check against the pack's milestone/invoice/budget context), written
+// by the ai.drawReview action. House rules (the modules/ai/draw-review.ts
+// header is the long form):
+//   · APPEND-ONLY — reviewing twice appends a new row (latest wins in the
+//     share/view surfaces, history stays queryable); there is no update path
+//     and no delete path anywhere in Wave-6 code.
+//   · ADVISORY ONLY — AI describes and flags; it NEVER approves. The note
+//     gates nothing: milestone.decide, payments and every other action
+//     ignore these rows entirely.
+//   · THE LEDGER DECIDES NUMBERS — every figure quoted next to a note comes
+//     from the rows fed in (inputsHash pins them); model-authored text has
+//     digit runs redacted before storage, so no number the reader sees was
+//     invented by the model.
+//   · HUMAN DECISION COLUMNS STAY NULL — reviewedBy/reviewedAt/decisionNote
+//     are present-but-unwritten in Wave 6: a human reads the note and
+//     decides elsewhere (the approval click stays human).
+model AiReviewNote {
+  id           String   @id @default(cuid())
+  drawPackId   String
+  drawPack     DrawPack @relation(fields: [drawPackId], references: [id], onDelete: Cascade)
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  providerId   String // which AI answered (e.g. 'zai')
+  modelLabel   String // provider label captured at run time (surface copy)
+  ruleVersion  Int      @default(1) // AI_DRAW_REVIEW_RULE_VERSION — prompt + parse contract
+  verdict      String // consistent | advisory | escalate (sanitized at parse)
+  summary      String // one-line advisory summary (figures redacted)
+  confidence   String   @default("low") // low, medium, high — the model's own honest label, sanitized
+  findings     String   @default("[]") // JSON: [{ category, severity, text }] (figures redacted)
+  inputsHash   String // SHA-256 over canonical JSON of the exact rows fed in
+  // Human decision fields — present but NEVER written by Wave-6 code paths.
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  decisionNote String?
+  createdAt    DateTime @default(now())
 }

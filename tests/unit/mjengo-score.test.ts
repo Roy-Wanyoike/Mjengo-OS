@@ -752,6 +752,11 @@ describe('non-influence: score rows change no action outcomes anywhere', () => {
       // cannot recompute, gate or influence the score (W3-3 follow-up note).
       'src/backend/modules/drawpack/service.ts',
       'src/frontend/mjengo/draw-pack-viewer.tsx',
+      // W6-1 AI draw review: the engine reads the pack's FROZEN score
+      // snapshot (pack.mjengoScore off the DrawPack row — never a score
+      // query, never a write) as prompt context for the advisory note. The
+      // model describes; the frozen row decides what the note can claim.
+      'src/backend/modules/ai/draw-review.ts',
       // v1 Phase D intel digest: the route READS the latest score row for the
       // read-only REST surface (same findFirst display pattern as draw packs);
       // it cannot recompute, gate or influence the score.

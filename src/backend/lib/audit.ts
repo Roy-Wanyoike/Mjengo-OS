@@ -170,6 +170,8 @@ export function summarizeAction(type: string, payload: any, result: any): string
     case 'score.recompute': return result?.score === null || result?.score === undefined
       ? `MjengoScore recomputed — no score yet (only ${result?.componentsCount ?? 0} of 6 components have data; describes, humans decide)`
       : `MjengoScore recomputed: ${result.score}/100 (confidence ${result?.confidence ?? 'low'} · ${result?.componentsCount ?? '?'} of 6 components · describes, humans decide)`
+    // AI module (W6-1) — advisory only, humans decide
+    case 'ai.drawReview': return `AI draw review appended: verdict ${result?.verdict ?? 'advisory'} (confidence ${result?.confidence ?? 'low'} · ${result?.findingsCount ?? 0} finding(s) · advisory only, humans decide)`
     default: return `Action: ${type}`
   }
 }
@@ -185,6 +187,7 @@ export function kindForAction(type: string): string {
     payroll: 'wage',
     inventory: 'inventory', boq: 'boq', payment: 'payment', wallet: 'wallet', ledger: 'ledger',
     score: 'mjengo_score', // MjengoScore recomputes (risk/digest/price/reliability stay 'action' — unchanged history semantics)
+    ai: 'ai_review', // W6-1: AI draw review appends (advisory notes — the kind the audit filter list exposes)
   }
   return map[prefix] ?? 'action'
 }
