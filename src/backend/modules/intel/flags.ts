@@ -32,6 +32,11 @@
 //                         ledger.post — the money-tab actions and the API
 //                         client surface) plus the whole /api/v1 wallets +
 //                         payments REST family, plus the Money tab entry.
+//                         ENFORCED IN /API/SYNC since W3-1 (S1 fix): the
+//                         offline sync drain applies the SAME family gate
+//                         per outbox item (lib/action-flag-gate.ts) — a
+//                         flagged item flushed while the flag is off fails
+//                         per-item and writes nothing; admins bypass.
 //                         BOUNDARY (honest): this flag does NOT gate internal
 //                         ledger postings driven by other flows — invoice.pay
 //                         (invoices module → provider seam → ledger), the
@@ -41,22 +46,24 @@
 //                         and the verified Daraja webhook callback (a machine
 //                         path, not a session) all keep posting while the
 //                         flag is off. The share-link surface (/api/share)
-//                         and the offline sync drain (/api/sync) dispatch some
-//                         of the same action types through their own
-//                         cross-cutting routes — outside this flag's
-//                         enforcement; documented as a follow-up, not
-//                         silently ignored.
+//                         dispatches only the client-decision allowlist
+//                         (milestone./variation./comment./notification.) —
+//                         no WALLET_ACTIONS types, so it has nothing to
+//                         gate; the sync drain was the last cross-cutting
+//                         hole and is closed.
 //   · marketplace       → the Finder loop: the SUPPLY_ACTIONS family on
 //                         POST /api/actions (supplier/catalog upserts,
 //                         request/quote/order/delivery/rule lifecycle,
-//                         supply.compare) + the Finder tab entry. invoice.*
-//                         (the invoices module that shares the Finder tab)
-//                         is NOT gated by this flag.
+//                         supply.compare) + the Finder tab entry. The same
+//                         family is enforced per-item in /api/sync (W3-1).
+//                         invoice.* (the invoices module that shares the
+//                         Finder tab) is NOT gated by this flag.
 //   · land_verification → the land module ladder: the LAND_ACTIONS family
 //                         on POST /api/actions (parcel.create/update/
 //                         setStatus, parcelDoc.attach, search.request/
 //                         receive/review) + the parcels section of the Land
-//                         tab. The professionals directory
+//                         tab. The same family is enforced per-item in
+//                         /api/sync (W3-1). The professionals directory
 //                         (PROFESSIONALS_ACTIONS — a separate module that
 //                         shares the Land tab) is NOT gated by this flag.
 //
