@@ -19,14 +19,18 @@
  *                          share-token / client-session paths) + the v1
  *                          REST family (GET /api/v1/wallets,
  *                          POST /api/v1/payments, POST deposit as the [id]
- *                          shape) — and the BOUNDARY: escrow.topup /
+ *                          shape) + the SAME family per-item on
+ *                          POST /api/sync (W3-1 — the offline outbox
+ *                          bypass, issue S1) — and the BOUNDARY: escrow.topup /
  *                          milestone.decide / invoice.pay keep flowing while
  *                          the flag is off (internal money paths, not the
  *                          user-facing wallet surface);
  *   · marketplace       → POST /api/actions SUPPLY_ACTIONS family (+ invoice
- *                          boundary);
+ *                          boundary) + the same family per-item on
+ *                          POST /api/sync (W3-1);
  *   · land_verification → POST /api/actions LAND_ACTIONS family (+ the
- *                          professionals-module boundary);
+ *                          professionals-module boundary) + the same family
+ *                          per-item on POST /api/sync (W3-1);
  *   · low_data          → REMOVED: FLAG_KEYS/labels/pop rows no longer
  *                          contain it, a stale table row is inert, the env
  *                          override ignores it and setFlag rejects it.
@@ -37,9 +41,9 @@
  * withGuard; the real guard's contract is pinned in guard.test.ts),
  * '@/backend/lib/mjengo' (applyAction spy), '@/backend/lib/ai',
  * z-ai-web-dev-sdk (ASR), the wallet service/providers/http seams for the v1
- * routes. route-kit, rate-limit, audit, pii-scrub and flags itself stay
- * REAL. NEXT_FLAGS_OFF is the off-switch; invalidateFlagCache() resets the
- * 30s flag cache between cases.
+ * routes. route-kit, rate-limit, audit, pii-scrub, lib/action-flag-gate and
+ * flags itself stay REAL. NEXT_FLAGS_OFF is the off-switch;
+ * invalidateFlagCache() resets the 30s flag cache between cases.
  */
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -100,10 +104,16 @@ vi.mock('@/backend/lib/db', () => {
       async findMany() { return [{ ...project }] },
     },
     phase: { async findMany() { return [] } },
+    // Milestone lookup for /api/sync's read-only conflict pre-check — no
+    // rows, so an offline milestone.decide flows through to applyAction.
+    milestone: { async findFirst() { return null } },
     paymentRequest: {
-      async findFirst({ where }: { where: { OR: Array<Record<string, string>> } }) {
-        const id = where.OR.find((c) => c.id !== undefined)?.id
-        const code = where.OR.find((c) => c.requestCode !== undefined)?.requestCode
+      // Handles BOTH where shapes in play: the v1 routes' { OR: [...] }
+      // lookup and /api/sync's flat { id, projectId } pre-check.
+      async findFirst({ where }: { where: Record<string, unknown> }) {
+        const or = Array.isArray(where.OR) ? (where.OR as Array<Record<string, unknown>>) : []
+        const id = or.find((c) => c.id !== undefined)?.id ?? where.id
+        const code = or.find((c) => c.requestCode !== undefined)?.requestCode
         if (id === 'pr-1' || code === 'PR-2026-000001') return { ...paymentRequest }
         return null
       },
@@ -226,6 +236,7 @@ import {
   requireFlagOn, setFlag,
 } from '@/backend/modules/intel/flags'
 import { POST as actionsPost } from '@/app/api/actions/route'
+import { POST as syncPost } from '@/app/api/sync/route'
 import { POST as analyzePhotoPost } from '@/app/api/ai/analyze-photo/route'
 import { POST as voiceLogPost } from '@/app/api/ai/voice-log/route'
 import { POST as parseTextPost } from '@/app/api/ai/parse-text/route'
@@ -685,6 +696,110 @@ describe('land_verification gates the LAND_ACTIONS family on POST /api/actions',
     sessionFor('contractor')
     const res = await actionsPost(actionReq('professional.upsert', { name: 'Eng. Mwangi' }), undefined)
     expect(res.status).toBe(200)
+    expect(applyAction).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ---------------------------------------------------------------- sync (W3-1)
+
+describe('wallet / land / marketplace gate their families PER-ITEM on POST /api/sync (W3-1, S1)', () => {
+  // The offline outbox flush — the S1 bypass surface. Before W3-1 the sync
+  // applier loop had NO flag gate, so a contractor session could flush
+  // payment.pay with the wallet flag off. Deep per-item semantics (zero
+  // ledger rows, batch continuation, gate-vs-§57-replay) are pinned in
+  // tests/unit/sync-flag-gate.test.ts; this block pins the per-flag surface.
+  const idemCount = () =>
+    (db as unknown as { __state: { idemRows: Array<Record<string, unknown>> } }).__state.idemRows.length
+
+  function syncFlush(items: Array<{ id: string; type: string; payload?: Record<string, unknown> }>) {
+    return syncPost(
+      new NextRequest('http://localhost/api/sync', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ actions: items.map((i) => ({ ...i, projectId: 'p-1' })) }),
+      }),
+      undefined,
+    )
+  }
+
+  it('wallet off + contractor → [payment.pay] per-item ok:false, applyAction never runs, no idempotency row', async () => {
+    process.env.NEXT_FLAGS_OFF = 'wallet'
+    sessionFor('contractor')
+    const before = idemCount()
+    const res = await syncFlush([{ id: 'pay-1', type: 'payment.pay', payload: { id: 'pr-1' } }])
+    expect(res.status).toBe(200)
+    const json = await bodyOf(res)
+    expect(json.synced).toBe(0)
+    expect(json.failed).toBe(1)
+    expect(json.results[0]).toMatchObject({
+      id: 'pay-1',
+      ok: false,
+      error: expect.stringMatching(/Feature disabled by feature flag \(wallet\)/),
+    })
+    expect(applyAction).not.toHaveBeenCalled()
+    expect(idemCount()).toBe(before) // a denied item writes NOTHING
+  })
+
+  it('wallet off + admin → the item applies (documented bypass, same rule as /api/actions)', async () => {
+    process.env.NEXT_FLAGS_OFF = 'wallet'
+    sessionFor('admin')
+    const res = await syncFlush([{ id: 'pay-1', type: 'payment.pay', payload: { id: 'pr-1' } }])
+    expect(res.status).toBe(200)
+    const json = await bodyOf(res)
+    expect(json.results[0]).toMatchObject({ id: 'pay-1', ok: true })
+    expect(applyAction).toHaveBeenCalledTimes(1)
+    expect(applyAction).toHaveBeenCalledWith(
+      'payment.pay',
+      expect.objectContaining({ __actor: 'admin', __role: 'admin' }),
+      'p-1',
+    )
+  })
+
+  it('wallet on + contractor → the item applies and its sync idem key is recorded (exactly as pre-W3-1)', async () => {
+    sessionFor('contractor')
+    // Fresh item id + payload: this file's db state persists across cases, so
+    // the §57 replay/fingerprint rows from the admin case above must not
+    // short-circuit this one before applyAction runs.
+    const res = await syncFlush([{ id: 'pay-on-1', type: 'payment.pay', payload: { id: 'pr-2' } }])
+    expect(res.status).toBe(200)
+    const json = await bodyOf(res)
+    expect(json.results[0]).toMatchObject({ id: 'pay-on-1', ok: true })
+    expect(applyAction).toHaveBeenCalledTimes(1)
+    expect(idemCount()).toBeGreaterThan(0) // the §57 sync:<project>:<item> record landed
+  })
+
+  it('land_verification off + contractor → [parcel.create] per-item denial naming land_verification', async () => {
+    process.env.NEXT_FLAGS_OFF = 'land_verification'
+    sessionFor('contractor')
+    const res = await syncFlush([{ id: 'par-1', type: 'parcel.create', payload: { plotNumber: 'LR/1234' } }])
+    const json = await bodyOf(res)
+    expect(json.results[0]).toMatchObject({
+      id: 'par-1',
+      ok: false,
+      error: expect.stringMatching(/Feature disabled by feature flag \(land_verification\)/),
+    })
+    expect(applyAction).not.toHaveBeenCalled()
+  })
+
+  it('marketplace off + contractor → [supplier.upsert] per-item denial naming marketplace', async () => {
+    process.env.NEXT_FLAGS_OFF = 'marketplace'
+    sessionFor('contractor')
+    const res = await syncFlush([{ id: 'sup-1', type: 'supplier.upsert', payload: { businessName: 'Karioke' } }])
+    const json = await bodyOf(res)
+    expect(json.results[0]).toMatchObject({
+      id: 'sup-1',
+      ok: false,
+      error: expect.stringMatching(/Feature disabled by feature flag \(marketplace\)/),
+    })
+    expect(applyAction).not.toHaveBeenCalled()
+  })
+
+  it('BOUNDARY: wallet off does NOT gate milestone.decide in the outbox (the client release ladder survives)', async () => {
+    process.env.NEXT_FLAGS_OFF = 'wallet'
+    sessionFor('contractor')
+    const res = await syncFlush([{ id: 'm-1', type: 'milestone.decide', payload: { id: 'ms-1', decision: 'approve' } }])
+    const json = await bodyOf(res)
+    expect(json.results[0]).toMatchObject({ id: 'm-1', ok: true })
     expect(applyAction).toHaveBeenCalledTimes(1)
   })
 })

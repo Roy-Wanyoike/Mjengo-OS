@@ -5,6 +5,7 @@ import { applyAction, getProjectPayload, getProjectsList, type ActionType } from
 import { CLIENT_ACTIONS } from '@/shared/client-actions'
 import { route, genericError } from '@/backend/lib/route-kit'
 import { safeErrorMessage } from '@/backend/lib/guard'
+import { actionFlagGateMessage } from '@/backend/lib/action-flag-gate'
 
 // OFFLINE-FIRST SYNC + DETERMINISTIC CONFLICT RESOLUTION (spec §40 / §41, W1-SYNC)
 // ============================================================================
@@ -50,6 +51,22 @@ import { safeErrorMessage } from '@/backend/lib/guard'
 // produces no audit event. Financial rows without a natural key
 // (references/ids) cannot be compared against a prior application — they fall
 // through to the normal appliers, exactly as today.
+//
+// FEATURE-FLAG FAMILY GATE (W3-1, security issue S1): the applier loop below
+// enforces the SAME FLAGGED_ACTION_FAMILIES gate as POST /api/actions (the
+// ONE shared definition lives in src/backend/lib/action-flag-gate.ts). A
+// wallet/land_verification/marketplace-family item flushed by a NON-ADMIN
+// session while its flag is OFF fails PER-ITEM with the uniform
+// `Feature disabled by feature flag (<key>)` message — batch semantics, the
+// rest of the outbox continues — and writes NOTHING: no idempotency record
+// (nothing was applied — a later re-flush once the flag is back on applies
+// cleanly), no conflict pre-check reads, no applyAction, no audit event. The
+// gate runs BEFORE the §57 idempotency-replay short-circuit, mirroring
+// /api/actions' placement (a replay would merely echo ok for an item the
+// feature now refuses). Admin sessions bypass exactly as in /api/actions
+// (toggle & test), and NON-flagged families (milestone.*, attendance.*,
+// task.*, escrow.*, invoice.*, wages.*) are untouched by the gate — the
+// offline field flows and the client's release ladder survive flags-off.
 
 interface QueuedAction {
   id: string
@@ -527,6 +544,20 @@ export const POST = route(
     const results: SyncItemResult[] = []
     for (const action of actions) {
       try {
+        // (0) FEATURE-FLAG FAMILY GATE (W3-1, S1) — FIRST, before the role/
+        // pinning branch, before the §57 idempotency replay, before every
+        // conflict pre-check and before applyAction: a flagged-family item
+        // (payment.*/wallet.*/parcel.*/search.*/supplier.*/order.*/…) flushed
+        // while its flag is OFF is refused per-item for NON-ADMIN sessions
+        // with the exact /api/actions denial message, and NOTHING is written
+        // — no idem key, no apply, no audit. Batch semantics: the loop
+        // continues with the next item. Admins bypass (FLAG_BYPASS_ROLES).
+        const flagDenied = await actionFlagGateMessage(action.type, session)
+        if (flagDenied !== null) {
+          results.push({ id: action.id, ok: false, error: flagDenied })
+          continue
+        }
+
         if (isClient) {
           // Clients flush only client-allowlisted actions, pinned to their project.
           if (!CLIENT_ACTIONS.includes(action.type)) {
