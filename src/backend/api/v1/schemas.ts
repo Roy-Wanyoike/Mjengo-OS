@@ -261,6 +261,69 @@ export const supplyOrdersQuery = z.strictObject({
 /** GET /api/v1/supply/orders/:id — no query params (unknown keys rejected). */
 export const supplyOrderDetailQuery = z.strictObject({})
 
+// ---------------------------------------------------------------- Phase C (money governance)
+
+/**
+ * Milestone status filter — the six values the schema column comment
+ * documents. HONEST LADDER NOTE: the runtime ladder (actions/money.ts)
+ * writes five of them — locked → evidence_submitted → release_requested →
+ * released | rejected. 'approved' never persists (milestone.decide approve
+ * jumps straight to 'released', atomically with the escrow ledger debit in
+ * releaseMilestoneAtomic) — it stays filterable so the documented column
+ * domain is honored; a stored value the enum lacks stays visible unfiltered
+ * and never matches a filter (same convention as projectStatusFilter).
+ */
+export const milestoneStatusFilter = z.enum(
+  ['locked', 'evidence_submitted', 'release_requested', 'approved', 'released', 'rejected'],
+  {
+    error:
+      'status must be one of locked, evidence_submitted, release_requested, approved, released, rejected',
+  },
+)
+
+/** Invoice status filter (modules/invoices/types.ts InvoiceStatus, 6 values). */
+export const invoiceStatusFilter = z.enum(
+  ['draft', 'submitted', 'approved', 'rejected', 'paid', 'disputed'],
+  {
+    error: 'status must be one of draft, submitted, approved, rejected, paid, disputed',
+  },
+)
+
+/** Milestone id (cuid) — milestones carry no human code, unlike wallets/POs. */
+export const milestoneIdRef = z
+  .string('milestone id must be a string')
+  .min(1, 'milestone id must not be empty')
+  .max(40, 'milestone id must be at most 40 characters')
+
+/** Invoice id OR invoiceCode — both are 2-40 chars of [A-Za-z0-9_-]. */
+export const invoiceRef = z
+  .string('invoice reference must be a string')
+  .regex(
+    /^[A-Za-z0-9_-]{2,40}$/,
+    'invoice reference must be 2-40 characters (invoice id or code, e.g. INV-2026-000031)',
+  )
+
+/** GET /api/v1/projects/:id/milestones query. */
+export const projectMilestonesQuery = z.strictObject({
+  status: milestoneStatusFilter.optional(),
+  ...listQuery,
+})
+
+/** GET /api/v1/milestones/:id — no query params (unknown keys rejected). */
+export const milestoneDetailQuery = z.strictObject({})
+
+/** GET /api/v1/projects/:id/invoices query. */
+export const projectInvoicesQuery = z.strictObject({
+  status: invoiceStatusFilter.optional(),
+  ...listQuery,
+})
+
+/** GET /api/v1/invoices/:id — no query params (unknown keys rejected). */
+export const invoiceDetailQuery = z.strictObject({})
+
+/** GET /api/v1/projects/:id/escrow — no query params (unknown keys rejected). */
+export const projectEscrowQuery = z.strictObject({})
+
 // ---------------------------------------------------------------- parse helpers
 
 export type Parsed<T> = { ok: true; data: T } | { ok: false; response: NextResponse }

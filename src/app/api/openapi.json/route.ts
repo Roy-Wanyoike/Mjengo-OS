@@ -8,11 +8,13 @@ import { NextResponse } from 'next/server'
  * Hand-written but kept truthful field-for-field against the route code —
  * every documented path, parameter, body field, response field and status
  * code is produced by src/backend/api/v1/** (reorg: src/app/api/v1/** are thin shims; this is the SDK-generation seam
- * listed in ARCHITECTURE.md's roadmap). 14 /api/v1 paths = the 8 v1 wallet/
+ * listed in ARCHITECTURE.md's roadmap). 19 /api/v1 paths = the 8 v1 wallet/
  * payment route files + the 6 read-only Phase B files (task 10-a: projects
- * list/detail/tasks/deliveries + supply orders list/detail), plus the two
- * wave-3 app-level GETs added by W3-B: /api/audit (admin audit log, spec
- * §44) and /api/reports/budget-variance (QS report).
+ * list/detail/tasks/deliveries + supply orders list/detail) + the 5 read-only
+ * Phase C money-governance files (W3-2: projects milestones/invoices/escrow
+ * + milestone/invoice detail), plus the two wave-3 app-level GETs added by
+ * W3-B: /api/audit (admin audit log, spec §44) and /api/reports/
+ * budget-variance (QS report).
  *
  * Honest facts baked into the text: simulated-by-default payment rails (Daraja
  * sandbox when env-configured), KES-only money,
@@ -667,6 +669,260 @@ const readBadRequestResponse = {
   content: { 'application/json': { schema: errorSchema } },
 }
 
+// ---- Phase C (W3-2) schema fragments: money governance reads ----
+
+/** Milestone id path param (cuid — milestones carry no human code). */
+const milestoneIdPathParam = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', minLength: 1, maxLength: 40 },
+  description: 'Milestone id (cuid) — milestones have no human code, unlike wallets/POs/invoices.',
+}
+
+/** Invoice id OR invoiceCode path param. */
+const invoiceIdPathParam = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', minLength: 2, maxLength: 40, pattern: '^[A-Za-z0-9_-]{2,40}$' },
+  description: 'Invoice id (cuid) OR human invoiceCode (e.g. INV-2026-000031) — the route resolves both.',
+}
+
+/**
+ * 403 for the Phase C family: client pin + the honest NO-FLAG note (the
+ * release ladder and invoices deliberately survive the wallet flag).
+ */
+const moneyGovernanceForbiddenResponse = {
+  description:
+    'Signed in but not permitted: a client-role session pinned to a foreign project → ' +
+    '{ error: "Not permitted for this project" } (the same pin /api/v1/payments applies). HONEST FLAG NOTE: no ' +
+    'feature flag gates these resources — the wallet flag\'s documented boundary (flags.ts) keeps the escrow/' +
+    'milestone release ladder alive while it is off, and invoices were never gated by marketplace or wallet. ' +
+    'Body shape { error }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const milestoneNotFoundResponse = {
+  description: 'Unknown milestone. Body { error: "Milestone not found" }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const invoiceNotFoundResponse = {
+  description: 'Unknown invoice. Body { error: "Invoice not found" }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const milestoneSummarySchema = {
+  type: 'object',
+  description:
+    'One rung of the escrow/milestone release ladder (MjengoPay, spec §28-29). The list item; the detail adds ' +
+    'projectId, the parsed evidencePhotoIds, the decision fields and the release-ledger tie.',
+  required: [
+    'id', 'phaseId', 'phaseName', 'name', 'amount', 'status', 'evidencePhotoCount',
+    'requestedAt', 'decidedAt', 'releasedAt', 'createdAt',
+  ],
+  properties: {
+    id: { type: 'string', description: 'Milestone id (cuid) — the pagination cursor value.' },
+    phaseId: { type: ['string', 'null'], description: 'The phase this milestone pays progress on, when linked.' },
+    phaseName: { type: ['string', 'null'], description: 'Phase name joined from the payload phases (null when phaseId is null).' },
+    name: { type: 'string' },
+    amount: { type: 'number', description: 'KES released when the milestone completes.' },
+    status: {
+      type: 'string',
+      enum: ['locked', 'evidence_submitted', 'release_requested', 'approved', 'released', 'rejected'],
+      description:
+        'The ladder. The runtime writes locked → evidence_submitted → release_requested → released | rejected; ' +
+        "'approved' is a documented column value the current release path does not write (approve jumps straight to " +
+        "'released', atomically with the escrow ledger debit).",
+    },
+    evidencePhotoCount: { type: 'integer', description: 'Parsed length of the JSON evidencePhotoIds array (proof-of-work).' },
+    requestedAt: { type: ['string', 'null'], format: 'date-time', description: 'Set when the ladder reaches release_requested.' },
+    decidedAt: { type: ['string', 'null'], format: 'date-time', description: 'Set when the client decides (approve → released, or reject).' },
+    releasedAt: { type: ['string', 'null'], format: 'date-time', description: 'Set when the money moves (only released milestones carry it).' },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const milestoneDetailSchema = {
+  type: 'object',
+  description:
+    'One milestone with its full ladder: status timestamps, evidence photo IDS (no bytes, no storage URLs — the ' +
+    'same honesty rule as the v1 supply photos), the decision history, and the release-ledger tie. HONEST: the ' +
+    'model carries no updatedAt and no offline-sync version — those fields are absent, never fabricated. releaseLedger ' +
+    'is the Transaction row the runtime release posts (type milestone, reference MJP-<id tail> — the A-1-lite ' +
+    'convention); null for not-released milestones and for pre-ledger seeded history.',
+  required: [
+    'id', 'phaseId', 'phaseName', 'name', 'amount', 'status', 'evidencePhotoCount',
+    'requestedAt', 'decidedAt', 'releasedAt', 'createdAt', 'projectId', 'evidencePhotoIds',
+    'decidedBy', 'decisionNote', 'releaseLedger',
+  ],
+  properties: {
+    ...milestoneSummarySchema.properties,
+    projectId: { type: 'string' },
+    evidencePhotoIds: {
+      type: 'array',
+      description: 'SitePhoto IDS ONLY (the parsed Milestone.evidencePhotoIds JSON array) — v1 serves no photo bytes or storage URLs.',
+      items: { type: 'string' },
+    },
+    decidedBy: { type: ['string', 'null'], description: 'The client name who approved/rejected (decision history).' },
+    decisionNote: { type: ['string', 'null'], description: 'The client\'s note recorded with the decision.' },
+    releaseLedger: {
+      type: ['object', 'null'],
+      description:
+        'The money proof of a release — the Transaction row releaseMilestoneAtomic posts. Null when the milestone ' +
+        'is not released or predates the ledger convention (seeded history).',
+      required: ['transactionId', 'reference', 'amount', 'method', 'ledgerTxnId', 'costCode', 'date', 'note'],
+      properties: {
+        transactionId: { type: 'string' },
+        reference: { type: 'string', description: 'MJP-<milestone id tail> — the convention the A-1-lite ledger check matches on.' },
+        amount: { type: 'number', description: 'KES — equals the milestone amount.' },
+        method: { type: 'string', description: 'Escrow releases post method "escrow".' },
+        ledgerTxnId: { type: ['string', 'null'], description: 'The double-entry LedgerTransaction id backing the row.' },
+        costCode: { type: ['string', 'null'] },
+        date: { type: 'string', format: 'date-time' },
+        note: { type: ['string', 'null'] },
+      },
+    },
+  },
+}
+
+const threeWayMatchSchema = {
+  type: 'object',
+  description:
+    'The 3-way-match verdict (PO ↔ invoice ↔ delivery) — recomputed per request by modules/invoices/three-way.ts ' +
+    '(the same pure matchThreeWay the pay gate and the Finder matrix run; never stored, never stale). WARN-ONLY by ' +
+    'design: every discrepancy is "review required" language, never an accusation — the human decides (a payment ' +
+    'with open items carries the payer\'s acknowledgeMismatch decision in the Approval trail).',
+  required: ['mode', 'hasOrder', 'hasDelivery', 'lines', 'mismatches', 'note', 'invoiceCode'],
+  properties: {
+    mode: { type: 'string', enum: ['three-way', 'two-way'], description: 'two-way when the invoice carries no purchase order (invoice vs project delivery records by name).' },
+    hasOrder: { type: 'boolean' },
+    hasDelivery: { type: 'boolean', description: 'False when no delivery is recorded yet — counts not verifiable (honest, not zero).' },
+    invoiceCode: { type: 'string' },
+    lines: {
+      type: 'array',
+      description: 'The per-line matrix: PO qty | invoice qty | delivered qty.',
+      items: {
+        type: 'object',
+        required: ['name', 'poQty', 'invQty', 'deliveredQty', 'feeLine'],
+        properties: {
+          name: { type: 'string' },
+          poQty: { type: ['number', 'null'], description: 'Null = not on the PO / fee line.' },
+          invQty: { type: 'number' },
+          deliveredQty: { type: ['number', 'null'], description: 'Null = no delivery record to compare against (unknown, not zero).' },
+          feeLine: { type: 'boolean', description: 'Delivery/transport fee lines reconcile against the PO delivery fee by amount.' },
+        },
+      },
+    },
+    mismatches: {
+      type: 'array',
+      description: 'Open review items (short deliveries, over-deliveries, PO/invoice qty differences, unverifiable counts) — honest language, never an accusation.',
+      items: {
+        type: 'object',
+        required: ['name', 'po', 'inv', 'delivered', 'issue'],
+        properties: {
+          name: { type: 'string' },
+          po: { type: ['number', 'null'] },
+          inv: { type: 'number' },
+          delivered: { type: ['number', 'null'] },
+          issue: { type: 'string' },
+        },
+      },
+    },
+    note: { type: 'string', description: 'One-line honest summary (mode, order code, open-item count or the no-delivery caveat).' },
+  },
+}
+
+const invoiceSummarySchema = {
+  type: 'object',
+  description:
+    'One supplier invoice summary (the list item; the detail adds lines, note and the 3-way verdict). Disputed and ' +
+    'paid states are represented exactly as stored — nothing invented, nothing hidden.',
+  required: [
+    'id', 'invoiceCode', 'status', 'supplierId', 'supplierName', 'orderId', 'orderCode', 'subtotal', 'tax',
+    'total', 'lineCount', 'dueDate', 'issuedAt', 'submittedAt', 'decidedAt', 'decidedBy', 'paidAt',
+    'paidByRole', 'paymentMethod', 'paymentReference', 'createdBy', 'createdAt', 'updatedAt',
+  ],
+  properties: {
+    id: { type: 'string', description: 'Invoice id (cuid) — the pagination cursor value.' },
+    invoiceCode: { type: 'string', description: 'Human invoice code, e.g. INV-2026-000031.' },
+    status: { type: 'string', enum: ['draft', 'submitted', 'approved', 'rejected', 'paid', 'disputed'], description: 'Disputes ride invoice.update { status: "disputed" } while SUBMITTED/APPROVED (documented path — there is no dispute action).' },
+    supplierId: { type: ['string', 'null'] },
+    supplierName: { type: ['string', 'null'], description: 'Supplier.businessName (joined).' },
+    orderId: { type: ['string', 'null'], description: 'The linked purchase order, when the invoice came from one.' },
+    orderCode: { type: ['string', 'null'] },
+    subtotal: { type: 'number', description: 'KES — recomputed server-side, never client sums.' },
+    tax: { type: 'number', description: 'KES.' },
+    total: { type: 'number', description: 'KES.' },
+    lineCount: { type: 'integer' },
+    dueDate: { type: ['string', 'null'], format: 'date-time' },
+    issuedAt: { type: ['string', 'null'], format: 'date-time' },
+    submittedAt: { type: ['string', 'null'], format: 'date-time' },
+    decidedAt: { type: ['string', 'null'], format: 'date-time' },
+    decidedBy: { type: ['string', 'null'], description: 'Who approved/rejected/disputed.' },
+    paidAt: { type: ['string', 'null'], format: 'date-time' },
+    paidByRole: { type: ['string', 'null'], description: 'client | contractor | finance.' },
+    paymentMethod: { type: ['string', 'null'], description: 'mpesa | bank | card | wallet | cash.' },
+    paymentReference: { type: ['string', 'null'], description: 'e.g. MPESA-8HKT4Q2A.' },
+    createdBy: { type: ['string', 'null'] },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const invoiceDetailSchema = {
+  type: 'object',
+  description:
+    'One supplier invoice with its full lifecycle, lines, totals, payment references and the 3-way-match verdict ' +
+    'computed by the invoices module\'s own read-only threeWayCheck (one algorithm, one source of truth — the exact ' +
+    'function /api/actions invoice.threeWayCheck runs, so the detail and the pay gate can never disagree).',
+  required: [
+    'id', 'invoiceCode', 'projectId', 'status', 'supplierId', 'supplierName', 'orderId', 'orderCode',
+    'subtotal', 'tax', 'total', 'lines', 'dueDate', 'issuedAt', 'submittedAt', 'decidedAt', 'decidedBy',
+    'paidAt', 'paidByRole', 'paymentMethod', 'paymentReference', 'createdBy', 'note', 'threeWayMatch',
+    'createdAt', 'updatedAt',
+  ],
+  properties: {
+    ...invoiceSummarySchema.properties,
+    projectId: { type: 'string' },
+    note: { type: ['string', 'null'] },
+    lines: {
+      type: 'array',
+      description: 'The invoiced lines (the paperwork side of the 3-way match).',
+      items: {
+        type: 'object',
+        required: ['id', 'name', 'qty', 'unitPrice', 'lineTotal'],
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          qty: { type: 'number' },
+          unitPrice: { type: 'number', description: 'KES.' },
+          lineTotal: { type: 'number', description: 'KES.' },
+        },
+      },
+    },
+    threeWayMatch: threeWayMatchSchema,
+  },
+}
+
+const projectEscrowSchema = {
+  type: 'object',
+  description:
+    'The project\'s escrow position. HONEST DERIVATION (the note the spec demands): balance is derived from the ' +
+    'ESCROW:<projectId> ledger account entries (credits − debits on the liability account) — never the stored ' +
+    'EscrowWallet.balance projection. A project with no escrow account yet (created lazily by the first top-up) ' +
+    'derives an honest 0; this route never writes anything.',
+  required: ['projectId', 'currency', 'balance', 'ledgerAccountCode', 'derivation'],
+  properties: {
+    projectId: { type: 'string' },
+    currency: { const: 'KES', description: 'MjengoOS money is KES-only today.' },
+    balance: { type: 'number', description: 'KES — ledger-derived (credits − debits), never the stored projection.' },
+    ledgerAccountCode: { type: 'string', description: 'e.g. ESCROW:<projectId> — the double-entry backing account (liability).' },
+    derivation: { type: 'string', description: 'The honest note stating how the number was produced.' },
+  },
+}
+
 // ---- the document ------------------------------------------------------------
 
 const spec = {
@@ -676,11 +932,14 @@ const spec = {
     version: '1.0.0',
     description:
       'REST v1 surface of MjengoOS: wallet accounts, derived balances, double-entry ledger reads, money movement ' +
-      'and payment execution (spec §38 wallets / §57 payments), plus the Phase B READ-ONLY projects + supply ' +
-      'resources (project roster, honest summaries, task lists, purchase orders and delivery verification).\n\n' +
+      'and payment execution (spec §38 wallets / §57 payments), the Phase B READ-ONLY projects + supply ' +
+      'resources (project roster, honest summaries, task lists, purchase orders and delivery verification), and ' +
+      'the Phase C READ-ONLY money-governance resources (milestone release ladder, escrow balance, invoice ' +
+      'lifecycle with 3-way-match verdicts).\n\n' +
       '**Honest scope notes** — money is KES-only; the payment provider rails are SIMULATED (each response ' +
       'carries an honest integrationNote; a real Daraja/bank provider plugs into the same seam); balances are ' +
-      'always derived from ledger entries, never stored.\n\n' +
+      'always derived from ledger entries, never stored; every v1 mutation lives in the wallet/payment family — ' +
+      'milestones, escrow and invoices are READ-ONLY here (their mutations stay on POST /api/actions).\n\n' +
       '**Auth** — NextAuth credentials session (HttpOnly, signed JWT cookie `next-auth.session-token`). ' +
       'Wallet routes: finance+admin. Payments: finance, admin, or the project-pinned client. ' +
       'No API keys, no OAuth — cookie session only, same-origin.\n\n' +
@@ -690,10 +949,11 @@ const spec = {
       '(replayed: true) and never 409.\n\n' +
       '**Pagination** — limit (1-200, default 50) + id cursor; responses carry nextCursor/hasMore.\n\n' +
       'This document is served unauthenticated at /api/openapi.json and is the SDK-generation seam ' +
-      '(ARCHITECTURE.md roadmap). It covers exactly the 14 /api/v1 route paths — the wallet + payment surface plus ' +
+      '(ARCHITECTURE.md roadmap). It covers exactly the 19 /api/v1 route paths — the wallet + payment surface, ' +
       'the Phase B READ-ONLY projects + supply resources (projects list/detail/tasks/deliveries, supply orders ' +
-      'list/detail — no mutations outside the money family) — and the two wave-3 app-level GETs: /api/audit ' +
-      '(admin audit log, spec §44) and /api/reports/budget-variance (QS report).',
+      'list/detail), and the Phase C READ-ONLY money-governance resources (milestones list/detail, escrow, ' +
+      'invoices list/detail — no mutations outside the money family) — and the two wave-3 app-level GETs: ' +
+      '/api/audit (admin audit log, spec §44) and /api/reports/budget-variance (QS report).',
   },
   servers: [{ url: '/', description: 'Same-origin (the app that rendered this document).' }],
   tags: [
@@ -701,6 +961,8 @@ const spec = {
     { name: 'payments', description: 'Payment execution for approved payment requests (finance/admin/client).' },
     { name: 'projects', description: 'Read-only project roster, honest summaries and task lists (any signed-in role; client-role sessions pinned to their own project).' },
     { name: 'supply', description: 'Read-only procurement reads: purchase orders and delivery verification (any signed-in role, client pinned; gated by the marketplace flag for non-admins).' },
+    { name: 'milestones', description: 'Read-only escrow & milestone release ladder (any signed-in role, client pinned; deliberately NOT gated by the wallet flag — the client release flow must survive it, per the flag\'s documented boundary).' },
+    { name: 'invoices', description: 'Read-only supplier invoice lifecycle with 3-way-match verdicts (any signed-in role, client pinned; not gated by the marketplace flag — invoices are their own module sharing the Finder tab).' },
     { name: 'audit', description: 'Admin audit-log reads — the append-only event ledger (admin only, spec §44).' },
     { name: 'reports', description: 'QS / cost-plan reports: budget variance per phase and category (contractor, admin, supervisor, qs).' },
   ],
@@ -822,6 +1084,12 @@ const spec = {
       DeliveryVerification: deliveryVerificationSchema,
       SupplyOrderSummary: supplyOrderSummarySchema,
       SupplyOrderDetail: supplyOrderDetailSchema,
+      MilestoneSummary: milestoneSummarySchema,
+      MilestoneDetail: milestoneDetailSchema,
+      InvoiceSummary: invoiceSummarySchema,
+      InvoiceDetail: invoiceDetailSchema,
+      ThreeWayMatch: threeWayMatchSchema,
+      ProjectEscrow: projectEscrowSchema,
     },
   },
   paths: {
@@ -1321,6 +1589,168 @@ const spec = {
           401: unauthorizedResponse,
           403: supplyForbiddenResponse,
           404: orderNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/milestones': {
+      get: {
+        tags: ['milestones'],
+        operationId: 'listProjectMilestones',
+        summary: 'Milestone release ladder of a project (cursor-paginated)',
+        description:
+          'The escrow/milestone release ladder (MjengoPay, spec §28-29): locked → evidence_submitted → ' +
+          'release_requested → released | rejected, every rung money-proven by the double-entry ledger. Data comes ' +
+          'from getProjectPayload\'s milestones read (db.milestone.findMany createdAt ASC — the same query the ' +
+          'webapp payload runs); the page is ordered (createdAt ASC, id ASC) for a deterministic keyset. READ-ONLY: ' +
+          'every mutation (milestone.create / evidence / requestRelease / decide) stays on POST /api/actions — v1 ' +
+          'never moves escrow. NO FEATURE FLAG (honest boundary, flags.ts): the `wallet` flag gates the user-facing ' +
+          'wallet & payment-request surface but deliberately NOT the escrow/milestone governance ladder — "the ' +
+          'client\'s release flow must survive" while it is off. GUARD: any signed-in role; client-role sessions ' +
+          'pinned to their own project (foreign → 403); unknown project → 404. ?status= filters BEFORE pagination ' +
+          '(a cursor that falls out → 400). Rate limit: 120/min per principal.',
+        security,
+        parameters: [
+          projectIdPathParam,
+          statusParam(
+            ['locked', 'evidence_submitted', 'release_requested', 'approved', 'released', 'rejected'],
+            'milestone status',
+          ),
+          limitParam,
+          cursorParam('a milestone id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/MilestoneSummary' }, 'milestone id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: moneyGovernanceForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/milestones/{id}': {
+      get: {
+        tags: ['milestones'],
+        operationId: 'getMilestone',
+        summary: 'One milestone: ladder timestamps, evidence photo ids, decision history, release ledger',
+        description:
+          'One milestone with its full ladder — requestedAt/decidedAt/releasedAt (null until each rung is reached), ' +
+          'the parsed evidencePhotoIds (SitePhoto IDS ONLY — no bytes, no storage URLs in /api/v1), the decision ' +
+          'history (decidedAt/decidedBy/decisionNote, kept forever on rejected milestones too) and the release\'s ' +
+          'ledger proof: the Transaction row the runtime release posts (type milestone, reference MJP-<id tail> — ' +
+          'the A-1-lite convention). releaseLedger is honestly null for not-released milestones and pre-ledger ' +
+          'seeded history. READ-ONLY — mutations stay on POST /api/actions (milestone.decide is CLIENT-only there). ' +
+          'NO FEATURE FLAG (the wallet flag\'s documented boundary keeps the release ladder alive while it is off). ' +
+          'GUARD: resolve-first, pin-second (the v1 payments precedent) — a client-role session must be pinned to ' +
+          'the milestone\'s own project (else 403). Unknown milestone → 404. Read via a route-layer findFirst (the ' +
+          'money module has no public single-milestone read — the wallet-transactions precedent). Pagination does ' +
+          'not apply (one object). Rate limit: 120/min per principal.',
+        security,
+        parameters: [milestoneIdPathParam],
+        responses: {
+          200: { description: 'ok: true, data = MilestoneDetail.', ...json(ok({ $ref: '#/components/schemas/MilestoneDetail' })) },
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: moneyGovernanceForbiddenResponse,
+          404: milestoneNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/invoices': {
+      get: {
+        tags: ['invoices'],
+        operationId: 'listProjectInvoices',
+        summary: 'Supplier invoices of a project (cursor-paginated)',
+        description:
+          'The supplier-invoice lifecycle (Finder §13-15): draft → submitted → approved | rejected | disputed → ' +
+          'paid, with totals and payment references — disputed and paid states represented exactly as stored. Data ' +
+          'comes from getProjectPayload\'s invoices slice (loadInvoicesSlice, the invoices module\'s public read — ' +
+          'the same rows the Finder invoices section renders); the page is ordered (createdAt DESC, id DESC) for a ' +
+          'deterministic keyset. READ-ONLY: every mutation (invoice.create / update / submit / decide / pay; ' +
+          'disputes ride invoice.update { status: "disputed" }) stays on POST /api/actions — v1 never records ' +
+          'payments. NO FEATURE FLAG (honest boundary, flags.ts): the `marketplace` flag gates the supply loop but ' +
+          'explicitly NOT invoice.* (its own module sharing the Finder tab), and the wallet flag never applied to ' +
+          'it either. GUARD: any signed-in role; client-role sessions pinned to their own project (foreign → 403); ' +
+          'unknown project → 404. ?status= (the six InvoiceStatus values) filters BEFORE pagination (a cursor that ' +
+          'falls out → 400). Rate limit: 120/min per principal.',
+        security,
+        parameters: [
+          projectIdPathParam,
+          statusParam(['draft', 'submitted', 'approved', 'rejected', 'paid', 'disputed'], 'invoice status'),
+          limitParam,
+          cursorParam('an invoice id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/InvoiceSummary' }, 'invoice id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: moneyGovernanceForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/invoices/{id}': {
+      get: {
+        tags: ['invoices'],
+        operationId: 'getInvoice',
+        summary: 'One invoice: lifecycle, lines, totals, payment refs + the 3-way-match verdict',
+        description:
+          'One supplier invoice (id OR invoiceCode) with its full lifecycle, lines, totals, payment references and ' +
+          'the 3-WAY-MATCH VERDICT (PO ↔ invoice ↔ delivery) — recomputed per request by modules/invoices/' +
+          'three-way.ts through the module\'s own read-only threeWayCheck: the exact function /api/actions ' +
+          'invoice.threeWayCheck runs, so this detail and the invoice.pay gate can never disagree. The verdict is ' +
+          'WARN-ONLY by design (the module\'s honesty rules): discrepancies are "review required" language, never ' +
+          'accusations — an authorized payment with open items carries the payer\'s acknowledgeMismatch decision in ' +
+          'the Approval trail. Read via a route-layer include (lines + supplier + order — the loadInvoicesSlice ' +
+          'columns; the wallet-transactions precedent). READ-ONLY — mutations stay on POST /api/actions. NO FEATURE ' +
+          'FLAG (invoices are not gated by marketplace or wallet — see flags.ts). GUARD: resolve-first, pin-second ' +
+          '(the v1 payments precedent) — a client-role session must be pinned to the invoice\'s own project (else ' +
+          '403). Unknown invoice → 404. Pagination does not apply (one object). Rate limit: 120/min per principal.',
+        security,
+        parameters: [invoiceIdPathParam],
+        responses: {
+          200: { description: 'ok: true, data = InvoiceDetail (carries threeWayMatch).', ...json(ok({ $ref: '#/components/schemas/InvoiceDetail' })) },
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: moneyGovernanceForbiddenResponse,
+          404: invoiceNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/escrow': {
+      get: {
+        tags: ['milestones'],
+        operationId: 'getProjectEscrow',
+        summary: 'The project escrow position (ledger-derived balance)',
+        description:
+          'The project\'s escrow position. THE LEDGER NEVER LIES (spec §39 / roadmap §8): balance is DERIVED from ' +
+          'the ESCROW:<projectId> ledger account\'s entries (credits − debits on the liability account) via the ' +
+          'ledger module\'s derivedBalance() — the ONLY way a balance is known, the same derivation the v1 wallet ' +
+          'family uses. It is NEVER the stored EscrowWallet.balance projection (F-MONEY keeps that projection in ' +
+          'sync inside the posting transaction; this route simply does not read it, so any drift surfaces here ' +
+          'honestly instead of being copied). A project with no escrow account yet (created lazily by the first ' +
+          'top-up) derives an honest 0 — this route never creates the account and never writes anything. READ-ONLY: ' +
+          'escrow.topup and milestone releases stay on POST /api/actions. NO FEATURE FLAG (the wallet flag\'s ' +
+          'documented boundary keeps the escrow governance ladder alive while it is off). GUARD: any signed-in role; ' +
+          'client-role sessions pinned to their own project (foreign → 403); unknown project → 404. Pagination does ' +
+          'not apply (one object). Rate limit: 120/min per principal.',
+        security,
+        parameters: [projectIdPathParam],
+        responses: {
+          200: { description: 'ok: true, data = ProjectEscrow (balance + ledgerAccountCode + the honest derivation note).', ...json(ok({ $ref: '#/components/schemas/ProjectEscrow' })) },
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: moneyGovernanceForbiddenResponse,
+          404: projectNotFoundResponse,
           429: rateLimitedResponse,
           500: serverErrorResponse,
         },
