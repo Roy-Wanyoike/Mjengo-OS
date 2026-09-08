@@ -12,7 +12,7 @@ TypeScript strict) application whose UI is one client-rendered page
 share-link views) talking to guarded API routes under `src/app/api/**`
 (NextAuth v4 credentials + JWT session cookies, role guards, rate limits,
 idempotency). Persistence is **Prisma 6 + SQLite** (single file at
-`DATABASE_URL`) with a 61-model schema, a double-entry ledger and
+`DATABASE_URL`) with a 63-model schema, a double-entry ledger and
 `_prisma_migrations` bookkeeping. File uploads (site photos, documents) are
 written to `public/photos/` and `public/docs/` on local disk. `next build`
 emits a **standalone** server (`output: "standalone"` → `.next/standalone/
@@ -49,7 +49,10 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `RATE_LIMIT_SQLITE_PATH` | with `RATE_LIMIT_STORE=sqlite` | Path of the shared store file (default `db/ratelimit.db`, `file:` prefix tolerated). Keep it on the same persistent volume as `DATABASE_URL` — never point it at the Prisma database; it is disposable cache-like state. |
 | `MUTATION_ORIGIN_ALLOWLIST` | hardening: optional | When set (comma-separated origin list), JSON mutation requests are rejected unless their `Origin` header matches — CSRF defense-in-depth on top of cookies. |
 | `USSD_WEBHOOK_SECRET` | hardening: optional | When set, `/api/ussd` requires a valid HMAC signature derived from this shared secret on every request (authenticated gateway webhooks); unset = the documented demo posture. |
+| `WHATSAPP_WEBHOOK_SECRET` | hardening: optional | Same posture for the WhatsApp field line: when set, `POST /api/whatsapp` (contract documented at `GET /api/whatsapp`) must carry `X-Signature: <hex HMAC-SHA256 of the raw body>` — shared-secret auth for the relay (Meta Cloud API bridge or aggregator) that would POST `{ from, text, timestamp }`. Unset = open demo posture (requests are still rate-limited 20/min/phone + 40/min/IP; every reply is footered "MjengoOS sim" — no WhatsApp provider is wired). |
 | `JOBS_RUN_TOKEN` | scheduler: optional | Shared secret (`openssl rand -hex 32`) that lets an external scheduler authenticate `POST /api/jobs/run` with `Authorization: Bearer <token>` (no browser session needed — compose `jobs-tick` sidecar, systemd timer, any cron). Same value must reach the app and the scheduler. **Unset = the bearer path is fully disabled** (fail closed — the endpoint then answers only to contractor/admin sessions, exactly as before). See §7.3. |
+| `NOTIFY_SMS_WEBHOOK_URL` / `_TOKEN` | notifications: optional | The SMS webhook relay: when the URL is set, notify calls that pass `opts.sms` additionally POST JSON `{ to, text, metadata }` to it (the optional token rides as a bearer header). Credentials stay in YOUR gateway — nothing SMS-related lives in this app. Rows honestly record `sent`/`failed` + delivery detail. |
+| `AT_API_KEY` + `AT_USERNAME` (+ `AT_SENDER_ID`, `AT_ENV`) | notifications: alternative to the webhook | Direct **Africa's Talking** provider: with both values set (a partial pair is ignored, fail-closed) and no webhook URL configured, notify calls AT's REST v1 messaging endpoint directly and records the real `messageId` as `providerRef`. The API key can send and bill SMS on your AT account — keep the env file uncommitted and narrowly readable. `AT_ENV=sandbox` targets AT's sandbox host for wiring tests without billing. **Webhook wins if both are configured; with neither, nothing external is called** (rows stay `logged`). |
 | `DARAJA_RECONCILE_AFTER_MIN` / `_INTERVAL_MIN` / `_MAX_AGE_MIN` | Daraja sweep: optional | Tuning for the `wallet.reconcile` job (pending STK-intent reconciliation, §7.3): probe intents once they are `AFTER` minutes old (default 2), re-probe every `INTERVAL` minutes (default 5, matching the scheduler tick), stop probing past `MAX_AGE` minutes (default 60 — the intent stays PENDING, never an invented failure/credit). Invalid values warn and fall back to defaults; all-unset = defaults, and with no Daraja env no intents exist so the sweep does nothing. |
 | `DARAJA_ALLOWED_IPS` | Daraja webhook: optional | Comma-separated IPv4 CIDRs (and/or bare IPs), e.g. `196.201.214.0/24` — when set, the STK callback route rejects requests whose resolved client IP (x-forwarded-for per `TRUST_PROXY`) matches no entry with 403 **before the body is parsed**; unresolvable IPs are rejected too (fail closed). Unset = the documented posture (unguessable secret path + query-API reconciliation). IPv6 = exact-literal match only (no IPv6 CIDR). Invalid entries are logged and ignored, but a set value with zero valid entries denies **all** traffic. Only sound behind a proxy you control that forwards `x-forwarded-for` (`TRUST_PROXY=1`). |
 | `S3_ENDPOINT` + 4 more | object storage: optional | The five `S3_*` values (`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) switch photo uploads from local disk to an S3/R2/MinIO-compatible bucket (presigned client-direct uploads become available). **All five or nothing** — a partial set fail-closes to local disk with one logged warning. Optional `S3_PUBLIC_BASE` = stable public/CDN URL base. See §9. |
@@ -58,6 +61,11 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 Cookie policy is switched per request in `src/backend/lib/auth.ts`
 (`buildAuthOptions`): https (proxied) traffic gets `SameSite=None; Secure`,
 direct localhost keeps next-auth's `lax` defaults.
+
+Full per-variable commentary lives in `.env.example` (each block is written
+to be copy-paste-safe). **In flight (Wave 5):** web push notifications will
+introduce VAPID keys through the same env-gated, fail-closed pattern — they
+will be documented here and in `.env.example` when they ship, not before.
 
 ## 4. Local development quickstart
 
@@ -82,8 +90,12 @@ The database ships **empty** — seed the demo data next.
 
 - **`bunx prisma migrate deploy`** — the production path. Applies
   `prisma/migrations/` in order and records them in `_prisma_migrations`.
-  Baseline: `0_init` (the entire 61-model schema, generated from
-  `prisma/schema.prisma`). Safe, additive, never drops data.
+  Baseline: `0_init` (the 61-model foundation schema, generated from
+  `prisma/schema.prisma`); then two **additive-only** migrations:
+  `1_mjengo_score` (the `MjengoScore` trust-score table — W3-3) and
+  `2_draw_pack` (the immutable `DrawPack` evidence-bundle table — W4-1);
+  63 models today. Each is one `CREATE TABLE`, zero data migration — safe,
+  additive, never drops data.
 - **`bunx prisma db push`** (or `bun run db:push`) — the prototyping path
   used while the schema is still moving: pushes `schema.prisma` straight to
   the DB, ignoring migrations. It still works after the baseline — push does

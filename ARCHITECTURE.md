@@ -13,7 +13,10 @@ product domain. It runs as a single deployable web app + PWA.
 
 ```text
 Next.js 16 (App Router, RSC shell + client app)
-  ├── app/           src/app/** — pages + /api HTTP routes (framework-fixed)
+  ├── app/           src/app/** — pages + /api HTTP routes (framework-fixed):
+  │                  guarded app routes + the ussd/whatsapp field-line webhooks
+  │                  + the /api/v1 REST surface (19 OpenAPI-documented paths,
+  │                  contract served at /api/openapi.json)
   ├── frontend/      src/frontend/** — web UI: mjengo/ (tab surfaces, role-aware),
   │                  ui/ (shadcn primitives), auth/, i18n/, hooks/
   │                  (use-mjengo.ts: zustand + persisted offline outbox)
@@ -22,20 +25,44 @@ Next.js 16 (App Router, RSC shell + client app)
   ├── shared/        src/shared/** — isomorphic contracts (permissions role
   │                  matrix, CLIENT_ACTIONS allowlist)
   └── backend/       src/backend/** — server-only: lib/ (guard, auth, audit,
-  │                  rate-limit, db, ai, mjengo payload+dispatcher) +
-  │                  actions/ + modules/** — each module = service + policy + types
+                    rate-limit, db, ai, mjengo payload+dispatcher) +
+                    actions/ + modules/** — each module = service + policy + types
         ├── ledger    double-entry accounts/transactions/entries (source of truth)
-        ├── wallet    escrow, payment requests, provider seam (SimulatedProvider)
+        ├── wallet    escrow, payment requests, provider seam (SimulatedProvider
+        │            default; Daraja sandbox activates from env, reconcile sweep)
         ├── supply    requests → approvals → quotes → POs → deliveries → site store
         ├── inventory append-only stock movements, derived closing stock
         ├── invoices  lifecycle, 3-way match (PO ↔ invoice ↔ delivery)
+        ├── drawpack  evidence draw packs — immutable, SHA-256-stamped proof
+        │            bundles frozen at milestone release, served via the share
+        │            link (one pack per release, DB-enforced unique)
         ├── land      parcels, documents, registry search, property passport
         ├── professionals verified directory + credential checks
-        ├── intel     risk engine, health score, digest, price intelligence
-        ├── notify    in-app notifications (deliveryStatus honesty)
+        ├── intel     risk engine, MjengoScore trust score (evidence-derived,
+        │            append-only history), digest, price intelligence
+        ├── notify    in-app notifications (deliveryStatus honesty) + SMS
+        │            providers behind one seam (webhook relay or direct
+        │            Africa's Talking — env-gated, fail-closed, pick one)
         ├── events    domain event bus (in-process, durable rows)
         └── jobs      background job queue (JobRecord) with guarded run endpoint
 ```
+
+**Field channels:** the USSD (`*384#` sim) and WhatsApp webhooks are public,
+rate-limited, optionally HMAC-signed routes that dispatch through the *same*
+`applyAction` appliers the app uses — with an action allowlist as the grammar
+(attendance + photo comments only; zero wallet/land/supply types, so the
+feature-flag family gate is never needed). Worker identity is the phone
+number; replies are footered "MjengoOS sim". **Supplier role seam (Wave 5,
+in flight):** the marketplace's supply side gets its own scoped role and
+surface (catalog, quotes, orders, delivery confirmation), pinned to one
+supplier — the same fail-closed pattern the client role uses.
+
+**MjengoScore discipline:** computed only by the explicit `score.recompute`
+action, from six evidence-derived components (evidence-backed releases,
+verified attendance, budget pace, variation discipline, delivery
+accuracy, invoice disputes) — append-only history, `RULE_VERSION` stamped,
+null (not a fake 0) when the evidence is too thin. The score gates nothing
+and approves nothing.
 
 **Rules that are non-negotiable in this codebase:**
 
@@ -81,14 +108,26 @@ logic. AI results are always labeled with confidence and require human applicati
 AI never writes official records directly.
 
 **Payments:** `PaymentProvider` abstraction (`src/backend/modules/wallet/providers.ts`).
-`SimulatedProvider` today; M-Pesa Daraja / card rails plug in behind the same seam with
-idempotent replay keys already enforced.
+`SimulatedProvider` is the default; a Safaricom **Daraja sandbox** provider
+activates from env behind the same seam (STK push/query/reversal shapes,
+webhook with unguessable derived path + reconciliation sweep for missed
+callbacks) — an honest sandbox, not a licensed rail. Card rails plug in the
+same way; idempotent replay keys are already enforced.
+
+**SMS:** one `ChannelProvider` seam, two providers — a generic webhook relay
+(`NOTIFY_SMS_WEBHOOK_URL`, credentials stay in your gateway) or direct
+Africa's Talking (`AT_API_KEY` + `AT_USERNAME`). Both env-gated and
+fail-closed; with neither set, nothing external is called and rows honestly
+stay `logged`. **Web push (Wave 5, in flight):** VAPID-gated push through the
+same notify seam, honest `logged` default.
 
 ---
 
 ## Sandbox constraints (why some things are "simulated")
 
 This workspace runs a single Next.js instance with SQLite and no external credentials.
-Therefore: payment rails, SMS/USSD gateways, push notifications, and government registry
-APIs are **honestly simulated** behind real seams. No secret ever ships in the repo.
+Therefore: payment rails (Daraja **sandbox** when configured), the USSD/WhatsApp field
+lines (simulated, one POST-contract away from a real relay), web push (in flight) and
+government registry APIs are **honestly simulated** behind real seams — while SMS has a
+**real** Africa's Talking option that activates from env. No secret ever ships in the repo.
 See README for the full honesty map.

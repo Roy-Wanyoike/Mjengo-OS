@@ -2,14 +2,17 @@
 
 An **evidence-based construction project OS for Kenya**: phase budgets on a
 double-entry ledger, escrow-backed milestones released against photo proof,
-AI photo verification, `*384#` USSD attendance for feature phones, and share
-links that let clients abroad watch their build without an account.
+**MjengoScore** (an evidence-derived contractor trust score), hash-stamped
+**evidence draw packs** for diaspora clients, AI photo verification, `*384#`
+USSD and WhatsApp attendance for feature phones, and share links that let
+clients abroad watch their build without an account.
 
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
 [![Prisma](https://img.shields.io/badge/Prisma-6-2D3748?logo=prisma)](https://www.prisma.io)
 [![Bun](https://img.shields.io/badge/Bun-1-000?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/Vitest-1,100%2B_tests-brightgreen?logo=vitest&logoColor=white)](https://vitest.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
 **Philosophy:** *don't just record what people say happened — record the
@@ -59,6 +62,13 @@ balanced ledger view:
 
 ![Money tab: escrow wallet, milestones, double-entry ledger](docs/screenshots/money.png)
 
+**Money → evidence draw pack** — the proof freezes the moment money moves: an
+immutable, SHA-256-stamped bundle of the evidence photos, ledger reference,
+open variations, attendance window and the MjengoScore at release — printable
+and forwardable through the client's share link:
+
+![Evidence draw pack: photos, ledger ref, content hash](docs/screenshots/draw-pack.png)
+
 **Materials** — Site Store append-only stock ledger with derived closing
 stock, delivery log, consumption:
 
@@ -68,6 +78,13 @@ stock, delivery log, consumption:
 actor, IP, user-agent and request id:
 
 ![Evidence tab: photo evidence and audit timeline](docs/screenshots/evidence.png)
+
+**Intel → MjengoScore** — a deterministic 0–100 contractor trust score
+computed from the project's evidence rows (releases, attendance, budget
+pace, variations, deliveries, invoices) with per-component deductions and
+an honest "describes, humans decide" label:
+
+![MjengoScore: trust ring, confidence, component breakdown](docs/screenshots/mjengo-score.png)
 
 **Phone-first** (`src/mobile` bottom nav) and the ⌘K command palette:
 
@@ -91,6 +108,9 @@ immediately. **These are intentional demo seeds, not real credentials.**
 | `procurement@mjengo.os` | `mjengo2026` | Procurement — closed-loop supply chain | Finder |
 | `qs@mjengo.os` | `mjengo2026` | Quantity Surveyor — BOQ, materials, costs | Materials |
 
+A **supplier** demo account ships with the Wave-5 supplier portal (in
+flight — see the shipping row in the feature tour).
+
 Diaspora clients with a **share link** need no account at all. Owner APIs are
 guarded server-side (401/403); client roles and share tokens can only run an
 explicit allowlist of actions (`src/shared/client-actions.ts` — approve
@@ -106,14 +126,15 @@ pay invoices, comment on photos, read notifications).
 | **Materials** | Inventory, delivery log (voice or manual), consumption, **Site Store** — append-only stock-movement ledger (opening/received/consumed/transferred/returned/damaged/adjusted) with derived closing stock + CSV export |
 | **Finder** | Procurement closed loop: BOQ → approval-rules engine (role bands, auto-approve within limit, chained client+finance over 250K) → RFQ + multi-line quotes → landed-cost comparison → PO lifecycle → **delivery verification** (per-line counts, damage, GPS, photos — ordered 50 / received 48 = discrepancy) → auto-posted Site Store movements → supplier invoices w/ client decision queue → **3-way match** (PO ↔ invoice ↔ delivery) → payments. Supplier directory + saved shortlists + price-history chips |
 | **Fundis** | **Workforce Trust**: verified vs reported vs exception attendance levels, daily muster roll, payroll gated on verification, kiosk PINs, check-in via app/USSD/kiosk QR, CSV export |
-| **Money** | **MjengoPay escrow on a double-entry ledger** (simulated money, real workflow): top-ups post balanced entries, milestone releases gated on photo proof, variation orders, payment requests with chained approval, reversals (history is never edited), cost codes, `PaymentProvider` seam |
+| **Money** | **MjengoPay escrow on a double-entry ledger** (simulated money, real workflow): top-ups post balanced entries, milestone releases gated on photo proof, variation orders, payment requests with chained approval, reversals (history is never edited), cost codes, `PaymentProvider` seam (Daraja sandbox when configured), **evidence draw packs** — immutable, hash-stamped proof bundles frozen at every milestone release, served (and printable) through the revocable client share link |
 | **Land** | Parcels + title-deed transcriptions, registry-search requests with deterministic consistency check, review gate, parcel timelines, printable **Property Passport**, professionals directory with verification ladder — honest: searches are recorded, not registry-confirmed |
 | **Evidence** | **Bias-Free Ledger** — append-only audit of every action with actor, IP, user-agent, request id and entity context; filters, anomaly feed, PDF reports |
-| **Intel** | Deterministic risk rules (weighted 5-rule score), weekly digest, regional price trends, supplier reliability from actual transactions, **background jobs** (anomaly scan, digest, reconciliation, overdue check) |
+| **Intel** | Deterministic risk rules (weighted 5-rule score), **MjengoScore** — the contractor trust score derived from evidence rows (six traceable components, append-only history, gates nothing), weekly digest, regional price trends, supplier reliability from actual transactions, **background jobs** (anomaly scan, digest, reconciliation, overdue check) |
 | **AI Copilot** | Vision photo analysis (phase, PPE, material counts) with a working upload pipeline, Swahili voice-to-invoice, anomaly scan — behind the `ai_progress` feature flag |
-| **USSD** | `*384#` muster-line simulation — feature-phone flow (menu → PIN → present/absent) dispatching real attendance records |
+| **Field channels — USSD + WhatsApp** | `*384#` muster-line simulation (menu → PIN → present/absent) dispatching real attendance records, plus the **WhatsApp field line**: workers text `PRESENT` / `ABSENT` / `HALF` / `BALANCE` or free text — the webhook contract is documented (`GET /api/whatsapp`), replies are footered "MjengoOS sim", and attendance + photo notes land through the same domain appliers the app uses (no Meta Cloud API wired — an honest seam) |
 | **Audit** | Admin-only drill-down into the full audit trail (contractors and clients don't see it) |
 | **Settings** | Profile, language (English/Kiswahili), local preferences, notification prefs — per-user, every role |
+| **Supplier portal** | *Shipping (Wave 5, in flight)* — a scoped surface for the marketplace's supply side: catalog, quotes, orders, delivery confirmation. Not in this build yet — the marketplace today is owner-side only, by honest design. |
 
 **Role matrix** (mirrors `src/shared/permissions.ts` ↔ `src/backend/lib/guard.ts`):
 
@@ -141,7 +162,9 @@ navigates tabs, switches projects, runs quick actions), offline-first sync
 (persisted outbox, server-side dedupe by outbox id — a lost HTTP response can
 never double-post money), Data Saver photo downscaling, installable PWA
 (`/api/*` is never cached — no stale money or evidence), notification center
-with honest `deliveryStatus: logged` state, and a feature-flag system.
+with honest `deliveryStatus: logged` state, and a feature-flag system that
+actually closes its feature when off — on `/api/actions`, per-item on the
+offline `/api/sync` drain, and by allowlist on the share link.
 
 ## Architecture
 
@@ -166,7 +189,7 @@ flowchart TB
         AIS["AI skills seam<br/>src/backend/lib/ai.ts<br/>(z-ai SDK, backend-only)"]
     end
 
-    DB[("SQLite + Prisma 6<br/>61-model schema<br/>double-entry ledger")]
+    DB[("SQLite + Prisma 6<br/>63-model schema<br/>double-entry ledger")]
 
     U --> NEXT
     U -->|"/website"| REWRITE
@@ -195,8 +218,22 @@ src/
   mobile/       # phone-first shell: bottom nav, ≤5 tabs + More sheet + camera
   shared/       # isomorphic contracts: permissions matrix, CLIENT_ACTIONS allowlist
 mjengoos-website/  # marketing site (independent app, :3001, proxied at /website)
-prisma/            # schema.prisma (61 models), migrations/, seed chain
+prisma/            # schema.prisma (63 models), migrations/, seed chain
 ```
+
+### REST API — `/api/v1`
+
+The typed integration surface, documented live as **OpenAPI 3.1** at
+`/api/openapi.json` (21 documented paths): **19 `/api/v1` paths** — wallets
+(7 routes incl. deposit/transfer/withdraw with idempotency keys), payments,
+projects (list/detail/tasks/deliveries), supply orders, **milestones**
+(list/detail with the full release ladder), **invoices** (list/detail with
+the **3-way-match verdict**: PO ↔ invoice ↔ delivery) and **escrow**
+(ledger-derived — the balance is computed from double-entry ledger entries,
+never a stored projection) — plus two app-level GETs (`/api/audit`,
+`/api/reports/budget-variance`). One error shape (`{ error, field? }`), zod
+strictObject validation, keyset pagination, per-principal rate limits and
+scope pinning (a client session can only ever see its own project).
 
 Full module boundaries and the production migration roadmap
 (SQLite → PostgreSQL, monolith → services, `PaymentProvider` seams): see
@@ -211,7 +248,7 @@ Full module boundaries and the production migration roadmap
 | UI | Tailwind CSS 4, shadcn/ui + Radix primitives, lucide icons, cmdk palette |
 | State | Zustand (app store + persisted offline outbox) |
 | Auth | NextAuth v4 — credentials provider, JWT session cookies, scrypt hashes |
-| Data | Prisma 6 + SQLite (61-model schema, SQL migrations, double-entry ledger) |
+| Data | Prisma 6 + SQLite (63-model schema, SQL migrations, double-entry ledger) |
 | Validation | Zod 4 on every mutating route |
 | AI | z-ai-web-dev-sdk behind a backend-only seam (vision, voice, anomaly) |
 | Runtime/tooling | Bun (install, seeds, dev), Node 20 for the production standalone server, Docker for self-host |
@@ -298,10 +335,19 @@ Recruiter-friendly, and all of it verifiable in the repo:
 - **Fail-closed authorization** — server guards are the enforcement point
   (`src/backend/lib/guard.ts`); the client matrix is only navigation. Unknown
   roles get one safe tab.
-- **Zod validation** on every mutating request; scrypt password hashing with
-  `timingSafeEqual`.
-- **PR-only main** — every commit on `main` landed through a reviewed,
-  CI-gated PR (13 merged; security hardening in #11, proxy-auth fix in #7).
+- **Feature-flag gates on every mutation path** — a flag set OFF closes its
+  feature on `/api/actions` (route-level gate), on offline `/api/sync`
+  (per-item: a denied outbox item writes nothing — no ledger row, no
+  idempotency record, the batch continues) and on the share link (its action
+  allowlist contains no flagged families). One shared gate definition:
+  `src/backend/lib/action-flag-gate.ts`; admins keep the documented bypass.
+- **Zod validation + raw-body caps on every mutating request** — including
+  the public `POST /api/share` (strictObject schema, 64 KB cap checked before
+  `JSON.parse`); scrypt password hashing with `timingSafeEqual`.
+- **PR-verified `main`** — the 13 foundation PRs were reviewed and CI-gated
+  (security hardening in #11, proxy-auth fix in #7); waves 3–5 landed as
+  locally-verified merge commits (full gate re-run per merge — lint, strict
+  typecheck, all 1,100+ tests) while GitHub push access was unavailable.
 
 Vulnerability disclosure policy: [SECURITY.md](./SECURITY.md).
 
@@ -335,7 +381,9 @@ form), health monitoring, SQLite backups, secrets handling — in
 `.github/workflows/ci.yml` runs lint + strict typecheck + a real
 `next build` on every push/PR; `docker.yml` builds the Docker image on a
 GitHub runner (the dev sandbox has no docker CLI — CI is the verification).
-PR runs auto-cancel on new commits. Workflows are currently paused by a
+The unit suite — **1,100+ tests across 43 vitest files** (`bun run test`) —
+is the local gate; every wave merge re-ran it in full (495 → 899 → 1,019 →
+1,102 tests across the release waves). PR runs auto-cancel on new commits. Workflows are currently paused by a
 billing lock on the account — they exist, are green on the last runs, and
 resume unchanged when billing is restored.
 
@@ -358,6 +406,10 @@ resume unchanged when billing is restored.
   with state licensing.
 - USSD is a faithful simulation of the `*384#` flow that dispatches real
   attendance records; no telco gateway is wired yet.
+- The WhatsApp field line is the same honest pattern: a documented webhook
+  contract, a keyword grammar and a simulator, with real attendance and
+  photo-comment rows written through the app's own appliers — but no Meta
+  Cloud API is wired; every reply is footered "MjengoOS sim".
 - AI results are labeled with confidence and require human application —
   AI never writes official records directly.
 
@@ -365,16 +417,18 @@ resume unchanged when billing is restored.
 
 | Path | What |
 |---|---|
-| `src/app/` | App Router: one page (`page.tsx`) + `/api/**` (auth, projects, actions, sync, share, upload, search, flags, notifications, jobs/run, audit, reports, health, ussd, `v1/wallets`, 5 AI routes) |
+| `src/app/` | App Router: one page (`page.tsx`) + `/api/**` (auth, projects, actions, sync, share, upload, search, flags, notifications, jobs/run, audit, reports, health, ussd, whatsapp, 5 AI routes) + the `/api/v1` REST surface (19 OpenAPI-documented paths) + `/api/openapi.json` |
 | `src/frontend/` | Web UI: `mjengo/` tab surfaces, `ui/` shadcn primitives, `auth/`, `i18n/`, `hooks/` (use-mjengo payload facade + offline outbox) |
 | `src/backend/` | Server-only: `lib/` (guard, auth, audit, rate-limit, db, ai, mjengo dispatcher), `actions/`, `modules/` per domain |
 | `src/mobile/` | Phone-first bottom nav |
 | `src/shared/` | Isomorphic contracts: `permissions.ts` role matrix, `client-actions.ts` allowlist |
 | `mjengoos-website/` | Marketing site (independent Next.js app, `:3001`, proxied at `/website`) |
-| `prisma/` | `schema.prisma` (61 models), `migrations/`, `seed.ts` + `seed-extras/` |
+| `prisma/` | `schema.prisma` (63 models), `migrations/` (0_init + additive 1_mjengo_score, 2_draw_pack), `seed.ts` + `seed-extras/` |
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Build/run/test/deploy operations guide |
+| [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) | Plain-language release notes — v0.1 → v0.2.x, wave by wave |
+| [docs/backlog.md](./docs/backlog.md) | PM release plan (waves 3–5) with paste-ready issue texts |
 | [SECURITY.md](./SECURITY.md) | Vulnerability reporting policy |
 
 Roadmap lives in [GitHub issues](https://github.com/Roy-Wanyoike/Mjengo-OS/issues).
