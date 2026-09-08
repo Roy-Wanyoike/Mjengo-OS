@@ -2,7 +2,7 @@
 
 What shipped, wave by wave, in words a non-engineer can follow — written for
 recruiters, investors and operators. Everything listed here **exists in this
-repository and is pinned by tests** (1,100+ tests across 43 vitest files at
+repository and is pinned by tests** (1,513 tests across 54 vitest files at
 the time of writing); nothing is roadmap dressed up as shipped. What is
 deliberately simulated is listed in [the honest small print](#the-honest-small-print).
 For the engineering detail behind each wave, see [ARCHITECTURE.md](../ARCHITECTURE.md)
@@ -79,17 +79,59 @@ through the same appliers the app uses. Honest seam: no Meta Cloud API is
 wired; every reply is footered "MjengoOS sim". Suite: 1,102 tests, all
 browser-verified end-to-end.
 
-## v0.2.3 — Wave 5: engagement & coverage (in flight)
+## v0.2.3 — Wave 5: engagement & coverage
 
-Being built now, documented as in flight — not claimed as shipped. **Web push
-notifications** (VAPID-gated through the notify seam, same honest `logged`
-default) keep the diaspora client in the loop with the tab closed. The
-**supplier-side portal** gives the marketplace's supply side its own scoped
-role and surface — catalog, quotes, orders, delivery confirmation — closing
-the one structural gap the marketing site honestly flagged. Kiswahili
-coverage continues to hold key-for-key parity with every new feature.
-**Why it matters:** retention for the paying persona, and two-sided liquidity
-for the marketplace.
+The retention wave, shipped and browser-verified. **Web push notifications**
+(VAPID-gated through the notify seam, same honest `logged` default) keep
+the diaspora client in the loop with the tab closed. The **supplier-side
+portal** gives the marketplace's supply side its own scoped role and
+surface — catalog, quotes, orders, delivery confirmation — closing the one
+structural gap the marketing site honestly flagged. Kiswahili coverage held
+key-for-key parity through every new feature. **Why it matters:** retention
+for the paying persona, and two-sided liquidity for the marketplace. Suite:
+1,244 tests.
+
+## v0.2.4 — Wave 6: the AI wave (advisory, flag-gated, ledger-anchored)
+
+The wave that put a model on top of the evidence — without ever letting it
+decide anything. It started with research (a market-gap analysis over 21
+web searches, `docs/research/market-gaps-2026-09.md`) and a release plan
+(`docs/wave6-plan.md`), then shipped four things:
+
+1. **The AI foundation** — a provider seam (`src/backend/modules/ai/`:
+   chat, vision, transcription, speech) behind a new `ai` feature flag that
+   ships **DEFAULT OFF**. Flag off → the SDK is never contacted. Failures
+   come back as honest, leak-free errors — never a faked analysis.
+2. **AI Draw Review** — the first AI review of construction money that runs
+   on evidence the platform itself hash-chained: a vision pass over a frozen
+   draw pack's photos plus an LLM cross-check against its milestone, invoice
+   and budget context. The output is a confidence-labeled advisory note —
+   the approval click stays human.
+3. **Evidence Authenticity Screen** — in the genAI era a photo is no longer
+   proof; a hash-chained, cross-checked, ledger-bound photo still is.
+   Perceptual-hash duplicate detection ("this photo paid for the foundation
+   AND the slab") plus a vision pass for phase consistency and render
+tells — every flag advisory and source-labeled rule vs AI.
+4. **Diaspora Trust Digest with voice** — a weekly "what your money did"
+   digest in English and Kiswahili whose every number is a ledger row (the
+   text is composed deterministically — the model never authors it), read
+   aloud as a voice note and served through the revocable share link.
+
+**Verified live, not just in tests:** real model calls through the running
+app — chat ~300 ms, single-photo vision ~720 ms, a real TTS voice note for
+the English digest. Production measurement raised the per-call timeout cap
+8 s → 20 s (multi-photo vision measured 6–8 s alone). The vision pass
+correctly flagged the seeded demo photos as **render-suspect** (they are
+stock renders — the AI was right); a real draw review returned an advisory
+verdict ("roof trusses installed ahead of milestone scope"); the Kiswahili
+digest rendered real Kiswahili text while its voice note timed out honestly
+— the text survived, by design. Suite: 1,244 → 1,513 tests across 45 → 54
+files. The v1 REST API also grew its Phase-D read surface (workers,
+attendance, tasks, suppliers, parcels, intel, budget-variance — 21 → 29
+OpenAPI paths). **Why it matters:** AI construction-finance money flows to
+US lender-side automation (Built's Draw Agent) — nobody anywhere binds AI
+flags to a hash-chained evidence ledger; every AI row here is advisory,
+append-only, and traceable to evidence the system itself manufactured.
 
 ---
 
@@ -101,13 +143,23 @@ for the marketplace.
   money — labeled as such in the UI.
 - **USSD and WhatsApp are faithful simulations** that dispatch real records
   through the real appliers; no telco gateway or Meta Cloud API is wired yet.
-- **Web push is in flight** (Wave 5) and not in this build.
+- **Web push is VAPID-gated** and honest — with no VAPID keys configured,
+  subscriptions store intent and sends stay `logged`.
 - **Land verification records evidence**; it never claims government registry
   confirmation.
-- **AI never approves anything** — results carry confidence labels and wait
-  for a human.
+- **The Wave-6 AI layer ships dark** — the `ai` flag is off until an admin
+  turns it on; live AI also needs a `.z-ai-config` file (no env vars). With
+  either missing, every surface shows an honest off/unavailable state and
+  nothing is faked.
+- **AI never approves anything** — results carry verdicts, confidence labels
+  and source labels (rule vs model), gate nothing, and wait for a human. No
+  model-authored number is ever stored: figures are redacted on the draw
+  review, and the trust digest's text is composed from ledger rows. AI rows
+  are append-only; a failed TTS leg degrades the audio, never the text.
 
 **Test growth across the releases:** 495 (v0.2 baseline) → 899 (v0.2 merged)
-→ 1,019 (Wave 3) → 1,102 (Wave 4). Run the whole thing yourself:
-`bun run test`. Screenshots: [MjengoScore](./screenshots/mjengo-score.png) ·
-[draw pack](./screenshots/draw-pack.png).
+→ 1,019 (Wave 3) → 1,102 (Wave 4) → 1,244 (Wave 5) → 1,513 (Wave 6). Run
+the whole thing yourself: `bun run test`. Screenshots: [MjengoScore](./screenshots/mjengo-score.png) ·
+[draw pack](./screenshots/draw-pack.png) · [AI draw review](./screenshots/ai-draw-review.png) ·
+[authenticity screen](./screenshots/ai-authenticity.png) ·
+[trust digest](./screenshots/ai-trust-digest.png).

@@ -2,6 +2,20 @@
 
 **Owner:** Senior Product Manager · **Date:** Wave planning following tasks 0, 1-a, 1-b, 1-c
 **Baseline:** `main` @ 8daad52 — lint clean, `tsc --noEmit` clean, **495 tests / 23 files green**
+
+> **STATUS (2026-09, docs refresh):** Waves 3, 4 and 5 below are **SHIPPED and
+> verified** (see `docs/RELEASE-NOTES.md` v0.2.1–v0.2.3; the issue texts in §2
+> remain paste-ready for the GitHub backlog). v1 **Phase D** (workers /
+> attendance / task detail / suppliers / parcels / intel / budget-variance —
+> OpenAPI 21 → 29 paths) also **shipped** (September 2026, `feat/v1-phase-d`).
+> **Wave 6 — the AI wave — SHIPPED** (September 2026): AI draw review,
+> evidence authenticity screen, diaspora trust digest + the `ai`-flagged
+> provider seam — full specs and paste-ready issue texts in
+> `docs/wave6-plan.md`. Current state: **1,513 tests / 54 files green**,
+> 68-model schema, 9 migrations. What follows is the historical plan text,
+> kept verbatim (append-only discipline) with the three narrative-honesty
+> fixes from task 7-c §4 applied in place.
+
 **Constraint reminders:** GitHub token currently invalid — every issue/PR below is written **paste-ready** with placeholder numbers (`#TBD`). Every feature lands as: issue → branch → PR ("Closes #N") → verified → merged. No feature requires external credentials to build or test; external services appear only as **honest seams** (existing patterns: `PaymentProvider`, `NOTIFY_SMS_WEBHOOK_URL`, `USSD_WEBHOOK_SECRET`). Philosophy is non-negotiable: no fake features, **AI never approves, the ledger never lies**.
 
 ---
@@ -38,7 +52,7 @@ Three waves, each 2–3 features built **in parallel on disjoint file areas**, m
   - `GET /api/v1/projects/:id/escrow` — `{ balance, ledgerAccountCode }` (balance is the ledger-derived projection; honest note carried into OpenAPI).
   - **No flag gates** on these routes (honest boundary already documented in `flags.ts`: the escrow/milestone ladder and invoices deliberately survive the `wallet` flag) — the OpenAPI text says so.
   - OpenAPI reflects all new paths field-for-field; v1 error shape `{ error, field? }` everywhere; 495+ tests green.
-- **Investor narrative:** The wallet/payments rails (Phase A/B) told the fintech story; Phase C surfaces escrow + 3-way match — the exact controls Strathmore data says drive 70–151% of overruns — as a bank-grade REST API. This is the API an M-Pesa partner or diaspora platform integrates against.
+- **Investor narrative:** The wallet/payments rails (Phase A/B) told the fintech story; Phase C surfaces escrow + 3-way match — the controls tied to 70–151% of overrun **costs** (variation orders' share of cost overruns; Lukale 2018, Strathmore) — as a bank-grade REST API. This is the API an M-Pesa partner or diaspora platform integrates against.
 
 **W3-3 — MjengoScore**
 - **Pitch:** "Every photo, attendance PIN and ledger row already tells the truth about a contractor — MjengoScore turns that history into a number lenders can underwrite."
@@ -60,7 +74,7 @@ Three waves, each 2–3 features built **in parallel on disjoint file areas**, m
 | W4-3 | **WhatsApp bi-directional field bot seam** | The honest-simulation WhatsApp webhook exactly like the USSD line: workers text in, actions dispatch through the same domain appliers, replies say "MjengoOS sim". | **M** |
 
 **W4-1 — Diaspora Evidence Draw Pack**
-- **Pitch:** "4 out of 5 diaspora clients lose money because they can't hold proof. A draw pack is proof you can hold."
+- **Pitch:** "Widespread diaspora losses (Nation, Jun 2025: 'Dream homes, real losses') happen because clients can't hold proof. A draw pack is proof you can hold."
 - **Files (verified):** `prisma/schema.prisma` (additive immutable `DrawPack` model + migration), `src/backend/actions/money.ts` (hook in `milestone.decide` approve path — the release transaction already runs atomically there), `src/backend/api/share.ts` (GET `?token&drawPack=<id>` — pack served through the *existing* revocable token, zero new auth surface), `src/frontend/mjengo/share-dialog.tsx` + new `draw-pack-viewer.tsx` (printable pattern: `finder/sections/invoices/printable-invoice.tsx`), `src/frontend/mjengo/money-tab.tsx` (pack links on released milestones), i18n dicts; new `tests/unit/draw-pack.test.ts`.
 - **Acceptance criteria (testable):**
   - `milestone.decide → approve` creates exactly one `DrawPack` (idempotent on re-decide: second decide is already refused by the status ladder — test asserts no second pack, no duplicate ledger ref).
@@ -107,13 +121,39 @@ Three waves, each 2–3 features built **in parallel on disjoint file areas**, m
 
 **W5-3 — Supplier portal (files):** `prisma/schema.prisma` (`User.role += 'supplier'`, `User.supplierId`), `src/shared/permissions.ts`, `src/backend/lib/guard.ts`, `src/frontend/mjengo/nav/tab-meta.ts`, supplier-scoped views in `src/frontend/mjengo/finder/sections/*` + new supplier surface, seed (`prisma/seed-extras/users.ts`, `supply.ts`), tests: supplier pinned to own `supplierId` (foreign catalog/quotes/invoices → 403, same honesty as client pinning). **Investor:** marketplace liquidity needs the supply side in-product; today the marketing site promises supplier views that don't exist (1-c promise gap) — this closes the last structural gap before the raise.
 
-### Backlog beyond Wave 5 (documented, deliberately unscheduled)
+### Wave 6 — The Advisory AI Layer (SHIPPED, September 2026)
+
+All three features + the foundation landed, merged in order W6-1 → W6-3 →
+W6-2, and browser-verified end-to-end (real model calls; see
+`docs/wave6-plan.md` for the full specs and §2 of that file for the
+paste-ready issue texts, and `docs/RELEASE-NOTES.md` v0.2.4 for the plain-
+language story):
+
+| # | Feature | State |
+|---|---------|-------|
+| 8-f | **AI provider seam** (`modules/ai/`, `ai` flag DEFAULT OFF, chat/vision/transcribe + `speak()`) | Shipped — `feat/ai-foundation` @ a948e8c, merged c44004e |
+| W6-1 | **AI Draw Review** — advisory vision+LLM note over frozen draw packs (`AiReviewNote`, migration 5) | Shipped — `feat/ai-draw-review` @ 443357c, merged f186b48 |
+| W6-3 | **Evidence Authenticity Screen** — dHash duplicates + vision phase-consistency (`PhotoHash`/`AiInsight`, migrations 6/7) | Shipped — `feat/ai-authenticity` @ e27e4de, merged c79cc2b |
+| W6-2 | **Diaspora Trust Digest + voice** — deterministic EN/SW text, TTS through the share link (`TrustDigest`, migration 8) | Shipped — `feat/ai-trust-digest` @ 51601f3, merged 0f52bfe |
+
+Also shipped with the wave: the production timeout fix (SDK call cap 8 s →
+20 s, `ec6bc87`, after real multi-photo vision measured 6–8 s alone) and the
+v1 Phase-D read surface above. Suite at wave close: **1,513 tests / 54
+files**, tsc + lint clean.
+
+### Backlog beyond Wave 6 (documented, deliberately unscheduled)
 - **BOQ versioning + variation-order control depth** (L) — core variation ladder already ships (`VariationOrder` + `variation.submit/decide`); full BOQ snapshots/diff land after draw packs + v1 expose the shapes (1-a's #2 gap — sequenced, not dropped).
-- **AI Draw Review** (L) — photo↔invoice↔budget cross-check on draw packs; AI flags, human approves (1-a's #3; the evidence substrate is W3-2+W3-3+W4-1).
 - **Daraja production** (M-L) — blocked on real creds; sandbox + reconcile engine + branch `feat/daraja-reconcile` are ready.
+- **Wave 7 candidates (from the task 7-a research, `docs/research/market-gaps-2026-09.md`):**
+  - **WhatsApp voice-note ASR ingest** (M) — a voice note in, `transcribe()` → PII scrub → proposed delivery log, foreman confirms by reply before any row is written;
+  - **Ledger Q&A on WhatsApp** (S-M) — "how much cement did we buy this month?" answered from the pinned read-only project digest, role-scoped;
+  - **Invoice price-book checks** (S-M) — LLM cross-checks of extracted invoices against the supplier catalog + `PricePoint` intel, flagged into the 3-way-match queue before a human approves;
+  - **Photo progress-% estimation** (M) — structured per-phase completion estimate as *variance vs claimed progress* (a flag, never an override).
+  - Also documented in the wave-6 plan's beyond-Wave-7 list: MjengoScore explainability report, pre-release draw review, `AiInsight` decide action, digest audio caching, upload-time attachment hashing.
 - **Theft shield, e-signature (KICA), DOSH/OSHA gating, carbon/ESG, equipment tracking, offline Gantt** — trigger-gated, per 1-c's deferral list.
-- **Remaining v1 resources** (workers/attendance, task mutations, suppliers/catalog, parcels, intel digest, budget-variance mirror) — Phase D candidates, same pattern as W3-2.
-- **S4–S6 small hardenings** (USSD secret posture, single-instance limiter → SQLite store branch, `/api/search` limit) — the two finished branches already cover the limiter; fold S6 into any v1 Phase D issue.
+- ~~**Remaining v1 resources**~~ — **shipped** as Phase D (workers/attendance, task detail, suppliers, parcels, intel, budget-variance; OpenAPI 21 → 29 paths).
+- ~~**AI Draw Review**~~ — **shipped** as W6-1 above (right-sized from this plan's L to the M that actually shipped).
+- **S4–S6 small hardenings** (USSD secret posture, single-instance limiter → SQLite store branch, `/api/search` limit) — the two finished branches already cover the limiter + the S6 search caps landed with Phase D; any remainder is folded into future v1 issues.
 
 ---
 
@@ -225,7 +265,7 @@ PR `feat/mjengo-score` squash-merged with "Closes #TBD"; the PR description show
 **Title:** `[trust] Diaspora Evidence Draw Packs — immutable, hash-stamped proof bundles served through the share link`
 
 **Problem statement**
-4/5 diaspora clients report lost money or incomplete projects (1-a); the share link shows *live* state, but releases have no frozen, portable, verifiable artifact. When money moves (milestone release), the diaspora client needs the evidence *as it was at decision time* — photos, ledger ref, open variations, attendance window — in one pack they can keep, forward, or hand to a lender.
+Diaspora construction losses are widely reported (Nation's "Dream homes, real losses", Jun 2025; the Feb 2026 diaspora-scam reporting — qualitative, no fabricated rate); the share link shows *live* state, but releases have no frozen, portable, verifiable artifact. When money moves (milestone release), the diaspora client needs the evidence *as it was at decision time* — photos, ledger ref, open variations, attendance window — in one pack they can keep, forward, or hand to a lender.
 
 **Proposed solution**
 On `milestone.decide → approve` (inside the existing atomic release path in `actions/money.ts`), write one immutable `DrawPack` row: milestone id + amount + ledger ref, evidence photo ids, variations open at decision time, attendance summary for request→decide window, MjengoScore at release (nullable — honest). `contentHash` = SHA-256 over canonical JSON. Served read-only via `GET /api/share?token=<t>&drawPack=<id>` through the **existing revocable share token** (no new auth surface); printable web view in the client surface (`printable-invoice.tsx` pattern); released milestones in `money-tab.tsx` link their packs.

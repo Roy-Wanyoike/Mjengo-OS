@@ -140,8 +140,10 @@ export const SCORE_WEIGHTS: Record<ScoreComponentKey, number> = {
  *   · budget lead cap       = 30 points of spend-ahead (the R1 CRITICAL line —
  *     reaching it deducts the full 20)
  *   · variation cap         = 15% of the project budget moved by APPROVED
- *     variation orders (research: variation orders drive 70–151% of Kenyan
- *     overruns — the bar is deliberately tight)
+ *     variation orders (research: variation orders accounted for 70–151% of
+ *     cost-overrun costs in Kenyan construction — share of overrun cost, not
+ *     overrun magnitude; Lukale 2018, Strathmore — the bar is deliberately
+ *     tight)
  *   · discrepancy cap       = 25% of landed deliveries closed discrepant
  *   · dispute cap           = 20% of invoices disputed
  *   · minimum components    = 2 non-null components before a score is quoted

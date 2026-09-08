@@ -12,7 +12,7 @@ TypeScript strict) application whose UI is one client-rendered page
 share-link views) talking to guarded API routes under `src/app/api/**`
 (NextAuth v4 credentials + JWT session cookies, role guards, rate limits,
 idempotency). Persistence is **Prisma 6 + SQLite** (single file at
-`DATABASE_URL`) with a 63-model schema, a double-entry ledger and
+`DATABASE_URL`) with a 68-model schema, a double-entry ledger and
 `_prisma_migrations` bookkeeping. File uploads (site photos, documents) are
 written to `public/photos/` and `public/docs/` on local disk. `next build`
 emits a **standalone** server (`output: "standalone"` → `.next/standalone/
@@ -63,9 +63,24 @@ Cookie policy is switched per request in `src/backend/lib/auth.ts`
 direct localhost keeps next-auth's `lax` defaults.
 
 Full per-variable commentary lives in `.env.example` (each block is written
-to be copy-paste-safe). **In flight (Wave 5):** web push notifications will
-introduce VAPID keys through the same env-gated, fail-closed pattern — they
-will be documented here and in `.env.example` when they ship, not before.
+to be copy-paste-safe). **Web push (Wave 5, shipped):** the optional VAPID
+pair (`VAPID_PUBLIC_KEY` + `VAPID_PRIVATE_KEY`, optional `VAPID_SUBJECT`)
+enables push sends through the same env-gated, fail-closed pattern — unset,
+subscriptions store intent and sends stay `logged`.
+
+**The Wave-6 AI surface (no env vars — flag + config file):** the `ai`
+feature flag **ships dark** (DEFAULT OFF in `FLAG_DEFAULTS`, seeded
+disabled); an admin opts in through the header flags popover, and
+`NEXT_FLAGS_OFF` can only force it off. Live AI additionally needs a
+`.z-ai-config` JSON file (`{ baseUrl, apiKey }`) readable by the process —
+the SDK looks in the working directory, the home directory, or `/etc`
+(`src/backend/modules/ai/provider.ts` documents the resolution). There are
+**no AI env vars by design**. Flag on + no config file → every surface
+answers the honest "AI unavailable" state (no fake output, no error storm);
+flag off → the SDK is never contacted. Every SDK call is capped at **20 s**
+(raised from 8 s after production measurement — multi-photo vision carries
+~1–2 MB of base64 and measured 6–8 s alone), and errors are leak-free
+(HTTP status or error class only — never URLs, keys or bodies).
 
 ## 4. Local development quickstart
 
@@ -90,19 +105,28 @@ The database ships **empty** — seed the demo data next.
 
 - **`bunx prisma migrate deploy`** — the production path. Applies
   `prisma/migrations/` in order and records them in `_prisma_migrations`.
-  Baseline: `0_init` (the 61-model foundation schema, generated from
-  `prisma/schema.prisma`); then two **additive-only** migrations:
-  `1_mjengo_score` (the `MjengoScore` trust-score table — W3-3) and
-  `2_draw_pack` (the immutable `DrawPack` evidence-bundle table — W4-1);
-  63 models today. Each is one `CREATE TABLE`, zero data migration — safe,
-  additive, never drops data.
+  Baseline: `0_init` (the foundation schema, generated from
+  `prisma/schema.prisma`); then eight **additive-only** migrations:
+  `1_mjengo_score` (W3-3 trust score), `2_draw_pack` (W4-1 evidence
+  bundles), `3_push_subscription` (W5-1 web push), `4_supplier_user_link`
+  (W5-3 — one `ALTER TABLE ADD COLUMN`), and the Wave-6 AI tables
+  `5_ai_review_note` / `6_photo_hash` / `7_ai_insight` / `8_trust_digest`.
+  68 models today; each migration is one `CREATE TABLE` (or one additive
+  `ALTER TABLE`) — zero data migration, safe, never drops data.
+- **Honest caveat (known, tracked):** the Wave-5 `DeliveryPhoto` model has a
+  row in `schema.prisma` but **no SQL migration** (it landed via `db push`
+  during development) — a fresh `migrate deploy` database would miss that
+  one table. The dev sandbox and the seeded DB are `db push`-synced and
+correct; the fix is a future additive migration (prisma/ changes are out of
+scope for the docs pass that documented this). Until then, `db push` (below)
+reconciles any drift.
 - **`bunx prisma db push`** (or `bun run db:push`) — the prototyping path
   used while the schema is still moving: pushes `schema.prisma` straight to
   the DB, ignoring migrations. It still works after the baseline — push does
   not read `_prisma_migrations` — but **once a real deployment exists, change
   the schema only via new migrations** (`bunx prisma migrate dev --name x`
   locally, commit the generated SQL, `migrate deploy` in production).
-- **`Transaction.phaseId` (issue #39, phase cost-codes)** is the latest
+- **`Transaction.phaseId` (issue #39, phase cost-codes)** is a further
   additive schema change: a nullable column + FK to `Phase` (`SetNull` on
   phase delete), zero data migration. Legacy rows and non-phase spend
   (wages, unattributed expenses) legitimately stay `null` — the

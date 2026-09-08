@@ -1,5 +1,7 @@
 # Mjengo-OS — Wave 6 Release Plan: The AI Wave (Task 7-c)
 
+> **SHIPPED (September 2026):** all three features + the 8-f foundation landed, merged in order W6-1 → W6-3 → W6-2, and browser-verified end-to-end with real model calls — see `worklog.md` task 9. 1,513 tests / 54 files green. The §2 issue texts below remain paste-ready for the GitHub backlog.
+
 **Owner:** Senior Product Manager · **Date:** September 2026
 **Inputs:** `worklog.md` (waves 1–5 shipped: 1244 tests / 45 files green on `main` @ 91edeed; task 7-a research; task 8-f AI foundation), `docs/research/market-gaps-2026-09.md` (the Research Expert's market-gap analysis — every market claim below cites it), `docs/backlog.md` (the release-plan format this follows).
 **Constraint reminders:** GitHub token still invalid — every issue below is **paste-ready** with `#TBD` numbers. No feature requires external credentials to build or test: the z-ai SDK self-configures via `.z-ai-config` (no env vars), and every test file **mocks the SDK with `vi.mock('z-ai-web-dev-sdk')`** — zero network, zero keys. Philosophy is non-negotiable and now has a contract: **AI describes and flags; it NEVER approves; the ledger never lies in either direction.**

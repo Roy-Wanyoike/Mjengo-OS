@@ -3,16 +3,18 @@
 An **evidence-based construction project OS for Kenya**: phase budgets on a
 double-entry ledger, escrow-backed milestones released against photo proof,
 **MjengoScore** (an evidence-derived contractor trust score), hash-stamped
-**evidence draw packs** for diaspora clients, AI photo verification, `*384#`
-USSD and WhatsApp attendance for feature phones, and share links that let
-clients abroad watch their build without an account.
+**evidence draw packs** for diaspora clients, an **advisory AI layer** (draw
+review, photo authenticity screening, a weekly trust digest with voice) that
+describes and never approves, `*384#` USSD and WhatsApp attendance for
+feature phones, and share links that let clients abroad watch their build
+without an account.
 
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
 [![Prisma](https://img.shields.io/badge/Prisma-6-2D3748?logo=prisma)](https://www.prisma.io)
 [![Bun](https://img.shields.io/badge/Bun-1-000?logo=bun&logoColor=white)](https://bun.sh)
-[![Tests](https://img.shields.io/badge/Vitest-1,100%2B_tests-brightgreen?logo=vitest&logoColor=white)](https://vitest.dev)
+[![Tests](https://img.shields.io/badge/Vitest-1%2C500%2B_tests-brightgreen?logo=vitest&logoColor=white)](https://vitest.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
 **Philosophy:** *don't just record what people say happened — record the
@@ -23,7 +25,7 @@ always derived.
 ## Contents
 
 - [The product in one page](#the-product-in-one-page) · [Visual tour](#visual-tour)
-- [Demo accounts (seed data)](#demo-accounts-seed-data) · [Feature tour (the real tabs)](#feature-tour-the-real-tabs)
+- [Demo accounts (seed data)](#demo-accounts-seed-data) · [Feature tour (the real tabs)](#feature-tour-the-real-tabs) · [The AI surface (honest by design)](#the-ai-surface-honest-by-design)
 - [Architecture](#architecture)
 - [Tech stack](#tech-stack) · [Quick start](#quick-start)
 - [Environment variables](#environment-variables) · [Security engineering](#security-engineering)
@@ -69,6 +71,27 @@ and forwardable through the client's share link:
 
 ![Evidence draw pack: photos, ledger ref, content hash](docs/screenshots/draw-pack.png)
 
+**Money → AI draw review** (flag-gated, advisory-only) — a vision + LLM pass
+over the frozen pack's photos and its milestone/invoice/budget context
+produces a confidence-labeled advisory note with findings; the approval click
+stays human:
+
+![AI draw review: advisory note with verdict and findings](docs/screenshots/ai-draw-review.png)
+
+**Evidence → authenticity screen** — 64-bit perceptual-hash duplicate
+detection ("this photo paid for the foundation AND the slab") plus a vision
+phase-consistency pass over the evidence photos; every flag is advisory and
+source-labeled rule vs AI:
+
+![Evidence authenticity screen: duplicate and render-suspect flags](docs/screenshots/ai-authenticity.png)
+
+**Intel → trust digest** — a weekly "what your money did" digest whose every
+number is a ledger row (deterministic text, English + Kiswahili), read aloud
+as a voice note through the share link; an audio failure is honest and never
+degrades the text:
+
+![Trust digest: EN/SW text, score delta, voice note](docs/screenshots/ai-trust-digest.png)
+
 **Materials** — Site Store append-only stock ledger with derived closing
 stock, delivery log, consumption:
 
@@ -109,8 +132,8 @@ immediately. **These are intentional demo seeds, not real credentials.**
 | `procurement@mjengo.os` | `mjengo2026` | Procurement — closed-loop supply chain | Finder |
 | `qs@mjengo.os` | `mjengo2026` | Quantity Surveyor — BOQ, materials, costs | Materials |
 
-A **supplier** demo account ships with the Wave-5 supplier portal (in
-flight — see the shipping row in the feature tour).
+A **supplier** demo account ships with the Wave-5 supplier portal (shipped —
+see the supplier row in the feature tour).
 
 Diaspora clients with a **share link** need no account at all. Owner APIs are
 guarded server-side (401/403); client roles and share tokens can only run an
@@ -131,11 +154,11 @@ Supplier row.
 | **Materials** | Inventory, delivery log (voice or manual), consumption, **Site Store** — append-only stock-movement ledger (opening/received/consumed/transferred/returned/damaged/adjusted) with derived closing stock + CSV export |
 | **Finder** | Procurement closed loop: BOQ → approval-rules engine (role bands, auto-approve within limit, chained client+finance over 250K) → RFQ + multi-line quotes → landed-cost comparison → PO lifecycle → **delivery verification** (per-line counts, damage, GPS, photos — ordered 50 / received 48 = discrepancy) → auto-posted Site Store movements → supplier invoices w/ client decision queue → **3-way match** (PO ↔ invoice ↔ delivery) → payments. Supplier directory + saved shortlists + price-history chips |
 | **Fundis** | **Workforce Trust**: verified vs reported vs exception attendance levels, daily muster roll, payroll gated on verification, kiosk PINs, check-in via app/USSD/kiosk QR, CSV export |
-| **Money** | **MjengoPay escrow on a double-entry ledger** (simulated money, real workflow): top-ups post balanced entries, milestone releases gated on photo proof, variation orders, payment requests with chained approval, reversals (history is never edited), cost codes, `PaymentProvider` seam (Daraja sandbox when configured), **evidence draw packs** — immutable, hash-stamped proof bundles frozen at every milestone release, served (and printable) through the revocable client share link |
+| **Money** | **MjengoPay escrow on a double-entry ledger** (simulated money, real workflow): top-ups post balanced entries, milestone releases gated on photo proof, variation orders, payment requests with chained approval, reversals (history is never edited), cost codes, `PaymentProvider` seam (Daraja sandbox when configured), **evidence draw packs** — immutable, hash-stamped proof bundles frozen at every milestone release, served (and printable) through the revocable client share link — and a flag-gated **"Run AI review"** button on released milestones that appends an advisory note to the pack |
 | **Land** | Parcels + title-deed transcriptions, registry-search requests with deterministic consistency check, review gate, parcel timelines, printable **Property Passport**, professionals directory with verification ladder — honest: searches are recorded, not registry-confirmed |
-| **Evidence** | **Bias-Free Ledger** — append-only audit of every action with actor, IP, user-agent, request id and entity context; filters, anomaly feed, PDF reports |
-| **Intel** | Deterministic risk rules (weighted 5-rule score), **MjengoScore** — the contractor trust score derived from evidence rows (six traceable components, append-only history, gates nothing), weekly digest, regional price trends, supplier reliability from actual transactions, **background jobs** (anomaly scan, digest, reconciliation, overdue check) |
-| **AI Copilot** | Vision photo analysis (phase, PPE, material counts) with a working upload pipeline, Swahili voice-to-invoice, anomaly scan — behind the `ai_progress` feature flag |
+| **Evidence** | **Bias-Free Ledger** — append-only audit of every action with actor, IP, user-agent, request id and entity context; filters, anomaly feed, PDF reports; the **authenticity screen** — perceptual-hash duplicate detection + vision phase-consistency over evidence photos (advisory flags, source-labeled rule vs AI, flag-gated) |
+| **Intel** | Deterministic risk rules (weighted 5-rule score), **MjengoScore** — the contractor trust score derived from evidence rows (six traceable components, append-only history, gates nothing), weekly digest, regional price trends, supplier reliability from actual transactions, **background jobs** (anomaly scan, digest, reconciliation, overdue check), and the **AI trust digest** — a weekly EN/Swahili "what your money did" digest composed from ledger rows with an optional TTS voice note |
+| **AI Copilot** | Vision photo analysis (phase, PPE, material counts) with a working upload pipeline, Swahili voice-to-invoice, anomaly scan — behind the `ai_progress` feature flag; the Wave-6 advisory layer (draw review, authenticity, trust digest) rides its own `ai` flag — see [The AI surface](#the-ai-surface-honest-by-design) |
 | **Field channels — USSD + WhatsApp** | `*384#` muster-line simulation (menu → PIN → present/absent) dispatching real attendance records, plus the **WhatsApp field line**: workers text `PRESENT` / `ABSENT` / `HALF` / `BALANCE` or free text — the webhook contract is documented (`GET /api/whatsapp`), replies are footered "MjengoOS sim", and attendance + photo notes land through the same domain appliers the app uses (no Meta Cloud API wired — an honest seam) |
 | **Audit** | Admin-only drill-down into the full audit trail (contractors and clients don't see it) |
 | **Settings** | Profile, language (English/Kiswahili), local preferences, notification prefs — per-user, every role |
@@ -172,6 +195,48 @@ with honest `deliveryStatus: logged` state, and a feature-flag system that
 actually closes its feature when off — on `/api/actions`, per-item on the
 offline `/api/sync` drain, and by allowlist on the share link.
 
+## The AI surface (honest by design)
+
+Wave 6 added an advisory AI layer over the evidence substrate. The design
+goal was not "AI features" — it was **AI output a bank could read without
+trusting the model**:
+
+- **One seam, flag-gated, dark by default.** Every Wave-6 feature calls
+  `AiProvider` (`src/backend/modules/ai/` — chat / vision / transcribe /
+  speak) resolved through `resolveAiProvider(flags)`. The `ai` flag ships
+  **DEFAULT OFF**; an admin opts in through the flags popover, and a flag-off
+  install never contacts the SDK (test-pinned: `sdk.create` call count 0).
+- **Advisory only — AI never approves.** Draw-review notes and authenticity
+  insights gate nothing: no action, ledger path or release ladder reads them
+  (grep-pinned non-influence tests). The human decision columns
+  (`reviewedBy`/`decidedBy` …) exist in the schema and nothing writes them.
+- **No model-authored numbers.** Every digit run the model emits is redacted
+  before storage (`redactModelFigures`); the trust-digest text is composed
+  deterministically from ledger rows in EN + Kiswahili — the model only reads
+  it aloud (TTS), never authors it. Every digest figure traces to a row.
+- **Honest failure states, never a fake analysis.** Provider unreachable,
+  timeout (20s per-call cap), empty or unparseable answers → `{ ok: false }`
+  leak-free errors and **no row written**; a failed TTS leg degrades the audio,
+  never the digest text (verified live: the Kiswahili voice timed out honestly
+  and the text survived).
+- **Append-only, like everything else here.** `AiReviewNote`, `PhotoHash`,
+  `AiInsight` and `TrustDigest` rows are append-only (no update/delete path
+  exists anywhere), latest wins, full history kept.
+- **Real, measured, live.** With the flag on and `.z-ai-config` present (the
+  SDK self-configures — **no new env vars**), the same models answer the app:
+  chat ≈ 300 ms, single-photo vision ≈ 720 ms; production measurement raised
+  the per-call cap 8 s → 20 s (commit `ec6bc87`). During browser
+  verification the vision pass correctly flagged the seeded demo photos as
+  **render-suspect** (they are stock renders — the AI was right), and a real
+  draw review returned verdict `advisory` ("roof trusses installed ahead of
+  milestone scope").
+
+The pre-existing Copilot routes (`/api/ai/recap`, `analyze-photo`, …) keep
+their older `ai_progress`/`ai_voice` flags; the Wave-6 layer is the new,
+stricter seam. Engineering detail: [ARCHITECTURE.md](./ARCHITECTURE.md) ·
+release story: [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) · plan:
+[docs/wave6-plan.md](./docs/wave6-plan.md).
+
 ## Architecture
 
 ```mermaid
@@ -190,12 +255,12 @@ flowchart TB
     end
 
     subgraph BACK["src/backend — server-only"]
-        BIZ["actions/ + modules/<br/>supply · inventory · wallet · ledger · invoices<br/>intel · notify · land · professionals · events"]
+        BIZ["actions/ + modules/<br/>supply · inventory · wallet · ledger · invoices<br/>intel · notify · land · professionals · events · ai"]
         JOBS["Job runner<br/>JobRecord queue<br/>POST /api/jobs/run"]
-        AIS["AI skills seam<br/>src/backend/lib/ai.ts<br/>(z-ai SDK, backend-only)"]
+        AIS["AI seams (backend-only)<br/>lib/ai.ts (Copilot routes) ·<br/>modules/ai/ (Wave-6 advisory layer:<br/>chat · vision · transcribe · speak,<br/>ai flag, 20s cap)"]
     end
 
-    DB[("SQLite + Prisma 6<br/>63-model schema<br/>double-entry ledger")]
+    DB[("SQLite + Prisma 6<br/>68-model schema<br/>double-entry ledger")]
 
     U --> NEXT
     U -->|"/website"| REWRITE
@@ -220,26 +285,30 @@ src/
   app/          # Next.js App Router — page + /api/** routes (framework-fixed)
   frontend/     # web UI: mjengo/ (tabs), ui/ (shadcn), auth/, i18n/ (en+sw), hooks/
   backend/      # SERVER-ONLY: lib/ (guard, auth, audit, rate-limit, ai) +
-                #   actions/ + modules/ (one folder per domain)
+                #   actions/ + modules/ (one folder per domain — incl.
+                #   modules/ai/, the Wave-6 advisory AI seam)
   mobile/       # phone-first shell: bottom nav, ≤5 tabs + More sheet + camera
   shared/       # isomorphic contracts: permissions matrix, CLIENT_ACTIONS allowlist
 mjengoos-website/  # marketing site (independent app, :3001, proxied at /website)
-prisma/            # schema.prisma (63 models), migrations/, seed chain
+prisma/            # schema.prisma (68 models), migrations/ (0–8), seed chain
 ```
 
 ### REST API — `/api/v1`
 
 The typed integration surface, documented live as **OpenAPI 3.1** at
-`/api/openapi.json` (21 documented paths): **19 `/api/v1` paths** — wallets
+`/api/openapi.json` (29 documented paths): **27 `/api/v1` paths** — wallets
 (7 routes incl. deposit/transfer/withdraw with idempotency keys), payments,
 projects (list/detail/tasks/deliveries), supply orders, **milestones**
 (list/detail with the full release ladder), **invoices** (list/detail with
 the **3-way-match verdict**: PO ↔ invoice ↔ delivery) and **escrow**
 (ledger-derived — the balance is computed from double-entry ledger entries,
-never a stored projection) — plus two app-level GETs (`/api/audit`,
-`/api/reports/budget-variance`). One error shape (`{ error, field? }`), zod
-strictObject validation, keyset pagination, per-principal rate limits and
-scope pinning (a client session can only ever see its own project).
+never a stored projection), plus the Phase-D read surface — **workers**
+(list/detail), **attendance**, task detail, **suppliers**, **parcels**
+(land), project **intel** and **budget-variance** — plus two app-level GETs
+(`/api/audit`, `/api/reports/budget-variance`). One error shape
+(`{ error, field? }`), zod strictObject validation, keyset pagination,
+per-principal rate limits and scope pinning (a client session can only ever
+see its own project).
 
 Full module boundaries and the production migration roadmap
 (SQLite → PostgreSQL, monolith → services, `PaymentProvider` seams): see
@@ -254,9 +323,9 @@ Full module boundaries and the production migration roadmap
 | UI | Tailwind CSS 4, shadcn/ui + Radix primitives, lucide icons, cmdk palette |
 | State | Zustand (app store + persisted offline outbox) |
 | Auth | NextAuth v4 — credentials provider, JWT session cookies, scrypt hashes |
-| Data | Prisma 6 + SQLite (63-model schema, SQL migrations, double-entry ledger) |
+| Data | Prisma 6 + SQLite (68-model schema, 9 additive migrations, double-entry ledger) |
 | Validation | Zod 4 on every mutating route |
-| AI | z-ai-web-dev-sdk behind a backend-only seam (vision, voice, anomaly) |
+| AI | z-ai-web-dev-sdk behind backend-only seams: `lib/ai.ts` (Copilot) and `modules/ai/` (Wave-6 advisory layer — chat/vision/transcribe/speak, `ai` flag default-off, 20s call cap) |
 | Runtime/tooling | Bun (install, seeds, dev), Node 20 for the production standalone server, Docker for self-host |
 
 ## Quick start
@@ -351,9 +420,9 @@ Recruiter-friendly, and all of it verifiable in the repo:
   the public `POST /api/share` (strictObject schema, 64 KB cap checked before
   `JSON.parse`); scrypt password hashing with `timingSafeEqual`.
 - **PR-verified `main`** — the 13 foundation PRs were reviewed and CI-gated
-  (security hardening in #11, proxy-auth fix in #7); waves 3–5 landed as
+  (security hardening in #11, proxy-auth fix in #7); waves 3–6 landed as
   locally-verified merge commits (full gate re-run per merge — lint, strict
-  typecheck, all 1,100+ tests) while GitHub push access was unavailable.
+  typecheck, all 1,500+ tests) while GitHub push access was unavailable.
 
 Vulnerability disclosure policy: [SECURITY.md](./SECURITY.md).
 
@@ -387,9 +456,10 @@ form), health monitoring, SQLite backups, secrets handling — in
 `.github/workflows/ci.yml` runs lint + strict typecheck + a real
 `next build` on every push/PR; `docker.yml` builds the Docker image on a
 GitHub runner (the dev sandbox has no docker CLI — CI is the verification).
-The unit suite — **1,100+ tests across 43 vitest files** (`bun run test`) —
+The unit suite — **1,513 tests across 54 vitest files** (`bun run test`) —
 is the local gate; every wave merge re-ran it in full (495 → 899 → 1,019 →
-1,102 tests across the release waves). PR runs auto-cancel on new commits. Workflows are currently paused by a
+1,102 → 1,244 → 1,513 tests across waves 1–6). PR runs
+auto-cancel on new commits. Workflows are currently paused by a
 billing lock on the account — they exist, are green on the last runs, and
 resume unchanged when billing is restored.
 
@@ -416,25 +486,36 @@ resume unchanged when billing is restored.
   contract, a keyword grammar and a simulator, with real attendance and
   photo-comment rows written through the app's own appliers — but no Meta
   Cloud API is wired; every reply is footered "MjengoOS sim".
-- AI results are labeled with confidence and require human application —
-  AI never writes official records directly.
+- **The Wave-6 AI layer ships dark.** The `ai` flag is DEFAULT OFF — an
+  admin opts in; with it off, no AI route, action or job contacts the SDK
+  (test-pinned). AI output is advisory-only and confidence-labeled — no
+  action, score or ledger path reads it.
+- **No model-authored numbers.** Model-emitted figures are redacted before
+  storage; the trust digest's text (and every figure in it) is composed
+  deterministically from ledger rows — the model only voices it. AI rows
+  (`AiReviewNote`, `PhotoHash`, `AiInsight`, `TrustDigest`) are append-only.
+- **AI failures are honest.** Unavailable SDK, timeout (20s cap) or empty
+  answers write no row and fake nothing; when the Kiswahili TTS leg timed
+  out during live verification the digest text survived — the text is the
+  product, the audio is the bonus.
 
 ## Project structure & docs
 
 | Path | What |
 |---|---|
-| `src/app/` | App Router: one page (`page.tsx`) + `/api/**` (auth, projects, actions, sync, share, upload, search, flags, notifications, jobs/run, audit, reports, health, ussd, whatsapp, 5 AI routes) + the `/api/v1` REST surface (19 OpenAPI-documented paths) + `/api/openapi.json` |
+| `src/app/` | App Router: one page (`page.tsx`) + `/api/**` (auth, projects, actions, sync, share, upload, search, flags, notifications, jobs/run, audit, reports, health, ussd, whatsapp, 7 AI routes) + the `/api/v1` REST surface (27 OpenAPI-documented paths) + `/api/openapi.json` |
 | `src/frontend/` | Web UI: `mjengo/` tab surfaces, `ui/` shadcn primitives, `auth/`, `i18n/`, `hooks/` (use-mjengo payload facade + offline outbox) |
-| `src/backend/` | Server-only: `lib/` (guard, auth, audit, rate-limit, db, ai, mjengo dispatcher), `actions/`, `modules/` per domain |
+| `src/backend/` | Server-only: `lib/` (guard, auth, audit, rate-limit, db, ai, mjengo dispatcher, perceptual-hash), `actions/`, `modules/` per domain — incl. `modules/ai/` (the Wave-6 seam + draw-review / authenticity / trust-digest engines) |
 | `src/mobile/` | Phone-first bottom nav |
 | `src/shared/` | Isomorphic contracts: `permissions.ts` role matrix, `client-actions.ts` allowlist |
 | `mjengoos-website/` | Marketing site (independent Next.js app, `:3001`, proxied at `/website`) |
-| `prisma/` | `schema.prisma` (63 models), `migrations/` (0_init + additive 1_mjengo_score, 2_draw_pack), `seed.ts` + `seed-extras/` |
+| `prisma/` | `schema.prisma` (68 models), `migrations/` (0_init + additive 1_mjengo_score … 8_trust_digest), `seed.ts` + `seed-extras/` |
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Build/run/test/deploy operations guide |
-| [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) | Plain-language release notes — v0.1 → v0.2.x, wave by wave |
-| [docs/backlog.md](./docs/backlog.md) | PM release plan (waves 3–5) with paste-ready issue texts |
+| [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) | Plain-language release notes — v0.1 → v0.2.4, wave by wave |
+| [docs/backlog.md](./docs/backlog.md) | PM release plan (waves 3–6) with paste-ready issue texts |
+| [docs/wave6-plan.md](./docs/wave6-plan.md) | Wave-6 release plan (research → specs → paste-ready issue texts) + the market-gap research it rests on (`docs/research/`) |
 | [SECURITY.md](./SECURITY.md) | Vulnerability reporting policy |
 
 Roadmap lives in [GitHub issues](https://github.com/Roy-Wanyoike/Mjengo-OS/issues).

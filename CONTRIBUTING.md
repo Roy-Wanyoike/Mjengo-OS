@@ -51,7 +51,7 @@ Run the same gates CI runs:
 ```bash
 bun run lint          # eslint — 0 errors, 0 warnings
 bunx tsc --noEmit     # strict typecheck, 0 errors
-bun run test          # vitest — the full unit suite (1,100+ tests / 43 files)
+bun run test          # vitest — the full unit suite (1,513 tests / 54 files)
 ```
 
 All three must pass locally. CI re-runs lint and the strict typecheck on
@@ -65,8 +65,8 @@ site:lint` and `bun run site:typecheck`.
 - **Small and single-purpose** — one branch, one concern. If the diff sprawls,
   split it into stacked PRs.
 - **Tests land with the code, in the same branch** — new behavior is pinned
-  by new tests before it merges (the suite grew 495 → 1,100+ tests across
-  the release waves; every merge re-ran the full suite).
+  by new tests before it merges (the suite grew 495 → 1,513 tests across
+  waves 1–6; every merge re-ran the full suite).
 - **Linked to an issue** — open or comment on one first, so the *why* is
   recorded before the *how*.
 - **Left open for review** — every change lands through a reviewed, CI-gated
@@ -77,7 +77,7 @@ site:lint` and `bun run site:typecheck`.
 ## Parallel work (waves & worktrees)
 
 Several features are often built at once, in isolation, then merged
-sequentially — that is how waves 3–5 were built. The working method:
+sequentially — that is how waves 3–6 were built. The working method:
 
 - Build each feature in its own **git worktree** off `main`
   (`git worktree add ../wt-<task> -b feat/<name>`), so parallel branches

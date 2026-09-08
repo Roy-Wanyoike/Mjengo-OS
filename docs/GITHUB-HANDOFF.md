@@ -4,7 +4,7 @@
 
 ## Current state (verified 2026-09-08)
 
-- **Local `main`: 64 commits ahead of `origin/main`** — lint clean, `tsc --noEmit` clean, **1,244 tests / 45 files all passing**, browser-verified.
+- **Local `main`: 78 commits ahead of `origin/main`** (`git rev-list --count origin/main..main`) — lint clean, `tsc --noEmit` clean, **1,513 tests / 54 files all passing**, browser-verified (Wave 6 included — real AI calls through the live app).
 - GitHub holds **16 open PRs (#56–#71)** whose branches were pushed by the previous session but never merged. Every one of those branch heads is **reachable from local `main`** (they were merged locally with `--no-ff`), so pushing `main` will mark them merged automatically.
 - **32 open issues** — most are closed by code already on local `main` (see mapping below).
 
@@ -66,9 +66,25 @@ Create these **before** pushing wave branches so the PRs can carry "Closes #N" (
 7. `[notify] Web push notifications (VAPID)` → `feat/web-push`
 8. `[roles] Supplier-side portal` → `feat/supplier-role`
 
-> Because these are already merged on local `main`, the simplest honest path is: create the issues, push `main`, then close each issue with a comment referencing the merge commit — or re-open tiny PRs from the still-existing branches with "Closes #N" bodies (the branches were preserved with `--no-ff` merges, so `git push origin --all` publishes them).
+## New issues to create for Wave 6 + v1 Phase D (paste-ready bodies: `docs/wave6-plan.md` §2)
+
+Same rule — create the issues, then reference the existing merge commits (all
+five branches were merged locally with `--no-ff` and are preserved):
+
+1. `[ai] AI Draw Review MVP — advisory vision+LLM cross-check over frozen draw packs` → branch `feat/ai-draw-review` @ 443357c, merged in `f186b48`
+2. `[ai] Evidence Authenticity Screen — dHash duplicate detection + vision phase-consistency` → `feat/ai-authenticity` @ e27e4de, merged in `c79cc2b`
+3. `[ai] Diaspora Trust Digest with voice — weekly EN/SW + TTS through the share link` → `feat/ai-trust-digest` @ 51601f3, merged in `0f52bfe`
+4. *(foundation — no separate issue needed, or fold into W6-1's)* `feat/ai-foundation` @ a948e8c, merged in `c44004e` (the `ai` flag + provider seam)
+5. *(v1 Phase D — same pattern as the Phase-C issues)* `feat/v1-phase-d`, merged in `2c3152a` (workers/attendance/tasks/suppliers/parcels/intel/budget-variance; OpenAPI 21 → 29 paths)
+
+> The full paste-ready bodies (problem statement / proposed solution / ACs /
+> tech notes / done definition) live in `docs/wave6-plan.md` §2 — issues W6-1,
+> W6-3, W6-2, in that order. Because all of this is already merged on local
+> `main`, the same honest path applies: create the issues, push `main`, close
+> each with a comment referencing the merge commit (or re-open small PRs from
+> the preserved branches with "Closes #N" bodies).
 
 ## After the push
 
-- Re-run the browser verification (scripts pattern documented in `worklog.md` tasks 3–5).
+- Re-run the browser verification (scripts pattern documented in `worklog.md` tasks 3–5; Wave-6 AI verification in task 9).
 - CI (`.github/workflows/ci.yml`) runs lint + strict typecheck + `next build` on every push — currently paused by the account's billing lock; they resume unchanged.
