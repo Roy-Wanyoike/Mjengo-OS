@@ -54,6 +54,16 @@ const NOT_FOUND_MESSAGES = new Set([
   // scoped to a project, e.g. from threeWayCheck's getInvoiceOrThrow.
   'Milestone not found in this project',
   'Invoice not found in this project',
+  // Phase D (site + procurement + land + intel reads): the exact single-line
+  // miss messages the domain modules throw — mjengo.ts team.remove /
+  // taskInProject, the supply service supplier lookups, the land service
+  // parcel ladder. Route-layer 404s (Worker/Task not found) answer the same
+  // shape directly; these entries map the SERVICE variants if one ever flows
+  // through a Phase D route's catch.
+  'Worker not found',
+  'Task not found in this project',
+  'Supplier not found',
+  'Parcel not found in this project',
 ])
 
 /**

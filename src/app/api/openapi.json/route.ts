@@ -8,11 +8,13 @@ import { NextResponse } from 'next/server'
  * Hand-written but kept truthful field-for-field against the route code —
  * every documented path, parameter, body field, response field and status
  * code is produced by src/backend/api/v1/** (reorg: src/app/api/v1/** are thin shims; this is the SDK-generation seam
- * listed in ARCHITECTURE.md's roadmap). 19 /api/v1 paths = the 8 v1 wallet/
+ * listed in ARCHITECTURE.md's roadmap). 27 /api/v1 paths = the 8 v1 wallet/
  * payment route files + the 6 read-only Phase B files (task 10-a: projects
  * list/detail/tasks/deliveries + supply orders list/detail) + the 5 read-only
  * Phase C money-governance files (W3-2: projects milestones/invoices/escrow
- * + milestone/invoice detail), plus the two wave-3 app-level GETs added by
+ * + milestone/invoice detail) + the 8 read-only Phase D files (task 7-b:
+ * workers list/detail, attendance, task detail, suppliers, parcels, intel
+ * digest, budget-variance mirror), plus the two wave-3 app-level GETs added by
  * W3-B: /api/audit (admin audit log, spec §44) and /api/reports/
  * budget-variance (QS report).
  *
@@ -923,6 +925,544 @@ const projectEscrowSchema = {
   },
 }
 
+// ---- Phase D (task 7-b) schema fragments: workforce / suppliers / parcels / intel reads ----
+
+/** Worker id path param (cuid — workers carry no human code). */
+const workerIdPathParam = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', minLength: 1, maxLength: 40 },
+  description: 'Worker id (cuid) — workers have no human code, and the kiosk PIN is never served.',
+}
+
+/** Task id path param (cuid — tasks carry no human code). */
+const taskIdPathParam = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', minLength: 1, maxLength: 40 },
+  description: 'Task id (cuid) — tasks have no human code.',
+}
+
+/**
+ * 403 for the workforce family (workers/attendance): client pin + the W5-3
+ * supplier uniform-403 note + the honest NO-FLAG note.
+ */
+const workforceForbiddenResponse = {
+  description:
+    'Signed in but not permitted: a client-role session pinned to a foreign project → ' +
+    '{ error: "Not permitted for this project" } (the same pin /api/v1/payments applies); a supplier-role session → ' +
+    'uniform 403 (W5-3: suppliers are not project readers — their surface is the supplier-owned rows). HONEST FLAG ' +
+    'NOTE: no feature flag gates these resources — none of the five flags (ai_progress, ai_voice, wallet, ' +
+    'marketplace, land_verification) names the workforce/attendance surface, so gating it by an unrelated flag ' +
+    'would be dishonest (the projects-resource precedent, flags.ts). Body shape { error }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const workerNotFoundResponse = {
+  description: 'Unknown worker. Body { error: "Worker not found" }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const taskNotFoundResponse = {
+  description: 'Unknown task. Body { error: "Task not found" }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+/** 403 for the parcels family: client pin + supplier 403 + the land_verification gate. */
+const landForbiddenResponse = {
+  description:
+    'Signed in but not permitted: a client-role session pinned to a foreign project → { error: "Not permitted for ' +
+    'this project" }; a supplier-role session → uniform 403 (W5-3); or the `land_verification` feature flag is OFF → ' +
+    '{ error: "Feature disabled by feature flag (land_verification)…" } for non-admin sessions (admins bypass so ' +
+    'they can toggle and test; spec §81 — mirrors the webapp hiding the parcels section while the flag is off). ' +
+    'Body shape { error }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+/** 403 for the intel digest: client pin + supplier 403 + the honest NO-FLAG note. */
+const intelForbiddenResponse = {
+  description:
+    'Signed in but not permitted: a client-role session pinned to a foreign project → ' +
+    '{ error: "Not permitted for this project" }; a supplier-role session → uniform 403 (W5-3). HONEST FLAG NOTE: ' +
+    'no feature flag gates this read — ai_progress/ai_voice gate the AI routes (Copilot photo analysis / voice ' +
+    'logging), not the intel module\'s deterministic reads; the webapp Intel tab renders while flags are off, and ' +
+    'v1 mirrors that. Body shape { error }.',
+  content: { 'application/json': { schema: errorSchema } },
+}
+
+const workerTodayStatusSchema = {
+  type: 'object',
+  description:
+    'The EAT-today attendance row state — the payload\'s OWN derivation (a null status means no row for today yet).',
+  required: ['status', 'checkIn', 'checkOut', 'method', 'wage', 'paid', 'verification', 'exceptionReason'],
+  properties: {
+    status: { type: ['string', 'null'], enum: ['present', 'absent', 'half_day', 'excused', null] },
+    checkIn: { type: ['string', 'null'], format: 'date-time' },
+    checkOut: { type: ['string', 'null'], format: 'date-time' },
+    method: { type: ['string', 'null'], description: 'geofence, ussd, app, kiosk_pin, qr_card, manager, whatsapp.' },
+    wage: { type: 'number', description: 'KES for today (0 when no row yet).' },
+    paid: { type: 'boolean' },
+    verification: { type: ['string', 'null'], description: 'verified (worker/kiosk evidence), reported (manager says), exception (needs review).' },
+    exceptionReason: { type: ['string', 'null'] },
+  },
+}
+
+const workerSummarySchema = {
+  type: 'object',
+  description:
+    'One worker of the roster (Doc A §14) — the SAME getProjectPayload() read the webapp Team tab renders ' +
+    '(todayStatus/weekEarnings are the payload\'s derivations, EAT "today" and trailing 7 calendar days). HONEST ' +
+    'OMISSIONS: Worker.pin (the kiosk PIN — a bearer credential) is never served; Worker has no createdAt/updatedAt ' +
+    'columns, so those fields are absent, never fabricated; the LIST carries no total attendance count (the ' +
+    'payload\'s per-worker window is the recent slice — the true counts are on GET /api/v1/workers/{id}).',
+  required: [
+    'id', 'projectId', 'name', 'role', 'phone', 'dailyRate', 'active', 'employmentType', 'skills',
+    'todayStatus', 'weekEarnings',
+  ],
+  properties: {
+    id: { type: 'string', description: 'Worker id (cuid) — the pagination cursor value.' },
+    projectId: { type: 'string' },
+    name: { type: 'string' },
+    role: { type: 'string', description: 'Trade, e.g. Fundi wa Mawe (Mason), Foreman.' },
+    phone: { type: 'string' },
+    dailyRate: { type: 'number', description: 'KES.' },
+    active: { type: 'boolean', description: 'The roster\'s live/inactive split (the ?active= filter).' },
+    employmentType: { type: ['string', 'null'], enum: ['casual', 'contract', 'full_time', null] },
+    skills: { type: 'array', description: 'Parsed from the stored JSON array (malformed stored JSON → [], never a 500).', items: { type: 'string' } },
+    todayStatus: workerTodayStatusSchema,
+    weekEarnings: { type: 'number', description: 'KES — Σ wages of the trailing 7 calendar days (the payload\'s derivation).' },
+  },
+}
+
+const workerDetailSchema = {
+  type: 'object',
+  description:
+    'One worker with the FULL attendance summary (true counts over the worker\'s whole history — by status, by ' +
+    'verification, paid/unpaid wage totals) and the recent day rows. Read via a route-layer include (the workforce ' +
+    'module has no public single-worker read — the wallet-transactions precedent); todayStatus/weekEarnings ' +
+    're-derive with the payload\'s exact logic so the two reads can never disagree.',
+  required: [
+    'id', 'projectId', 'name', 'role', 'phone', 'dailyRate', 'active', 'employmentType', 'skills',
+    'todayStatus', 'weekEarnings', 'idNumber', 'emergencyContactName', 'emergencyContactPhone',
+    'attendanceSummary', 'recentAttendance',
+  ],
+  properties: {
+    ...workerSummarySchema.properties,
+    idNumber: { type: ['string', 'null'], description: 'National ID as given — no verification claim.' },
+    emergencyContactName: { type: ['string', 'null'] },
+    emergencyContactPhone: { type: ['string', 'null'] },
+    attendanceSummary: {
+      type: 'object',
+      description: 'True totals over the worker\'s WHOLE attendance history (the list honestly cannot carry these).',
+      required: [
+        'records', 'present', 'absent', 'halfDay', 'excused', 'verified', 'reported', 'exception',
+        'paidWages', 'unpaidWages', 'unpaidRecords', 'firstDate', 'lastDate',
+      ],
+      properties: {
+        records: { type: 'integer' },
+        present: { type: 'integer' },
+        absent: { type: 'integer' },
+        halfDay: { type: 'integer' },
+        excused: { type: 'integer' },
+        verified: { type: 'integer', description: 'Rows with worker/kiosk evidence (Workforce Trust).' },
+        reported: { type: 'integer', description: 'Rows a manager reported without worker evidence.' },
+        exception: { type: 'integer', description: 'Rows flagged for review.' },
+        paidWages: { type: 'number', description: 'KES — wages of PAID rows.' },
+        unpaidWages: { type: 'number', description: 'KES — wages still unpaid (the payroll gate\'s exposure).' },
+        unpaidRecords: { type: 'integer' },
+        firstDate: { type: ['string', 'null'], description: 'Oldest attendance day (YYYY-MM-DD); null when no rows.' },
+        lastDate: { type: ['string', 'null'], description: 'Newest attendance day (YYYY-MM-DD); null when no rows.' },
+      },
+    },
+    recentAttendance: {
+      type: 'array',
+      description: 'The 14 most recent day rows (newest first — the payload\'s own window).',
+      items: {
+        type: 'object',
+        required: ['id', 'date', 'status', 'checkIn', 'checkOut', 'method', 'wage', 'paid', 'verification', 'exceptionReason', 'version', 'createdAt'],
+        properties: {
+          id: { type: 'string' },
+          date: { type: 'string', description: 'EAT calendar day, YYYY-MM-DD (the column is a date string).' },
+          status: { type: 'string', enum: ['present', 'absent', 'half_day', 'excused'] },
+          checkIn: { type: ['string', 'null'], format: 'date-time' },
+          checkOut: { type: ['string', 'null'], format: 'date-time' },
+          method: { type: 'string' },
+          wage: { type: 'number', description: 'KES.' },
+          paid: { type: 'boolean' },
+          verification: { type: 'string' },
+          exceptionReason: { type: ['string', 'null'] },
+          version: { type: 'integer', description: 'Offline-sync entity version — bumped by every applier that mutates the day-row.' },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+    },
+  },
+}
+
+const attendanceRecordSchema = {
+  type: 'object',
+  description:
+    'One attendance day-row (Doc A §15-16) — the Workforce Trust surface. Evidence and the append-only override log ' +
+    'are JSON arrays in storage; they surface as COUNTS ONLY, never raw payloads. Read via a route-layer include ' +
+    '(the wallet-transactions precedent — the webapp reads attendance inside the payload\'s worker include).',
+  required: [
+    'id', 'projectId', 'workerId', 'workerName', 'workerRole', 'date', 'status', 'checkIn', 'checkOut', 'method',
+    'wage', 'paid', 'verification', 'evidenceCount', 'overrideCount', 'exceptionReason', 'exceptionNote',
+    'recordedBy', 'version', 'createdAt',
+  ],
+  properties: {
+    id: { type: 'string', description: 'Attendance id (cuid) — the pagination cursor value.' },
+    projectId: { type: 'string' },
+    workerId: { type: 'string' },
+    workerName: { type: ['string', 'null'], description: 'Joined from Worker (null only for a vanished worker row).' },
+    workerRole: { type: ['string', 'null'] },
+    date: { type: 'string', description: 'EAT calendar day, YYYY-MM-DD (the column IS a date string).' },
+    status: { type: 'string', enum: ['present', 'absent', 'half_day', 'excused'] },
+    checkIn: { type: ['string', 'null'], format: 'date-time' },
+    checkOut: { type: ['string', 'null'], format: 'date-time' },
+    method: { type: 'string', description: 'geofence, ussd, app, kiosk_pin, qr_card, manager, whatsapp.' },
+    wage: { type: 'number', description: 'KES.' },
+    paid: { type: 'boolean' },
+    verification: { type: 'string', enum: ['verified', 'reported', 'exception'] },
+    evidenceCount: { type: 'integer', description: 'Parsed length of the evidence JSON array (gps, pin, qr, photo, supervisor, whatsapp…).' },
+    overrideCount: { type: 'integer', description: 'Parsed length of the append-only override log (edits after the fact — Doc A §16 pattern to verify, never an accusation).' },
+    exceptionReason: { type: ['string', 'null'] },
+    exceptionNote: { type: ['string', 'null'] },
+    recordedBy: { type: ['string', 'null'], description: 'Who created the row (name/role).' },
+    version: { type: 'integer', description: 'Offline-sync entity version — bumped by every applier that mutates the day-row.' },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const taskDetailSchema = {
+  type: 'object',
+  description:
+    'One task of the v2 model (Doc A §11) — every TaskSummary field plus the detail-only joins (assignedToName, ' +
+    'blockedByTitle). Read-only: task mutations stay on POST /api/actions (Phase D is the read surface). Read via a ' +
+    'route-layer include (phase + assigned worker + blocker task — the wallet-transactions precedent).',
+  required: [
+    'id', 'projectId', 'phaseId', 'phaseName', 'title', 'status', 'progress', 'priority', 'dueDate', 'assignedToId',
+    'assignedToName', 'blockedById', 'blockedByTitle', 'blockedReason', 'verifiedAt', 'verifiedByName', 'version',
+    'createdAt', 'updatedAt',
+  ],
+  properties: {
+    id: { type: 'string', description: 'Task id (cuid).' },
+    projectId: { type: 'string' },
+    phaseId: { type: 'string' },
+    phaseName: { type: ['string', 'null'] },
+    title: { type: 'string' },
+    status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'blocked'] },
+    progress: { type: 'integer', description: '0-100.' },
+    priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
+    dueDate: { type: ['string', 'null'], format: 'date-time' },
+    assignedToId: { type: ['string', 'null'], description: 'Worker id when assigned.' },
+    assignedToName: { type: ['string', 'null'], description: 'Worker name joined (null when unassigned).' },
+    blockedById: { type: ['string', 'null'], description: 'Task id of the blocker when blocked.' },
+    blockedByTitle: { type: ['string', 'null'], description: 'The blocker task\'s title joined (null when not blocked).' },
+    blockedReason: { type: ['string', 'null'] },
+    verifiedAt: { type: ['string', 'null'], format: 'date-time', description: 'When the completed work was verified.' },
+    verifiedByName: { type: ['string', 'null'] },
+    version: { type: 'integer', description: 'Offline-sync entity version — bumped by every applier that mutates the row.' },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const supplierCatalogSummarySchema = {
+  type: 'object',
+  description:
+    'One supplier of the marketplace directory with its catalog summary and THIS project\'s relationship marks. ' +
+    'HONEST SCOPE: Supplier rows are a GLOBAL directory (loadSupplySlice loads the whole marketplace table — the ' +
+    'same rows the webapp Finder renders for the project); the project relationship is carried per row ' +
+    '(savedByProject, orderCount, orderTotal computed from this project\'s purchase orders), never by silently ' +
+    'filtering the directory. Gated by the `marketplace` flag like the rest of the v1 supply family.',
+  required: [
+    'id', 'businessName', 'county', 'town', 'phone', 'email', 'verificationState', 'reliabilityScore',
+    'responseHours', 'deliveryFeeBase', 'minimumOrder', 'freeDeliveryOver', 'deliveryZones', 'operatingHours',
+    'savedByProject', 'orderCount', 'orderTotal', 'catalogCount', 'catalog', 'createdAt', 'updatedAt',
+  ],
+  properties: {
+    id: { type: 'string', description: 'Supplier id (cuid) — the pagination cursor value.' },
+    businessName: { type: 'string' },
+    county: { type: 'string' },
+    town: { type: ['string', 'null'] },
+    phone: { type: ['string', 'null'] },
+    email: { type: ['string', 'null'] },
+    verificationState: { type: 'integer', description: '0-5 platform ladder (unverified → trusted) — based on platform activity, never a government certification claim.' },
+    reliabilityScore: { type: 'integer', description: '0-100 from ACTUAL platform transaction history — never anonymous ratings.' },
+    responseHours: { type: 'integer', description: 'Average quote response time (hours).' },
+    deliveryFeeBase: { type: 'number', description: 'KES base delivery fee.' },
+    minimumOrder: { type: 'number', description: 'KES minimum order value.' },
+    freeDeliveryOver: { type: ['number', 'null'], description: 'KES order value above which delivery is free.' },
+    deliveryZones: { type: 'string', description: 'CSV of zones/counties served.' },
+    operatingHours: { type: ['string', 'null'], description: 'e.g. "Mon-Sat 07:00-18:00" (spec §31).' },
+    savedByProject: { type: 'boolean', description: 'The project\'s saved-supplier mark (spec §30 — the directory sorts saved first).' },
+    orderCount: { type: 'integer', description: 'THIS project\'s purchase orders placed with the supplier.' },
+    orderTotal: { type: 'number', description: 'KES — Σ totals of those orders (landed).' },
+    catalogCount: { type: 'integer' },
+    catalog: {
+      type: 'array',
+      description: 'The supplier\'s catalog items (name/unit/price/stock/min order — spec §29).',
+      items: {
+        type: 'object',
+        required: ['id', 'name', 'category', 'brand', 'specification', 'unit', 'unitPrice', 'stockQty', 'minOrderQty', 'updatedAt'],
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          category: { type: ['string', 'null'], description: 'cement, steel, timber, roofing, plumbing, electrical, paint, tiles, sand, ballast, blocks, tools, equipment, finishes.' },
+          brand: { type: ['string', 'null'], description: 'e.g. Simba, Devki, Bamburi.' },
+          specification: { type: ['string', 'null'], description: 'e.g. "42.5N 50kg bag".' },
+          unit: { type: 'string' },
+          unitPrice: { type: 'number', description: 'KES.' },
+          stockQty: { type: 'number', description: 'Stock as of updatedAt (spec §31).' },
+          minOrderQty: { type: 'number' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        },
+      },
+    },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const parcelSummarySchema = {
+  type: 'object',
+  description:
+    'One land parcel with the verification ladder\'s summary. HONEST LANGUAGE (land/policy.ts): "verified" is a ' +
+    'record state produced by the ladder (document + registry search reviewed), NEVER a government certification ' +
+    'claim; "flagged" is an anomaly state for human review, never an accusation. Data comes from the payload\'s ' +
+    'land slice — loadLandSlice(projectId), the land module\'s public read. Gated by the `land_verification` flag ' +
+    'exactly as the webapp parcels section is.',
+  required: [
+    'id', 'projectId', 'plotNumber', 'county', 'town', 'lat', 'lng', 'approxArea', 'tenureType', 'status',
+    'documentCount', 'searchCount', 'assignmentCount', 'latestSearch', 'assignments', 'createdAt', 'updatedAt',
+  ],
+  properties: {
+    id: { type: 'string', description: 'LandParcel id (cuid) — the pagination cursor value.' },
+    projectId: { type: 'string' },
+    plotNumber: { type: 'string', description: 'e.g. "LR No. 2090/1234".' },
+    county: { type: 'string' },
+    town: { type: ['string', 'null'] },
+    lat: { type: ['number', 'null'] },
+    lng: { type: ['number', 'null'] },
+    approxArea: { type: ['string', 'null'], description: 'e.g. "0.25 ha", "50x100 ft".' },
+    tenureType: { type: ['string', 'null'], description: 'freehold / leasehold.' },
+    status: { type: 'string', enum: ['searching', 'verified', 'flagged'], description: 'The documented column values (free-form column — other stored values stay visible unfiltered and never match a filter).' },
+    documentCount: { type: 'integer', description: 'Attached documents (title deed, search cert, survey map…).' },
+    searchCount: { type: 'integer', description: 'Registry title searches recorded.' },
+    assignmentCount: { type: 'integer', description: 'Professionals assigned (surveyor, advocate, engineer…).' },
+    latestSearch: {
+      type: ['object', 'null'],
+      description: 'The newest registry search (null when none requested yet).',
+      required: ['id', 'searchRef', 'status', 'transcriptionMatch', 'requestedAt', 'receivedAt', 'reviewedAt'],
+      properties: {
+        id: { type: 'string' },
+        searchRef: { type: 'string', description: 'Registry search reference.' },
+        status: { type: 'string', enum: ['requested', 'received', 'reviewed'] },
+        transcriptionMatch: { type: 'string', enum: ['pending', 'consistent', 'mismatch'], description: 'mismatch = an anomaly flag for human review, not an accusation.' },
+        requestedAt: { type: 'string', format: 'date-time' },
+        receivedAt: { type: ['string', 'null'], format: 'date-time' },
+        reviewedAt: { type: ['string', 'null'], format: 'date-time' },
+      },
+    },
+    assignments: {
+      type: 'array',
+      description: 'Assigned professionals with their role on the parcel.',
+      items: {
+        type: 'object',
+        required: ['id', 'professionalName', 'professionalCategory', 'roleOnParcel', 'status', 'createdAt'],
+        properties: {
+          id: { type: 'string' },
+          professionalName: { type: 'string' },
+          professionalCategory: { type: 'string', description: 'surveyor, advocate, engineer, qty_surveyor, architect.' },
+          roleOnParcel: { type: 'string' },
+          status: { type: 'string', enum: ['active', 'completed', 'withdrawn'] },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+    },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+}
+
+const intelDigestSchema = {
+  type: 'object',
+  description:
+    'The project\'s INTEL DIGEST — flags state, the latest MjengoScore, the latest risk assessment, the §48 health ' +
+    'snapshot, the latest weekly digest row, and the anomalies summary (the Alert ledger the anomaly scan writes). ' +
+    'HONESTY RULES (the intel module\'s own): the score gates nothing and approves nothing — it describes, humans ' +
+    'decide; score is NULL (never a fake 0 or 100) when the project has too little history; every number is ' +
+    'deterministic and traceable to real rows — no anonymous ratings, no opaque "AI scores"; risk findings and ' +
+    'anomalies are "review required" language, never accusations.',
+  required: ['projectId', 'flags', 'score', 'risk', 'health', 'digest', 'anomalies'],
+  properties: {
+    projectId: { type: 'string' },
+    flags: {
+      type: 'object',
+      description: 'The §81 feature-flag state as of this read (global, 30s cache — see flags.ts).',
+      required: ['ai_progress', 'ai_voice', 'wallet', 'marketplace', 'land_verification'],
+      properties: {
+        ai_progress: { type: 'boolean' },
+        ai_voice: { type: 'boolean' },
+        wallet: { type: 'boolean' },
+        marketplace: { type: 'boolean' },
+        land_verification: { type: 'boolean' },
+      },
+    },
+    score: {
+      type: ['object', 'null'],
+      description:
+        'The LATEST MjengoScore row (append-only history; latest wins). Null when never computed. The score is a ' +
+        'PROJECTION recomputed only on the explicit score.recompute action — never from a job, webhook or page load.',
+      required: ['score', 'confidence', 'ruleVersion', 'computedAt', 'componentsCount', 'components', 'notes'],
+      properties: {
+        score: { type: ['integer', 'null'], description: '0-100; null = honest low-confidence state (too few components have data — see notes).' },
+        confidence: { type: 'string', enum: ['low', 'medium', 'high'], description: 'How many components carry data.' },
+        ruleVersion: { type: 'string' },
+        computedAt: { type: 'string', format: 'date-time' },
+        componentsCount: { type: 'integer' },
+        components: {
+          type: 'array',
+          description: 'Parsed components (malformed stored JSON → [], never a 500).',
+          items: {
+            type: 'object',
+            required: ['key', 'label', 'weight', 'value', 'deduction', 'evidence'],
+            properties: {
+              key: { type: 'string', enum: ['evidence_backed_releases', 'attendance_verification', 'budget_discipline', 'variation_discipline', 'delivery_discrepancy', 'invoice_disputes'] },
+              label: { type: 'string' },
+              weight: { type: 'integer' },
+              value: { type: ['integer', 'null'] },
+              deduction: { type: ['number', 'null'] },
+              evidence: { type: 'string', description: 'The rows behind the number.' },
+            },
+          },
+        },
+        notes: { type: ['string', 'null'], description: 'The explanation when score is null.' },
+      },
+    },
+    risk: {
+      type: ['object', 'null'],
+      description: 'The LATEST RiskAssessment (recomputed only on the explicit risk.recompute action). Null when never computed.',
+      required: ['overallScore', 'ruleVersion', 'computedAt', 'findings'],
+      properties: {
+        overallScore: { type: 'integer', description: '0-100 (higher = more attention needed).' },
+        ruleVersion: { type: 'string' },
+        computedAt: { type: 'string', format: 'date-time' },
+        findings: {
+          type: 'array',
+          description: 'Parsed rule hits (malformed stored JSON → [], never a 500).',
+          items: {
+            type: 'object',
+            required: ['rule', 'severity', 'title', 'message', 'evidence'],
+            properties: {
+              rule: { type: 'string' },
+              severity: { type: 'string', enum: ['info', 'warning', 'critical'] },
+              title: { type: 'string' },
+              message: { type: 'string' },
+              evidence: { type: 'string', description: 'The rows behind the number.' },
+              score: { type: 'integer', description: 'Severity weight contributed (info 5 · warning 15 · critical 30).' },
+            },
+          },
+        },
+      },
+    },
+    health: {
+      type: ['object', 'null'],
+      description: 'The §48 project-health snapshot (recomputed on every payload load). Null when the project row is missing.',
+      required: ['overall', 'computedAt', 'dimensions'],
+      properties: {
+        overall: { type: 'integer', description: '0-100, mean of the 6 dimension scores.' },
+        computedAt: { type: 'string', format: 'date-time' },
+        dimensions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['key', 'label', 'score', 'grade', 'summary'],
+            properties: {
+              key: { type: 'string', enum: ['progress', 'budget', 'schedule', 'procurement', 'issues', 'evidence'] },
+              label: { type: 'string' },
+              score: { type: 'integer' },
+              grade: { type: 'string', enum: ['good', 'attention', 'poor'] },
+              summary: { type: 'string', description: 'One line citing the real numbers.' },
+            },
+          },
+        },
+      },
+    },
+    digest: {
+      type: ['object', 'null'],
+      description: 'The LATEST weekly digest row (digest.weekly writes one per week, updating the same week). Null when none generated yet.',
+      required: ['id', 'weekStart', 'summary', 'items', 'createdAt'],
+      properties: {
+        id: { type: 'string' },
+        weekStart: { type: 'string', description: 'ISO date (Monday) of the digest week.' },
+        summary: { type: 'string' },
+        items: {
+          type: 'array',
+          description: 'Parsed digest items (malformed stored JSON → [], never a 500).',
+          items: {
+            type: 'object',
+            required: ['kind', 'title', 'detail'],
+            properties: {
+              kind: { type: 'string', description: 'price_trend, risk, pending_approval, discrepancy, procurement, milestone…' },
+              title: { type: 'string' },
+              detail: { type: 'string' },
+            },
+          },
+        },
+        createdAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    anomalies: {
+      type: 'object',
+      description:
+        'The project\'s Alert ledger summary — the rows the anomaly scan writes (deterministic §16/§29 rules + the LLM pass). ' +
+        'Alerts NEVER auto-change money or records — humans decide; counts are honest row counts, latest carries the 5 newest.',
+      required: ['total', 'unacknowledged', 'critical', 'warning', 'info', 'byType', 'latest'],
+      properties: {
+        total: { type: 'integer' },
+        unacknowledged: { type: 'integer' },
+        critical: { type: 'integer' },
+        warning: { type: 'integer' },
+        info: { type: 'integer' },
+        byType: {
+          type: 'object',
+          description: 'Counts per Alert.type bucket (the documented set).',
+          required: ['anomaly', 'budget', 'attendance', 'safety', 'progress', 'info'],
+          properties: {
+            anomaly: { type: 'integer' },
+            budget: { type: 'integer' },
+            attendance: { type: 'integer' },
+            safety: { type: 'integer' },
+            progress: { type: 'integer' },
+            info: { type: 'integer' },
+          },
+        },
+        latest: {
+          type: 'array',
+          description: 'The 5 newest alerts (newest first).',
+          items: {
+            type: 'object',
+            required: ['id', 'type', 'severity', 'title', 'message', 'acknowledged', 'createdAt'],
+            properties: {
+              id: { type: 'string' },
+              type: { type: 'string', description: 'anomaly, budget, safety, attendance, progress, info.' },
+              severity: { type: 'string', enum: ['info', 'warning', 'critical'] },
+              title: { type: 'string' },
+              message: { type: 'string', description: 'Carries the evidence and the rule key for deterministic findings.' },
+              acknowledged: { type: 'boolean' },
+              createdAt: { type: 'string', format: 'date-time' },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+
 // ---- the document ------------------------------------------------------------
 
 const spec = {
@@ -933,13 +1473,16 @@ const spec = {
     description:
       'REST v1 surface of MjengoOS: wallet accounts, derived balances, double-entry ledger reads, money movement ' +
       'and payment execution (spec §38 wallets / §57 payments), the Phase B READ-ONLY projects + supply ' +
-      'resources (project roster, honest summaries, task lists, purchase orders and delivery verification), and ' +
-      'the Phase C READ-ONLY money-governance resources (milestone release ladder, escrow balance, invoice ' +
-      'lifecycle with 3-way-match verdicts).\n\n' +
+      'resources (project roster, honest summaries, task lists, purchase orders and delivery verification), the ' +
+      'Phase C READ-ONLY money-governance resources (milestone release ladder, escrow balance, invoice lifecycle ' +
+      'with 3-way-match verdicts), and the Phase D READ-ONLY site + market + intel resources (workers, attendance ' +
+      'day-rows, task detail, supplier catalog, land parcels, intel digest, and the v1 mirror of the ' +
+      'budget-variance report).\n\n' +
       '**Honest scope notes** — money is KES-only; the payment provider rails are SIMULATED (each response ' +
       'carries an honest integrationNote; a real Daraja/bank provider plugs into the same seam); balances are ' +
       'always derived from ledger entries, never stored; every v1 mutation lives in the wallet/payment family — ' +
-      'milestones, escrow and invoices are READ-ONLY here (their mutations stay on POST /api/actions).\n\n' +
+      'milestones, escrow, invoices, workers, attendance, tasks, suppliers, parcels and intel are READ-ONLY here ' +
+      '(their mutations stay on POST /api/actions).\n\n' +
       '**Auth** — NextAuth credentials session (HttpOnly, signed JWT cookie `next-auth.session-token`). ' +
       'Wallet routes: finance+admin. Payments: finance, admin, or the project-pinned client. ' +
       'No API keys, no OAuth — cookie session only, same-origin.\n\n' +
@@ -949,10 +1492,12 @@ const spec = {
       '(replayed: true) and never 409.\n\n' +
       '**Pagination** — limit (1-200, default 50) + id cursor; responses carry nextCursor/hasMore.\n\n' +
       'This document is served unauthenticated at /api/openapi.json and is the SDK-generation seam ' +
-      '(ARCHITECTURE.md roadmap). It covers exactly the 19 /api/v1 route paths — the wallet + payment surface, ' +
+      '(ARCHITECTURE.md roadmap). It covers exactly the 27 /api/v1 route paths — the wallet + payment surface, ' +
       'the Phase B READ-ONLY projects + supply resources (projects list/detail/tasks/deliveries, supply orders ' +
-      'list/detail), and the Phase C READ-ONLY money-governance resources (milestones list/detail, escrow, ' +
-      'invoices list/detail — no mutations outside the money family) — and the two wave-3 app-level GETs: ' +
+      'list/detail), the Phase C READ-ONLY money-governance resources (milestones list/detail, escrow, ' +
+      'invoices list/detail — no mutations outside the money family), and the Phase D READ-ONLY site + market + ' +
+      'intel resources (workers list/detail, attendance, task detail, suppliers, parcels, intel digest, ' +
+      'budget-variance mirror — no mutations at all) — and the two wave-3 app-level GETs: ' +
       '/api/audit (admin audit log, spec §44) and /api/reports/budget-variance (QS report).',
   },
   servers: [{ url: '/', description: 'Same-origin (the app that rendered this document).' }],
@@ -963,6 +1508,9 @@ const spec = {
     { name: 'supply', description: 'Read-only procurement reads: purchase orders and delivery verification (any signed-in role, client pinned; gated by the marketplace flag for non-admins).' },
     { name: 'milestones', description: 'Read-only escrow & milestone release ladder (any signed-in role, client pinned; deliberately NOT gated by the wallet flag — the client release flow must survive it, per the flag\'s documented boundary).' },
     { name: 'invoices', description: 'Read-only supplier invoice lifecycle with 3-way-match verdicts (any signed-in role, client pinned; not gated by the marketplace flag — invoices are their own module sharing the Finder tab).' },
+    { name: 'workers', description: 'Read-only workforce roster + attendance day-rows with the Workforce Trust verification states (any signed-in role, client pinned; no flag gates the workforce surface).' },
+    { name: 'land', description: 'Read-only land parcels with the verification ladder summary (any signed-in role, client pinned; gated by the land_verification flag for non-admins, mirroring the webapp parcels section).' },
+    { name: 'intel', description: 'Read-only intel digest: flags state, latest MjengoScore, risk, health, weekly digest and the anomalies summary (any signed-in role, client pinned; no flag gates the intel reads).' },
     { name: 'audit', description: 'Admin audit-log reads — the append-only event ledger (admin only, spec §44).' },
     { name: 'reports', description: 'QS / cost-plan reports: budget variance per phase and category (contractor, admin, supervisor, qs).' },
   ],
@@ -1090,6 +1638,13 @@ const spec = {
       InvoiceDetail: invoiceDetailSchema,
       ThreeWayMatch: threeWayMatchSchema,
       ProjectEscrow: projectEscrowSchema,
+      WorkerSummary: workerSummarySchema,
+      WorkerDetail: workerDetailSchema,
+      AttendanceRecord: attendanceRecordSchema,
+      TaskDetail: taskDetailSchema,
+      SupplierCatalogSummary: supplierCatalogSummarySchema,
+      ParcelSummary: parcelSummarySchema,
+      IntelDigest: intelDigestSchema,
     },
   },
   paths: {
@@ -1752,6 +2307,291 @@ const spec = {
           403: moneyGovernanceForbiddenResponse,
           404: projectNotFoundResponse,
           429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/workers': {
+      get: {
+        tags: ['workers'],
+        operationId: 'listProjectWorkers',
+        summary: 'Workforce roster of a project with the attendance rollup (cursor-paginated)',
+        description:
+          'The project\'s workforce roster (Doc A §14) — identity, trade, terms, and the SAME todayStatus/' +
+          'weekEarnings derivation the webapp Team tab renders (getProjectPayload\'s workers read; EAT "today" and ' +
+          'trailing 7 calendar days, projected verbatim). HONEST: the LIST carries no total attendance count (the ' +
+          'payload\'s per-worker window is the recent slice — the true counts are on GET /api/v1/workers/{id}), and ' +
+          'Worker has no createdAt column, so the deterministic keyset order is the payload\'s own (name ASC, id ASC). ' +
+          'READ-ONLY — worker mutations stay on POST /api/actions (team.* / attendance.*). NO FEATURE FLAG (none of ' +
+          'the five flags names the workforce surface — gating it by an unrelated flag would be dishonest, the ' +
+          'projects-resource precedent). GUARD: any signed-in role; client-role sessions pinned to their own project ' +
+          '(foreign → 403); supplier-role sessions → uniform 403 (W5-3 — suppliers are not project readers); ' +
+          'unknown project → 404. ?active= (true|false — the one Worker boolean column) filters BEFORE pagination ' +
+          '(a cursor that falls out → 400). Rate limit: 120/min per principal.',
+        security,
+        parameters: [
+          projectIdPathParam,
+          {
+            name: 'active',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['true', 'false'] },
+            description: 'The roster\'s live/inactive split (the Worker.active boolean). Applies BEFORE pagination.',
+          },
+          limitParam,
+          cursorParam('a worker id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/WorkerSummary' }, 'worker id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: workforceForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/workers/{id}': {
+      get: {
+        tags: ['workers'],
+        operationId: 'getWorker',
+        summary: 'One worker: identity, terms, the FULL attendance summary + recent day rows',
+        description:
+          'One worker with the attendance summary the list honestly cannot carry: true counts over the worker\'s ' +
+          'WHOLE history (by status, by verification — the Workforce Trust states), paid/unpaid wage totals, and ' +
+          'the 14 most recent day rows. Read via a route-layer include (the workforce module has no public ' +
+          'single-worker read — the wallet-transactions precedent); todayStatus/weekEarnings re-derive with the ' +
+          'payload\'s exact logic so the two reads can never disagree. HONEST OMISSION: Worker.pin (the 4-digit ' +
+          'kiosk PIN — a bearer credential for the shared site device) is never served, the same rule that keeps ' +
+          'project.shareToken out of v1. READ-ONLY — mutations stay on POST /api/actions (team.* / attendance.*). ' +
+          'NO FEATURE FLAG (the workforce-family precedent). GUARD: resolve-first, pin-second (the v1 payments ' +
+          'precedent) — a client-role session must be pinned to the worker\'s own project (else 403); a supplier ' +
+          'session → uniform 403. Unknown worker → 404. Pagination does not apply (one object). Rate limit: ' +
+          '120/min per principal.',
+        security,
+        parameters: [workerIdPathParam],
+        responses: {
+          200: { description: 'ok: true, data = WorkerDetail.', ...json(ok({ $ref: '#/components/schemas/WorkerDetail' })) },
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: workforceForbiddenResponse,
+          404: workerNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/attendance': {
+      get: {
+        tags: ['workers'],
+        operationId: 'listProjectAttendance',
+        summary: 'Attendance day-rows of a project (cursor-paginated, filterable by worker/status/day)',
+        description:
+          'The project\'s attendance day-rows (Doc A §15-16) — the Workforce Trust surface: reported vs verified ' +
+          'presence, exceptions and their reasons, and the paid state the payroll gate consumes. Evidence and the ' +
+          'append-only override log surface as COUNTS ONLY (evidenceCount/overrideCount), never raw payloads. Read ' +
+          'via a route-layer include (worker name/role join — the wallet-transactions precedent). READ-ONLY — ' +
+          'attendance mutations stay on POST /api/actions (attendance.checkin / record / override / payroll.*). NO ' +
+          'FEATURE FLAG (the workforce-family precedent). GUARD: any signed-in role; client-role sessions pinned to ' +
+          'their own project (foreign → 403); supplier-role sessions → uniform 403 (W5-3); unknown project → 404. ' +
+          'The page is ordered (createdAt DESC, id DESC) — newest day-rows first, the invoices-list precedent. ' +
+          'FILTERS (all BEFORE pagination): ?workerId= (a worker of this project — a foreign or unknown id matches ' +
+          'no rows and answers an honest empty page, the never-written-status precedent), ?status= (present, absent, ' +
+          'half_day, excused), ?date= (an exact YYYY-MM-DD calendar day — the column IS a date string). Rate limit: ' +
+          '120/min per principal.',
+        security,
+        parameters: [
+          projectIdPathParam,
+          {
+            name: 'workerId',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', minLength: 1, maxLength: 40 },
+            description: 'Only this worker\'s rows. A foreign/unknown worker id matches no rows (honest empty page).',
+          },
+          statusParam(['present', 'absent', 'half_day', 'excused'], 'attendance status'),
+          {
+            name: 'date',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+            description: 'One exact calendar day (YYYY-MM-DD — the EAT day-sheet).',
+          },
+          limitParam,
+          cursorParam('an attendance record id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/AttendanceRecord' }, 'attendance record id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: workforceForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/tasks/{id}': {
+      get: {
+        tags: ['projects'],
+        operationId: 'getTask',
+        summary: 'One task: v2 fields, assignment and blocker joins, verification trail',
+        description:
+          'One task of the v2 task model (Doc A §11) — every field GET /api/v1/projects/{id}/tasks lists, plus the ' +
+          'detail-only joins: assignedToName (the worker) and blockedByTitle (the blocker task). READ-ONLY — task ' +
+          'mutations (task.create/update/assign/block/verify …) stay on POST /api/actions; Phase D deliberately ' +
+          'exposes no task mutations (the actions layer owns them). NO FEATURE FLAG (the projects/tasks family ' +
+          'precedent — no flag names the task surface). GUARD: resolve-first, pin-second — a client-role session ' +
+          'must be pinned to the task\'s own project (else 403); a supplier session → uniform 403 (W5-3). Unknown ' +
+          'task → 404. Read via a route-layer include (phase + assigned worker + blocker task — the ' +
+          'wallet-transactions precedent). Pagination does not apply (one object). Rate limit: 120/min per principal.',
+        security,
+        parameters: [taskIdPathParam],
+        responses: {
+          200: { description: 'ok: true, data = TaskDetail.', ...json(ok({ $ref: '#/components/schemas/TaskDetail' })) },
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: projectsForbiddenResponse,
+          404: taskNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/suppliers': {
+      get: {
+        tags: ['supply'],
+        operationId: 'listProjectSuppliers',
+        summary: 'Supplier catalog summary for a project (cursor-paginated)',
+        description:
+          'The supplier catalog summary the project\'s procurement sees (Finder §30): the marketplace directory ' +
+          'rows with their catalogs plus THIS project\'s relationship marks (savedByProject, orderCount, ' +
+          'orderTotal). HONEST SCOPE: Supplier rows are a GLOBAL directory (loadSupplySlice loads the whole ' +
+          'marketplace table — the same rows the webapp Finder renders for the project); the project relationship ' +
+          'is carried per row, never by silently filtering the directory. FEATURE FLAG: gated by `marketplace` like ' +
+          'the rest of the v1 supply family — OFF → 403 for non-admins (admins bypass). GUARD: any signed-in role; ' +
+          'client-role sessions pinned to their own project (foreign → 403); supplier-role sessions → uniform 403 ' +
+          '(W5-3 — their OWN catalog is the /api/supplier portal surface, never this buyer directory); unknown ' +
+          'project → 404. The page is ordered (createdAt ASC, id ASC) — the deterministic keyset (the webapp ' +
+          'directory re-sorts by verification state for display). ?q= free-text search on businessName/county/town ' +
+          '(contains, ASCII case-insensitive) filters BEFORE pagination. READ-ONLY — catalog mutations stay on ' +
+          'POST /api/actions (catalog.upsert / supplier.*). Rate limit: 120/min per principal.',
+        security,
+        parameters: [
+          projectIdPathParam,
+          searchParam,
+          limitParam,
+          cursorParam('a supplier id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/SupplierCatalogSummary' }, 'supplier id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: supplyForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/parcels': {
+      get: {
+        tags: ['land'],
+        operationId: 'listProjectParcels',
+        summary: 'Land parcels of a project with the verification ladder summary (cursor-paginated)',
+        description:
+          'The project\'s land parcels (Doc A §3-8): identity (plot/county/area), tenure, status, document and ' +
+          'title-search counts, the latest registry search\'s state, and the assigned professionals. HONEST ' +
+          'LANGUAGE (land/policy.ts): "verified" is a record state produced by the ladder, NEVER a government ' +
+          'certification claim; "flagged" is an anomaly state for human review, never an accusation. FEATURE FLAG: ' +
+          'gated by `land_verification` exactly as the webapp is — the flag\'s enforcement map closes "the parcels ' +
+          'section of the Land tab", so OFF → 403 for non-admins (admins bypass). GUARD: any signed-in role; ' +
+          'client-role sessions pinned to their own project (foreign → 403); supplier-role sessions → uniform 403 ' +
+          '(W5-3); unknown project → 404. Data comes from the payload\'s land slice — loadLandSlice(projectId), ' +
+          'the land module\'s public read. The page is ordered (createdAt ASC, id ASC). ?status= ' +
+          '(searching|verified|flagged) filters BEFORE pagination (a cursor that falls out → 400). READ-ONLY — ' +
+          'parcel mutations stay on POST /api/actions (parcel.* / search.*). Rate limit: 120/min per principal.',
+        security,
+        parameters: [
+          projectIdPathParam,
+          statusParam(['searching', 'verified', 'flagged'], 'parcel status'),
+          limitParam,
+          cursorParam('a parcel id'),
+        ],
+        responses: {
+          200: listOkResponse({ $ref: '#/components/schemas/ParcelSummary' }, 'parcel id'),
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: landForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/intel': {
+      get: {
+        tags: ['intel'],
+        operationId: 'getProjectIntelDigest',
+        summary: 'The project\'s intel digest: flags, latest score, risk, health, weekly digest, anomalies summary',
+        description:
+          'The project\'s INTEL DIGEST in one object: the flags state, the latest MjengoScore trust score, the ' +
+          'latest risk assessment, the §48 health snapshot, the latest weekly digest row, and the anomalies ' +
+          'summary (the project\'s Alert ledger — the rows the anomaly scan writes, with the severity mix and ' +
+          'acknowledgement state). HONESTY RULES (the intel module\'s own): the score gates nothing and approves ' +
+          'nothing — it describes, humans decide; score is NULL (never a fake 0 or 100) when the project has too ' +
+          'little history; every number is deterministic and traceable to real rows. Data comes from the payload\'s ' +
+          'intel slice — loadIntelSlice(projectId), the module\'s public read (latest-wins rows + the module\'s own ' +
+          'safe JSON parsers, re-used, never re-implemented) plus a route-layer Alert read (the ' +
+          'wallet-transactions precedent). NO FEATURE FLAG gates this READ (ai_progress/ai_voice gate the AI ' +
+          'routes, not the intel reads — the webapp Intel tab renders while flags are off, and v1 mirrors that). ' +
+          'GUARD: any signed-in role; client-role sessions pinned to their own project (foreign → 403); ' +
+          'supplier-role sessions → uniform 403 (W5-3); unknown project → 404. Recomputations stay on POST ' +
+          '/api/actions (risk.recompute / score.recompute / digest.generate). Pagination does not apply (one ' +
+          'digest object). Rate limit: 120/min per principal.',
+        security,
+        parameters: [projectIdPathParam],
+        responses: {
+          200: { description: 'ok: true, data = IntelDigest.', ...json(ok({ $ref: '#/components/schemas/IntelDigest' })) },
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: intelForbiddenResponse,
+          404: projectNotFoundResponse,
+          429: rateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/v1/projects/{id}/budget-variance': {
+      get: {
+        tags: ['reports'],
+        operationId: 'getProjectBudgetVariance',
+        summary: 'Budget variance report for the project (the v1 mirror of /api/reports/budget-variance)',
+        description:
+          'The QS budget-variance report (W3-B) on the v1 surface — the SAME service call, report contract and ' +
+          'role gate as /api/reports/budget-variance; only the request moved to the path param and the errors adopt ' +
+          'the v1 { error, field? } contract. project rollup: budgetTotal = Σ Phase.budget and spent = Σ ' +
+          'Transaction.amount — the exact ProjectSummary derivations, so the report can never disagree with the ' +
+          'dashboard. HONEST per-phase derivation: three-tier attribution (real phase cost-codes / milestone ' +
+          'linkage / documented budget-share estimate — phaseAttribution states which mode produced the numbers). ' +
+          'GUARD: contractor / admin / supervisor / qs only (client, finance, procurement and supplier sessions are ' +
+          'not on this surface → 403 — the guard\'s role gate, fail closed). RATE LIMIT: 30/min per principal (NOT ' +
+          'the 120/min v1 read convention — a deliberate deviation mirroring the app route: the derivation walks ' +
+          'every transaction of the project, so it is a heavyweight read, not a polling target). Unknown project → ' +
+          '404 { error: "Project not found" } (never an empty report). Pagination does not apply (one object).',
+        security,
+        parameters: [projectIdPathParam],
+        responses: {
+          200: { description: 'ok: true, data = BudgetVarianceReport (the same component /api/reports/budget-variance serves).', ...json(ok({ $ref: '#/components/schemas/BudgetVarianceReport' })) },
+          400: readBadRequestResponse,
+          401: unauthorizedResponse,
+          403: {
+            description: 'Signed in but the role is not on the QS surface (allowed: contractor, admin, supervisor, qs). Body { error: "Not permitted for role \\"<role>\\"" }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          404: projectNotFoundResponse,
+          429: reportRateLimitedResponse,
           500: serverErrorResponse,
         },
       },

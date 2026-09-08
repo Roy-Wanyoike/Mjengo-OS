@@ -752,6 +752,14 @@ describe('non-influence: score rows change no action outcomes anywhere', () => {
       // cannot recompute, gate or influence the score (W3-3 follow-up note).
       'src/backend/modules/drawpack/service.ts',
       'src/frontend/mjengo/draw-pack-viewer.tsx',
+      // v1 Phase D intel digest: the route READS the latest score row for the
+      // read-only REST surface (same findFirst display pattern as draw packs);
+      // it cannot recompute, gate or influence the score.
+      'src/backend/api/v1/project-intel.ts',
+      // v1 Phase D OpenAPI: the /api/v1/projects/:id/intel path description
+      // mentions the latest MjengoScore in its honest documentation string —
+      // prose only, no logic, cannot influence anything.
+      'src/app/api/openapi.json/route.ts',
       // display strings only — dictionary values, no logic, cannot influence actions
       'src/frontend/i18n/dicts/en.ts',
       'src/frontend/i18n/dicts/sw.ts',
