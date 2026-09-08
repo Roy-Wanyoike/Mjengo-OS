@@ -452,13 +452,16 @@ function CommandPaletteButton() {
 // Mirrors FLAG_KEYS/FLAG_LABELS in src/backend/modules/intel/flags.ts — the
 // server module can't be imported here (it pulls the Prisma client), so the
 // list is duplicated; keep the two in sync. low_data was removed (task 9-a
-// decision — see flags.ts header).
+// decision — see flags.ts header). `ai` was added DEFAULT OFF (task 8-f —
+// the Wave-6 AI provider seam; the row ships unchecked until an admin
+// opts in).
 const FLAG_ROWS: Array<{ key: string; label: string }> = [
   { key: 'ai_progress', label: 'AI progress (photo analysis)' },
   { key: 'ai_voice', label: 'AI voice logging' },
   { key: 'wallet', label: 'Wallet & payment requests' },
   { key: 'marketplace', label: 'Supplier marketplace (Finder)' },
   { key: 'land_verification', label: 'Land verification ladder' },
+  { key: 'ai', label: 'AI features (chat, vision, voice)' },
 ]
 
 /**

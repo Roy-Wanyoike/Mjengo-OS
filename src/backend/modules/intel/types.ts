@@ -291,11 +291,17 @@ export const EMPTY_INTEL_SLICE: IntelSlice = {
   suggestions: [],
   reliability: [],
   health: null,
-  // Keep in sync with FLAG_KEYS in ./flags.ts (low_data was removed —
-  // task 9-a decision, see the flags.ts header).
-  flags: Object.fromEntries(
-    ['ai_progress', 'ai_voice', 'wallet', 'marketplace', 'land_verification'].map((k) => [k, true]),
-  ) as FlagMap,
+  // Keep in sync with FLAG_KEYS / FLAG_DEFAULTS in ./flags.ts (low_data was
+  // removed — task 9-a decision, see the flags.ts header; `ai` was added
+  // DEFAULT OFF — task 8-f, the Wave-6 AI provider seam).
+  flags: {
+    ai_progress: true,
+    ai_voice: true,
+    wallet: true,
+    marketplace: true,
+    land_verification: true,
+    ai: false,
+  } as FlagMap,
 }
 
 /** Supplier row shape the engine needs (subset of the Prisma Supplier model). */
