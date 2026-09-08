@@ -1,6 +1,6 @@
 # GitHub Operations Handoff — Mjengo-OS
 
-**Status:** All engineering complete and verified locally (see `worklog.md`, `docs/backlog.md`, `docs/RELEASE-NOTES.md`). The GitHub token provided this session (`ghp_1o0W…`) is rejected by the GitHub API with **401 Bad credentials** (tested repeatedly with both `token` and `Bearer` formats — it was revoked/invalid before this session's work began). Everything below executes the moment a valid token is supplied.
+**Status:** All engineering complete and verified locally (see `worklog.md`, `docs/backlog.md`, `docs/RELEASE-NOTES.md`). The GitHub token provided this session (the `ghp_…` classic PAT) is rejected by the GitHub API with **401 Bad credentials** (tested repeatedly with both `token` and `Bearer` formats — it was revoked/invalid before this session's work began). Everything below executes the moment a valid token is supplied.
 
 ## Current state (verified 2026-09-08)
 
