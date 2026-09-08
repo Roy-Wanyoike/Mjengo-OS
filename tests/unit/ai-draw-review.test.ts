@@ -533,21 +533,21 @@ describe('provider fail / empty / unparseable → leak-free failure, no fake not
     expect(state.aiReviewNotes.size).toBe(0)
   })
 
-  it('8s timeout on the vision call (the provider cap) → honest failure, no row', async () => {
+  it('20s timeout on the vision call (the provider cap) → honest failure, no row', async () => {
     // Only setTimeout is faked (fs/db/setImmediate stay real): the loop below
     // drains the REAL event loop so the pre-vision async chain (driver read,
-    // context assembly) settles, then fake-advances the provider's 8s cap —
+    // context assembly) settles, then fake-advances the provider's 20s cap —
     // a vision call that never settles fails honestly and nothing is written.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     sdk.visionCreate.mockReturnValueOnce(new Promise(() => {})) // never settles
     const pending = runAction({ drawPackId: 'dp-1' })
     let settled = false
     void pending.catch(() => { settled = true })
-    for (let i = 0; i < 50 && !settled; i++) {
+    for (let i = 0; i < 80 && !settled; i++) {
       await new Promise<void>((r) => setImmediate(r))
       await vi.advanceTimersByTimeAsync(400)
     }
-    await expect(pending).rejects.toThrow(/timed out after 8s/)
+    await expect(pending).rejects.toThrow(/timed out after 20s/)
     expect(state.aiReviewNotes.size).toBe(0)
     expect(state.auditEvents).toHaveLength(0)
   })

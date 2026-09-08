@@ -25,10 +25,12 @@ import type { AiAudioResult, AiChatMessage, AiProvider, AiTextResult } from './t
 //     call — worth avoiding per request). A FAILED create() is never
 //     cached: the next call retries, so an operator dropping the config in
 //     later is picked up without a restart.
-//   · 8s CAP on every SDK call (the AT-provider discipline): the SDK's own
-//     fetch has NO timeout, so each call is raced against an 8s timer — a
-//     stuck model API can never hang a route handler. The abandoned SDK
-//     request finishes in the background and is discarded.
+//   · 20s CAP on every SDK call: the SDK's own fetch has NO timeout, so each
+//     call is raced against a timer — a stuck model API can never hang a route
+//     handler. (Raised from the AT-provider's 8s: multi-photo vision requests
+//     carry ~1–2 MB of base64 and measured 6–8s alone in production testing —
+//     8s made real reviews borderline-fail. The abandoned SDK request still
+//     finishes in the background and is discarded.)
 //   · NEVER THROWS, LEAK-FREE ERRORS: every failure mode comes back as
 //     { ok: false, error }. SDK failures embed the request URL, the API
 //     error body and stack traces in messages — NONE of that reaches a
@@ -53,8 +55,8 @@ import type { AiAudioResult, AiChatMessage, AiProvider, AiTextResult } from './t
 //     DEFAULT OFF (an admin turns the AI surface on deliberately); a
 //     missing key fails closed exactly like a false one.
 
-/** Hard cap on any single SDK call — 8s, then the attempt fails honestly. */
-const AI_CALL_TIMEOUT_MS = 8_000
+/** Hard cap on any single SDK call — 20s, then the attempt fails honestly. */
+const AI_CALL_TIMEOUT_MS = 20_000
 
 /** Vision model — the same one the existing photo-analysis path uses (lib/ai.ts). */
 const VISION_MODEL = 'glm-5v-turbo'

@@ -729,16 +729,16 @@ describe('audio is the bonus, text is the product', () => {
     }
   })
 
-  it('TTS TIMEOUT → honest failure after the 8s cap, text intact, no throw', async () => {
+  it('TTS TIMEOUT → honest failure after the 20s cap, text intact, no throw', async () => {
     vi.useFakeTimers()
     sdk.ttsCreate.mockReturnValueOnce(new Promise(() => {})) // never settles
     const pending = buildTrustDigest(P1, { lang: 'en', now: NOW })
-    await vi.advanceTimersByTimeAsync(8_000)
+    await vi.advanceTimersByTimeAsync(20_000)
     const res = await pending
     expect(res.ok).toBe(true)
     if (res.ok) {
       expect(res.digest.audioStatus).toBe('failed')
-      expect(res.digest.audioError).toContain('timed out after 8s')
+      expect(res.digest.audioError).toContain('timed out after 20s')
       expect(res.digest.text).toContain('BUDGET PACE')
     }
   })

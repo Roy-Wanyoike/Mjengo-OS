@@ -26,7 +26,7 @@
  *  · input-validation bugs (empty messages/prompt/images/audio, an
  *    http(s) URL where base64 is required) → { ok: false } WITHOUT the
  *    SDK being contacted;
- *  · the 8s cap: a call that never settles fails honestly after 8s
+ *  · the 20s cap: a call that never settles fails honestly after 20s
  *    (fake timers — the SDK's own fetch has no timeout).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -212,14 +212,14 @@ describe('chat()', () => {
     expect(sdk.chatCreate).not.toHaveBeenCalled()
   })
 
-  it('a call that never settles fails honestly after the 8s cap (the SDK fetch has no timeout)', async () => {
+  it('a call that never settles fails honestly after the 20s cap (the SDK fetch has no timeout)', async () => {
     vi.useFakeTimers()
     sdk.chatCreate.mockReturnValueOnce(new Promise(() => {})) // never settles
     const provider = resolveAiProvider({ ai: true }) as AiProvider
     const pending = provider.chat([{ role: 'user', content: 'hello' }])
-    await vi.advanceTimersByTimeAsync(8_000)
+    await vi.advanceTimersByTimeAsync(20_000)
     const res = await pending
-    expect(res).toEqual({ ok: false, error: 'AI chat timed out after 8s' })
+    expect(res).toEqual({ ok: false, error: 'AI chat timed out after 20s' })
   })
 })
 
@@ -279,13 +279,13 @@ describe('vision()', () => {
     expect((await provider.vision('describe', ['data:image/jpeg;base64,AAA']))?.ok).toBe(false)
   })
 
-  it('a call that never settles fails honestly after the 8s cap', async () => {
+  it('a call that never settles fails honestly after the 20s cap', async () => {
     vi.useFakeTimers()
     sdk.visionCreate.mockReturnValueOnce(new Promise(() => {}))
     const provider = resolveAiProvider({ ai: true }) as AiProvider
     const pending = provider.vision('describe', ['data:image/jpeg;base64,AAA'])
-    await vi.advanceTimersByTimeAsync(8_000)
-    expect(await pending).toEqual({ ok: false, error: 'AI vision timed out after 8s' })
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(await pending).toEqual({ ok: false, error: 'AI vision timed out after 20s' })
   })
 })
 
@@ -344,13 +344,13 @@ describe('transcribe()', () => {
     expect(sdk.asrCreate).not.toHaveBeenCalled()
   })
 
-  it('a call that never settles fails honestly after the 8s cap', async () => {
+  it('a call that never settles fails honestly after the 20s cap', async () => {
     vi.useFakeTimers()
     sdk.asrCreate.mockReturnValueOnce(new Promise(() => {}))
     const provider = resolveAiProvider({ ai: true }) as AiProvider
     const pending = provider.transcribe('data:audio/webm;base64,QUJD')
-    await vi.advanceTimersByTimeAsync(8_000)
-    expect(await pending).toEqual({ ok: false, error: 'AI transcription timed out after 8s' })
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(await pending).toEqual({ ok: false, error: 'AI transcription timed out after 20s' })
   })
 })
 
@@ -489,13 +489,13 @@ describe('speak()', () => {
     expect(sdk.ttsCreate).not.toHaveBeenCalled()
   })
 
-  it('a call that never settles fails honestly after the 8s cap (per chunk)', async () => {
+  it('a call that never settles fails honestly after the 20s cap (per chunk)', async () => {
     vi.useFakeTimers()
     sdk.ttsCreate.mockReturnValueOnce(new Promise(() => {}))
     const provider = resolveAiProvider({ ai: true }) as AiProvider
     const pending = provider.speak('hello')
-    await vi.advanceTimersByTimeAsync(8_000)
-    expect(await pending).toEqual({ ok: false, error: 'AI speech timed out after 8s' })
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(await pending).toEqual({ ok: false, error: 'AI speech timed out after 20s' })
   })
 })
 
