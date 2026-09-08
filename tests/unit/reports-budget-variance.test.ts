@@ -319,8 +319,11 @@ describe('phase budget-share allocation — the documented estimate path', () =>
     seedAllocationFixture()
     const r = await buildBudgetVarianceReport(P1)
     expect(r!.phases.map((f) => f.id)).toEqual(['f1', 'f2', 'f3'])
+    // Phase-codes attribution (feat/reports-phase-codes) extended the row
+    // contract with the coded-spend fields — the pinned key list follows the
+    // shipped shape, in insertion order.
     expect(Object.keys(r!.phases[0])).toEqual([
-      'id', 'name', 'budget', 'spent', 'variance', 'variancePct', 'progressPct', 'txCount', 'topTransactions',
+      'id', 'name', 'budget', 'spent', 'variance', 'variancePct', 'progressPct', 'txCount', 'codedSpent', 'codedTxnCount', 'topTransactions',
     ])
   })
 })
