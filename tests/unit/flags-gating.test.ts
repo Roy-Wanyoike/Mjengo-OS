@@ -31,6 +31,13 @@
  *   · land_verification → POST /api/actions LAND_ACTIONS family (+ the
  *                          professionals-module boundary) + the same family
  *                          per-item on POST /api/sync (W3-1);
+ *   · ai                → ADDED (task 8-f, default OFF — the only flag that
+ *                          ships dark): gates the Wave-6 AI provider seam
+ *                          (resolveAiProvider, src/backend/modules/ai/), not
+ *                          a route here — the provider-seam pins live in
+ *                          tests/unit/ai-provider.test.ts; what THIS file
+ *                          pins is the registry membership, the default-off
+ *                          behavior and the admin opt-in round-trip;
  *   · low_data          → REMOVED: FLAG_KEYS/labels/pop rows no longer
  *                          contain it, a stale table row is inert, the env
  *                          override ignores it and setFlag rejects it.
@@ -62,8 +69,10 @@ vi.mock('@/backend/lib/db', () => {
     id: 'pr-1', requestCode: 'PR-2026-000001', projectId: 'p-1', status: 'approved',
   }
   const state = {
-    // 5 kept keys default-on + a STALE low_data row (pre-removal install):
-    // reads filter to FLAG_KEYS so the stale row must be inert.
+    // 5 legacy keys default-on + a STALE low_data row (pre-removal install).
+    // `ai` starts ABSENT — the lazy ensureRows path creates it with its
+    // FLAG_DEFAULTS value (false — task 8-f), which is exactly what a fresh
+    // install does.
     flagRows: [
       { key: 'ai_progress', enabled: true, description: 'AI progress' },
       { key: 'ai_voice', enabled: true, description: 'AI voice' },
@@ -80,7 +89,13 @@ vi.mock('@/backend/lib/db', () => {
   const db = {
     __state: state,
     featureFlag: {
-      async upsert() { /* rows exist; lazy creation is a no-op here */ },
+      // The real ensureRows upsert: create the row when missing (with the
+      // caller's per-key default), no-op update when it exists.
+      async upsert({ where, create }: { where: { key: string }; create: { key: string; enabled: boolean; description: string } }) {
+        if (!state.flagRows.find((r) => r.key === where.key)) state.flagRows.push({ ...create })
+        const row = state.flagRows.find((r) => r.key === where.key)
+        return row ? { ...row } : { ...create }
+      },
       async findMany({ where }: { where?: { key?: { in?: string[] } } }) {
         const keys = where?.key?.in
         return state.flagRows
@@ -322,28 +337,47 @@ afterEach(() => {
 
 // ---------------------------------------------------------------- flags module
 
-describe('flags registry after the low_data removal', () => {
-  it('FLAG_KEYS is exactly the five kept keys — low_data is gone', () => {
+describe('flags registry after the low_data removal (+ the ai flag, task 8-f)', () => {
+  it('FLAG_KEYS is exactly the six keys — five kept + ai (the Wave-6 AI foundation)', () => {
     expect([...FLAG_KEYS]).toEqual([
-      'ai_progress', 'ai_voice', 'wallet', 'marketplace', 'land_verification',
+      'ai_progress', 'ai_voice', 'wallet', 'marketplace', 'land_verification', 'ai',
     ])
   })
 
-  it('FLAG_LABELS covers every kept key and no low_data', () => {
+  it('FLAG_LABELS covers every key and no low_data', () => {
     expect(Object.keys(FLAG_LABELS).sort()).toEqual([...FLAG_KEYS].sort())
     expect('low_data' in FLAG_LABELS).toBe(false)
   })
 
-  it('getFlags() defaults every kept key ON — a stale low_data table row is inert', async () => {
+  it('getFlags() defaults the five legacy keys ON and ai OFF (ships dark — an admin opts in)', async () => {
     const flags = await getFlags()
     expect(Object.keys(flags).sort()).toEqual([...FLAG_KEYS].sort())
-    for (const k of FLAG_KEYS) expect(flags[k], `${k} default on`).toBe(true)
+    for (const k of FLAG_KEYS) {
+      if (k === 'ai') expect(flags.ai, 'ai default off').toBe(false)
+      else expect(flags[k], `${k} default on`).toBe(true)
+    }
+  })
+
+  it('a missing ai row is lazily created disabled by ensureRows (the default is FLAG_DEFAULTS)', async () => {
+    const rows = (db as unknown as { __state: { flagRows: Array<{ key: string; enabled: boolean }> } }).__state.flagRows
+    // Simulate a fresh install: no ai row yet (an earlier test may have
+    // created it — drop it so this pins the LAZY creation path).
+    const i = rows.findIndex((r) => r.key === 'ai')
+    if (i !== -1) rows.splice(i, 1)
+    invalidateFlagCache()
+    await getFlags() // triggers ensureRows for any missing key
+    expect(rows.find((r) => r.key === 'ai')?.enabled).toBe(false)
   })
 
   it('NEXT_FLAGS_OFF naming the removed key is ignored (unknown keys never apply)', async () => {
     process.env.NEXT_FLAGS_OFF = 'low_data'
     const flags = await getFlags()
-    for (const k of FLAG_KEYS) expect(flags[k]).toBe(true)
+    for (const k of FLAG_KEYS) {
+      // ai is default-off (8-f), not affected by an unknown-key override;
+      // every legacy key stays on — the env override did nothing.
+      if (k === 'ai') expect(flags.ai).toBe(false)
+      else expect(flags[k]).toBe(true)
+    }
     expect('low_data' in flags).toBe(false)
   })
 
@@ -371,6 +405,17 @@ describe('flags registry after the low_data removal', () => {
     // And back on (leaves the table in the default state for later suites).
     await setFlag('ai_voice', true)
     expect(rows.find((r) => r.key === 'ai_voice')?.enabled).toBe(true)
+  })
+
+  it('setFlag round-trips ai — an admin opts the AI surface in (and back out)', async () => {
+    const rows = (db as unknown as { __state: { flagRows: Array<{ key: string; enabled: boolean }> } }).__state.flagRows
+    const on = await setFlag('ai', true)
+    expect(on.ai).toBe(true)
+    expect(rows.find((r) => r.key === 'ai')?.enabled).toBe(true)
+    // Back OFF — leaves the table in the default-off state for later suites.
+    const off = await setFlag('ai', false)
+    expect(off.ai).toBe(false)
+    expect(rows.find((r) => r.key === 'ai')?.enabled).toBe(false)
   })
 })
 

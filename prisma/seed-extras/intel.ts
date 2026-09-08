@@ -37,19 +37,23 @@ export async function seedIntel(db: PrismaClient): Promise<void> {
   await db.notification.deleteMany({ where: { kind: { in: V2_KINDS } } })
 
   // ---------------- feature flags (spec §81 — F-INSIGHT) ----------------
-  // The runtime also creates these lazily (modules/intel/flags.ts ensureRows),
-  // so this is a belt-and-braces seed: 5 keys, all enabled by default.
-  // Keep in sync with FLAG_KEYS (low_data was removed — task 9-a decision,
-  // see the flags.ts header).
-  const FLAG_SEED: Array<{ key: string; description: string }> = [
-    { key: 'ai_progress', description: 'AI progress (photo analysis)' },
-    { key: 'ai_voice', description: 'AI voice logging' },
-    { key: 'wallet', description: 'Wallet & payment requests' },
-    { key: 'marketplace', description: 'Supplier marketplace (Finder)' },
-    { key: 'land_verification', description: 'Land verification ladder' },
+  // The runtime also creates these lazily (modules/intel/flags.ts ensureRows,
+  // using the same per-key defaults), so this is a belt-and-braces seed: 6
+  // keys — the five legacy flags enabled by default, `ai` (task 8-f, the
+  // Wave-6 AI provider seam) DISABLED by default: the AI surface ships dark
+  // and an admin turns it on deliberately.
+  // Keep in sync with FLAG_KEYS / FLAG_DEFAULTS (low_data was removed — task
+  // 9-a decision, see the flags.ts header).
+  const FLAG_SEED: Array<{ key: string; description: string; enabled: boolean }> = [
+    { key: 'ai_progress', description: 'AI progress (photo analysis)', enabled: true },
+    { key: 'ai_voice', description: 'AI voice logging', enabled: true },
+    { key: 'wallet', description: 'Wallet & payment requests', enabled: true },
+    { key: 'marketplace', description: 'Supplier marketplace (Finder)', enabled: true },
+    { key: 'land_verification', description: 'Land verification ladder', enabled: true },
+    { key: 'ai', description: 'AI features (chat, vision, voice)', enabled: false },
   ]
   for (const f of FLAG_SEED) {
-    await db.featureFlag.upsert({ where: { key: f.key }, create: { ...f, enabled: true }, update: {} })
+    await db.featureFlag.upsert({ where: { key: f.key }, create: { ...f }, update: {} })
   }
 
   const p1 = await db.project.findFirst({ where: { name: { contains: 'Nyumba Yangu' } } })
@@ -158,7 +162,7 @@ export async function seedIntel(db: PrismaClient): Promise<void> {
     ],
   })
 
-  console.log('seedIntel: 48 price points, 1 risk assessment (score 58), 1 digest, 4 notifications, 6 feature flags')
+  console.log('seedIntel: 48 price points, 1 risk assessment (score 58), 1 digest, 4 notifications, 6 feature flags (ai off)')
 }
 
 // Standalone runner (Bun): `bun prisma/seed-extras/intel.ts`

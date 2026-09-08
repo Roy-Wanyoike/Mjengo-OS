@@ -1,11 +1,15 @@
 // Intel module — FEATURE FLAGS (spec §81, ownership-clean home for F-INSIGHT).
 //
-// Flags live in the FeatureFlag table (one row per key, default enabled),
-// created lazily on first read so a fresh install needs no seed step. A 30s
-// in-memory cache keeps the payload cheap; writes invalidate it immediately
-// (a route gate may therefore serve a value up to 30s stale after a toggle —
-// the documented tradeoff). NEXT_FLAGS_OFF (comma list) is an env override
-// for local/CI runs that forces flags off regardless of the table.
+// Flags live in the FeatureFlag table (one row per key, created lazily on
+// first read so a fresh install needs no seed step — the per-key default
+// comes from FLAG_DEFAULTS: the five legacy flags ship ON, `ai` (task 8-f)
+// ships OFF). A 30s in-memory cache keeps the payload cheap; writes
+// invalidate it immediately (a route gate may therefore serve a value up to
+// 30s stale after a toggle — the documented tradeoff). NEXT_FLAGS_OFF
+// (comma list) is an env override for local/CI runs that forces flags off
+// regardless of the table (note: it can only ever turn flags OFF — a
+// default-off flag like `ai` is enabled by an admin via the popover or the
+// DB row, never by env).
 //
 // ENFORCEMENT (task 9-a, "every flag gates its feature or is honestly
 // removed"): every flag below gates its feature SERVER-SIDE — a flag OFF
@@ -17,6 +21,20 @@
 // exported at the bottom of this file.
 //
 // Per-flag enforcement map (keep in sync with the call sites):
+//   · ai                → the AI PROVIDER seam (task 8-f, Wave-6 foundation):
+//                         resolveAiProvider() in src/backend/modules/ai/
+//                         provider.ts returns null unless this flag is on, so
+//                         every Wave-6 AI feature (AI draw review, site
+//                         assistant, voice reports) gates on it through the
+//                         shared provider. NO route or action family is
+//                         wired to it yet — Wave-6 features add their own
+//                         requireFlagOn('ai', …) call sites. Unlike the five
+//                         legacy flags, this one is DEFAULT OFF (see
+//                         FLAG_DEFAULTS): the AI surface ships dark and an
+//                         admin turns it on deliberately (the popover, or
+//                         the DB row). The pre-existing /api/ai routes
+//                         (analyze-photo, voice-log) keep their own older
+//                         flags (ai_progress / ai_voice) — unchanged.
 //   · ai_progress       → POST /api/ai/analyze-photo (the Copilot photo-
 //                         analysis route) + the Copilot "Analyze with vision
 //                         AI" button. The button was always gated; the route
@@ -88,10 +106,28 @@ export const FLAG_KEYS = [
   'wallet',
   'marketplace',
   'land_verification',
+  'ai',
 ] as const
 
 export type FlagKey = (typeof FLAG_KEYS)[number]
 export type FlagMap = Record<FlagKey, boolean>
+
+/**
+ * Per-key DEFAULTS — used when a flag row is lazily created (ensureRows) and
+ * as the fallback when a row is somehow missing (getFlags). The five legacy
+ * flags ship ON (each gated a feature that was already live — a flag there is
+ * an opt-OUT); `ai` (task 8-f) ships OFF: the Wave-6 AI surface is new, so an
+ * install must opt IN — an admin flips it from the flags popover. This is the
+ * documented default for every flag added from 8-f on.
+ */
+export const FLAG_DEFAULTS: Record<FlagKey, boolean> = {
+  ai_progress: true,
+  ai_voice: true,
+  wallet: true,
+  marketplace: true,
+  land_verification: true,
+  ai: false,
+}
 
 /** Human labels for the admin popover (spec §81 names). */
 export const FLAG_LABELS: Record<FlagKey, string> = {
@@ -100,6 +136,7 @@ export const FLAG_LABELS: Record<FlagKey, string> = {
   wallet: 'Wallet & payment requests',
   marketplace: 'Supplier marketplace (Finder)',
   land_verification: 'Land verification ladder',
+  ai: 'AI features (chat, vision, voice)',
 }
 
 const CACHE_TTL_MS = 30_000
@@ -110,12 +147,12 @@ function isFlagKey(v: string): v is FlagKey {
   return (FLAG_KEYS as readonly string[]).includes(v)
 }
 
-/** Create any missing flag rows (idempotent; default enabled). */
+/** Create any missing flag rows (idempotent; default per FLAG_DEFAULTS). */
 async function ensureRows(): Promise<void> {
   for (const key of FLAG_KEYS) {
     await db.featureFlag.upsert({
       where: { key },
-      create: { key, enabled: true, description: FLAG_LABELS[key] },
+      create: { key, enabled: FLAG_DEFAULTS[key], description: FLAG_LABELS[key] },
       update: {},
     })
   }
@@ -136,7 +173,7 @@ export async function getFlags(): Promise<FlagMap> {
   if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.flags
   await ensureRows()
   const rows = await db.featureFlag.findMany({ where: { key: { in: [...FLAG_KEYS] } } })
-  const flags = Object.fromEntries(FLAG_KEYS.map((k) => [k, rows.find((r) => r.key === k)?.enabled ?? true])) as FlagMap
+  const flags = Object.fromEntries(FLAG_KEYS.map((k) => [k, rows.find((r) => r.key === k)?.enabled ?? FLAG_DEFAULTS[k]])) as FlagMap
   applyEnvOverride(flags)
   cache = { at: Date.now(), flags }
   return flags
