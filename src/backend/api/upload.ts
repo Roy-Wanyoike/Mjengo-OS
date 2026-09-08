@@ -51,9 +51,12 @@ import {
 // the frozen-build caveat below still applies to THAT driver (public/ is
 // snapshotted at build time in a production build). The presigned client-
 // direct flow (POST /api/upload/presign → PUT → /api/upload/confirm) exists
-// for drivers that can presign. Document mode (public/docs via the documents
-// service) is deliberately NOT yet driver-mediated — see DEPLOYMENT.md's
-// object-storage driver matrix.
+// for drivers that can presign. Document mode is ALSO driver-mediated now
+// (issue #37: the route passes the active driver to saveDocument — local-disk
+// keeps the exact public/docs layout; S3-backed deploys store documents in
+// the bucket under docs/), and extraction reads the bytes back through the
+// driver's read seam. The presigned-GET re-sign endpoint lives at
+// /api/upload/re-sign (issue #38) for expired private-bucket URLs.
 //
 // Route-kit note: the two modes have DIFFERENT rate-limit buckets chosen
 // only after the body is parsed, so the per-mode limits stay in this handler
@@ -270,6 +273,10 @@ async function uploadDocument(
     mimeType,
     category,
     bytes,
+    // Issue #37: documents ride the same transport seam as photos — the
+    // local-disk driver keeps the exact public/docs layout (the docs/ key
+    // prefix), S3-backed deploys store documents in the bucket.
+    driver: getStorageDriver(),
     title,
     projectId,
     entityType,

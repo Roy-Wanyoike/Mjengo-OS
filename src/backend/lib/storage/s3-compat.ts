@@ -27,8 +27,17 @@
 // contract. Errors thrown here are single-line and secret-free (no URLs —
 // they carry signatures; no credentials) so route error mappers pass them
 // through honestly.
+//
+// read() / keyFor() (issues #37 + #38): read mints a 60s presigned GET and
+// fetches it — same one-signing-code-path posture as put/statObject. keyFor
+// reverses publicUrl(): it recognizes the two URL prefixes this driver can
+// mint (the S3_PUBLIC_BASE, or the endpoint origin for the no-base presigned
+// form), strips the /<bucket>/ object-path prefix, and decodes the key
+// segments. Rows whose storageKey neither prefix explains (another
+// deployment's shapes) resolve to null — callers answer honestly, they never
+// guess a key.
 
-import type { ObjectStat, PresignedPut, StorageAdapter } from './types'
+import type { ObjectRead, ObjectStat, PresignedPut, StorageAdapter } from './types'
 import { canonicalUri, parseEndpoint, sigv4Presign } from './sigv4'
 
 /** Server-mediated put() mints + consumes the URL immediately. */
@@ -76,6 +85,29 @@ export function createS3CompatDriver(config: S3CompatConfig): StorageAdapter {
 
   /** Object URL path, single-encoded (same shape the signer canonicalizes). */
   const objectPath = (key: string) => canonicalUri(config.bucket, key)
+
+  /**
+   * keyFor helper: strip `/<bucket>/` off an object path and decode the key
+   * segments (publicUrl single-encodes them). Traversal shapes refuse
+   * honestly with null: WHATWG URL parsing already collapses dot segments
+   * (including their %2E-encoded forms), and the explicit empty/dot segment
+   * check here is the second layer — the resolved key is fed back into the
+   * signer, so it must be a plain object path.
+   */
+  const keyFromObjectPath = (objectPathname: string): string | null => {
+    const bucketPrefix = `/${config.bucket}/`
+    if (!objectPathname.startsWith(bucketPrefix)) return null
+    const keyPath = objectPathname.slice(bucketPrefix.length)
+    if (!keyPath) return null
+    let segments: string[]
+    try {
+      segments = keyPath.split('/').map((seg) => decodeURIComponent(seg))
+    } catch {
+      return null // malformed percent-encoding — not a URL this driver minted
+    }
+    if (segments.some((seg) => seg === '' || seg === '.' || seg === '..')) return null
+    return segments.join('/')
+  }
 
   return {
     id: 's3-compat',
@@ -126,6 +158,64 @@ export function createS3CompatDriver(config: S3CompatConfig): StorageAdapter {
         sizeBytes: Number.isFinite(len) ? len : null,
         contentType: res.headers.get('content-type'),
       }
+    },
+
+    // Read seam (issue #37): GET via the same presign machinery put/stat use.
+    // 404 → null (a plain answer, like statObject); other failures throw the
+    // same single-line, secret-free shape. sizeBytes is the ACTUAL byte count
+    // read (the S3 GET body), not a header claim.
+    async read(key: string): Promise<ObjectRead | null> {
+      const { url } = presign('GET', key, SERVER_OP_EXPIRES_SEC)
+      const res = await doFetch(url, { method: 'GET' })
+      if (res.status === 404) return null
+      if (!res.ok) {
+        throw new Error(
+          `s3-compat read failed for key "${key}" (HTTP ${res.status} from ${host})`,
+        )
+      }
+      const bytes = Buffer.from(await res.arrayBuffer())
+      return { bytes, contentType: res.headers.get('content-type'), sizeBytes: bytes.length }
+    },
+
+    // keyFor (issues #37 + #38): reverse publicUrl() for the URL shapes this
+    // driver mints. Candidates: the configured public base (its path prefix,
+    // when it has one) and the endpoint origin (the no-base presigned GET
+    // form — the query string is simply not part of the pathname). Relative
+    // local-path shapes and foreign origins are null: this driver cannot
+    // address an object another backend stored.
+    keyFor(storageKey: string): string | null {
+      if (!/^https?:\/\//i.test(storageKey)) return null
+      let u: URL
+      try {
+        u = new URL(storageKey)
+      } catch {
+        return null
+      }
+
+      const candidates: Array<{ origin: string; pathPrefix: string }> = []
+      const base = config.publicBase?.trim().replace(/\/+$/, '')
+      if (base) {
+        try {
+          const b = new URL(base)
+          candidates.push({ origin: b.origin, pathPrefix: b.pathname.replace(/\/+$/, '') })
+        } catch {
+          // an unparseable base is a factory-level misconfiguration; skip it
+          // and let the endpoint candidate decide
+        }
+      }
+      candidates.push({ origin, pathPrefix: '' })
+
+      for (const candidate of candidates) {
+        if (u.origin !== candidate.origin) continue
+        let pathname = u.pathname
+        if (candidate.pathPrefix) {
+          if (!pathname.startsWith(candidate.pathPrefix)) continue
+          pathname = pathname.slice(candidate.pathPrefix.length)
+        }
+        const key = keyFromObjectPath(pathname)
+        if (key !== null) return key
+      }
+      return null
     },
   }
 }
