@@ -424,8 +424,13 @@ model User {
   email        String   @unique
   passwordHash String
   name         String
-  role         String   @default("contractor") // contractor, client, admin, finance, supervisor, procurement, qs
+  role         String   @default("contractor") // contractor, client, admin, finance, supervisor, procurement, qs, supplier
   projectId    String? // the client user's project (client-role login boots that project)
+  // W5-3 supplier-side portal: for supplier-role users, the Supplier row this
+  // account IS. Plain scalar link (no FK relation by design — the migration
+  // is ALTER TABLE ADD COLUMN only, house rule for additive migrations); a
+  // dangling id fails closed at session shaping ("no supplier linked").
+  supplierId   String?
   createdAt    DateTime @default(now())
   // Notification preferences (Doc A §42, backend wave): per-kind opt-in map
   // stored as JSON — the in-app channel is always on, prefs gate future channels.

@@ -85,6 +85,7 @@ immediately. **These are intentional demo seeds, not real credentials.**
 |---|---|---|---|
 | `contractor@mjengo.os` | `mjengo2026` | Contractor — full owner app | Overview |
 | `client@mjengo.os` | `mjengo2026` | Client — read-only "Virtual Site Visit" + decisions | Overview |
+| `supplier@mjengo.os` | `supplier2026` | Supplier — scoped supplier portal (quotes to answer, orders to confirm/dispatch, invoices, catalog) | Supplier |
 | `admin@mjengo.os` | `admin2026` | Admin — owner app + feature flags + Audit tab | Overview |
 | `finance@mjengo.os` | `mjengo2026` | Finance — payment approvals, wallet ops, `/api/v1` | Money |
 | `supervisor@mjengo.os` | `mjengo2026` | Site Supervisor — site operations + evidence | Overview |
@@ -95,7 +96,11 @@ Diaspora clients with a **share link** need no account at all. Owner APIs are
 guarded server-side (401/403); client roles and share tokens can only run an
 explicit allowlist of actions (`src/shared/client-actions.ts` — approve
 milestones/variations/payment requests, decide client-band material requests,
-pay invoices, comment on photos, read notifications).
+pay invoices, comment on photos, read notifications). Supplier accounts
+(`supplier@mjengo.os` above) run their own allowlist
+(`src/shared/supplier-actions.ts` — answer their quotes, confirm/dispatch
+their orders, maintain their catalog) pinned server-side to their linked
+Supplier row.
 
 ## Feature tour (the real tabs)
 
@@ -114,24 +119,26 @@ pay invoices, comment on photos, read notifications).
 | **USSD** | `*384#` muster-line simulation — feature-phone flow (menu → PIN → present/absent) dispatching real attendance records |
 | **Audit** | Admin-only drill-down into the full audit trail (contractors and clients don't see it) |
 | **Settings** | Profile, language (English/Kiswahili), local preferences, notification prefs — per-user, every role |
+| **Supplier** (supplier role only) | The supply side of the marketplace: scoped portal — RFQs waiting for their price, sent POs to confirm, confirmed orders to dispatch (writes the same delivery records the buyer verifies), their invoices with honest statuses, their catalog exactly as buyers' comparisons see it. Every read/mutation is server-pinned to the linked Supplier row (foreign ids → the same error as a miss) |
 
 **Role matrix** (mirrors `src/shared/permissions.ts` ↔ `src/backend/lib/guard.ts`):
 
-| Tab | Contractor | Admin | Supervisor | Finance | Procurement | QS | Client |
-|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
-| Overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Site Plan | ✅ | ✅ | ✅ | — | — | ✅ | ✅ |
-| Materials | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
-| Finder | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Fundis | ✅ | ✅ | ✅ | — | — | — | ✅ |
-| Money | ✅ | ✅ | — | ✅ | — | — | ✅ |
-| Land | ✅ | ✅ | — | — | — | — | ✅ |
-| Evidence | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Intel | ✅ | ✅ | — | — | — | — | ✅ |
-| AI Copilot | ✅ | ✅ | ✅ | — | — | — | — |
-| USSD | ✅ | ✅ | ✅ | — | — | — | ✅ |
-| Audit | — | ✅ | — | — | — | — | — |
-| Settings | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Tab | Contractor | Admin | Supervisor | Finance | Procurement | QS | Client | Supplier |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| Overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Site Plan | ✅ | ✅ | ✅ | — | — | ✅ | ✅ | — |
+| Materials | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — |
+| Finder | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Fundis | ✅ | ✅ | ✅ | — | — | — | ✅ | — |
+| Money | ✅ | ✅ | — | ✅ | — | — | ✅ | — |
+| Land | ✅ | ✅ | — | — | — | — | ✅ | — |
+| Evidence | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Intel | ✅ | ✅ | — | — | — | — | ✅ | — |
+| AI Copilot | ✅ | ✅ | ✅ | — | — | — | — | — |
+| USSD | ✅ | ✅ | ✅ | — | — | — | ✅ | — |
+| Audit | — | ✅ | — | — | — | — | — | — |
+| Settings | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Supplier portal | — | — | — | — | — | — | — | ✅ |
 
 Unknown roles fail closed (one safe tab + an honest notice), client-side and
 server-side, in the same commit.

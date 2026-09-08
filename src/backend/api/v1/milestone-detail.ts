@@ -3,7 +3,7 @@ import { route } from '@/backend/lib/route-kit'
 import { milestoneSummary, parseEvidencePhotoIds } from './milestone-rows'
 import { milestoneDetailQuery, milestoneIdRef, validateQuery } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied } from './scope'
+import { clientProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/milestones/:id (Phase C, read-only — the money-governance family) —
 // src/app/api/v1/milestones/[id]/route.ts is the shim.
@@ -61,6 +61,10 @@ export const GET = route(
     if (!milestone) return v1Err(404, 'Milestone not found')
     const denied = clientProjectDenied(session, milestone.projectId)
     if (denied) return denied
+    // W5-3: supplier sessions are not project readers (their surface is the
+    // supplier-owned rows). Uniform 403 — no project data is returned.
+    const supplierDenied = supplierProjectDenied(session)
+    if (supplierDenied) return supplierDenied
 
     // Phase name join (the payload's phases carry names; a single-row read
     // joins it directly — null phaseId or a vanished phase stays null).

@@ -4,7 +4,7 @@ import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { loadSupplySlice } from '@/backend/modules/supply/repository'
 import { supplyOrdersQuery, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied } from './scope'
+import { clientProjectDenied, supplierSessionId } from './scope'
 import { supplyOrderSummary } from './supply-rows'
 
 // /api/v1/supply/orders (Phase B, read-only) —
@@ -22,7 +22,12 @@ import { supplyOrderSummary } from './supply-rows'
  * ROLE SCOPING mirrors the webapp data guard: every signed-in role may read
  * (the Finder tab is visible to the whole site team + client); CLIENT-role
  * sessions are pinned to their own project — a foreign projectId → 403
- * 'Not permitted for this project' (the v1 payments precedent).
+ * 'Not permitted for this project' (the v1 payments precedent). SUPPLIER
+ * sessions (W5-3) read the same resource ROW-PINNED to their own supplierId:
+ * the list returns exactly their purchase orders in that project (a project
+ * they have never sold to yields an honest empty page — never another
+ * supplier's rows); a supplier with no linked supplier row → 403 (fail
+ * closed, the client no-project pin's mirror).
  *
  * QUERY: projectId REQUIRED (the Finder surface is project-scoped — absent →
  * 400 'projectId must not be empty', mirroring the budget-variance report's
@@ -58,9 +63,17 @@ export const GET = route(
     if (!project) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, projectId)
     if (denied) return denied
+    // W5-3 supplier row pin: their orders only (fail closed with no link).
+    const supplierId = supplierSessionId(session)
+    if (session.user.role === 'supplier' && !supplierId) {
+      return v1Err(403, 'Supplier account has no supplier linked')
+    }
 
     const slice = await loadSupplySlice(projectId)
     let orders = slice.orders
+    if (supplierId) {
+      orders = orders.filter((o) => o.supplierId === supplierId)
+    }
     if (q.data.status) {
       orders = orders.filter((o) => o.status === q.data.status)
     }

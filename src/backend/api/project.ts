@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { getProjectPayload } from '@/backend/lib/mjengo'
 import { publicRoute, genericError } from '@/backend/lib/route-kit'
-import { unauthorized } from '@/backend/lib/guard'
+import { unauthorized, forbidden } from '@/backend/lib/guard'
 
 // Owner project payload — src/app/api/project/route.ts is the shim.
 // Requires a session; a VALID ?share=<token> is also accepted so share-link
@@ -136,6 +136,11 @@ export const GET = publicRoute(
     onError: genericError(500, 'Failed to load project'),
   },
   async (req: NextRequest, session) => {
+    // W5-3: supplier sessions never read the buyer project payload — their
+    // surface is GET /api/supplier (scoped to their own rows). Fail closed
+    // BEFORE the share-token path too: a supplier session is signed in and
+    // gets the honest 403, not a share-link client view.
+    if (session && session.user.role === 'supplier') return forbidden(session.user.role)
     if (!session) {
       const share = req.nextUrl.searchParams.get('share')
       if (!share) return unauthorized()

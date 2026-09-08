@@ -2,7 +2,7 @@ import { route } from '@/backend/lib/route-kit'
 import { getProjectPayload } from '@/backend/lib/mjengo'
 import { projectInvoicesQuery, projectIdRef, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied } from './scope'
+import { clientProjectDenied, supplierSessionId } from './scope'
 
 // /api/v1/projects/:id/invoices (Phase C, read-only — the money-governance
 // family) — src/app/api/v1/projects/[id]/invoices/route.ts is the shim.
@@ -28,7 +28,9 @@ const iso = (v: Date | null): string | null => (v ? v.toISOString() : null)
  * honest boundary note.
  *
  * ROLE SCOPING: same as /api/v1/projects/:id (client pinned to their own
- * project, foreign → 403; unknown project → 404).
+ * project, foreign → 403; unknown project → 404). SUPPLIER sessions (W5-3)
+ * read ROW-PINNED: only THEIR OWN invoices in the project (a supplier with no
+ * link → 403 fail closed — never another supplier's money rows).
  *
  * DATA: the invoice rows come from getProjectPayload()'s invoices slice —
  * loadInvoicesSlice(projectId), the invoices module's public read (rows
@@ -56,8 +58,16 @@ export const GET = route(
     if (!payload) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, payload.project.id)
     if (denied) return denied
+    // W5-3 supplier row pin: their invoices only (fail closed with no link).
+    const supplierId = supplierSessionId(session)
+    if (session.user.role === 'supplier' && !supplierId) {
+      return v1Err(403, 'Supplier account has no supplier linked')
+    }
 
     let invoices = payload.invoices.invoices
+    if (supplierId) {
+      invoices = invoices.filter((i) => i.supplierId === supplierId)
+    }
     if (q.data.status) {
       invoices = invoices.filter((i) => i.status === q.data.status)
     }

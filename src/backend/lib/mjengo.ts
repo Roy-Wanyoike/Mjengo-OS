@@ -32,6 +32,7 @@ import type { IntelSlice } from '@/backend/modules/intel/types'
 import type { InventorySlice, BoqSlice } from '@/backend/modules/inventory/types'
 import type { FinanceSlice } from '@/backend/modules/wallet/types'
 import { supplyCan, type SupplyAction, type SupplyRole } from '@/backend/modules/supply/policy'
+import { assertSupplierScope } from '@/backend/modules/supply/supplier-scope'
 import type {
   Alert, Attendance, AuditEvent, Consumption, Delivery, EscrowWallet, Material, Milestone, Notification, OrderDelivery, Phase, PhotoComment, Project, ProjectTeam, Recap, SitePhoto, SiteZone, Task, Transaction, VariationOrder, Worker,
 } from '@prisma/client'
@@ -560,7 +561,7 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
   const projectId = await resolveProjectId(projectIdArg, payload)
 
   // Optional actor override (used by the public share route / client role); never reaches handlers
-  const { __actor, __role, ...cleanPayload } = payload ?? {}
+  const { __actor, __role, __supplierId, ...cleanPayload } = payload ?? {}
 
   // ---- B1 domain role gates (Doc A §24/§26/§33) ------------------------------
   // The role stamp arrives via __role, written SERVER-side by every entry
@@ -593,6 +594,16 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
       `Clients may raise material requests and place purchase orders — "${type}" stays with the site team (spec §24). ` +
         'Sign in as the site team, or ask them to run it.',
     )
+  }
+  // W5-3 supplier pin — the SAME dual-layer pattern, mirrored: the route layer
+  // stamps __role 'supplier' + __supplierId (session-derived, never
+  // payload-overridable — /api/actions rewrites any payload copy); HERE the
+  // shared path re-checks the allowlist and pins every id to the supplier's
+  // own rows before any handler runs. A supplier without a link, or a
+  // foreign/unknown id, is refused with the exact miss-error the service
+  // layer produces (indistinguishable from the id not existing).
+  if (effectiveRole === 'supplier' || __supplierId) {
+    await assertSupplierScope(type, cleanPayload, projectId, __supplierId ?? null)
   }
 
   let result: any

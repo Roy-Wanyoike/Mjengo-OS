@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/backend/lib/mjengo'
 import { CLIENT_ACTIONS } from '@/shared/client-actions'
+import { SUPPLIER_ACTIONS } from '@/shared/supplier-actions'
 import { publicRoute, safeError } from '@/backend/lib/route-kit'
 import { unauthorized, forbidden } from '@/backend/lib/guard'
 import { kindForAction, withAuditContext } from '@/backend/lib/audit'
@@ -68,6 +69,11 @@ export const POST = publicRoute(
       shareToken?: string
     }
     if (!type) return NextResponse.json({ error: 'type required' }, { status: 400 })
+    // W5-3: supplier sessions never receive project/portfolio payloads — the
+    // buyer's `data`/`projects` response keys are skipped for them everywhere
+    // below (replays included: the replay branch would otherwise embed
+    // getProjectPayload + the full projects list into a supplier response).
+    const isSupplier = session?.user.role === 'supplier'
 
     // Feature-flag gate (spec §81, task 9-a) — BEFORE the idempotency replay
     // and before any session/share branch: a disabled feature's endpoint is
@@ -93,6 +99,10 @@ export const POST = publicRoute(
           replayed = JSON.parse(existing.responseBody ?? 'null')
         } catch {
           replayed = null
+        }
+        if (isSupplier) {
+          // Supplier replay: the stored result only — no buyer payload keys.
+          return NextResponse.json({ ok: true, result: replayed, replayed: true, scope: existing.scope })
         }
         const data = await getProjectPayload(existing.projectId ?? null)
         const projects = await getProjectsList()
@@ -121,6 +131,26 @@ export const POST = publicRoute(
       // Pinned: body projectId is deliberately ignored for client sessions.
       targetProjectId = session.user.projectId
       actorPayload = { ...actorPayload, __actor: session.user.name, __role: 'client' }
+    } else if (session.user.role === 'supplier') {
+      // W5-3 supplier pin (mirrors the client branch exactly): allowlist →
+      // linked supplier → session-stamped identity. The body projectId STANDS
+      // (a supplier's rows span projects — the row-level pin in
+      // modules/supply/supplier-scope.ts is the guard, not the project), and
+      // any payload __actor/__role/__supplierId copies are overwritten below.
+      if (!SUPPLIER_ACTIONS.includes(type)) return forbidden(session.user.role)
+      if (!session.user.supplierId) {
+        return NextResponse.json(
+          { ok: false, error: 'Supplier account has no supplier linked' },
+          { status: 403 },
+        )
+      }
+      targetProjectId = projectId
+      actorPayload = {
+        ...actorPayload,
+        __actor: session.user.name,
+        __role: 'supplier',
+        __supplierId: session.user.supplierId,
+      }
     } else {
       // Site team: stamp the signed-in identity (never overridable by the payload)
       actorPayload = { ...actorPayload, __actor: session.user.name, __role: session.user.role }
@@ -152,6 +182,11 @@ export const POST = publicRoute(
     }
 
     // Refresh payload for the project the action targeted (explicit > payload.projectId > first)
+    if (isSupplier) {
+      // Supplier response: the result only — the buyer payload keys never
+      // ride a supplier response (the portal re-reads /api/supplier).
+      return NextResponse.json({ ok: true, result })
+    }
     const refreshProjectId = session?.user.role === 'client' ? session.user.projectId : targetProjectId || payload?.projectId || null
     const data = await getProjectPayload(refreshProjectId)
     const projects = await getProjectsList()

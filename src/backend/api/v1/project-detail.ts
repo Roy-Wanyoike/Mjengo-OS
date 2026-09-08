@@ -3,7 +3,7 @@ import { getProjectPayload } from '@/backend/lib/mjengo'
 import { procurementTotals } from '@/backend/modules/supply/insights'
 import { projectDetailQuery, projectIdRef, validateQuery } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied } from './scope'
+import { clientProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/projects/:id (Phase B, read-only) — src/app/api/v1/projects/[id]/route.ts
 // is the shim.
@@ -53,6 +53,10 @@ export const GET = route(
     if (!payload) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, payload.project.id)
     if (denied) return denied
+    // W5-3: supplier sessions are not project readers (their surface is the
+    // supplier-owned rows). Uniform 403 — no project data is returned.
+    const supplierDenied = supplierProjectDenied(session)
+    if (supplierDenied) return supplierDenied
 
     const tasks = payload.phases.flatMap((ph) => ph.tasks)
     // The exact finder-dashboard wiring (dashboard-section.tsx) over the same

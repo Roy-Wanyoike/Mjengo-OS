@@ -4,7 +4,7 @@ import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { loadSupplySlice } from '@/backend/modules/supply/repository'
 import { projectIdRef, projectDeliveriesQuery, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied } from './scope'
+import { clientProjectDenied, supplierSessionId } from './scope'
 import { deliveryRecord } from './supply-rows'
 
 // /api/v1/projects/:id/deliveries (Phase B, read-only — the supply resource's
@@ -30,6 +30,9 @@ type Ctx = { params: Promise<{ id: string }> }
  *
  * ROLE SCOPING: client-role sessions pinned to their own project (foreign →
  * 403); unknown project → 404; every other signed-in role may read.
+ * SUPPLIER sessions (W5-3) read row-pinned: only the deliveries against
+ * THEIR purchase orders in the project (their trucks, their discrepancy
+ * records); a supplier with no link → 403 (fail closed).
  *
  * QUERY: ?status= (dispatched|in_transit|arrived|received|discrepancy,
  * filters before pagination) + ?limit/?cursor (delivery id of the last item
@@ -63,11 +66,20 @@ export const GET = route(
     if (!project) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, id)
     if (denied) return denied
+    // W5-3 supplier row pin: their orders' deliveries only (fail closed with
+    // no link).
+    const supplierId = supplierSessionId(session)
+    if (session.user.role === 'supplier' && !supplierId) {
+      return v1Err(403, 'Supplier account has no supplier linked')
+    }
 
     const slice = await loadSupplySlice(id)
     // pageOfKind needs { id } rows; carry the owning order alongside for
     // orderCode + line-name lookups.
     let rows = slice.orders.flatMap((o) => o.deliveries.map((d) => ({ id: d.id, d, o })))
+    if (supplierId) {
+      rows = rows.filter((r) => r.o.supplierId === supplierId)
+    }
     if (q.data.status) {
       rows = rows.filter((r) => r.d.status === q.data.status)
     }

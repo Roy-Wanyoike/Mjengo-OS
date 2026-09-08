@@ -3,7 +3,7 @@ import { getProjectPayload } from '@/backend/lib/mjengo'
 import { milestoneSummary } from './milestone-rows'
 import { projectMilestonesQuery, projectIdRef, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied } from './scope'
+import { clientProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/projects/:id/milestones (Phase C, read-only — the money-governance
 // family) — src/app/api/v1/projects/[id]/milestones/route.ts is the shim.
@@ -53,6 +53,10 @@ export const GET = route(
     if (!payload) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, payload.project.id)
     if (denied) return denied
+    // W5-3: supplier sessions are not project readers (their surface is the
+    // supplier-owned rows). Uniform 403 — no project data is returned.
+    const supplierDenied = supplierProjectDenied(session)
+    if (supplierDenied) return supplierDenied
 
     const phaseNames = new Map(payload.phases.map((ph) => [ph.id, ph.name]))
     let milestones = payload.milestones

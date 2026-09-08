@@ -18,15 +18,19 @@ export interface MjengoSessionUser {
   id: string
   email: string
   name: string
-  role: 'contractor' | 'client' | 'admin' | 'finance' | 'supervisor' | string
+  role: 'contractor' | 'client' | 'admin' | 'finance' | 'supervisor' | 'supplier' | string
   /** For client-role users: the project they are buying. Null for site team / admin. */
   projectId: string | null
+  /** For supplier-role users (W5-3): the Supplier row they operate. Null for
+   *  every other role — the supplier surface fails closed without it. */
+  supplierId: string | null
 }
 
 declare module 'next-auth' {
   interface User {
     role?: string
     projectId?: string | null
+    supplierId?: string | null
   }
   interface Session {
     user: MjengoSessionUser
@@ -38,6 +42,7 @@ declare module 'next-auth/jwt' {
     id?: string
     role?: string
     projectId?: string | null
+    supplierId?: string | null
   }
 }
 
@@ -194,6 +199,7 @@ export function buildAuthOptions(secureCookies: boolean): NextAuthOptions {
           name: user.name,
           role: user.role,
           projectId: user.projectId,
+          supplierId: user.supplierId,
         }
       },
     }),
@@ -204,6 +210,7 @@ export function buildAuthOptions(secureCookies: boolean): NextAuthOptions {
         token.id = user.id
         token.role = user.role ?? 'contractor'
         token.projectId = user.projectId ?? null
+        token.supplierId = user.supplierId ?? null
         token.name = user.name ?? token.name
         token.email = user.email ?? token.email
       }
@@ -216,6 +223,7 @@ export function buildAuthOptions(secureCookies: boolean): NextAuthOptions {
         name: String(token.name ?? ''),
         role: String(token.role ?? 'contractor'),
         projectId: token.projectId ?? null,
+        supplierId: token.supplierId ?? null,
       }
       return session
     },
@@ -238,6 +246,7 @@ export async function requireSession(
       name: String(token.name ?? ''),
       role: String(token.role ?? 'contractor'),
       projectId: token.projectId ?? null,
+      supplierId: token.supplierId ?? null,
     },
   }
 }

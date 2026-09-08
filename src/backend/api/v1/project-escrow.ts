@@ -3,7 +3,7 @@ import { route } from '@/backend/lib/route-kit'
 import { derivedBalance } from '@/backend/modules/ledger/service'
 import { projectEscrowQuery, projectIdRef, validateQuery } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied } from './scope'
+import { clientProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/projects/:id/escrow (Phase C, read-only — the money-governance
 // family) — src/app/api/v1/projects/[id]/escrow/route.ts is the shim.
@@ -54,6 +54,10 @@ export const GET = route(
     if (!project) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, id)
     if (denied) return denied
+    // W5-3: supplier sessions are not project readers (their surface is the
+    // supplier-owned rows). Uniform 403 — no project data is returned.
+    const supplierDenied = supplierProjectDenied(session)
+    if (supplierDenied) return supplierDenied
 
     const ledgerAccountCode = `ESCROW:${id}`
     const balance = await derivedBalance(ledgerAccountCode)
