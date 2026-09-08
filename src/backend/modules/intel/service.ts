@@ -3,11 +3,13 @@
 // Deterministic intelligence over REAL project data — every number traceable
 // to rows. Called from src/backend/actions/intel.ts:
 //   - risk.recompute:      5 rules → RiskAssessment (history preserved)
+//   - score.recompute:     MjengoScore trust score (append-only history)
 //   - digest.generate:     weekly IntelDigest (upsert on the Monday weekStart)
 //   - price.record:        manual PricePoint (+ price.alert event when it jumps)
 //   - reliability.recompute: Supplier.reliabilityScore from actual history
 //
 // Intel describes patterns; humans decide. Findings never accuse.
+// The MjengoScore describes; humans decide — it gates nothing.
 
 import { db } from '@/backend/lib/db'
 import { notify } from '@/backend/modules/notify/service'
@@ -16,6 +18,10 @@ import {
   OPEN_ORDER_STATUSES, OPEN_REQUEST_STATUSES, RULE_VERSION, type SupplierOrderHistory,
   type EngineFinding, type PricePointLike, type RiskPhase,
 } from './engine'
+import {
+  computeMjengoScore, SCORE_RULE_VERSION, ATTENDANCE_WINDOW_DAYS,
+  type MjengoScoreResult,
+} from './score'
 import type { DigestItem, ReliabilityResult, SupplierLike } from './types'
 
 const DAY_MS = 86_400_000
@@ -96,6 +102,88 @@ export async function recomputeRisk(projectId: string): Promise<{
     },
   })
   return { id: row.id, overallScore, findings, ruleVersion: RULE_VERSION }
+}
+
+// ---------------- score.recompute ----------------
+
+/** Parse a Milestone.evidencePhotoIds JSON string into a count (never throws). */
+function evidencePhotoCount(raw: string): number {
+  try {
+    const v = JSON.parse(raw)
+    return Array.isArray(v) ? v.length : 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Recompute the MjengoScore contractor trust score from live rows (issue
+ * W3-3). Append-only EXACTLY like recomputeRisk: every call appends a new
+ * MjengoScore row (latest wins in the UI, history preserved) — there is no
+ * update path anywhere. A project with too little history stores score NULL
+ * + an explanatory note (never a fake 0 or 100).
+ *
+ * Runs ONLY on the explicit `score.recompute` action — never from a job, a
+ * webhook or a page load. The score gates nothing and approves nothing.
+ */
+export async function recomputeScore(projectId: string): Promise<
+  MjengoScoreResult & { id: string }
+> {
+  const now = new Date()
+  const attendanceSince = new Date(now.getTime() - ATTENDANCE_WINDOW_DAYS * DAY_MS).toISOString().slice(0, 10)
+  const [project, phases, transactions, milestones, attendances, variations, orders, invoices] = await Promise.all([
+    db.project.findUnique({ where: { id: projectId } }),
+    db.phase.findMany({ where: { projectId }, include: { tasks: true } }),
+    db.transaction.findMany({ where: { projectId } }),
+    db.milestone.findMany({ where: { projectId, status: 'released' } }),
+    db.attendance.findMany({ where: { projectId, date: { gte: attendanceSince } } }),
+    db.variationOrder.findMany({ where: { projectId } }),
+    db.purchaseOrder.findMany({ where: { projectId }, include: { deliveries: { include: { lines: true } } } }),
+    db.invoice.findMany({ where: { projectId } }),
+  ])
+  if (!project) throw new Error('Project not found')
+
+  const result = computeMjengoScore({
+    now,
+    releasedMilestones: milestones.map((m) => ({
+      id: m.id,
+      name: m.name,
+      evidencePhotoCount: evidencePhotoCount(m.evidencePhotoIds),
+    })),
+    attendances: attendances.map((a) => ({ verification: a.verification })),
+    phases: phases.map((p) => ({
+      name: p.name,
+      status: p.status,
+      budget: p.budget,
+      progressManual: p.progressManual,
+      tasks: p.tasks.map((t) => ({ title: t.title, status: t.status, progress: t.progress, dueDate: t.dueDate })),
+    })),
+    transactions: transactions.map((t) => ({ amount: t.amount })),
+    projectBudget: project.budget,
+    variations: variations.map((v) => ({ title: v.title, status: v.status, budgetImpact: v.budgetImpact })),
+    deliveries: orders.flatMap((o) =>
+      o.deliveries.map((d) => ({
+        status: d.status,
+        lines: d.lines.map((l) => ({ qtyOrdered: l.qtyOrdered, qtyReceived: l.qtyReceived })),
+      })),
+    ),
+    invoices: invoices.map((i) => ({ status: i.status })),
+  })
+
+  // History is preserved — every recompute appends a new row (latest wins in
+  // UI). No row is ever updated; there is no update call in this module.
+  const row = await db.mjengoScore.create({
+    data: {
+      projectId,
+      computedAt: now,
+      score: result.score,
+      confidence: result.confidence,
+      components: JSON.stringify(result.components),
+      notes: result.notes,
+      ruleVersion: SCORE_RULE_VERSION,
+    },
+  })
+  return { ...result, id: row.id }
 }
 
 // ---------------- digest.generate ----------------

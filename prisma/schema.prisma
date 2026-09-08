@@ -46,6 +46,7 @@ model Project {
   purchaseOrders     PurchaseOrder[]
   invoices           Invoice[]
   riskAssessments    RiskAssessment[]
+  mjengoScores       MjengoScore[]
   intelDigests       IntelDigest[]
   // v3 domain slices (money core, inventory, platform)
   paymentRequests    PaymentRequest[]
@@ -824,6 +825,25 @@ model RiskAssessment {
   overallScore Int      @default(0) // 0-100 (higher = more attention needed)
   findings     String   @default("[]") // JSON array of rule hits
   ruleVersion  String   @default("v1")
+}
+
+// MjengoScore — deterministic contractor trust score (issue W3-3).
+// Append-only history EXACTLY like RiskAssessment: every `score.recompute`
+// intel action appends a row, the UI reads the latest, no row is ever updated.
+// HONESTY RULES: the score describes, humans decide — it gates nothing,
+// approves nothing, and is only ever computed on an explicit action.
+// `score` is NULL (never a fake 0 or 100) when too few components have data;
+// `notes` carries the explanation. components = JSON array of breakdowns.
+model MjengoScore {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  computedAt  DateTime @default(now())
+  score       Int? // 0-100 (null = honest low-confidence: not enough rows yet)
+  confidence  String   @default("low") // low, medium, high — how many components carry data
+  components  String   @default("[]") // JSON array of ScoreComponent breakdowns
+  notes       String? // explanation when score is null (never a fake 0 or 100)
+  ruleVersion String   @default("v1")
 }
 
 // Weekly project digest. items is a JSON string array.
