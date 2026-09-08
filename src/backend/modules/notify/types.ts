@@ -58,6 +58,21 @@ export interface NotifyOptions {
    * kind — the attempt proceeds (fail-open: today's behavior).
    */
   sms?: { to: string; userId?: string }
+  /**
+   * Additionally attempt a real WEB PUSH delivery to this app user's recorded
+   * browser subscriptions (PushSubscription rows, POST /api/push/subscribe).
+   * Only honored when the VAPID pair is configured (channels.ts:
+   * VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY); otherwise the row honestly stays
+   * 'logged' and web-push is never contacted. Never throws into the caller —
+   * the aggregated outcome lands in deliveryStatus/deliveryDetail.
+   *
+   * Recipient preference gate: the SAME per-kind gate as SMS (the
+   * notificationPrefs { inApp: false } opt-out skips the push attempt
+   * entirely — no subscription is contacted; the row records the honest skip
+   * reason). userId is REQUIRED for push (unlike SMS there is no phone-number
+   * fallback — the subscriptions ARE the address); without it nothing is sent.
+   */
+  push?: { userId: string }
 }
 
 /** Delivery lifecycle of an external channel row (in-app 'logged' is the default). */

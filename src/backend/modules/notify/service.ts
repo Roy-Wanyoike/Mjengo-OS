@@ -26,9 +26,18 @@
 //     records the outcome honestly via
 //     markDelivered(): 'sent' (deliveredAt stamped) or 'failed' (leak-free
 //     detail in deliveryDetail). The attempt NEVER throws into the caller.
+//   · When a caller passes opts.push (W5-1 — the web push seam; call sites
+//     opt in, none changed), notify() additionally attempts a real web push
+//     to THAT user's recorded PushSubscription rows (the channel's address
+//     book) when the VAPID pair is configured (VAPID_PUBLIC_KEY +
+//     VAPID_PRIVATE_KEY). One row, ONE aggregated honest outcome across the
+//     user's subscriptions: 'sent' when at least one browser accepted
+//     (deliveredAt stamped, providerRef = that subscription's endpoint),
+//     'failed' when every attempt failed. Subscriptions the push service
+//     answers 404/410 are pruned — nobody keeps pushing at a revoked one.
 //   · With no provider configured, nothing external is contacted — every row
-//     stays deliveryStatus 'logged' (fail-closed; if SMS was requested the
-//     skip reason is recorded in deliveryDetail).
+//     stays deliveryStatus 'logged' (fail-closed; if SMS/push was requested
+//     the skip reason is recorded in deliveryDetail).
 //   · WhatsApp/email are NOT wired: future providers implement ChannelProvider
 //     (channels.ts) and get resolved here — the seam is the interface.
 //
@@ -49,9 +58,12 @@
 //     — behavior never silently changes for users who never opted out.
 //     Lookup failures append an honest note to the recorded delivery detail.
 //   · The gate only consults prefs (read-only); it never edits them.
+//   · The SAME gate applies to the web push attempt (W5-1): push is also more
+//     intrusive than the in-app row the pref was recorded against, so a muted
+//     kind never reaches any external channel.
 
 import { db } from '@/backend/lib/db'
-import { getSmsProvider, type ChannelSendInput } from './channels'
+import { getPushProvider, getSmsProvider, type ChannelSendInput } from './channels'
 import type { NotifyOptions } from './types'
 
 /**
@@ -90,9 +102,12 @@ export async function notify(
   })
 
   // Additive SMS attempt (opt-in via opts.sms). Catch-everything: a channel
-  // problem must never take the in-app notification down with it.
+  // problem must never take the in-app notification down with it. The
+  // outcome feeds the push attempt's composition when BOTH channels are
+  // opted in — one row, one honest combined state.
+  let smsOutcome: ChannelOutcome | null = null
   if (opts?.sms) {
-    await attemptSmsDelivery(
+    smsOutcome = await attemptSmsDelivery(
       row.id,
       {
         to: typeof opts.sms.to === 'string' ? opts.sms.to : '',
@@ -104,7 +119,27 @@ export async function notify(
       typeof opts.sms.userId === 'string' && opts.sms.userId ? opts.sms.userId : undefined,
     )
   }
+
+  // Additive web push attempt (opt-in via opts.push, W5-1). Same
+  // catch-everything contract: the in-app row always survives a channel.
+  // When an SMS attempt ran first, its outcome is composed in — a prior real
+  // 'sent' is never downgraded by a push skip/failure (the ledger never
+  // lies in either direction).
+  if (opts?.push) {
+    await attemptPushDelivery(
+      row.id,
+      { title, body, projectId, kind: row.kind },
+      typeof opts.push.userId === 'string' && opts.push.userId ? opts.push.userId : undefined,
+      smsOutcome,
+    )
+  }
   return { id: row.id }
+}
+
+/** The outcome one channel attempt recorded (or intends to record) on the row. */
+interface ChannelOutcome {
+  status: 'logged' | 'sent' | 'failed'
+  detail: string
 }
 
 /** Outcome of consulting the recipient's recorded preferences for one SMS attempt. */
@@ -121,12 +156,14 @@ function isPrefObject(v: unknown): v is { inApp?: unknown } {
 }
 
 /**
- * Resolve the recipient's notification preferences for one SMS attempt.
+ * Resolve the recipient's notification preferences for one external attempt
+ * (SMS or web push — the gate is channel-agnostic: an opt-out the recipient
+ * recorded for the kind means "do not reach me about this", on any channel).
  * Never throws; every failure mode fails OPEN (the attempt proceeds — today's
  * behavior) with an honest note for the row. Coarse per-kind gate over
  * User.notificationPrefs — see the module header for the documented default.
  */
-async function resolveSmsPrefGate(userId: string | undefined, kind: string): Promise<SmsPrefGate> {
+async function resolveRecipientPrefGate(userId: string | undefined, kind: string): Promise<SmsPrefGate> {
   if (!userId) return { send: true } // recipient user unknown — no gate, today's behavior
   try {
     const user = await db.user.findUnique({
@@ -174,31 +211,34 @@ function parseNotificationPrefs(raw: string | null | undefined): Record<string, 
 /**
  * One honest SMS attempt for a freshly created notification row. Never
  * throws; every outcome (sent / failed / skipped-and-why) lands in the row's
- * deliveryStatus + deliveryDetail via markDelivered(). The recipient's
- * recorded preferences are consulted FIRST — an opted-out kind never reaches
- * the provider (no fetch at all).
+ * deliveryStatus + deliveryDetail via markDelivered(), and is RETURNED so a
+ * later push attempt (when both channels are opted in) can compose one
+ * honest combined state. The recipient's recorded preferences are consulted
+ * FIRST — an opted-out kind never reaches the provider (no fetch at all).
+ * Returns null only when the belt-and-braces catch fired.
  */
-async function attemptSmsDelivery(id: string, input: ChannelSendInput, userId?: string): Promise<void> {
+async function attemptSmsDelivery(id: string, input: ChannelSendInput, userId?: string): Promise<ChannelOutcome | null> {
   try {
-    const gate = await resolveSmsPrefGate(userId, input.kind)
+    const gate = await resolveRecipientPrefGate(userId, input.kind)
     if (!gate.send) {
-      await markDelivered(id, 'logged', gate.detail)
-      return
+      return await markAndReturn(id, 'logged', gate.detail)
     }
     if (!input.to) {
-      await markDelivered(id, 'logged', 'SMS requested but no recipient number provided — nothing sent')
-      return
+      return await markAndReturn(id, 'logged', 'SMS requested but no recipient number provided — nothing sent')
     }
     const provider = getSmsProvider()
     if (!provider) {
       // Fail-closed: nothing configured → nothing sent — say so honestly.
-      await markDelivered(id, 'logged', 'SMS requested but no provider configured (NOTIFY_SMS_WEBHOOK_URL or AT_API_KEY+AT_USERNAME unset) — nothing sent')
-      return
+      return await markAndReturn(
+        id,
+        'logged',
+        'SMS requested but no provider configured (NOTIFY_SMS_WEBHOOK_URL or AT_API_KEY+AT_USERNAME unset) — nothing sent',
+      )
     }
     const result = await provider.send(input)
     // When the gate could not be consulted (lookup failure / unknown user /
     // unreadable prefs), append the honest note to the real outcome detail.
-    await markDelivered(id, result.status, gate.detail ? `${result.detail} — ${gate.detail}` : result.detail)
+    return await markAndReturn(id, result.status, gate.detail ? `${result.detail} — ${gate.detail}` : result.detail)
   } catch {
     // Belt-and-braces: provider.send already returns instead of throwing and
     // markDelivered swallows its own errors — but a channel attempt must
@@ -208,7 +248,146 @@ async function attemptSmsDelivery(id: string, input: ChannelSendInput, userId?: 
     } catch {
       // row gone — nothing to record
     }
+    return null
   }
+}
+
+/** Record an outcome on the row and hand it back for later composition. */
+async function markAndReturn(
+  id: string,
+  status: 'logged' | 'sent' | 'failed',
+  detail?: string,
+): Promise<ChannelOutcome> {
+  await markDelivered(id, status, detail)
+  return { status, detail: detail ?? '' }
+}
+
+/**
+ * One honest WEB PUSH attempt for a freshly created notification row (W5-1).
+ * Targets EVERY PushSubscription the recipient user recorded — one row, one
+ * aggregated outcome: at least one browser accepted → 'sent' (deliveredAt
+ * stamped, detail carries the first accepted subscription's endpoint as the
+ * provider ref); every attempt failed → 'failed'. Subscriptions the push
+ * service answered 404/410 (gone) are pruned right here — a revoked endpoint
+ * is deleted, not retried forever. Every skip state (no user, muted kind, no
+ * subscriptions, no VAPID pair) honestly stays 'logged' with the reason.
+ * Never throws into notify().
+ */
+async function attemptPushDelivery(
+  id: string,
+  input: Omit<ChannelSendInput, 'to' | 'pushSubscription'>,
+  userId: string | undefined,
+  priorSms?: ChannelOutcome | null,
+): Promise<void> {
+  try {
+    // Push has no phone-number fallback: without a userId there is no address
+    // to push to — say so honestly, send nothing.
+    if (!userId) {
+      await markPushOutcome(id, 'logged', 'Web push requested but no recipient user provided — nothing sent', priorSms)
+      return
+    }
+    const gate = await resolveRecipientPrefGate(userId, input.kind)
+    if (!gate.send) {
+      await markPushOutcome(id, 'logged', gate.detail ?? 'skipped: recipient preference opted out of this kind — nothing sent', priorSms)
+      return
+    }
+    let subs: Array<{ id: string; endpoint: string; p256dh: string; auth: string }>
+    try {
+      subs = await db.pushSubscription.findMany({ where: { userId } })
+    } catch {
+      await markPushOutcome(id, 'logged', 'Web push subscription lookup failed — nothing sent (fail-closed)', priorSms)
+      return
+    }
+    if (subs.length === 0) {
+      await markPushOutcome(id, 'logged', 'Web push requested but this user has no recorded subscription — nothing sent', priorSms)
+      return
+    }
+    const provider = getPushProvider()
+    if (!provider) {
+      // Fail-closed: no VAPID pair → nothing sent — say so honestly. The
+      // subscriptions stay stored for the day the operator configures them.
+      await markPushOutcome(
+        id,
+        'logged',
+        'Web push requested but no VAPID pair configured (VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY unset) — nothing sent',
+        priorSms,
+      )
+      return
+    }
+
+    let delivered = 0
+    let pruned = 0
+    let firstFailureDetail = ''
+    let firstAcceptedEndpoint = ''
+    for (const sub of subs) {
+      const result = await provider.send({
+        ...input,
+        to: sub.endpoint,
+        pushSubscription: { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+      })
+      if (result.ok) {
+        delivered += 1
+        if (!firstAcceptedEndpoint && result.providerRef) firstAcceptedEndpoint = result.providerRef
+        continue
+      }
+      if (!firstFailureDetail) firstFailureDetail = result.detail
+      if (result.gone) {
+        pruned += 1
+        try {
+          await db.pushSubscription.delete({ where: { id: sub.id } })
+        } catch {
+          // row already gone (concurrent unsubscribe) — the outcome stands
+        }
+      }
+    }
+
+    const suffix =
+      (gate.detail ? ` — ${gate.detail}` : '') +
+      (pruned > 0 ? ` — ${pruned} gone subscription(s) pruned` : '')
+    if (delivered > 0) {
+      await markPushOutcome(
+        id,
+        'sent',
+        `Web push delivered to ${delivered} of ${subs.length} subscription(s)` +
+          (firstAcceptedEndpoint ? ` (ref ${firstAcceptedEndpoint})` : '') +
+          suffix,
+        priorSms,
+      )
+    } else {
+      await markPushOutcome(
+        id,
+        'failed',
+        (firstFailureDetail || 'Web push failed') + ` — 0 of ${subs.length} subscription(s) delivered` + suffix,
+        priorSms,
+      )
+    }
+  } catch {
+    // Belt-and-braces: provider.send returns instead of throwing and
+    // markDelivered swallows its own errors — but a channel attempt must
+    // NEVER propagate into notify().
+    try {
+      await markDelivered(id, 'failed', 'Web push delivery attempt errored')
+    } catch {
+      // row gone — nothing to record
+    }
+  }
+}
+
+/**
+ * Record the push outcome on the row, composing with a prior SMS outcome
+ * when both channels were opted in (one row, one honest combined state):
+ * a prior real 'sent' is never downgraded by a push skip/failure — but the
+ * detail always states both channels' outcomes verbatim.
+ */
+async function markPushOutcome(
+  id: string,
+  status: 'logged' | 'sent' | 'failed',
+  detail: string,
+  priorSms?: ChannelOutcome | null,
+): Promise<void> {
+  const finalStatus = priorSms?.status === 'sent' ? 'sent' : status
+  const finalDetail = priorSms ? `${detail} — SMS: ${priorSms.detail}` : detail
+  await markDelivered(id, finalStatus, finalDetail)
 }
 
 /**

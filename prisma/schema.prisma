@@ -430,6 +430,34 @@ model User {
   // Notification preferences (Doc A §42, backend wave): per-kind opt-in map
   // stored as JSON — the in-app channel is always on, prefs gate future channels.
   notificationPrefs String? // JSON { kind: { inApp: true, ... } }
+  // Web push subscriptions this user recorded via POST /api/push/subscribe
+  // (W5-1). Virtual back-relation — no User table change; the FK lives on
+  // PushSubscription.
+  pushSubscriptions PushSubscription[]
+}
+
+// Web push subscriptions (W5-1) — the honest push channel's address book.
+// One row per (user, endpoint): POST /api/push/subscribe upserts on the
+// endpoint (a browser push subscription belongs to exactly one browser; when
+// a different signed-in user subscribes from the same browser the row is
+// re-owned — the previous owner silently stops receiving there, which is the
+// honest statement of "this browser now belongs to that session").
+// POST /api/push/unsubscribe deletes the session user's row. Rows are ALSO
+// pruned automatically when the push service answers 404/410 (subscription
+// gone) — the notify service deletes dead endpoints, never keeps pushing at
+// them. With no VAPID env configured, rows are still stored but every send
+// honestly stays 'logged' (fail-closed — same posture as the SMS providers).
+model PushSubscription {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint       String    @unique // browser push-service URL — the upsert key
+  p256dh         String // subscription.keys.p256dh (client public key, base64url)
+  auth           String // subscription.keys.auth (client auth secret, base64url)
+  expirationTime DateTime? // subscription.expirationTime, when the browser supplies one
+  userAgent      String? // honest device hint for the settings surface ("Chrome on Windows")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 // Project staffing roster (Doc A §54/§10, backend wave): who is attached to
