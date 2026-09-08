@@ -1,11 +1,13 @@
+import { sendNotification } from 'web-push'
+
 // Notifications module — external channel providers (the provider seam).
 //
 // The ChannelProvider interface is how notify() reaches people who are not
 // staring at the app. SMS is wired today in two flavors behind the same
 // interface — WebhookSmsProvider (generic gateway) and AtSmsProvider
-// (Africa's Talking REST); WhatsApp and email are future providers that
-// implement the same interface and get resolved in service.ts — no new
-// concepts needed.
+// (Africa's Talking REST) — and WebPushProvider (VAPID web push) is the third;
+// WhatsApp and email are future providers that implement the same interface
+// and get resolved in service.ts — no new concepts needed.
 //
 // Honest by construction:
 //   · A provider is only "configured" when its env is present — no URL, no
@@ -95,6 +97,54 @@
 //   · network  → 'failed', detail carries the error class only (e.g.
 //                TypeError) — the key/host stays out of the row.
 
+// ── WebPushProvider contract (env: VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY, ───
+//    optional VAPID_SUBJECT) ──────────────────────────────────────────────
+//
+// The retention loop for the diaspora client persona: real web push to the
+// browser subscriptions recorded via POST /api/push/subscribe (the PWA's sw.js
+// already ships offline; push is the "tab is closed" half). Same honesty rules
+// as the SMS providers — this is the third ChannelProvider behind the seam:
+//
+//   · CONFIGURED only when the VAPID PAIR is present. A partial pair (public
+//     without private or vice versa) resolves to null — fail-closed, exactly
+//     like a partial AT pair. With no provider: subscriptions are STILL stored
+//     by the routes, but notify() send attempts honestly stay 'logged' and
+//     web-push is never contacted.
+//   · VAPID_SUBJECT (a mailto: or https:// URL the push services can contact
+//     about your traffic) defaults to 'mailto:admin@localhost' — set a real
+//     contact for any real deployment.
+//   · send() NEVER throws. web-push's sendNotification is called PER
+//     SUBSCRIPTION with the per-call vapidDetails (no library-global
+//     setVapidDetails state — the provider stays stateless and testable).
+//     The payload is buildWebPushPayload(input) — the exact JSON shape
+//     public/sw.js's push handler parses (title, body, projectId, kind —
+//     the click deep-link /?projectId=<id> is derived client-side from
+//     projectId). TTL is 24h: a milestone text that wakes a phone four weeks
+//     later is a lie about freshness.
+//   · Outcomes: 2xx from the push service → 'sent' with the subscription
+//     endpoint as providerRef (the push service's own correlation handle for
+//     that browser). A 404/410 answer means the subscription is GONE —
+//     'failed' with { gone: true } so the notify service prunes the dead row
+//     instead of pushing at it forever. Any other status → 'failed' with the
+//     HTTP status only. Network/timeout → 'failed' with the error class only
+//     (WebPushError messages embed the endpoint URL — they never reach the
+//     row). The 8s cap rides along as web-push's socket timeout.
+//   · Keys: the app env holds the VAPID PRIVATE key — env-file discipline as
+//     documented for AT_API_KEY. The PUBLIC key is handed to browsers by GET
+//     /api/push/subscribe ({ configured: false } when the pair is not set).
+
+/** One browser push subscription, as the routes store it / the provider needs it. */
+export interface PushSubscriptionTarget {
+  endpoint: string
+  keys: { p256dh: string; auth: string }
+}
+
+/** Web-push TTL: 24h — stale site news waking a phone later is dishonest. */
+const PUSH_TTL_SEC = 24 * 60 * 60
+
+/** Honest default VAPID subject (push services want a contact for abuse replies). */
+const DEFAULT_VAPID_SUBJECT = 'mailto:admin@localhost'
+
 /** Africa's Talking REST hosts (AT_ENV=sandbox switches to the sandbox one). */
 const AT_PROD_BASE = 'https://api.africaistalking.com'
 const AT_SANDBOX_BASE = 'https://api.sandbox.africaistalking.com'
@@ -106,6 +156,13 @@ export interface ChannelSendInput {
   body: string
   projectId: string
   kind: string
+  /**
+   * Web-push only: the full subscription this send targets (endpoint +
+   * p256dh/auth keys). `to` carries the same subscription's endpoint URL so
+   * providerRef/details stay a single string like the SMS providers. The SMS
+   * providers ignore this field.
+   */
+  pushSubscription?: PushSubscriptionTarget
 }
 
 /** The honest outcome of one attempt — never thrown, always returned. */
@@ -116,6 +173,12 @@ export interface ChannelSendResult {
   providerRef?: string
   /** Operator-readable, leak-free detail recorded in Notification.deliveryDetail. */
   detail: string
+  /**
+   * Web-push only: the push service answered 404/410 — the subscription no
+   * longer exists. The notify service prunes the stored row; nobody keeps
+   * sending to a revoked subscription.
+   */
+  gone?: boolean
 }
 
 /** A delivery channel (SMS today; WhatsApp/email are future implementations). */
@@ -305,4 +368,116 @@ export function getSmsProvider(env: NodeJS.ProcessEnv = process.env): ChannelPro
     return new AtSmsProvider(apiKey, username, senderId || undefined, sandbox ? AT_SANDBOX_BASE : AT_PROD_BASE)
   }
   return null
+}
+
+// ── WebPushProvider (VAPID) ──────────────────────────────────────────────────
+
+/**
+ * The JSON payload one web push carries — THE CONTRACT shared with the service
+ * worker (public/sw.js parses exactly these fields; src/frontend/sw-handlers.ts
+ * is the mirrored pure parser the tests round-trip against). Pure and exported
+ * so provider tests and sw-handler tests can pin the same shape without a
+ * network. The deep-link (/?projectId=<id>) is derived client-side from
+ * projectId — the server never guesses the app's routing.
+ */
+export function buildWebPushPayload(input: ChannelSendInput): string {
+  return JSON.stringify({
+    title: input.title,
+    body: input.body,
+    projectId: input.projectId,
+    kind: input.kind,
+  })
+}
+
+/**
+ * Real web push to one browser subscription via the web-push library (VAPID).
+ * Same honesty rules as the SMS providers: never throws, leak-free details
+ * (WebPushError messages embed the endpoint — only the HTTP status / error
+ * class ever reaches the row), and a 24h TTL. vapidDetails ride each call —
+ * no library-global setVapidDetails state.
+ */
+export class WebPushProvider implements ChannelProvider {
+  readonly id = 'web-push'
+  readonly label = 'Web push (VAPID)'
+
+  constructor(
+    private readonly publicKey: string,
+    private readonly privateKey: string,
+    private readonly subject: string = DEFAULT_VAPID_SUBJECT,
+  ) {}
+
+  async send(input: ChannelSendInput): Promise<ChannelSendResult> {
+    const subscription = input.pushSubscription
+    if (!subscription || !subscription.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) {
+      // Defensive: the notify service always passes a full subscription; a
+      // half-shaped one is a bug, reported honestly, never thrown.
+      return { ok: false, status: 'failed', detail: 'Web push attempted without a complete subscription — nothing sent' }
+    }
+    try {
+      await sendNotification(
+        { endpoint: subscription.endpoint, keys: subscription.keys },
+        buildWebPushPayload(input),
+        {
+          vapidDetails: { subject: this.subject, publicKey: this.publicKey, privateKey: this.privateKey },
+          TTL: PUSH_TTL_SEC,
+          timeout: SEND_TIMEOUT_MS, // the same 8s cap the SMS providers enforce
+        },
+      )
+      // web-push resolves only on 2xx from the push service. The subscription
+      // endpoint is the provider-side reference for this browser.
+      return {
+        ok: true,
+        status: 'sent',
+        providerRef: subscription.endpoint,
+        detail: 'Web push accepted by the push service',
+      }
+    } catch (err) {
+      // Never throw into the caller. WebPushError carries a statusCode (and a
+      // message that embeds the endpoint) — status/class ONLY in the detail.
+      const status = (err as { statusCode?: unknown }).statusCode
+      if (typeof status === 'number') {
+        const gone = status === 404 || status === 410
+        return {
+          ok: false,
+          status: 'failed',
+          detail: gone
+            ? `Push service responded HTTP ${status} (subscription gone)`
+            : `Push service responded HTTP ${status}`,
+          ...(gone ? { gone: true } : {}),
+        }
+      }
+      const name = err instanceof Error ? err.name : 'unknown'
+      return { ok: false, status: 'failed', detail: `Web push unreachable (${name})` }
+    }
+  }
+}
+
+/**
+ * Resolve the web push provider from env, at call time (same discipline as
+ * getSmsProvider — never cached across a long-lived process or tests).
+ * VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY BOTH required: a partial pair resolves
+ * to null, not to a provider that would fail every send — fail closed. With no
+ * provider, notify() push attempts honestly stay 'logged' and web-push is
+ * never contacted (subscriptions are still stored by the routes).
+ */
+export function getPushProvider(env: NodeJS.ProcessEnv = process.env): WebPushProvider | null {
+  const publicKey = (env.VAPID_PUBLIC_KEY ?? '').trim()
+  const privateKey = (env.VAPID_PRIVATE_KEY ?? '').trim()
+  if (!publicKey || !privateKey) return null
+  const subject = (env.VAPID_SUBJECT ?? '').trim() || DEFAULT_VAPID_SUBJECT
+  return new WebPushProvider(publicKey, privateKey, subject)
+}
+
+/**
+ * The PUBLIC half of the VAPID pair, handed to browsers by GET
+ * /api/push/subscribe so they can create a subscription. Returns the key only
+ * when the pair is COMPLETE (a public key without its private half cannot send
+ * — reporting configured would be a lie); null otherwise, which the route
+ * renders as { configured: false }.
+ */
+export function getVapidPublicKey(env: NodeJS.ProcessEnv = process.env): string | null {
+  const publicKey = (env.VAPID_PUBLIC_KEY ?? '').trim()
+  const privateKey = (env.VAPID_PRIVATE_KEY ?? '').trim()
+  if (!publicKey || !privateKey) return null
+  return publicKey
 }
