@@ -579,6 +579,16 @@ app tier entirely.
 
 ### 9.5 Honest scope notes
 
+- **Document extraction on PDFs** reads the text layer **server-side**
+  (`src/backend/lib/pdf-text.ts`, zero-dependency best-effort parser:
+  FlateDecode content streams, Tj/TJ text operators, object-stream page
+  trees) — no client `ocrTextHint` is required anymore; a supplied hint
+  still wins. Honest limits: it is NOT OCR — scanned/image-only PDFs
+  (empty text layer) and encrypted PDFs return the same explicit 400 the
+  route has always returned for unusable PDFs (upload an image or supply
+  a hint); CID/Type0 fonts are decoded best-effort. The extraction stays
+  draft-only (Attachment extraction fields, human review gate) and is
+  capped like a hint (8 MB in, 100 k chars out).
 - **Document uploads** (`mode: 'document'`, `public/docs/`) are still
   local-disk writes inside the documents service — deliberately not yet
   driver-mediated, because document extraction READS the bytes back
