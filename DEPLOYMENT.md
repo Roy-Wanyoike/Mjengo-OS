@@ -12,14 +12,16 @@ TypeScript strict) application whose UI is one client-rendered page
 share-link views) talking to guarded API routes under `src/app/api/**`
 (NextAuth v4 credentials + JWT session cookies, role guards, rate limits,
 idempotency). Persistence is **Prisma 6 + SQLite** (single file at
-`DATABASE_URL`) with a 60-model schema, a double-entry ledger and
+`DATABASE_URL`) with a 61-model schema, a double-entry ledger and
 `_prisma_migrations` bookkeeping. File uploads (site photos, documents) are
 written to `public/photos/` and `public/docs/` on local disk. `next build`
 emits a **standalone** server (`output: "standalone"` → `.next/standalone/
 server.js`) that runs with `node` (or `bun`), so a self-host deployment is
 one process + one SQLite file + one uploads directory — no message queue, no
 external services. Background jobs run in-process (`POST /api/jobs/run` is
-the cron hook); the AI routes call z-ai-web-dev-sdk from the backend only.
+the cron hook — drained on a schedule by a token-authenticated scheduler:
+compose sidecar / systemd timer / any cron, §7.3); the AI routes call
+z-ai-web-dev-sdk from the backend only.
 
 ## 2. Prerequisites
 
@@ -43,8 +45,14 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `AUTH_TRUST_HOST` | behind proxy: yes (`1`) | Makes next-auth v4's `detectOrigin` honor the proxy's forwarded host/proto headers instead of silently pinning every origin to `NEXTAUTH_URL` (or `http://localhost:3000`). Harmless for direct localhost access — keep it set whenever a proxy is involved. |
 | `WEBSITE_ORIGIN` | with the marketing site | Rewrite target for `/website/*` — the origin of the `mjengoos-website/` Next.js app. Default `http://127.0.0.1:3001` (the site's own server in local dev); under docker-compose set `http://website:3001` (service DNS — `docker-compose.yml` does this for you). |
 | `TRUST_PROXY` | hardening: `1` behind a trusted proxy | When set, the app reads the client IP from the **rightmost** `X-Forwarded-For` value (the one appended by your trusted proxy) instead of the first, client-spoofable value. Leave unset when there is no appending proxy in front. |
+| `RATE_LIMIT_STORE` | multi-process: optional | `memory` (default — the historical in-process counters, exact for one process) or `sqlite` — one shared SQLite file per **host** so every process sees the same token buckets and login lockout (issue #33; needs `node` as the standalone runtime and one Docker COPY line, see §9.4). Any init failure logs one warning and stays in-memory. |
+| `RATE_LIMIT_SQLITE_PATH` | with `RATE_LIMIT_STORE=sqlite` | Path of the shared store file (default `db/ratelimit.db`, `file:` prefix tolerated). Keep it on the same persistent volume as `DATABASE_URL` — never point it at the Prisma database; it is disposable cache-like state. |
 | `MUTATION_ORIGIN_ALLOWLIST` | hardening: optional | When set (comma-separated origin list), JSON mutation requests are rejected unless their `Origin` header matches — CSRF defense-in-depth on top of cookies. |
 | `USSD_WEBHOOK_SECRET` | hardening: optional | When set, `/api/ussd` requires a valid HMAC signature derived from this shared secret on every request (authenticated gateway webhooks); unset = the documented demo posture. |
+| `JOBS_RUN_TOKEN` | scheduler: optional | Shared secret (`openssl rand -hex 32`) that lets an external scheduler authenticate `POST /api/jobs/run` with `Authorization: Bearer <token>` (no browser session needed — compose `jobs-tick` sidecar, systemd timer, any cron). Same value must reach the app and the scheduler. **Unset = the bearer path is fully disabled** (fail closed — the endpoint then answers only to contractor/admin sessions, exactly as before). See §7.3. |
+| `DARAJA_RECONCILE_AFTER_MIN` / `_INTERVAL_MIN` / `_MAX_AGE_MIN` | Daraja sweep: optional | Tuning for the `wallet.reconcile` job (pending STK-intent reconciliation, §7.3): probe intents once they are `AFTER` minutes old (default 2), re-probe every `INTERVAL` minutes (default 5, matching the scheduler tick), stop probing past `MAX_AGE` minutes (default 60 — the intent stays PENDING, never an invented failure/credit). Invalid values warn and fall back to defaults; all-unset = defaults, and with no Daraja env no intents exist so the sweep does nothing. |
+| `DARAJA_ALLOWED_IPS` | Daraja webhook: optional | Comma-separated IPv4 CIDRs (and/or bare IPs), e.g. `196.201.214.0/24` — when set, the STK callback route rejects requests whose resolved client IP (x-forwarded-for per `TRUST_PROXY`) matches no entry with 403 **before the body is parsed**; unresolvable IPs are rejected too (fail closed). Unset = the documented posture (unguessable secret path + query-API reconciliation). IPv6 = exact-literal match only (no IPv6 CIDR). Invalid entries are logged and ignored, but a set value with zero valid entries denies **all** traffic. Only sound behind a proxy you control that forwards `x-forwarded-for` (`TRUST_PROXY=1`). |
+| `S3_ENDPOINT` + 4 more | object storage: optional | The five `S3_*` values (`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) switch photo uploads from local disk to an S3/R2/MinIO-compatible bucket (presigned client-direct uploads become available). **All five or nothing** — a partial set fail-closes to local disk with one logged warning. Optional `S3_PUBLIC_BASE` = stable public/CDN URL base. See §9. |
 | `PORT` / `HOSTNAME` | standalone runtime | `3000` / `0.0.0.0` defaults (set by the Docker image; `HOSTNAME=0.0.0.0` binds all interfaces). |
 
 Cookie policy is switched per request in `src/backend/lib/auth.ts`
@@ -74,7 +82,7 @@ The database ships **empty** — seed the demo data next.
 
 - **`bunx prisma migrate deploy`** — the production path. Applies
   `prisma/migrations/` in order and records them in `_prisma_migrations`.
-  Baseline: `0_init` (the entire 60-model schema, generated from
+  Baseline: `0_init` (the entire 61-model schema, generated from
   `prisma/schema.prisma`). Safe, additive, never drops data.
 - **`bunx prisma db push`** (or `bun run db:push`) — the prototyping path
   used while the schema is still moving: pushes `schema.prisma` straight to
@@ -82,6 +90,17 @@ The database ships **empty** — seed the demo data next.
   not read `_prisma_migrations` — but **once a real deployment exists, change
   the schema only via new migrations** (`bunx prisma migrate dev --name x`
   locally, commit the generated SQL, `migrate deploy` in production).
+- **`Transaction.phaseId` (issue #39, phase cost-codes)** is the latest
+  additive schema change: a nullable column + FK to `Phase` (`SetNull` on
+  phase delete), zero data migration. Legacy rows and non-phase spend
+  (wages, unattributed expenses) legitimately stay `null` — the
+  budget-variance report then attributes them by its documented budget-share
+  estimate, while money posted through seams that KNOW the phase (milestone
+  releases, milestone payment requests, payer-attributed `invoice.pay`)
+  carries a real code and counts directly. The report's
+  `phaseAttribution.mode` (`real` / `mixed` / `estimated`) states which mode
+  produced the numbers. Apply via the path above; money math is untouched
+  (amounts, ledger double-entry, balances — this is attribution only).
 - Seeding does NOT run automatically in any path; run it explicitly (§4.2).
 
 ### 4.2 Seed chain (exact order)
@@ -193,7 +212,7 @@ cp .env.example .env     # set NEXTAUTH_SECRET (+ NEXTAUTH_URL only if fixed dom
 docker compose up -d --build
 ```
 
-`docker-compose.yml` (single-node self-host, **two services**):
+`docker-compose.yml` (single-node self-host, **three services**):
 
 - **`app`** — the webapp on `3000:3000`, `restart: unless-stopped`, env from
   `.env` **except** `DATABASE_URL` which is pinned to the named volume
@@ -207,6 +226,13 @@ docker compose up -d --build
   3001 only** (not published — it is reached through the app's rewrite),
   named volume `website-data` for contact-form submissions, healthcheck
   probing `/website` with node's `fetch`.
+- **`jobs-tick`** — a busybox sidecar (no app code) that POSTs
+  `http://app:3000/api/jobs/run` every 5 minutes with
+  `Authorization: Bearer $JOBS_RUN_TOKEN`, draining the background-job
+  queue on a schedule. Enabled by setting `JOBS_RUN_TOKEN` in `.env`
+  (unset → the app fails the bearer calls closed and every tick logs a
+  401); `docker compose logs jobs-tick` is its health signal. Full
+  contract: §7.3.
 
 After `up -d --build`: the product is at `http://localhost:3000` and the
 marketing site at `http://localhost:3000/website` — one origin, the site's
@@ -342,10 +368,150 @@ server {
   `sqlite3 /srv/mjengo/custom.db ".backup '/srv/backups/mjengo-$(date +%F).db'"`
   — both produce a consistent snapshot; schedule it daily and keep the
   uploads volume in the same backup (photos are evidence).
+- **Rate-limit store file (`db/ratelimit.db`, only when
+  `RATE_LIMIT_STORE=sqlite`):** NOT part of backups — it is cache-like
+  counter state (WAL sidecar files included); deleting it while the app is
+  stopped simply resets everyone's limits and lockouts.
 - **Secrets:** generate `NEXTAUTH_SECRET` with `openssl rand -hex 32`; store
   it in your secret manager / `.env` on the host (never in git, never in the
   image). Changing it invalidates all sessions (users just sign in again).
   Do not expose the SQLite file or `db/` via the proxy.
+
+### 7.3 Background jobs scheduler
+
+Background jobs (anomaly scan, weekly digest, ledger reconciliation,
+overdue check — `src/backend/modules/jobs/service.ts`) are drained by
+`POST /api/jobs/run`. Nothing inside the app schedules that call — the
+drain is deliberately an HTTP endpoint so any scheduler can own the
+cadence. Pick **one** of the wirings below; they all just POST the
+endpoint on an interval.
+
+**The token.** A scheduler cannot hold a NextAuth session, so the
+endpoint accepts a machine credential *in addition to* the
+contractor/admin session (both paths stay live; the session path is
+byte-identical to the pre-token behavior):
+
+```bash
+curl -X POST https://your-host.example/api/jobs/run \
+  -H "Authorization: Bearer $JOBS_RUN_TOKEN" \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+`JOBS_RUN_TOKEN` is a shared secret generated with
+`openssl rand -hex 32`; the same value must reach the app **and** the
+scheduler. **Unset = the bearer path is disabled entirely** — no default
+token, no fallback: the endpoint then answers only to contractor/admin
+sessions, exactly as before. A presented-but-invalid token gets
+`401 {"error":"Invalid jobs token"}` (the secret itself is never echoed
+back).
+
+**Option A — docker compose sidecar (`jobs-tick`).** The compose stack
+ships a busybox sidecar that POSTs `http://app:3000/api/jobs/run` over
+the compose network (no proxy, no TLS needed) every 5 minutes. Enable it
+by setting `JOBS_RUN_TOKEN` in `.env`: the app reads it via `env_file`,
+the sidecar via compose interpolation — one file feeds both sides.
+`docker compose up -d`, then watch it with
+`docker compose logs jobs-tick`: a tick logs only failures (successful
+drains are silent, like a cron); what actually ran is visible in the
+Intel "Background jobs" card or via `GET /api/jobs/run`. Without the
+token the sidecar still runs but every tick fails closed with a logged
+401 — its startup banner explains the fix. Cadence: 5 minutes
+(`sleep 300`), 50× under the endpoint's 10/min rate limit.
+
+**Option B — systemd timer (bare-metal self-host).** `deploy/systemd/`
+ships the pair `mjengo-jobs.service` + `mjengo-jobs.timer` (plus
+`mjengo-jobs.env.example`):
+
+```bash
+install -D -m 0644 deploy/systemd/mjengo-jobs.service /etc/systemd/system/
+install -D -m 0644 deploy/systemd/mjengo-jobs.timer   /etc/systemd/system/
+install -D -m 0600 deploy/systemd/mjengo-jobs.env.example /etc/mjengo/jobs.env
+# edit /etc/mjengo/jobs.env (URL + JOBS_RUN_TOKEN), then:
+systemctl daemon-reload && systemctl enable --now mjengo-jobs.timer
+```
+
+`OnCalendar=*:0/5` fires on the 5-minute grid (same cadence as the
+compose sidecar) with `Persistent=true` — a host that was down fires one
+catch-up drain on the next boot, which is safe (see idempotency below).
+`curl -fsS` turns a 401/5xx into a failed unit: `journalctl -u
+mjengo-jobs.service` shows both the failure and each drain's
+`{ok, ran, results}` reply. The secret lives only in the root-only
+`/etc/mjengo/jobs.env` (chmod 600), never in the tracked unit files.
+
+**Option C — any external cron.** Anything that can POST with a header
+works: a host crontab, cron-job.org, a GitHub Actions scheduled
+workflow, a k8s CronJob:
+
+```bash
+*/5 * * * * curl -fsS -X POST https://your-host.example/api/jobs/run \
+  -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' -d '{}'
+```
+
+**Vercel Cron caveat:** it only issues GET requests (its `CRON_SECRET`
+can add a bearer header, but the method is fixed) while the drain is
+POST-only by design — on Vercel you would need a thin GET wrapper route
+(not shipped) or an external POST-capable scheduler.
+
+**Security model.**
+
+- The token is a shared secret that grants, for this one endpoint, what
+  a contractor/admin session grants there: enqueueing and draining jobs.
+  It grants **no read access** — `GET /api/jobs/run` stays session-only.
+  Treat it like a password: 64-hex random, no default, never in git (it
+  lives in `.env`/process env and the scheduler's config only).
+- Comparison is constant-time (`crypto.timingSafeEqual` over
+  length-matched buffers — `src/backend/lib/jobs-token.ts`). Comparing
+  lengths first leaks the token's *length* (not its content) to a timing
+  observer: the standard trade-off of that approach.
+- The endpoint stays rate-limited: valid bearer calls pass through the
+  same 10 runs/min bucket as session calls (for token calls the bucket
+  key is the caller's IP-derived principal — the compose sidecar's
+  direct internal call carries no cookie and no `x-forwarded-for`, so it
+  lands in the shared `anon` bucket; 1 tick / 5 min leaves 50× headroom).
+  Invalid tokens 401 before the bucket, exactly as session 401s always
+  did.
+- Repeated/overlapping ticks are safe — jobs are idempotent from the
+  scheduler's perspective (`src/backend/modules/jobs/service.ts`): a
+  drain only picks `queued`/`retrying` rows whose `runAt` is due;
+  `done`/`failed` rows are never re-run; a failed handler retries with
+  exponential backoff (2 → 8 → 30 min) and lands terminally `failed`
+  after 3 attempts, keeping `lastError` on the row (the row itself is
+  the dead letter). A missed or duplicated tick costs queue latency,
+  never double work — modulo the narrow find-then-update race covered by
+  service.ts's "single drain process" honesty note, which the 5-minute
+  cadence (with 90–150 s call timeouts) makes practically unreachable.
+  Note the scheduler also drives *retries*: without it, a `retrying` row
+  waits for the next manual drain.
+- **Rotation:** generate a new value → put it in the app's env and
+  restart the app (`docker compose up -d` recreates app + sidecar; for
+  systemd, edit `/etc/mjengo/jobs.env` and restart the app unit) → the
+  next tick uses it. A few 401s during the swap are harmless — rows wait
+  in the queue. Rotate on suspected leak or staff turnover; there is no
+  automatic expiry (add a calendar reminder, or wrap the token in your
+  secret manager's rotation if you use one).
+
+**Daraja pending-intent reconciliation (`wallet.reconcile`).** The drain
+also carries the M-Pesa STK safety net (issue #34): an STK initiation
+whose Safaricom callback never arrives would leave the payment intent
+pending forever, so every pending initiation seeds a `wallet.reconcile`
+job row (due at `DARAJA_RECONCILE_AFTER_MIN`, default 2 min) and each
+sweep re-probes unsettled intents every `DARAJA_RECONCILE_INTERVAL_MIN`
+(default 5) until they settle or pass `DARAJA_RECONCILE_MAX_AGE_MIN`
+(default 60). The sweep re-drives the **same callback processor** the
+real webhook uses — it never posts money through a second path: the
+query API (`stkpushquery`) is still the gate, the dedupe is still
+`CheckoutRequestID` + the durable `daraja.callback:<id>` record + the
+ledger idempotency key, so a sweep racing a late callback is always a
+no-op on the losing side. Unmapped query results keep the intent
+pending (never a credit); past max-age the intent stays pending and the
+payment request stays approved for a re-initiation. With the whole
+Daraja block unset, no intents exist and the sweep seeds nothing — the
+default deployment is unchanged. Watch it in the jobs card or
+`GET /api/jobs/run` (result JSON: scanned / probed / credited /
+unverified / followUpAt). The webhook route itself accepts an optional
+source-IP allowlist (`DARAJA_ALLOWED_IPS`, see §3) checked before the
+body is parsed — the unguessable path + query-API reconciliation remain
+the always-on integrity model.
 
 ## 8. Updating a deployment
 
@@ -360,3 +526,167 @@ git pull && bun install && bunx prisma generate && bun run build \
 CI guarantees the gate before this ever reaches production: lint, strict
 typecheck (build fails on TS errors — `ignoreBuildErrors` is gone), a real
 `next build`, and a real `docker build` on every PR.
+
+## 9. Object storage (S3 / R2 / MinIO)
+
+Photo evidence (site photos, delivery photos) used to live on the app
+server's local disk — fine for one box, broken the moment you run more than
+one instance behind a load balancer (instance A's `public/photos` is
+invisible to instance B). The upload module now has a **storage driver
+seam** (`src/backend/lib/storage/`) with two drivers:
+
+| Driver | Selected when | Files land | Public URL | Presigned flow |
+|---|---|---|---|---|
+| `local-disk` (default) | any of the five required `S3_*` values is unset/blank | `public/photos/<key>` on the app server | `/photos/<key>` (served by Next) | no — honest 409 from `/api/upload/presign` |
+| `s3-compat` | **all five** set: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | `s3://<bucket>/<key>` (path-style) | `S3_PUBLIC_BASE/<bucket>/<key>` when set; otherwise a presigned GET (7-day SigV4 maximum — see below) | yes |
+
+Fail-closed: a **partial** env set is treated as unset — one server warning
+naming the missing keys (names only, never values), local-disk behavior.
+`S3_ENDPOINT` examples: `https://s3.eu-central-1.amazonaws.com` (AWS),
+`https://<account>.r2.cloudflarestorage.com` (R2, region `auto`),
+`http://minio.internal:9000` (MinIO). SigV4 is implemented with
+`node:crypto` — no new dependencies.
+
+### 9.1 The two upload paths
+
+**Server-mediated (unchanged, works on every driver):** the client POSTs the
+photo to `/api/upload` as it always did; the route validates caps + magic
+numbers and writes through `getStorageDriver().put()`. With local-disk this
+is byte-identical to every prior release (same key shape `upp-*`, same
+`/photos/<key>` URL, same response contract). With the S3 driver the bytes
+land in the bucket and the response URL is the driver's public URL.
+
+**Presigned client-direct (new, S3 driver only):** the photo never detours
+through the app server — no ~5.4 MB base64 envelope per 4 MB photo:
+
+```
+client                    app                         object storage
+  │                        │                                │
+  │ POST /api/upload/presign                                │
+  │  { contentType,        │ mints server-generated key     │
+  │    sizeBytes,          │  upp-<ts>-<hex>.<ext>          │
+  │    category }          │ + SigV4 presigned PUT (5 min)  │
+  │◄───────────────────────┤ { uploadUrl, key, expiresSec,  │
+  │                        │   headers: {Content-Type} }    │
+  │                                                        │
+  │ PUT uploadUrl (bytes, Content-Type) ──────────────────►│ object stored
+  │                                                        │
+  │ POST /api/upload/confirm                               │
+  │  { key, category }     │ HEADs the object via the      │
+  │                        │ driver: exists? ≤ 4 MB?       │
+  │                        │ image content-type?           │
+  │                        │ → creates the Attachment row  │
+  │◄───────────────────────┤ { ok, attachment: { id,       │
+  │                        │   storageKey, fileName,       │
+  │                        │   category, reviewStatus } }  │
+```
+
+`/api/upload/presign` answers **409** on the local-disk driver with an
+honest error ("server-mediated upload only") instead of pretending.
+`/api/upload/confirm` verifies before it records: existence, the 4 MB cap,
+and the image `Content-Type` (whatever the client's PUT carried — the
+presign response told it exactly which header to send). The Attachment row
+is created at `reviewStatus: 'pending'`, exactly like every other upload
+path (humans review; AI never auto-approves).
+
+### 9.2 The presigned-URL expiry tradeoff (choose per deployment)
+
+`Attachment.storageKey` is the URL the frontend renders. With
+`S3_PUBLIC_BASE` set it is **stable forever** — set it whenever the bucket
+(or a CDN in front of it) is publicly readable. Without it, the driver's
+public URLs are **presigned GETs that expire after 7 days** (the SigV4
+maximum): rows recorded today stop resolving next week. That is an
+operational choice, not a bug to code around — but if you must run a fully
+private bucket, know that a replay-time re-signing seam (resolve
+`storageKey` → fresh presigned URL per render) is the documented follow-up,
+deliberately not built in this wave.
+
+### 9.3 Self-host local path (nothing to do)
+
+Single-box self-hosts keep the default: leave the whole `S3_*` block unset.
+Uploads write `public/photos/` exactly as before; in a **frozen production
+build** `public/` is snapshotted at build time, so runtime-written photos
+still need a persistent volume for that directory (the historical caveat —
+unchanged, and one more reason multi-instance deploys should switch to the
+S3 driver).
+
+### 9.4 Multi-instance note
+
+Running >1 app instance? Set the five `S3_*` values so file storage stops
+being the thing that breaks: every instance PUTs to and reads from the same
+bucket, and the client-direct presigned flow removes the upload bandwidth
+from the app tier entirely.
+
+The rate limiter and login lockout now have a real **single-host** answer
+(W3-b, issue #33) instead of an honest TODO: set
+
+```bash
+RATE_LIMIT_STORE=sqlite
+# optional, default shown; keep it next to custom.db on the same volume
+RATE_LIMIT_SQLITE_PATH=db/ratelimit.db
+```
+
+and every process on that host shares ONE SQLite store (WAL journal,
+busy-timeout, `BEGIN IMMEDIATE` around every read-modify-write): a bucket
+exhausted on instance A is exhausted on instance B, and the 5-strike login
+lockout trips no matter which process served the failures. The semantics
+are the same the in-memory default pins in tests — same key formats, same
+continuous token-bucket refill, same lockout lifecycle.
+
+Honest requirements and limits of that path:
+
+- **Runtime must be node** — the store is `better-sqlite3`, a native addon
+  the Bun runtime **crashes** on (verified on Bun 1.3.x). The Docker CMD
+  (`node server.js`) is fine; the loader detects Bun and falls back to
+  memory with one warning instead of crashing.
+- **Docker: one COPY line** (not added in this wave — the Dockerfile is
+  outside the feature's file ownership; the module is loaded dynamically
+  and therefore invisible to the bundler's standalone tracing):
+  `COPY --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3`
+  in the runner stage. Without it the app still boots — it logs one
+  fallback warning and stays in-memory. `bun install` in the builder
+  downloads the platform prebuild (prebuild-install; node:20-slim has no
+  compile toolchain, so a GitHub-releases-blocking proxy needs a mirrored
+  artifact).
+- **Same host only.** One shared file on one filesystem — put it on the
+  same volume as `DATABASE_URL` (default `db/ratelimit.db` → `/app/db/`
+  in Docker). Do **not** point it at the Prisma database; the file is
+  disposable (delete while stopped = reset all limits/lockouts) and is
+  deliberately excluded from backups.
+- **Fail-safe posture:** any init failure (module missing, unwritable
+  path, bad value) logs ONE warning and degrades to the in-memory default
+  — rate limiting never prevents boot. Runtime store failure fails OPEN
+  with a warning (an unavailable optional store must not wedge every
+  request behind 429s).
+
+**Multiple hosts** (a real load-balanced cluster, ≥2 machines): a shared
+SQLite file does not cross machines — that still needs the Redis
+implementation of the same store seams (`INCR`+`TTL`, or a Lua token
+bucket for the exact continuous-refill semantics), deliberately not built:
+no Redis dependency exists in this repo. Until then, an N-host deployment
+honestly means per-host shared state, not global state.
+
+### 9.5 Honest scope notes
+
+- **Document extraction on PDFs** reads the text layer **server-side**
+  (`src/backend/lib/pdf-text.ts`, zero-dependency best-effort parser:
+  FlateDecode content streams, Tj/TJ text operators, object-stream page
+  trees) — no client `ocrTextHint` is required anymore; a supplied hint
+  still wins. Honest limits: it is NOT OCR — scanned/image-only PDFs
+  (empty text layer) and encrypted PDFs return the same explicit 400 the
+  route has always returned for unusable PDFs (upload an image or supply
+  a hint); CID/Type0 fonts are decoded best-effort. The extraction stays
+  draft-only (Attachment extraction fields, human review gate) and is
+  capped like a hint (8 MB in, 100 k chars out).
+- **Document uploads** (`mode: 'document'`, `public/docs/`) are still
+  local-disk writes inside the documents service — deliberately not yet
+  driver-mediated, because document extraction READS the bytes back
+  (`extractDocument`); moving it needs a driver read seam, not just a put
+  seam. Parked follow-up.
+- The legacy `/api/upload` data-URL photo path creates **no Attachment row**
+  (historical contract — its URL is consumed by the AI photo flow); the
+  presigned flow is the one that records rows (that is the point of
+  `confirm`).
+- `confirm` is **not idempotent**: Attachment rows are append-only evidence
+  (same posture as the rest of the app); confirming one key twice records
+  two rows pointing at the same object.

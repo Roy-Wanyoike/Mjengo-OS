@@ -11,6 +11,7 @@ import { Avatar, AvatarFallback } from '@/frontend/ui/avatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/frontend/ui/popover'
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from '@/frontend/ui/sheet'
 import { ProjectSwitcher } from '@/frontend/mjengo/project-switcher'
+import { SyncOutboxPanel } from '@/frontend/mjengo/sync-outbox-panel'
 import {
   Wifi, CloudOff, HardHat, RefreshCw, CheckCheck, Share2, Bell, LogOut,
   Landmark, FileDiff, MessageSquare, TriangleAlert, BellRing,
@@ -22,7 +23,7 @@ import type { Notification } from '@prisma/client'
 import type { TabKey } from '@/frontend/mjengo/app'
 import { formatKES } from '@/frontend/lib/format'
 import { usePermissions, tabsForRole } from '@/shared/permissions'
-import { metaForAll } from '@/frontend/mjengo/nav/tab-meta'
+import { metaForAll, tabsVisibleForFlags } from '@/frontend/mjengo/nav/tab-meta'
 import { useTablistKeyboard } from '@/frontend/mjengo/nav/use-tablist'
 import { useCommandPalette } from '@/frontend/mjengo/cmdk/palette-store'
 import { useT } from '@/frontend/i18n/provider'
@@ -448,20 +449,24 @@ function CommandPaletteButton() {
 
 // ---------------- Feature flags popover (spec §81, admin only) ----------------
 
+// Mirrors FLAG_KEYS/FLAG_LABELS in src/backend/modules/intel/flags.ts — the
+// server module can't be imported here (it pulls the Prisma client), so the
+// list is duplicated; keep the two in sync. low_data was removed (task 9-a
+// decision — see flags.ts header).
 const FLAG_ROWS: Array<{ key: string; label: string }> = [
   { key: 'ai_progress', label: 'AI progress (photo analysis)' },
   { key: 'ai_voice', label: 'AI voice logging' },
   { key: 'wallet', label: 'Wallet & payment requests' },
   { key: 'marketplace', label: 'Supplier marketplace (Finder)' },
   { key: 'land_verification', label: 'Land verification ladder' },
-  { key: 'low_data', label: 'Low-data mode option' },
 ]
 
 /**
  * Admin-only feature-flag popover (Settings icon). Toggles persist through
  * POST /api/flags and update the payload's intel.flags in place so gated UI
- * (Copilot analyze button) reacts immediately. Only ai_progress gates a real
- * behavior today — the rest are honest state for rollout planning.
+ * reacts immediately. Every flag gates its feature server-side (task 9-a):
+ * OFF closes the feature's API routes with 403 for non-admin sessions and
+ * hides its UI entry; admins bypass both so they can toggle & test.
  */
 function FlagsPopover() {
   const { data: session } = useSession()
@@ -512,8 +517,9 @@ function FlagsPopover() {
       <PopoverContent align="end" className="w-80">
         <p className="text-xs font-bold uppercase tracking-wide text-stone-400">{t('header.flags.title')}</p>
         <p className="mt-1 text-[11px] text-stone-500 leading-snug">
-          Controlled rollout (spec §81). Only <strong>AI progress</strong> gates a live behavior today — the
-          Copilot photo-analysis button. Others are recorded state for rollout planning.
+          Controlled rollout (spec §81). Every flag gates its feature server-side: OFF closes the
+          feature&apos;s API (403 for non-admin sessions) and hides its UI entry. Admins keep access
+          while a flag is off, so they can toggle &amp; test.
         </p>
         <div className="mt-3 space-y-2.5">
           {FLAG_ROWS.map(({ key, label }) => (
@@ -810,9 +816,9 @@ export function Header({
 }) {
   const {
     data, projects, activeProjectId, switchProject, viewMode, shareToken, clientRole,
-    online, setOnline, outbox, syncing, syncNow, lastSyncAt,
+    online, setOnline, outbox, lastSyncAt,
   } = useMjengo()
-  const { tabs: roleTabs } = usePermissions()
+  const { tabs: roleTabs, role: sessionRole } = usePermissions()
   const t = useT()
   const { listRef, onKeyDown } = useTablistKeyboard<HTMLElement>()
   const summary = data?.summary
@@ -823,7 +829,18 @@ export function Header({
   const isShareClient = viewMode === 'client' && (Boolean(shareToken) || clientRole)
   // W1-PERM: role-filtered tab strip (src/shared/permissions.ts mirrors guard.ts).
   // Client surface keeps its existing set (all tabs except AI Copilot).
-  const tabs = isShareClient ? metaForAll(tabsForRole('client')) : metaForAll(roleTabs)
+  // Feature flags (spec §81, task 9-a): a flag OFF additionally hides its
+  // gated tab (money / finder) for NON-ADMIN sessions — the same rule the
+  // server routes enforce via requireFlagOn; flags ride on the payload's
+  // intel slice (undefined while booting → unfiltered, the ai_progress
+  // pattern). Share-link visitors have no session → non-admins → filtered.
+  const tabs = metaForAll(
+    tabsVisibleForFlags(
+      isShareClient ? tabsForRole('client') : roleTabs,
+      data?.intel?.flags,
+      sessionRole,
+    ),
+  )
   return (
     <header className="bg-stone-950 text-stone-100 sticky top-0 z-40 shadow-lg">
       <div className="h-1 bg-amber-500" aria-hidden />
@@ -927,22 +944,10 @@ export function Header({
                   <span className="text-xs font-medium w-12 hidden sm:inline">{online ? t('header.online') : t('header.offlineSim')}</span>
                 </div>
 
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={online || outbox.length === 0 || syncing}
-                  onClick={() => void syncNow()}
-                  aria-label={t('header.aria.sync')}
-                  className="gap-1.5 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white relative"
-                >
-                  <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden />
-                  <span className="hidden sm:inline">{syncing ? t('header.syncing') : t('header.sync')}</span>
-                  {outbox.length > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-stone-950 text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center" aria-label={t('header.aria.queuedActions', { count: outbox.length })}>
-                      {outbox.length}
-                    </span>
-                  )}
-                </Button>
+                {/* Sync control + per-item outbox sheet (issue "Outbox
+                    conflict metadata + entity versions"): the historical flush
+                    button, now opening the queue with conflict resolution. */}
+                <SyncOutboxPanel />
                 {lastSyncAt && online && outbox.length === 0 && (
                   <span className="hidden md:flex items-center gap-1 text-[11px] text-stone-500">
                     <CheckCheck className="w-3.5 h-3.5 text-emerald-500" aria-hidden /> {t('header.synced')}
