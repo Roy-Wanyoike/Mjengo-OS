@@ -3,22 +3,34 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getToken } from 'next-auth/jwt'
 import { db } from '@/backend/lib/db'
 import { getSessionFromReq, unauthorized, type GuardSession } from '@/backend/lib/guard'
+import { createSqliteStores } from '@/backend/lib/rate-limit-sqlite'
 
 /**
  * In-process security primitives: rate limiting, login lockout and the shared
  * /api/ai/* route policy (W1-SEC, spec Doc A §52 security hardening).
  *
- * HONEST LIMITATION — SINGLE INSTANCE ONLY. All state lives in module-scope
- * Maps in THIS Node process (ARCHITECTURE.md: the current deployment is one
- * Next.js server). If the app is ever load-balanced or run serverless/edge,
- * every instance keeps its OWN counters — a user would effectively get
- * `limit × instances` requests, and a login lockout would only lock the
- * instance that happened to serve the failures. Multi-instance deployment
- * needs a shared store — the RateLimitStore interface below is the seam:
- * swap `rateLimitStore` for a Redis-backed implementation (INCR+TTL for fixed
- * windows, or a Lua token-bucket script for this exact refill semantics) and
- * the lockout Maps would follow the same pattern. No Redis dependency is
- * added in this wave (comments only — see MemoryRateLimitStore).
+ * STORE RESOLUTION (W3-b, issue #33): the token buckets and login lockout
+ * used to live in module-scope Maps of THIS Node process only — fine for one
+ * Next.js server, silently wrong the moment several processes share the
+ * traffic (a user effectively got `limit × instances` requests; a login
+ * lockout only locked the instance that happened to serve the failures).
+ * The seams are unchanged, but the backing stores are now env-resolved at
+ * startup (resolveRateLimitStores below):
+ *   · RATE_LIMIT_STORE unset / "memory" (default): in-process stores —
+ *     byte-identical historical behavior (MemoryRateLimitStore + the
+ *     in-process login trackers). Nothing changes for existing deploys.
+ *   · RATE_LIMIT_STORE=sqlite: ONE shared SQLite file per host
+ *     (RATE_LIMIT_SQLITE_PATH, default db/ratelimit.db — a separate file,
+ *     never the Prisma database) backing both the buckets and the lockout
+ *     trackers: writes are durable immediately, reads compute allowance from
+ *     the persisted state, so exhaustion/lockout on process A is seen by
+ *     process B. Any init failure logs ONE warning and falls back to the
+ *     in-memory stores — rate limiting never prevents boot. See
+ *     rate-limit-sqlite.ts for the persistence choice and honest tradeoffs.
+ * Multi-HOST still needs a Redis-backed implementation of these same seams
+ * (INCR+TTL, or a Lua token-bucket script for this exact refill semantics) —
+ * deliberately not built; no Redis dependency is added (the sqlite store
+ * covers the single-host multi-process case, e.g. the compose stack).
  */
 
 // ---------------------------------------------------------------- primitives
@@ -87,14 +99,19 @@ export async function principalFor(req: NextRequest): Promise<string> {
  * Pluggable backing store for the token buckets. `hit` consumes one token
  * (returning the wait in seconds when the bucket is empty); `check` reports
  * the same answer WITHOUT consuming (for headers/probes); `sweep` is
- * best-effort memory hygiene (a Redis store would use TTLs and no-op).
+ * best-effort hygiene for stores that keep rows (a TTL store would no-op).
+ * Synchronous by design — the login lockout below is sync too, and callers
+ * (enforceRateLimit, auth.ts lockout calls) rely on that.
  *
- * REDIS-READY SEAM (documented, deliberately not implemented — no new deps
- * in this wave): implement with `INCR key` + `EXPIRE` for fixed windows, or
- * a Lua script holding {tokens, lastRefill} per key for this exact
- * continuous-refill semantics; assign the instance to `rateLimitStore` below
- * and every limiter call site follows. Keep the keys namespaced per bucket
- * and set TTLs from windowMs so foreign entries cannot accumulate.
+ * Implementations: MemoryRateLimitStore (default, this process only) and
+ * SqliteRateLimitStore (rate-limit-sqlite.ts, one shared file per host).
+ * REDIS-READY SEAM for multi-host (documented, deliberately not implemented
+ * — no new external service in this repo): implement with `INCR key` +
+ * `EXPIRE` for fixed windows, or a Lua script holding {tokens, lastRefill}
+ * per key for this exact continuous-refill semantics; assign the instance
+ * via the resolver below and every limiter call site follows. Keep the keys
+ * namespaced per bucket and set TTLs from windowMs so foreign entries
+ * cannot accumulate.
  */
 export interface RateLimitStore {
   /** Consume one token; null = allowed, else seconds until a token refills. */
@@ -107,7 +124,7 @@ export interface RateLimitStore {
 
 type BucketState = { tokens: number; lastRefill: number; limit: number; refillPerMs: number }
 
-/** Current in-process store (single-instance honesty note in the header). */
+/** In-process token buckets (the default store — see the file header). */
 export class MemoryRateLimitStore implements RateLimitStore {
   private readonly buckets = new Map<string, BucketState>()
 
@@ -147,9 +164,6 @@ export class MemoryRateLimitStore implements RateLimitStore {
     }
   }
 }
-
-/** Swap this for a shared-store implementation when going multi-instance. */
-export const rateLimitStore: RateLimitStore = new MemoryRateLimitStore()
 
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000
 let opsSinceSweep = 0
@@ -204,51 +218,196 @@ export const LOGIN_FAILURE_LIMIT = 5
 export const LOGIN_WINDOW_MS = 15 * 60 * 1000
 export const LOGIN_LOCKOUT_MS = 15 * 60 * 1000
 
-type LoginTracker = { failures: number; lastFailureAt: number; lockedUntil: number }
+/** Raw lockout tracker row — persisted as-is by the store seam below. */
+export type LoginTracker = { failures: number; lastFailureAt: number; lockedUntil: number }
+
+/** Which of the two lockout key spaces a tracker belongs to. */
+export type LoginTrackerKind = 'email' | 'pair'
 
 /**
- * Lockout trackers (W-AUDIT #1 fix): the failure counter is keyed PRIMARILY
- * by EMAIL — rotating the (spoofable or distributed) source IP no longer
- * resets the count, so 5 bad passwords for one account lock that account.
- * A SECONDARY (email|ip) tracker is kept so a distributed attack still gets
- * per-pair throttling and the historical same-IP behavior is unchanged.
- * Same in-process store as the rate buckets (single-instance — see header).
+ * Pluggable backing store for the lockout trackers (W3-b, issue #33): the
+ * historical in-process Maps (MemoryLoginTrackerStore) or the shared SQLite
+ * file (SqliteLoginTrackerStore in rate-limit-sqlite.ts). The lockout ENGINE
+ * (createLoginLockout below) is store-agnostic and shared by both, so the
+ * 5-strikes/window/lockout lifecycle cannot drift between implementations.
+ * `transact` wraps read-modify-write cycles atomically where the store can
+ * (BEGIN IMMEDIATE in SQLite; identity for the single-threaded memory map).
  */
-const loginTrackers = new Map<string, LoginTracker>() // key: email
-const loginIpTrackers = new Map<string, LoginTracker>() // key: email|ip
+export interface LoginTrackerStore {
+  getTracker(kind: LoginTrackerKind, key: string): LoginTracker | undefined
+  putTracker(kind: LoginTrackerKind, key: string, tracker: LoginTracker): void
+  deleteTracker(kind: LoginTrackerKind, key: string): void
+  /** Remove trackers whose lock is served AND whose window is cold. */
+  pruneTrackers(now: number, windowMs: number): void
+  /** Run fn atomically vs other processes when the store supports it. */
+  transact<T>(fn: () => T): T
+}
+
+/**
+ * In-process lockout trackers — the exact historical behavior of the two
+ * module Maps (email-keyed and email|ip-keyed), namespaced into one Map by
+ * kind (the kinds are disjoint key spaces; a NUL separator cannot appear in
+ * an email or IP, so no key can ever collide across kinds).
+ */
+export class MemoryLoginTrackerStore implements LoginTrackerStore {
+  private readonly rows = new Map<string, LoginTracker>()
+
+  private namespaced(kind: LoginTrackerKind, key: string): string {
+    return `${kind}\u0000${key}`
+  }
+
+  getTracker(kind: LoginTrackerKind, key: string): LoginTracker | undefined {
+    return this.rows.get(this.namespaced(kind, key))
+  }
+
+  putTracker(kind: LoginTrackerKind, key: string, tracker: LoginTracker): void {
+    this.rows.set(this.namespaced(kind, key), tracker)
+  }
+
+  deleteTracker(kind: LoginTrackerKind, key: string): void {
+    this.rows.delete(this.namespaced(kind, key))
+  }
+
+  pruneTrackers(now: number, windowMs: number): void {
+    for (const [namespaced, t] of this.rows) {
+      const lockServed = !t.lockedUntil || t.lockedUntil <= now
+      const windowCold = now - t.lastFailureAt > windowMs
+      if (lockServed && windowCold) this.rows.delete(namespaced)
+    }
+  }
+
+  transact<T>(fn: () => T): T {
+    return fn() // single-threaded: already atomic
+  }
+}
+
+// ------------------------------------------------------- store resolution
+
+type ResolvedRateLimitStores = {
+  kind: 'memory' | 'sqlite'
+  rateLimitStore: RateLimitStore
+  loginTrackerStore: LoginTrackerStore
+}
+
+/**
+ * Env-driven store resolution, run ONCE at module init (startup — after both
+ * in-memory store classes are declared). Default and every failure path end
+ * at the in-memory stores — byte-identical historical behavior; the sqlite
+ * path is strictly opt-in (issue #33: shared state for multi-process
+ * single-host deployments). Fail-closed honest logging: any sqlite init
+ * failure emits ONE warning and degrades to memory.
+ */
+function resolveRateLimitStores(env: NodeJS.ProcessEnv): ResolvedRateLimitStores {
+  const wanted = (env.RATE_LIMIT_STORE ?? '').trim().toLowerCase()
+  if (wanted === 'sqlite') {
+    const sqlite = createSqliteStores(env) // null + one console.warn on ANY init failure
+    if (sqlite) return { kind: 'sqlite', ...sqlite }
+  } else if (wanted && wanted !== 'memory') {
+    console.warn(
+      `[rate-limit] RATE_LIMIT_STORE="${wanted}" is not a known store (memory | sqlite) — ` +
+        `using the in-memory store (per-process counters).`,
+    )
+  }
+  return {
+    kind: 'memory',
+    rateLimitStore: new MemoryRateLimitStore(),
+    loginTrackerStore: new MemoryLoginTrackerStore(),
+  }
+}
+
+const resolvedStores = resolveRateLimitStores(process.env)
+
+/** Which backing store is live — observability for logs/tests ('memory' | 'sqlite'). */
+export const rateLimitStoreKind: 'memory' | 'sqlite' = resolvedStores.kind
+
+/** The live token-bucket store (memory by default; sqlite when opted in). */
+export const rateLimitStore: RateLimitStore = resolvedStores.rateLimitStore
+
+const loginTrackerStore: LoginTrackerStore = resolvedStores.loginTrackerStore
+
+export interface LoginLockout {
+  /** Is this login attempt currently locked out? `msLeft` > 0 while locked. */
+  checkLoginLockout(email: string, ip: string): { locked: boolean; msLeft: number }
+  /** Record a failed attempt against both trackers; reports when it trips. */
+  recordLoginFailure(email: string, ip: string): { locked: boolean; msLeft: number }
+  /** Successful login: wipe both trackers entirely. */
+  clearLoginFailures(email: string, ip: string): void
+}
 
 const emailLockKey = (email: string): string => email.trim().toLowerCase()
 const pairLockKey = (email: string, ip: string): string =>
   `${email.trim().toLowerCase()}|${ip || 'unknown'}`
 
-function sweepLoginTrackers(now: number): void {
-  for (const map of [loginTrackers, loginIpTrackers]) {
-    for (const [key, t] of map) {
-      const lockServed = !t.lockedUntil || t.lockedUntil <= now
-      const windowCold = now - t.lastFailureAt > LOGIN_WINDOW_MS
-      if (lockServed && windowCold) map.delete(key)
-    }
+/**
+ * Lockout engine (W-AUDIT #1 fix, store-agnostic since W3-b): the failure
+ * counter is keyed PRIMARILY by EMAIL — rotating the (spoofable or
+ * distributed) source IP no longer resets the count, so 5 bad passwords for
+ * one account lock that account. A SECONDARY (email|ip) tracker is kept so a
+ * distributed attack still gets per-pair throttling and the historical
+ * same-IP behavior is unchanged. All state goes through the injected store —
+ * in-process by default, the shared SQLite file when RATE_LIMIT_STORE=sqlite.
+ */
+export function createLoginLockout(store: LoginTrackerStore): LoginLockout {
+  const probes = (email: string, ip: string): Array<[LoginTrackerKind, string]> => [
+    ['email', emailLockKey(email)],
+    ['pair', pairLockKey(email, ip)],
+  ]
+
+  const bump = (kind: LoginTrackerKind, key: string, now: number): { locked: boolean; msLeft: number } => {
+    const t = store.getTracker(kind, key) ?? { failures: 0, lastFailureAt: 0, lockedUntil: 0 }
+    if (now - t.lastFailureAt > LOGIN_WINDOW_MS) t.failures = 0 // stale window → restart the count
+    t.failures += 1
+    t.lastFailureAt = now
+    const locked = t.failures >= LOGIN_FAILURE_LIMIT && !t.lockedUntil
+    if (locked) t.lockedUntil = now + LOGIN_LOCKOUT_MS
+    store.putTracker(kind, key, t)
+    return { locked, msLeft: Math.max(0, t.lockedUntil - now) }
   }
+
+  return {
+    checkLoginLockout(email, ip) {
+      const now = Date.now()
+      let msLeft = 0
+      for (const [kind, key] of probes(email, ip)) {
+        const t = store.getTracker(kind, key)
+        if (!t) continue
+        if (t.lockedUntil > now) {
+          msLeft = Math.max(msLeft, t.lockedUntil - now)
+        } else if (t.lockedUntil) {
+          store.deleteTracker(kind, key) // this tracker's lock is served → clean slate for it
+        }
+      }
+      return { locked: msLeft > 0, msLeft }
+    },
+
+    recordLoginFailure(email, ip) {
+      const now = Date.now()
+      return store.transact(() => {
+        const byEmail = bump('email', emailLockKey(email), now)
+        const byPair = bump('pair', pairLockKey(email, ip), now)
+        return {
+          locked: byEmail.locked || byPair.locked,
+          msLeft: Math.max(byEmail.msLeft, byPair.msLeft),
+        }
+      })
+    },
+
+    clearLoginFailures(email, ip) {
+      for (const [kind, key] of probes(email, ip)) store.deleteTracker(kind, key)
+    },
+  }
+}
+
+/** The live lockout engine — bound to the env-resolved tracker store. */
+const defaultLoginLockout = createLoginLockout(loginTrackerStore)
+
+function sweepLoginTrackers(now: number): void {
+  loginTrackerStore.pruneTrackers(now, LOGIN_WINDOW_MS)
 }
 
 /** Is this login attempt currently locked out? `msLeft` > 0 while locked. */
 export function checkLoginLockout(email: string, ip: string): { locked: boolean; msLeft: number } {
-  const now = Date.now()
-  let msLeft = 0
-  const probes: Array<[Map<string, LoginTracker>, string]> = [
-    [loginTrackers, emailLockKey(email)],
-    [loginIpTrackers, pairLockKey(email, ip)],
-  ]
-  for (const [map, key] of probes) {
-    const t = map.get(key)
-    if (!t) continue
-    if (t.lockedUntil > now) {
-      msLeft = Math.max(msLeft, t.lockedUntil - now)
-    } else if (t.lockedUntil) {
-      map.delete(key) // this tracker's lock is served → clean slate for it
-    }
-  }
-  return { locked: msLeft > 0, msLeft }
+  return defaultLoginLockout.checkLoginLockout(email, ip)
 }
 
 /**
@@ -258,26 +417,12 @@ export function checkLoginLockout(email: string, ip: string): { locked: boolean;
  * can throw the "Too many attempts" error on the very attempt that tripped it.
  */
 export function recordLoginFailure(email: string, ip: string): { locked: boolean; msLeft: number } {
-  const now = Date.now()
-  const bump = (map: Map<string, LoginTracker>, key: string): { locked: boolean; msLeft: number } => {
-    const t = map.get(key) ?? { failures: 0, lastFailureAt: 0, lockedUntil: 0 }
-    if (now - t.lastFailureAt > LOGIN_WINDOW_MS) t.failures = 0 // stale window → restart the count
-    t.failures += 1
-    t.lastFailureAt = now
-    const locked = t.failures >= LOGIN_FAILURE_LIMIT && !t.lockedUntil
-    if (locked) t.lockedUntil = now + LOGIN_LOCKOUT_MS
-    map.set(key, t)
-    return { locked, msLeft: Math.max(0, t.lockedUntil - now) }
-  }
-  const byEmail = bump(loginTrackers, emailLockKey(email))
-  const byPair = bump(loginIpTrackers, pairLockKey(email, ip))
-  return { locked: byEmail.locked || byPair.locked, msLeft: Math.max(byEmail.msLeft, byPair.msLeft) }
+  return defaultLoginLockout.recordLoginFailure(email, ip)
 }
 
 /** Successful login resets the counters entirely (both trackers). */
 export function clearLoginFailures(email: string, ip: string): void {
-  loginTrackers.delete(emailLockKey(email))
-  loginIpTrackers.delete(pairLockKey(email, ip))
+  defaultLoginLockout.clearLoginFailures(email, ip)
 }
 
 // ---------------------------------------------------------------- /api/ai/* policy
