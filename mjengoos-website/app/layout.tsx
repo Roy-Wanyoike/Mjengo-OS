@@ -18,7 +18,11 @@ const grotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(SITE.url),
+  // Origin + base path, so every root-relative metadata URL (canonicals,
+  // OG/Twitter images, icons) resolves WITH the /website prefix when the
+  // site is served in integrated mode (MW-9): Next joins the base's pathname
+  // with each relative URL via path.posix.join.
+  metadataBase: new URL(`${SITE.url}${SITE.basePath}`),
   title: {
     default: "MjengoOS — Build with evidence.",
     template: "%s — MjengoOS",
@@ -41,7 +45,7 @@ export const metadata: Metadata = {
     siteName: "MjengoOS",
     title: "MjengoOS — Build with evidence.",
     description: SITE.description,
-    url: SITE.url,
+    url: `${SITE.url}${SITE.basePath}`,
     images: [{ url: "/images/og.png", width: 1200, height: 630, alt: "MjengoOS — Build with evidence." }],
   },
   twitter: {

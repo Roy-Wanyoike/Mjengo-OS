@@ -49,7 +49,7 @@ export function DirectoryPreview() {
       <SectionHeading
         eyebrow="Directory preview"
         title="Find the right professional, with the record attached."
-        description="Clients browse by trade and county — and see more than a name: licence reference recorded, service area, and work that has landed in project records."
+        description="What the directory will look like once the first professionals are verified — the entries below are illustrative examples, not live listings. Clients will browse by trade and county, seeing more than a name: licence reference recorded, service area, and work that has landed in project records."
       />
 
       <div className="mt-10 overflow-hidden rounded-xl border border-ink/10 bg-white shadow-[0_24px_64px_-28px_rgb(23_25_24/0.3)]">

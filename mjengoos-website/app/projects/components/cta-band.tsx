@@ -48,7 +48,7 @@ export function ProjectsCtaBand() {
         </Reveal>
         <Reveal delay={320}>
           <p className="mt-6 text-[13px] text-forest-300/70">
-            Early access — we onboarding projects in Nairobi &amp; Kiambu first.
+            Early access — preparing to onboard the first Nairobi &amp; Kiambu projects.
           </p>
         </Reveal>
       </Container>

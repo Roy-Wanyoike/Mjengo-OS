@@ -92,8 +92,10 @@ const LIVE_TODAY = [
   "Invoices, payments & M-Pesa references",
   "Land records & verification states",
   "Approvals & notifications",
-  "AI photo & voice analysis",
+  "AI photo & voice analysis — opt-in, enabled per project",
   "Offline capture & sync",
+  "Marketplace ordering & supplier surfaces",
+  "Public API (v1)",
 ] as const;
 
 export default function AboutPage() {
@@ -218,14 +220,20 @@ export default function AboutPage() {
             <div className="mt-5 space-y-4 text-[15.5px] leading-relaxed text-ink-soft">
               <p>
                 MjengoOS is a real, working product — not a landing page waiting
-                for an engineering team. We are in the early-access stage, with
-                the first projects being onboarded in Nairobi and Kiambu while
-                the pilot runs free.
+                for an engineering team. We are in the early-access stage,
+                preparing to onboard the first Nairobi and Kiambu projects
+                while the pilot runs free.
               </p>
               <p>
                 We don&apos;t publish usage numbers because there aren&apos;t
                 usage numbers worth publishing yet. When there are, they&apos;ll
                 be real ones.
+              </p>
+              <p>
+                AI features are part of the product but not switched on by
+                default: during the pilot they are enabled per project —
+                flag-gated and opt-in. Ask when you request access and
+                we&apos;ll turn them on for your project.
               </p>
             </div>
           </Reveal>
@@ -243,9 +251,11 @@ export default function AboutPage() {
                 ))}
               </ul>
               <p className="mt-6 border-t border-ink/10 pt-5 text-[13px] leading-relaxed text-ink-mute">
-                Marketplace ordering, portfolio surfaces for funders and the
-                public API are in active build. We&apos;ll say they&apos;re live
-                when they&apos;re live — not before.
+                Genuinely still next: production M-Pesa rails (payment
+                initiation is in sandbox testing today), a telco-connected USSD
+                gateway (the current *384# line runs as a simulator) and real
+                professional-network onboarding. We&apos;ll say they&apos;re
+                live when they&apos;re live — not before.
               </p>
             </div>
           </Reveal>

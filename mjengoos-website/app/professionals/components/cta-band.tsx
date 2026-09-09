@@ -48,7 +48,8 @@ export function ProfessionalsCtaBand() {
         </Reveal>
         <Reveal delay={320}>
           <p className="mt-6 text-[13px] text-forest-300/70">
-            Early access — onboarding professionals across Nairobi, Kiambu &amp; Nakuru first.
+            Early access — professionals across Nairobi, Kiambu &amp; Nakuru will
+            be onboarded first, as verification opens.
           </p>
         </Reveal>
       </Container>

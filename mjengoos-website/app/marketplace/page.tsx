@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import { MapPin, Clock } from "lucide-react";
 import { PageHero } from "@/components/page-hero";
 import { Reveal } from "@/components/reveal";
@@ -31,12 +32,14 @@ export default function MarketplacePage() {
       >
         <Reveal delay={200}>
           <figure className="relative overflow-hidden rounded-xl border border-ink/10 shadow-[0_24px_64px_-28px_rgb(23_25_24/0.45)]">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
+            {/* next/image (MW-11): hero photo, full-width hero slot. */}
+            <Image
               src={asset("/images/phone.jpg")}
               alt="An engineer on a construction site in Kenya requesting material quotes on a smartphone"
+              width={1200}
+              height={882}
+              sizes="(min-width: 1024px) 960px, 100vw"
               className="aspect-[21/9] w-full object-cover"
-              loading="lazy"
             />
             <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-2 bg-gradient-to-t from-ink/70 to-transparent px-4 pb-3 pt-10">
               <span className="text-[11.5px] font-medium text-white">

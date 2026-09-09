@@ -36,7 +36,7 @@ const contactJsonLd = {
   name: "Contact MjengoOS",
   description:
     "Contact the MjengoOS team about your construction project — questions, feedback and early-access requests.",
-  url: `${SITE.url}/contact`,
+  url: `${SITE.url}${SITE.basePath}/contact`,
 };
 
 export default function ContactPage() {
@@ -115,27 +115,43 @@ export default function ContactPage() {
                   Early access
                 </Badge>
                 <p className="mt-3 text-[14px] leading-relaxed text-ink-soft">
-                  We&apos;re onboarding projects in Nairobi &amp; Kiambu first,
-                  free during the pilot. If you&apos;re building elsewhere,
-                  write anyway — we&apos;ll tell you honestly where you stand.
+                  We&apos;re preparing to onboard the first Nairobi &amp; Kiambu
+                  projects, free during the pilot. If you&apos;re building
+                  elsewhere, write anyway — we&apos;ll tell you honestly where
+                  you stand.
                 </p>
               </div>
 
-              <div className="rounded-2xl border border-ink/10 bg-white p-6">
-                <h3 className="flex items-center gap-2 text-[14.5px] font-semibold text-ink">
-                  <Mail className="h-4 w-4 text-forest-700" aria-hidden />
-                  Prefer email?
-                </h3>
-                <a
-                  href={`mailto:${SITE.contactEmail}`}
-                  className="mt-2 inline-block text-[15px] font-medium text-forest-800 underline decoration-forest-800/30 underline-offset-4 transition-colors hover:decoration-forest-800"
-                >
-                  {SITE.contactEmail}
-                </a>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-mute">
-                  Same queue, same two-working-day promise.
-                </p>
-              </div>
+              {SITE.contactEmail ? (
+                <div className="rounded-2xl border border-ink/10 bg-white p-6">
+                  <h3 className="flex items-center gap-2 text-[14.5px] font-semibold text-ink">
+                    <Mail className="h-4 w-4 text-forest-700" aria-hidden />
+                    Prefer email?
+                  </h3>
+                  <a
+                    href={`mailto:${SITE.contactEmail}`}
+                    className="mt-2 inline-block text-[15px] font-medium text-forest-800 underline decoration-forest-800/30 underline-offset-4 transition-colors hover:decoration-forest-800"
+                  >
+                    {SITE.contactEmail}
+                  </a>
+                  <p className="mt-2 text-[13px] leading-relaxed text-ink-mute">
+                    Same queue, same two-working-day promise.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-ink/10 bg-white p-6">
+                  <h3 className="flex items-center gap-2 text-[14.5px] font-semibold text-ink">
+                    <Mail className="h-4 w-4 text-forest-700" aria-hidden />
+                    The form is the fastest way
+                  </h3>
+                  <p className="mt-2 text-[13px] leading-relaxed text-ink-mute">
+                    There&apos;s no public mailbox yet — the form above lands
+                    directly with the team, and a person reads every message
+                    within two working days. A mailbox will be listed here the
+                    day one exists.
+                  </p>
+                </div>
+              )}
             </div>
           </Reveal>
         </div>

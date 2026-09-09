@@ -11,13 +11,13 @@ import { ContactForm } from "@/components/contact-form";
 export const metadata: Metadata = {
   title: "Get Started",
   description:
-    "Request early access to MjengoOS. Free during the pilot — the full platform, up to 3 projects, and a direct line to the product team. Nairobi & Kiambu first.",
+    "Request early access to MjengoOS. Free during the pilot — the full platform, up to 3 onboarded projects, and a direct line to the product team. Nairobi & Kiambu first.",
   alternates: { canonical: "/signup" },
 };
 
 const WHAT_YOU_GET = [
   "The full platform — every module, no gates",
-  "Up to 3 active projects",
+  "Up to 3 active projects (a soft limit — onboarding is managed in batches)",
   "A direct line to the people building the product",
   "Your feedback shaping the roadmap",
 ] as const;
@@ -62,7 +62,7 @@ export default function SignupPage() {
                     submitLabel: "Request access",
                     successTitle: "You're on the list.",
                     successText:
-                      "We onboarding projects in batches — you'll hear from us within two working days.",
+                      "We onboard projects in batches — you'll hear from us within two working days.",
                     analyticsEvent: "signup_completed",
                   }}
                 />

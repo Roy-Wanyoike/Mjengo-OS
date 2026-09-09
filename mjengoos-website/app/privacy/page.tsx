@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/privacy" },
 };
 
-const LAST_UPDATED = "31 August 2026";
+const LAST_UPDATED = "9 September 2026";
 
 export default function PrivacyPage() {
   return (
@@ -117,14 +117,53 @@ export default function PrivacyPage() {
                 pixels on MjengoOS.
               </li>
               <li>
-                We don&apos;t share your project data with other projects,
-                suppliers or third parties — project scoping keeps records
-                isolated, and no one outside a project can see into it.
+                We don&apos;t sell or share your data with anyone beyond the
+                service providers listed in §4, who handle only what running
+                the service requires, under contract. Beyond them: no other
+                project, supplier or outside party can see into your
+                project&apos;s record — project scoping keeps records isolated.
               </li>
             </ul>
           </LegalSection>
 
-          <LegalSection n={4} title="Data retention & your rights">
+          <LegalSection n={4} title="Service providers we share data with">
+            <p>
+              Running the service requires a small set of processors. Each is
+              used only for its job, each is bound by contract, and each is
+              named here — this is the complete list:
+            </p>
+            <ul className="list-disc space-y-2 pl-5">
+              <li>
+                <strong>AI analysis provider (LLM service)</strong> — when AI
+                features are enabled for a project (they are opt-in and off by
+                default), the photos, voice notes and text you submit for
+                analysis are processed server-side by our large-language-model
+                provider to produce advisory output.
+              </li>
+              <li>
+                <strong>Africa&apos;s Talking</strong> — delivers SMS
+                notifications on our behalf, and sees the phone numbers those
+                messages are addressed to.
+              </li>
+              <li>
+                <strong>Safaricom M-Pesa (Daraja)</strong> — used for the M-Pesa
+                payment references recorded against payments. This integration
+                is in sandbox testing today; production transfers are not
+                enabled.
+              </li>
+              <li>
+                <strong>Object storage host (S3-compatible)</strong> — stores
+                the photos, videos, voice notes and documents you capture and
+                upload.
+              </li>
+            </ul>
+            <p>
+              If we add a processor that touches your data, it appears on this
+              list before your data flows to it.
+            </p>
+          </LegalSection>
+
+          <LegalSection n={5} title="Data retention & your rights">
             <p>
               Your project data lives with the service while your project is
               active. You don&apos;t have to ask to get it: export is built into
@@ -143,7 +182,7 @@ export default function PrivacyPage() {
             </p>
           </LegalSection>
 
-          <LegalSection n={5} title="Security posture">
+          <LegalSection n={6} title="Security posture">
             <p>
               We treat security as an engineering practice: role-based access
               control enforced server-side, project-level data isolation,
@@ -160,7 +199,7 @@ export default function PrivacyPage() {
             </p>
           </LegalSection>
 
-          <LegalSection n={6} title="Updates to this policy">
+          <LegalSection n={7} title="Updates to this policy">
             <p>
               If this policy changes, the &ldquo;last updated&rdquo; date at the
               top changes with it, and material changes will be announced to
@@ -170,17 +209,26 @@ export default function PrivacyPage() {
             </p>
           </LegalSection>
 
-          <LegalSection n={7} title="Contact">
+          <LegalSection n={8} title="Contact">
             <p>
               Questions about this policy, your data, or a deletion request:{" "}
-              <ContactLink /> or{" "}
-              <a
-                href={`mailto:${SITE.contactEmail}`}
-                className="font-medium text-forest-800 underline decoration-forest-800/30 underline-offset-4 hover:decoration-forest-800"
-              >
-                {SITE.contactEmail}
-              </a>
-              . We respond within two working days.
+              <ContactLink />. The contact form is our primary channel — there
+              is no public MjengoOS mailbox yet, and one will be named here the
+              day it exists.
+              {SITE.contactEmail && (
+                <>
+                  {" "}
+                  You can also write to{" "}
+                  <a
+                    href={`mailto:${SITE.contactEmail}`}
+                    className="font-medium text-forest-800 underline decoration-forest-800/30 underline-offset-4 hover:decoration-forest-800"
+                  >
+                    {SITE.contactEmail}
+                  </a>
+                  .
+                </>
+              )}{" "}
+              We respond within two working days.
             </p>
           </LegalSection>
         </Reveal>

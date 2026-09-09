@@ -91,6 +91,19 @@ export function ContactForm({ config }: { config: Config }) {
 
   return (
     <form onSubmit={onSubmit} noValidate className="grid gap-5">
+      {/* Honeypot (MW-10): positioned far off-screen and removed from tab
+          order — humans never see or fill it. The server rejects any
+          submission that arrives with a value here. */}
+      <div aria-hidden="true" className="absolute -left-[9999px] h-0 w-0 overflow-hidden">
+        <label htmlFor="cf-company-website">Company website (leave empty)</label>
+        <input
+          id="cf-company-website"
+          name="companyWebsite"
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+        />
+      </div>
       <div className="grid gap-5 sm:grid-cols-2">
         <Field label="Name" htmlFor="cf-name" error={fieldErrors.name}>
           <input id="cf-name" name="name" type="text" required autoComplete="name" placeholder="Amina Wanjiru" className={inputBase} aria-invalid={Boolean(fieldErrors.name)} />
