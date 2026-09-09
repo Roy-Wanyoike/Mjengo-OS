@@ -1,4 +1,4 @@
-// Service-worker push handler logic (W5-1) — PURE and unit-tested.
+// Service-worker handler logic (W5-1 + W7 PWA offline) — PURE and unit-tested.
 //
 // public/sw.js is a plain static script (no bundler step — its offline
 // behavior is load-bearing and deliberately hand-rolled), so it cannot
@@ -103,4 +103,69 @@ export function clickTargetUrl(data: unknown, origin: string): string {
     if (typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//')) url = raw
   }
   return `${origin.replace(/\/$/, '')}${url}`
+}
+
+// ------------- W7 PWA offline (issue #78 / audit FE-1 + FE-8) --------------
+//
+// The v3 service-worker additions (offline app shell + photo LRU) follow the
+// same contract as the push handlers above: public/sw.js is a STATIC script
+// with no bundler step, so it cannot import this module — it mirrors the SAME
+// logic inline, and these pure functions are the canonical, unit-tested
+// statement (tests/unit/sw-offline-shell.test.ts pins both the helpers and
+// the sw.js source wiring by reading the file, exactly like push-routes).
+
+/** Hostnames `next dev` serves the SW from — production deployments never do. */
+export const DEV_HOSTNAMES: readonly string[] = ['localhost', '127.0.0.1']
+
+/**
+ * Should this origin's service worker cache and serve cached HTML for
+ * document navigations? PRODUCTION: yes — the last-good app shell is what an
+ * offline RELOAD boots (issue #78/FE-1; data + outbox live client-side in
+ * localStorage, so the shell is all the network owes us). DEV: never — the
+ * dev server recompiles the same URL into different HTML on every edit;
+ * caching it would serve a stale dev shell (the v2 no-stale-shell rule).
+ * Honest mechanism: sw.js is ONE static file registered by both dev and prod
+ * (layout.tsx), with no build step, so the SW's own origin hostname is the
+ * only reliable runtime signal.
+ */
+export function shouldCacheNavigationHtml(hostname: string): boolean {
+  return !DEV_HOSTNAMES.includes(hostname)
+}
+
+/**
+ * The cache key a navigation's HTML is stored under: the APP serves exactly
+ * one HTML route — the client-side app at '/' (query strings such as
+ * ?share= / ?projectId= are read by the booted client; the server HTML is
+ * identical), so every app-shell navigation caches AND serves under the
+ * single key '/'. Any other path → null: not an app shell, not cached. (The
+ * proxied marketing site at /website and /offline.html itself stay on the v2
+ * rule: network-first with the offline.html fallback, never cached.)
+ */
+export function navigationShellKey(pathname: string): string | null {
+  return pathname === '/' ? '/' : null
+}
+
+/** LRU cap for /photos/** cache entries (issue #78/FE-8: quota pressure). */
+export const PHOTO_CACHE_CAP = 100
+
+/**
+ * Which cached photo URLs to delete when the set exceeds `cap` (issue #78 /
+ * FE-8): least-recently-used first. A URL absent from `lastUsed` (never
+ * served from the cache since the catalog was recorded, or the LRU catalog
+ * was lost with a SW restart) counts as OLDEST; ties keep the cache's own key
+ * order, so the result is deterministic. Returns the eviction list in delete
+ * order — empty when the set is within the cap.
+ */
+export function photoLruEvictions(
+  urls: readonly string[],
+  lastUsed: ReadonlyMap<string, number>,
+  cap: number = PHOTO_CACHE_CAP,
+): string[] {
+  const excess = urls.length - cap
+  if (excess <= 0) return []
+  return urls
+    .map((url, i) => ({ url, i, at: lastUsed.get(url) ?? 0 }))
+    .sort((a, b) => a.at - b.at || a.i - b.i)
+    .slice(0, excess)
+    .map((e) => e.url)
 }

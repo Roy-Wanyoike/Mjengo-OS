@@ -31,6 +31,8 @@ import { Card, CardContent } from '@/frontend/ui/card'
 import { CloudOff, RefreshCw, HardHat, Link2Off, TriangleAlert } from 'lucide-react'
 import { Button } from '@/frontend/ui/button'
 import { toast } from 'sonner'
+import { useT } from '@/frontend/i18n/provider'
+import { AUTH_LOADING_TIMEOUT_MS, shouldOfflineBoot } from '@/frontend/mjengo/offline-boot'
 import { usePermissions, tabsForRole, landingForRole } from '@/shared/permissions'
 import { tabsVisibleForFlags } from '@/frontend/mjengo/nav/tab-meta'
 
@@ -69,12 +71,17 @@ export function MjengoApp() {
   } = useMjengo()
   const { data: session, status } = useSession()
   const { role: sessionRole, knownRole, tabs: roleTabs } = usePermissions()
+  const t = useT()
   const [tab, setTab] = useState<TabKey>('overview')
   const [createOpen, setCreateOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [origin, setOrigin] = useState('')
   const [shareBooting, setShareBooting] = useState(false)
+  // Offline session short-circuit (issue #78 / FE-1) — armed while the auth
+  // gate has sat in next-auth's 'loading' state past the timeout (see the
+  // offline-boot.ts contract for the full honesty rules).
+  const [authTimedOut, setAuthTimedOut] = useState(false)
 
   // ---------------- Surface + permission-derived tab visibility (W1-PERM) ----------------
   // The client surface (share link or logged-in client) keeps its existing
@@ -184,7 +191,17 @@ export function MjengoApp() {
   useEffect(() => {
     useMjengo.setState({ online: navigator.onLine })
     const onOffline = () => useMjengo.getState().setOnline(false)
-    const onOnline = () => useMjengo.getState().setOnline(true)
+    const onOnline = () => {
+      useMjengo.getState().setOnline(true)
+      // Connectivity recovery after an offline boot (issue #78): next-auth
+      // never refetches the session on the 'online' event by itself — it only
+      // refetches on visibilitychange. Nudge it down its own documented path
+      // (the handler checks document.visibilityState === 'visible', which a
+      // foregrounded PWA is) so a still-valid session resolves immediately
+      // instead of stranding a signed-in user on the login screen until they
+      // switch tabs. Harmless when the session is already resolved.
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
     window.addEventListener('offline', onOffline)
     window.addEventListener('online', onOnline)
     return () => {
@@ -192,6 +209,20 @@ export function MjengoApp() {
       window.removeEventListener('online', onOnline)
     }
   }, [])
+
+  // ---------------- Auth-gate timeout (issue #78 / FE-1) ----------------
+  // While the session check hangs (lie-fi: request neither resolves nor
+  // rejects), arm the offline boot after a short timeout; disarm the moment
+  // status leaves 'loading' (resolved authenticated/unauthenticated gates
+  // take over honestly).
+  useEffect(() => {
+    if (status !== 'loading') {
+      setAuthTimedOut(false)
+      return
+    }
+    const timer = setTimeout(() => setAuthTimedOut(true), AUTH_LOADING_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [status])
 
   // ---------------- Cross-component tab navigation (F-INSIGHT, spec §80) ----------------
   // Global-search result clicks dispatch 'mjengo:tab' (detail: { tab }) from
@@ -248,9 +279,9 @@ export function MjengoApp() {
               <Link2Off className="w-7 h-7 text-stone-500" />
             </div>
             <div className="space-y-1.5">
-              <h1 className="text-lg font-bold text-stone-900">This link no longer works</h1>
+              <h1 className="text-lg font-bold text-stone-900">{t('app.deadLink.title')}</h1>
               <p className="text-sm text-stone-500 leading-relaxed">
-                {shareError}. Ask the site team to send a fresh link from MjengoOS.
+                {t('app.deadLink.body', { error: shareError })}
               </p>
             </div>
             <Button
@@ -272,10 +303,32 @@ export function MjengoApp() {
   // ---------------- Auth gate (login is an app state, not a route) ----------------
   // Session still resolving → boot skeleton (prevents a login flash on share links:
   // shareBooting covers the gap while the share token is being fetched).
-  if (status === 'loading') {
+  //
+  // OFFLINE SHORT-CIRCUIT (issue #78 / FE-1 — shouldOfflineBoot): next-auth's
+  // session check needs the network, so a PWA reopened offline either hangs in
+  // 'loading' (dead radio) or fails fast into a FALSE 'unauthenticated' (valid
+  // cookie, unreachable server) — either way the old gates stranded a field
+  // supervisor on a skeleton/login screen while their data + outbox sat in the
+  // persisted store. When the gate is provably stuck AND persisted data exists,
+  // boot the app shell from the cached store instead — "continue offline":
+  //   · the amber offline banner is up (store `online` false) and mutations keep
+  //     queueing to the outbox exactly as they already do offline — the app
+  //     NEVER pretends to be online;
+  //   · the role is genuinely UNKNOWN offline (no client-side session copy), so
+  //     the permission system fail-closes to the Overview tab + outbox panel —
+  //     the same honest rule as an unknown role online;
+  //   · when the session resolves later (network back — the online handler
+  //     above nudges a refetch), the gates take over again and the routing
+  //     effect re-loads fresh server data.
+  const offlineBoot =
+    !isClientSurface &&
+    !shareBooting &&
+    shouldOfflineBoot({ status, authTimedOut, online, hasData: Boolean(data) })
+
+  if (status === 'loading' && !offlineBoot) {
     return <BootSkeleton />
   }
-  if (status === 'unauthenticated' && !isClientSurface && !shareBooting) {
+  if (status === 'unauthenticated' && !isClientSurface && !shareBooting && !offlineBoot) {
     return <LoginScreen />
   }
 
@@ -351,7 +404,7 @@ export function MjengoApp() {
         >
           <TriangleAlert className="w-4 h-4 shrink-0" aria-hidden />
           <span className="text-center">
-            Unknown role “{sessionRole}” — showing a safe, minimal view (Overview only). Ask an admin to fix your account role.
+            {t('app.unknownRole', { role: sessionRole ?? '' })}
           </span>
         </div>
       )}
@@ -368,8 +421,8 @@ export function MjengoApp() {
         <div className="bg-amber-500 text-stone-950 px-4 py-2 flex items-center justify-center gap-2 text-sm font-medium" role="status">
           <CloudOff className="w-4 h-4 shrink-0" aria-hidden />
           <span className="text-center">
-            Offline — saving to on-device queue
-            {outbox.length > 0 && ` (${outbox.length} pending sync)`}. AI features need connectivity.
+            {t('app.offline.banner')}
+            {outbox.length > 0 && ` ${t('app.offline.pending', { count: outbox.length })}`}. {t('app.offline.aiOffline')}
           </span>
           {syncing && <RefreshCw className="w-4 h-4 animate-spin" aria-hidden />}
         </div>

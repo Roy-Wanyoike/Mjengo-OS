@@ -620,4 +620,13 @@ export const swDict = {
   'trustDigest.runFailed': 'Digest haitengenezwi',
   'trustDigest.runFailedFallback': 'seva ilikataa (feature flag, wadhifa au hali ya mtoa huduma)',
   'trustDigest.runNetwork': 'Seva haikupatikana — digest haitengenezwi.',
+
+  // ------------------------------------------------------------- W7 PWA offline (issue #78)
+  // (end-appended block — merge order W6-1 → W6-3 → W6-2 → W7; keep all)
+  'app.deadLink.title': 'Hiki kiungo hakitumiki tena',
+  'app.deadLink.body': '{error}. Omba timu ya ujenzi itume kiungo kipya kutoka MjengoOS.',
+  'app.offline.banner': 'Nje ya mtandao — tunahifadhi kwenye foleni ya kifaa',
+  'app.offline.pending': '({count} zinangojea kusawazishwa)',
+  'app.offline.aiOffline': 'VIPENGELE vya AI vinahitaji mtandao.',
+  'app.unknownRole': 'Wadhifa usiojulikana “{role}” — tunakuonyesha mtazamo salama na mdogo (Mwanzo pekee). Omba msimamizi arekebishe wadhifa wa akaunti yako.',
 } satisfies Dict

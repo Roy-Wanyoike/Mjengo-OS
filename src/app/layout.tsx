@@ -22,6 +22,9 @@ export const metadata: Metadata = {
   keywords: ["MjengoOS", "construction", "Kenya", "fundi", "offline-first", "AI", "site management"],
   manifest: "/manifest.webmanifest",
   icons: {
+    // favicon.ico (issue #78/FE-9): served from /public at the classic
+    // location browsers request — closes the /favicon.ico 404.
+    icon: "/favicon.ico",
     apple: "/icons/apple-touch-icon.png",
   },
 };
