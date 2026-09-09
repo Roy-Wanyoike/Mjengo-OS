@@ -471,13 +471,13 @@ Three workflows live in `.github/workflows/`, all triggered on every push to
   a real `next build` (standalone) with a throwaway SQLite URL + dummy secret
   — the production build must never require real env secrets.
 - **Tests** (`test.yml`) — the full vitest unit suite, **`bun run test`
-  (1,513 tests across 54 files)**, on every push/PR to `main`. No database or
+  (1,645 tests across 66 files)**, on every push/PR to `main`. No database or
   secrets required — the tests are pure/unit-level by design.
 - **Docker** (`docker.yml`) — `docker build` for both production images
   (webapp + marketing site) on a GitHub runner (the dev sandbox has no docker
   CLI — CI is the image verification).
 
-The suite grew 495 → 899 → 1,019 → 1,102 → 1,244 → 1,513 tests across waves
+The suite grew 495 → 899 → 1,019 → 1,102 → 1,244 → 1,513 → 1,645 tests across waves
 1–6, re-run in full on every wave merge. **Honest state:** the workflow
 definitions are active and fire on every push/PR, but every run to date has
 failed to start its jobs — the GitHub account is locked by a billing issue
