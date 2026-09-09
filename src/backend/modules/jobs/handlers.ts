@@ -7,6 +7,8 @@
 //   · runReconciliation   — reuses invoices computeLedgerConsistency
 //   · runOverdueCheck     — overdue tasks + absent workers today
 //   · runBudgetCheck      — budget pace watch (90% / 100%)
+//   · runDarajaReconcile  — wallet: re-drive missed M-Pesa STK callbacks
+//                           (src/backend/modules/wallet/daraja-reconcile.ts)
 //
 // Handlers NEVER throw to the job runner (the runner catches + records the
 // failure), always return a JSON-able result, and emit their domain events via
@@ -22,6 +24,7 @@ import {
   computeAttendanceFraudFindings, computeCostVarianceFindings, computeDuplicatePurchaseFindings,
   overallProgress, type AttendanceAuditRow, type CostCategory, type DuplicateOrderRow, type EngineFinding,
 } from '@/backend/modules/intel/engine'
+import { runDarajaReconcile } from '@/backend/modules/wallet/daraja-reconcile'
 
 /** Nairobi/EAT date string (UTC+3) — the platform's "today". */
 function todayEAT(): string {
@@ -297,8 +300,9 @@ export interface RecapJobResult {
 /**
  * Daily 6 PM client recap shared core: writes the Recap row, then emits
  * 'recap.daily' — the event policy lands the notification-center row as an
- * HONEST in-app entry (channel in_app, deliveryStatus 'logged'): nothing is
- * sent on WhatsApp until a provider is wired.
+ * HONEST in-app entry (channel in_app, deliveryStatus 'logged'): external
+ * delivery is opt-in via the notify channel seam (NOTIFY_SMS_WEBHOOK_URL —
+ * see modules/notify/channels.ts) and is attempted only when configured.
  */
 export async function runDailyRecap(projectId?: string | null): Promise<RecapJobResult> {
   const digest = await buildProjectDigest(projectId)
@@ -519,9 +523,11 @@ export type JobType =
   | 'reconciliation'
   | 'overdue.check'
   | 'budget.check'
+  | 'wallet.reconcile'
 
 export const JOB_TYPES: readonly JobType[] = [
   'anomaly_scan', 'digest.weekly', 'recap.daily', 'reconciliation', 'overdue.check', 'budget.check',
+  'wallet.reconcile',
 ]
 
 /** Handler registry — the job runner dispatches on these. */
@@ -532,4 +538,9 @@ export const JOB_HANDLERS: Record<JobType, (payload: Record<string, unknown>, pr
   reconciliation: (_payload, projectId) => runReconciliation(projectId),
   'overdue.check': (_payload, projectId) => runOverdueCheck(projectId),
   'budget.check': (_payload, projectId) => runBudgetCheck(projectId),
+  // Cross-project money sweep (no projectId — it scans every project's
+  // daraja.intent:* rows). Idempotent by construction: it re-drives the
+  // callback processor, whose dedupe + ledger idempotency key are the
+  // safety rails. See wallet/daraja-reconcile.ts.
+  'wallet.reconcile': () => runDarajaReconcile(),
 }

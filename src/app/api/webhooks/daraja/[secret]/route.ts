@@ -23,10 +23,16 @@
 //       module for the matching pending intent (never a credit without one).
 //   (d) ORIGIN / NETWORK: browser-Origin checking mirrors route-kit's
 //       MUTATION_ORIGIN_ALLOWLIST gate (env-gated, no-Origin callers pass —
-//       Safaricom is a server, not a browser). Safaricom source-IP
-//       allowlisting is NOT implemented (no published stable IP list);
-//       TLS terminates at the reverse proxy in front of the app. The
-//       integrity model is the unguessable path + query-API reconciliation.
+//       Safaricom is a server, not a browser). OPTIONAL source-IP allowlist
+//       (issue #35): when DARAJA_ALLOWED_IPS is set (comma-separated IPv4
+//       CIDRs, e.g. 196.201.214.0/24), the request's resolved client IP
+//       (x-forwarded-for per TRUST_PROXY — rate-limit.ts clientIpFromHeaders)
+//       must match BEFORE the body is parsed; non-matching or unresolvable
+//       sources get a generic 403. Unset = the documented posture (unguessable
+//       path + query-API reconciliation). IPv6 entries are exact-match only
+//       (no IPv6 CIDR — documented limitation); invalid entries are warned +
+//       ignored, and a set-but-empty allowlist denies everything (fail
+//       closed). TLS terminates at the reverse proxy in front of the app.
 //
 // Body quirk: Safaricom POSTs JSON with a text/plain-ish content-type — the
 // raw body is read once and parsed regardless of the declared type.
@@ -41,6 +47,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { timingSafeEqual } from 'node:crypto'
 import { processDarajaStkCallback } from '@/backend/modules/wallet/daraja-callback'
 import { darajaWebhookSegment } from '@/backend/modules/wallet/daraja'
+import { ipAllowed, parseIpAllowlist } from '@/backend/modules/wallet/ip-allowlist'
+import { clientIpFromHeaders } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
@@ -65,6 +73,28 @@ function segmentMatches(given: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
+/**
+ * Optional source-IP allowlist (issue #35), checked BEFORE any body read.
+ * Unset env → allowed (the documented posture). Set → the resolved client
+ * IP must match an entry. Invalid entries warn + are ignored; a set-but-
+ * empty allowlist denies everything (fail closed), as does an unresolvable
+ * IP (no x-forwarded-for at all — the source cannot be verified, so it is
+ * not verified). The response is generic on purpose: no config, no echo.
+ */
+function sourceIpDenied(req: NextRequest): boolean {
+  const raw = process.env.DARAJA_ALLOWED_IPS
+  if (!raw || !raw.trim()) return false
+  const { entries, invalid } = parseIpAllowlist(raw)
+  if (invalid.length > 0) {
+    // Honest config signal; entry VALUES are not printed (no echo).
+    console.warn(
+      `[api/webhooks/daraja] DARAJA_ALLOWED_IPS has ${invalid.length} invalid entr${invalid.length === 1 ? 'y' : 'ies'} — ignored (supported: IPv4 CIDR, bare IPv4, exact IPv6 literal; IPv6 CIDR is NOT supported). Remaining valid entries still apply; zero valid entries denies all.`,
+    )
+  }
+  const ip = clientIpFromHeaders(req.headers)
+  return !ipAllowed(ip, entries)
+}
+
 const MAX_BODY_BYTES = 64 * 1024
 
 type Ctx = { params: Promise<{ secret: string }> }
@@ -78,6 +108,12 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<NextResponse> {
         { error: `Origin "${req.headers.get('origin')}" is not allowed to mutate this API` },
         { status: 403 },
       )
+    }
+
+    // Source-IP allowlist — BEFORE the body is read (and before the secret
+    // segment check: a non-permitted source learns nothing but the 403).
+    if (sourceIpDenied(req)) {
+      return NextResponse.json({ error: 'Source IP not permitted' }, { status: 403 })
     }
 
     if (!segmentMatches(secret)) {

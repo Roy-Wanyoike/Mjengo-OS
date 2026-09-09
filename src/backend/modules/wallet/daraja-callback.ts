@@ -33,6 +33,7 @@
 import { db } from '@/backend/lib/db'
 import { cashAccountForMethod, postLedgerTransactionInTx } from '@/backend/modules/ledger/service'
 import { notify } from '@/backend/modules/notify/service'
+import { phaseIdForMilestonePayment } from './service'
 import { getDarajaProvider } from './daraja'
 
 export const DARAJA_INTENT_KEY_PREFIX = 'daraja.intent:'
@@ -163,11 +164,25 @@ export interface DarajaCallbackOutcome {
 }
 
 /**
+ * What triggered a settlement — recorded in the money trail so finance can
+ * tell a real Safaricom callback from the wallet.reconcile sweep re-driving
+ * the exact same path (issue #34). The mechanics are identical either way.
+ */
+export type DarajaSettlementOrigin = 'callback' | 'reconcile-sweep'
+
+/**
  * Process one parsed Safaricom callback body. Never throws on domain paths —
  * unexpected storage errors DO propagate so the route can 500 and Safaricom
  * retries (the ledger idempotency key makes retries money-safe).
+ *
+ * `origin` labels the trigger in the posting's audit trail: 'callback' (the
+ * webhook — default) or 'reconcile-sweep' (the jobs-module sweep re-driving
+ * this processor for a missed callback). Money movement is identical.
  */
-export async function processDarajaStkCallback(body: unknown): Promise<DarajaCallbackOutcome> {
+export async function processDarajaStkCallback(
+  body: unknown,
+  origin: DarajaSettlementOrigin = 'callback',
+): Promise<DarajaCallbackOutcome> {
   const cb = extractStkCallback(body)
   if (!cb) {
     return { ok: true, action: 'ignored', detail: 'No Body.stkCallback in payload — only STK result callbacks are processed (reversal Result bodies are logged, never posted)' }
@@ -210,7 +225,7 @@ export async function processDarajaStkCallback(body: unknown): Promise<DarajaCal
   }
 
   // 5. Verified — post the money for the recorded intent (if one exists).
-  const outcome = await completeVerifiedIntent(cb)
+  const outcome = await completeVerifiedIntent(cb, origin)
   if (outcome.action === 'credited' || outcome.action === 'duplicate') rememberCheckout(checkoutRequestID)
   return outcome
 }
@@ -218,9 +233,14 @@ export async function processDarajaStkCallback(body: unknown): Promise<DarajaCal
 /**
  * The money path: intent lookup → in-transaction status recheck → balanced
  * double-entry post through the ledger module → PaymentRequest marked paid.
+ * `origin` only labels the audit trail (callback vs sweep) — never the checks.
  */
-async function completeVerifiedIntent(cb: StkCallbackData): Promise<DarajaCallbackOutcome> {
+async function completeVerifiedIntent(
+  cb: StkCallbackData,
+  origin: DarajaSettlementOrigin,
+): Promise<DarajaCallbackOutcome> {
   const { checkoutRequestID } = cb
+  const originLabel = origin === 'reconcile-sweep' ? 'reconciliation sweep' : 'callback'
   const intentRow = await db.idempotencyRecord.findUnique({
     where: { key: `${DARAJA_INTENT_KEY_PREFIX}${checkoutRequestID}` },
   })
@@ -251,7 +271,7 @@ async function completeVerifiedIntent(cb: StkCallbackData): Promise<DarajaCallba
     // finance reconciliation — never silently posted, never blocking.
     const ledgerTxn = await postLedgerTransactionInTx(tx, {
       projectId: fresh.projectId,
-      description: `Payment ${fresh.requestCode} — ${fresh.payee} (M-Pesa STK, verified callback)`,
+      description: `Payment ${fresh.requestCode} — ${fresh.payee} (M-Pesa STK, verified ${originLabel})`,
       postedBy: intent.initiatedBy,
       postedRole: intent.initiatedByRole,
       idempotencyKey: `${DARAJA_CALLBACK_KEY_PREFIX}${checkoutRequestID}`,
@@ -260,6 +280,12 @@ async function completeVerifiedIntent(cb: StkCallbackData): Promise<DarajaCallba
         { accountCode: cashAccountForMethod('mpesa'), side: 'credit', amount: fresh.amount },
       ],
     })
+
+    // Phase cost-code (issue #39): same derivation as the in-app pay path — a
+    // request raised against a milestone pays that milestone's phase, derived
+    // + validated INSIDE the transaction (fail-closed on a foreign phase; no
+    // milestone linkage → null → the report estimates the row).
+    const phaseId = await phaseIdForMilestonePayment(tx, fresh.projectId, fresh.relatedEntityType, fresh.relatedEntityId)
 
     // Exactly ONE legacy Transaction row per ledger txn (idempotent link).
     const txnRow =
@@ -272,8 +298,9 @@ async function completeVerifiedIntent(cb: StkCallbackData): Promise<DarajaCallba
           method: 'mpesa',
           reference: cb.receipt ? `MPESA-${cb.receipt}` : `MPESA-${checkoutRequestID.slice(-12)}`,
           costCode: 'payment_request',
+          phaseId,
           ledgerTxnId: ledgerTxn.id,
-          note: `${fresh.requestCode} — ${fresh.description} (M-Pesa verified callback ${checkoutRequestID})`,
+          note: `${fresh.requestCode} — ${fresh.description} (M-Pesa verified ${originLabel} ${checkoutRequestID})`,
           date: new Date(),
         },
       }))
@@ -306,7 +333,7 @@ async function completeVerifiedIntent(cb: StkCallbackData): Promise<DarajaCallba
         key: `${DARAJA_CALLBACK_KEY_PREFIX}${checkoutRequestID}`,
         scope: CALLBACK_SCOPE,
         projectId: intent.projectId,
-        responseBody: JSON.stringify({ checkoutRequestID, ...result }),
+        responseBody: JSON.stringify({ checkoutRequestID, origin, ...result }),
       },
     })
   } catch {
@@ -319,7 +346,7 @@ async function completeVerifiedIntent(cb: StkCallbackData): Promise<DarajaCallba
     await notify(
       intent.projectId,
       `Payment ${intent.requestCode} recorded`,
-      `KSh ${result.amount.toLocaleString()} to ${intent.payee} — M-Pesa callback verified against the query API, ledger ${result.ledgerRef}`,
+      `KSh ${result.amount.toLocaleString()} to ${intent.payee} — M-Pesa ${originLabel} verified against the query API, ledger ${result.ledgerRef}`,
       { kind: 'payment.paid' },
     )
   } catch (e) {

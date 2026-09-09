@@ -64,8 +64,6 @@ next-env.d.ts
 *.log
 dev.log
 dev.out.log
-test
-prompt
 
 server.log
 # Skills directory
@@ -95,7 +93,6 @@ Caddyfile
 # sandbox-only docs (local reports/notes — published docs like docs/screenshots stay tracked)
 docs/reports/
 docs/*.local.md
-(docs(readme): recruiter-grade README with real app screenshots, MIT license, security policy)
 
 # sandbox environment scripts & template demos
 # (tests/ was previously ignored as sandbox scratch — it now holds the real
