@@ -13,8 +13,10 @@ import { RefreshCw, Truck, MapPin, ClipboardCheck } from 'lucide-react'
 import type { ReliabilityComponent } from '@/backend/modules/intel/types'
 
 function scoreTone(score: number): string {
+  // FE-4 (issue #80): amber-700 as text on white (4.52:1) — the old
+  // amber-600 scored 3.19:1 (icons keep amber-600: non-text 3:1 is fine).
   if (score >= 75) return 'text-emerald-600'
-  if (score >= 50) return 'text-amber-600'
+  if (score >= 50) return 'text-amber-700'
   return 'text-red-600'
 }
 

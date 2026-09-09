@@ -293,7 +293,7 @@ function GlobalSearch() {
     }
   }
 
-  function searchBox(inputRefLocal: React.RefObject<HTMLInputElement | null>, autoFocus = false) {
+  function searchBox(inputRefLocal: React.RefObject<HTMLInputElement | null>, idPrefix: string, autoFocus = false) {
     return (
       <div className="relative">
         <div className="flex items-center gap-2 rounded-lg border border-stone-700 bg-stone-900 px-2.5 h-9 focus-within:border-amber-500">
@@ -308,6 +308,17 @@ function GlobalSearch() {
             onFocus={() => { if (q.trim().length >= 2 && flat.length) setOpen(true) }}
             placeholder={t('header.search.placeholder')}
             aria-label={t('header.aria.search')}
+            // FE-7 (issue #80): combobox pattern — aria-expanded tells AT the
+            // popup is open, aria-controls points at the listbox, and
+            // aria-activedescendant tracks the Arrow-key-active option (ids
+            // are instance-prefixed: the desktop and mobile boxes never share
+            // DOM ids).
+            role="combobox"
+            aria-expanded={open}
+            aria-controls={open ? `${idPrefix}-results` : undefined}
+            aria-activedescendant={
+              open && active >= 0 && active < flat.length ? `${idPrefix}-opt-${active}` : undefined
+            }
             className="bg-transparent text-sm text-stone-100 placeholder:text-stone-500 outline-none w-full min-w-0 [&::-webkit-search-cancel-button]:hidden"
           />
           {loading ? (
@@ -329,6 +340,7 @@ function GlobalSearch() {
 
         {open && (
           <div
+            id={`${idPrefix}-results`}
             className={`absolute left-0 right-0 top-full mt-2 rounded-lg border border-stone-200 bg-white shadow-xl z-50 max-h-96 overflow-y-auto ${SCROLLBAR}`}
             role="listbox"
             aria-label={t('header.aria.results')}
@@ -340,7 +352,7 @@ function GlobalSearch() {
             ) : (
               groups.map((g) => (
                 <div key={g.group}>
-                  <p className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wide text-stone-400 sticky top-0 bg-white">
+                  <p className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wide text-stone-600 sticky top-0 bg-white">
                     {g.group}
                   </p>
                   {g.items.map((item) => {
@@ -350,6 +362,7 @@ function GlobalSearch() {
                         key={item.id}
                         type="button"
                         role="option"
+                        id={`${idPrefix}-opt-${idx}`}
                         aria-selected={idx === active}
                         onMouseEnter={() => setActive(idx)}
                         onClick={() => handleTarget(item)}
@@ -361,7 +374,7 @@ function GlobalSearch() {
                           <span className="block text-sm font-medium text-stone-900 truncate">{item.title}</span>
                           <span className="block text-xs text-stone-500 truncate">{item.sub}</span>
                           {item.project && (
-                            <span className="block text-[10px] text-stone-400 truncate">{item.project}</span>
+                            <span className="block text-[10px] text-stone-600 truncate">{item.project}</span>
                           )}
                         </span>
                       </button>
@@ -397,13 +410,13 @@ function GlobalSearch() {
 
       {/* Desktop: always-visible inline search */}
       <div ref={wrapRef} className="hidden md:block w-56 lg:w-72 shrink-0">
-        {searchBox(inputRef)}
+        {searchBox(inputRef, 'gs-desktop')}
       </div>
 
       {/* Mobile expanded panel */}
       {mobileOpen && (
         <div className="md:hidden fixed left-3 right-3 top-[72px] z-50">
-          {searchBox(mobileInputRef, true)}
+          {searchBox(mobileInputRef, 'gs-mobile', true)}
         </div>
       )}
     </>
@@ -697,7 +710,7 @@ function NotificationBell() {
           size="sm"
           variant="outline"
           aria-label={unread.length > 0 ? t('header.aria.notifications', { count: unread.length }) : t('header.aria.notificationsPlain')}
-          className="relative gap-1.5 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white"
+          className="relative min-h-11 gap-1.5 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white"
         >
           <Bell className="w-4 h-4" aria-hidden />
           <span className="hidden md:inline">{t('header.alerts')}</span>
@@ -714,7 +727,7 @@ function NotificationBell() {
       <SheetContent side="right" className="sm:max-w-md w-full p-0 gap-0">
         <SheetHeader className="p-4 pb-3 border-b border-stone-100">
           <SheetTitle className="text-base text-stone-900">{t('header.notifications.title')}</SheetTitle>
-          <SheetDescription className="text-xs text-stone-400">
+          <SheetDescription className="text-xs text-stone-600">
             {unread.length > 0 ? t('header.notifications.unread', { count: unread.length }) : t('header.notifications.caughtUp')} · {data?.project.name ?? 'project'}
           </SheetDescription>
         </SheetHeader>
@@ -749,7 +762,7 @@ function NotificationBell() {
           <div className="px-4 py-10 text-center flex-1" role="status">
             <Bell className="w-6 h-6 text-stone-300 mx-auto" aria-hidden />
             <p className="mt-2 text-sm text-stone-500">{t('header.notifications.emptyTitle')}</p>
-            <p className="mt-1 text-xs text-stone-400">{t('header.notifications.emptySub')}</p>
+            <p className="mt-1 text-xs text-stone-600">{t('header.notifications.emptySub')}</p>
           </div>
         ) : (
           <ul className={`flex-1 min-h-0 max-h-[64vh] overflow-y-auto ${SCROLLBAR}`} aria-label={t('header.aria.notificationsPlain')}>
@@ -775,10 +788,10 @@ function NotificationBell() {
                       )}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[10px] font-semibold uppercase tracking-wide text-stone-400">{meta.label}</span>
+                      <span className="block text-[10px] font-semibold uppercase tracking-wide text-stone-600">{meta.label}</span>
                       <span className={`block text-sm leading-snug ${n.read ? 'text-stone-600' : 'font-medium text-stone-900'}`}>{n.title}</span>
                       <span className="block text-xs text-stone-500 mt-0.5 line-clamp-2" title={n.body}>{n.body}</span>
-                      <span className="block text-[11px] text-stone-400 mt-0.5">
+                      <span className="block text-[11px] text-stone-600 mt-0.5">
                         {formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
                       </span>
                     </span>
@@ -909,14 +922,15 @@ export function Header({
             {/* Low-data mode selector (spec §74) */}
             {!isShareClient && <DataModeSelector />}
 
-            {/* Share with client (owner only) */}
+            {/* Share with client (owner only) — FE-5: min-h-11 keeps the
+                header's icon+label pill at a 44px target on mobile. */}
             {!isShareClient && viewMode === 'owner' && (
               <Button
                 size="sm"
                 variant="outline"
                 onClick={onShare}
                 aria-label={t('header.aria.share')}
-                className="gap-1.5 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white"
+                className="min-h-11 gap-1.5 border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white"
               >
                 <Share2 className="w-4 h-4" aria-hidden />
                 <span className="hidden md:inline">{t('header.share')}</span>
@@ -970,7 +984,12 @@ export function Header({
             permissions.ts; on mobile the bottom bar in mobile/nav/mobile-bottom-nav.tsx
             takes over for the owner app — the client surface keeps this strip).
             role="tablist" pairs with the role="tab" buttons below (W3-F2 a11y —
-            the mobile strip already had it on its <ul>). */}
+            the mobile strip already had it on its <ul>), and FE-7 (issue #80)
+            completes the pattern: each tab carries id + aria-controls pointing
+            at the app shell's role="tabpanel" (app.tsx `mjengo-panel-<key>`),
+            the active one is referenced back via the panel's aria-labelledby.
+            FE-5: min-h-11 — the client surface's mobile tab strip gets 44px
+            targets (bottom-nav parity; it stays flex-scrollable at 375px). */}
         <nav
           ref={listRef}
           onKeyDown={onKeyDown}
@@ -984,10 +1003,12 @@ export function Header({
               <button
                 key={key}
                 role="tab"
+                id={`mjengo-tab-${key}`}
+                aria-controls={`mjengo-panel-${key}`}
                 aria-selected={active}
                 tabIndex={active ? 0 : -1}
                 onClick={() => onTabChange(key)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 min-h-9 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 min-h-11 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
                   active
                     ? 'bg-amber-500 text-stone-950'
                     : 'text-stone-400 hover:text-stone-100 hover:bg-stone-800'

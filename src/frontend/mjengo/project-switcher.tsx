@@ -25,7 +25,7 @@ export interface ProjectSwitcherProps {
 function statusBadge(status: string): { label: string; className: string } {
   switch (status) {
     case 'active':
-      return { label: 'active', className: 'bg-amber-500/10 text-amber-600 border-amber-500/30' }
+      return { label: 'active', className: 'bg-amber-500/10 text-amber-700 border-amber-500/30' }
     case 'completed':
       return { label: 'completed', className: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30' }
     default:
@@ -53,12 +53,14 @@ export function ProjectSwitcher({ projects, activeId, onSelect, onCreate }: Proj
           [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent
           [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full"
       >
-        <DropdownMenuLabel className="px-3 pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-400">
+        {/* FE-4 (issue #80): stone-600 on the white dropdown — labels and the
+            progress/budget timestamp line were stone-400 (2.31:1). */}
+        <DropdownMenuLabel className="px-3 pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-600">
           Projects · {projects.length}
         </DropdownMenuLabel>
 
         {projects.length === 0 && (
-          <p className="px-3 py-6 text-sm text-stone-400 text-center">No projects yet — create your first one below.</p>
+          <p className="px-3 py-6 text-sm text-stone-600 text-center">No projects yet — create your first one below.</p>
         )}
 
         {projects.map((p) => {
@@ -98,7 +100,7 @@ export function ProjectSwitcher({ projects, activeId, onSelect, onCreate }: Proj
                 )}
               </div>
 
-              <div className="pl-6 text-[11px] text-stone-400 tabular-nums">
+              <div className="pl-6 text-[11px] text-stone-600 tabular-nums">
                 {p.progressPct}% · {formatKES(p.budgetSpent, true)} / {formatKES(p.budgetTotal, true)}
               </div>
             </DropdownMenuItem>

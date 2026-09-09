@@ -61,7 +61,7 @@ export function ShareDialog({ open, onOpenChange, shareUrl, previewing, onPrevie
                 onClick={() => void copyLink()}
                 disabled={!shareUrl}
                 aria-label={t('share.aria.copy')}
-                className="shrink-0 h-9 w-9 bg-amber-600 hover:bg-amber-700 text-white"
+                className="shrink-0 h-11 w-11 bg-amber-600 hover:bg-amber-700 text-white"
               >
                 <Copy className="w-4 h-4" aria-hidden />
               </Button>
@@ -75,7 +75,9 @@ export function ShareDialog({ open, onOpenChange, shareUrl, previewing, onPrevie
             >
               <RefreshCw className="w-3.5 h-3.5" aria-hidden /> {t('share.regenerate')}
             </Button>
-            <p className="text-[11px] text-stone-400 flex items-start gap-1.5">
+            {/* FE-4 (issue #80): stone-600 on white — the share note was
+                stone-400 (2.31:1). */}
+            <p className="text-[11px] text-stone-600 flex items-start gap-1.5">
               <Share2 className="w-3 h-3 mt-0.5 shrink-0" aria-hidden />
               {t('share.note')}
             </p>

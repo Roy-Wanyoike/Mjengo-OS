@@ -26,7 +26,7 @@ export function PrintableInvoice({ invoice, projectName, clientName, location }:
       {/* header */}
       <div className="flex items-start justify-between border-b-2 border-stone-800 pb-4">
         <div>
-          <p className="text-2xl font-black tracking-tight">Mjengo<span className="text-amber-600">OS</span></p>
+          <p className="text-2xl font-black tracking-tight">Mjengo<span className="text-amber-700">OS</span></p>
           <p className="text-xs text-stone-500">Construction procurement &amp; site record</p>
         </div>
         <div className="text-right">

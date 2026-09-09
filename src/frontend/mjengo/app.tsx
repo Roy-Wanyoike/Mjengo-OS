@@ -386,12 +386,20 @@ export function MjengoApp() {
 
   return (
     <div className="min-h-screen flex flex-col bg-stone-100">
-      <Header
-        tab={activeTab}
-        onTabChange={setTab}
-        onCreateProject={() => setCreateOpen(true)}
-        onShare={() => setShareOpen(true)}
-      />
+      {/* FE-3 (issue #80) — shell boundary around the header: a render crash
+          in the 1000-line header (search, notifications, flags, tab strip)
+          swaps in the friendly boundary card instead of white-screening the
+          whole app — banners, the active tab and the offline queue stay
+          usable. Layered with the per-tab boundary below and the route-level
+          src/app/error.tsx (which catches banners/dialogs/footer). */}
+      <ErrorBoundary context="shell:header">
+        <Header
+          tab={activeTab}
+          onTabChange={setTab}
+          onCreateProject={() => setCreateOpen(true)}
+          onShare={() => setShareOpen(true)}
+        />
+      </ErrorBoundary>
 
       {/* ⌘K command palette (W3-F3) — mounted at the app root so the shortcut
           works on every surface below the auth/boot gates. */}
@@ -429,6 +437,18 @@ export function MjengoApp() {
       )}
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 py-6" data-active-project={activeProjectId ?? data.project.id}>
+        {/* FE-7 (issue #80): the active tab PANEL — role="tabpanel" pairs with
+            the header strip's role="tab" buttons (id `mjengo-tab-<key>` +
+            aria-controls → this id). aria-labelledby names the panel from the
+            visible strip: the desktop tab (hidden below md, ignored by AT) or
+            the mobile bottom-nav tab (`mjengo-mtab-<key>`, hidden md+); the
+            client surface has no bottom nav — the header strip is its only
+            strip, so the first id always resolves. */}
+        <div
+          role="tabpanel"
+          id={`mjengo-panel-${activeTab}`}
+          aria-labelledby={`mjengo-tab-${activeTab} mjengo-mtab-${activeTab}`}
+        >
         {/* One error boundary around the ACTIVE tab panel (W3-F2): a render
             crash in any tab swaps in the friendly boundary card instead of
             blanking the whole app. key={activeTab} remounts the boundary on
@@ -451,6 +471,7 @@ export function MjengoApp() {
           {/* Settings (W3-F3) — every role: profile, local prefs, notification prefs. */}
           {activeTab === 'settings' && <SettingsTab />}
         </ErrorBoundary>
+        </div>
       </main>
 
       {/* Mobile owner navigation — fixed bottom bar, hidden on md+ where the
@@ -471,12 +492,15 @@ export function MjengoApp() {
               <span className="font-semibold text-stone-200">MjengoOS</span>
               <span className="hidden sm:inline">· Live client view · Your build, verified daily</span>
             </div>
-            {/* Share-link visitors may be site team; logged-in client-role users belong here */}
+            {/* Share-link visitors may be site team; logged-in client-role
+                users belong here. FE-4 (issue #80): stone-300 on stone-950
+                (7.35:1) — the old stone-500 was 3.65:1 at 11px, unreadable
+                in field light. */}
             {isShareClient && !clientRole && (
               <button
                 type="button"
                 onClick={exitShareView}
-                className="text-[11px] text-stone-500 hover:text-stone-300 underline underline-offset-2 min-h-11 px-2 transition-colors"
+                className="text-[11px] text-stone-300 hover:text-stone-100 underline underline-offset-2 min-h-11 px-2 transition-colors"
                 aria-label="Site team member? Open the full MjengoOS app"
               >
                 Site team? Open the full app

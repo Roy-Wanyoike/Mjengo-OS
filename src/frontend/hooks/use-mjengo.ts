@@ -164,6 +164,30 @@ function normalizeOutboxItem(item: OutboxItem): OutboxItem {
 /** Retention cap for the synced/resolved history — the live queue is never pruned. */
 const SYNC_HISTORY_CAP = 50
 
+/**
+ * FE-6a (issue #80) — load sequencing token. Every load(), switchProject() and
+ * createProject() bumps this counter; a response whose captured token no
+ * longer matches was superseded and is DISCARDED before any set(). Without
+ * it, a rapid P1→P2→P1 switch races: the LATE stale fetch resolves after the
+ * newer one and overwrites `data` + `activeProjectId`, showing the wrong
+ * project. Module-level on purpose — it is in-flight-request bookkeeping,
+ * never store state, so it is neither persisted nor observable.
+ */
+let loadSeq = 0
+
+/**
+ * FE-6b (issue #80) — one honest toast for a refused /api/actions|share call.
+ * The server's { error } text reaches the user verbatim (money-tab's aiReview
+ * pattern); a refusal without a reason falls back to the generic copy.
+ */
+function serverRefusalToast(json: unknown): string {
+  const reason =
+    json && typeof json === 'object' && typeof (json as { error?: unknown }).error === 'string'
+      ? (json as { error: string }).error.trim()
+      : ''
+  return reason ? t('sync.serverRefused', { reason }) : t('sync.applyFailed')
+}
+
 /** EAT "today" — mirrors the server's todayStr() so client-side row lookups line up. */
 function todayEAT(): string {
   return new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10)
@@ -589,6 +613,9 @@ export const useMjengo = create<MjengoState>()(
             }
             return
           }
+          // FE-6a: a share boot owns the screen — invalidate any in-flight
+          // load()/switchProject() response so it cannot clobber share data.
+          ++loadSeq
           set({
             data: json.data as ProjectPayload,
             activeProjectId: (json.data as ProjectPayload).project.id,
@@ -609,6 +636,11 @@ export const useMjengo = create<MjengoState>()(
       },
 
       load: async () => {
+        // FE-6a (issue #80): capture the sequence token — if a newer
+        // load()/switchProject()/createProject() starts before this one's
+        // fetches resolve, every set() below is skipped (a stale response
+        // must not overwrite newer data or stop a newer spinner).
+        const seq = ++loadSeq
         set({ loading: !get().data })
         try {
           const { activeProjectId } = get()
@@ -616,6 +648,7 @@ export const useMjengo = create<MjengoState>()(
             fetch('/api/projects', { cache: 'no-store' }),
             fetch(`/api/project${activeProjectId ? `?projectId=${encodeURIComponent(activeProjectId)}` : ''}`, { cache: 'no-store' }),
           ])
+          if (seq !== loadSeq) return // superseded — the newer request owns the screen
           const projectsJson = projectsRes.ok ? await projectsRes.json().catch(() => null) : null
           const listLoaded = Boolean(projectsJson?.ok)
           const projects: ProjectListItem[] = listLoaded ? (projectsJson.projects as ProjectListItem[]) : get().projects
@@ -626,30 +659,42 @@ export const useMjengo = create<MjengoState>()(
           }
           if (projectRes.ok) {
             const data = (await projectRes.json()) as ProjectPayload
+            if (seq !== loadSeq) return // superseded while parsing
             set({ data, projects, activeProjectId: data.project.id, loading: false })
           } else {
             // Active project may have been deleted — fall back to the first project
             const fallbackRes = await fetch('/api/project', { cache: 'no-store' })
+            if (seq !== loadSeq) return // superseded while fetching the fallback
             if (fallbackRes.ok) {
               const data = (await fallbackRes.json()) as ProjectPayload
+              if (seq !== loadSeq) return
               set({ data, projects, activeProjectId: data.project.id, loading: false })
             } else {
               set({ projects, loading: false })
             }
           }
         } catch {
-          set({ loading: false })
+          // A stale request's failure belongs to the newer owner — never stop
+          // its spinner or flash error state on its behalf.
+          if (seq === loadSeq) set({ loading: false })
         }
       },
 
       switchProject: async (id) => {
         const { data, activeProjectId } = get()
         if (id === activeProjectId && data?.project?.id === id) return
+        // FE-6a: the optimistic activeProjectId set below is kept (the store's
+        // current id drives the UI immediately); the token discards a LATE
+        // stale response so it can neither swap `data` back to the old project
+        // nor fire its "Switched to …" toast after a newer switch landed.
+        const seq = ++loadSeq
         set({ loading: true, activeProjectId: id })
         try {
           const res = await fetch(`/api/project?projectId=${encodeURIComponent(id)}`, { cache: 'no-store' })
+          if (seq !== loadSeq) return // superseded — a newer switch owns the screen
           if (res.ok) {
             const newData = (await res.json()) as ProjectPayload
+            if (seq !== loadSeq) return // superseded while parsing
             set({ data: newData, activeProjectId: newData.project.id, loading: false })
             toast.success(`Switched to ${newData.project.name}`)
           } else {
@@ -657,6 +702,7 @@ export const useMjengo = create<MjengoState>()(
             toast.error('Could not open that project')
           }
         } catch {
+          if (seq !== loadSeq) return
           set({ loading: false })
           toast.error('Network error — could not switch project')
         }
@@ -671,6 +717,10 @@ export const useMjengo = create<MjengoState>()(
           })
           const json = await res.json()
           if (json.ok && json.data) {
+            // FE-6a: the created project owns the screen — invalidate any
+            // in-flight load()/switchProject() response so stale server data
+            // cannot clobber the fresh project view.
+            ++loadSeq
             set({
               data: json.data,
               projects: (json.projects ?? get().projects) as ProjectListItem[],
@@ -725,6 +775,11 @@ export const useMjengo = create<MjengoState>()(
               set({ data: json.data, lastSyncAt: Date.now() })
               return true
             }
+            // FE-6b (issue #80): surface the server's refusal to the USER, not
+            // just the console — generic per-surface copy can't say WHY
+            // (validation, lockout, flag-off 403). Same pattern as money-tab's
+            // aiReview, via the W7 store-level t().
+            toast.error(serverRefusalToast(json))
             console.error('client action failed', json.error)
             return false
           } catch {
@@ -748,6 +803,8 @@ export const useMjengo = create<MjengoState>()(
               set({ data: json.data, lastSyncAt: Date.now() })
               return true
             }
+            // FE-6b (issue #80): same honest-refusal surfacing as the share path.
+            toast.error(serverRefusalToast(json))
             console.error('client-role action failed', json.error)
             return false
           } catch {
@@ -779,6 +836,10 @@ export const useMjengo = create<MjengoState>()(
               })
               return true
             }
+            // FE-6b (issue #80): the server's refusal reaches the toast, not
+            // just console.error — users can finally act on the REAL reason
+            // (duplicate material, payment lock, flag-off 403…).
+            toast.error(serverRefusalToast(json))
             console.error('action failed', json.error)
             return false
           } catch {
@@ -791,6 +852,14 @@ export const useMjengo = create<MjengoState>()(
             const item: OutboxItem = { id: uid(), type, payload: queuedPayload, label, createdAt: Date.now(), projectId: projectId ?? null, syncStatus: 'pending', retryCount: 0 }
             if (data) set({ data: reduceLocal(data, type, queuedPayload) })
             set({ outbox: [...get().outbox, item] })
+            // FE-6c (issue #80): honest queued copy. Callers branch their
+            // success toast on `online` from their render closure — still
+            // true here — so they would fire the ONLINE copy for a write that
+            // only landed on-device. dispatch is the only place that KNOWS the
+            // action was queued, so it fires the queued copy itself
+            // ('field.savedQueued'); the explicit-offline branch below does
+            // NOT (callers already show the queued copy when online is false).
+            toast.success(t('field.savedQueued', { count: get().outbox.length }))
             return true
           } finally {
             set({ actionBusy: null })
