@@ -29,10 +29,12 @@
  *   · notificationOptionsFor: per-project tag (same project replaces, not
  *     stacks), icons, data.url;
  *   · sw.js SOURCE pins: push + notificationclick handlers wired with the
- *     same shapes, AND the offline behavior byte-identical — the fetch
- *     strategy invariants (/api never cached, offline shell fallback,
- *     immutable cache-first, /_next/static network-first) still present,
- *     with the push handlers strictly APPENDED after them.
+ *     same shapes, AND the fetch-strategy invariants intact — /api never
+ *     cached, offline.html still the final navigation fallback, immutable
+ *     cache-first, /_next/static network-first — with the push handlers
+ *     strictly APPENDED after them. (sw.js v3 changed the navigation strategy
+ *     on purpose — issue #78 — and its pins live in sw-offline-shell.test.ts;
+ *     these invariants still hold.)
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -480,7 +482,7 @@ describe('clickTargetUrl — the click can never leave the origin', () => {
 
 const SW_SOURCE = readFileSync(fileURLToPath(new URL('../../public/sw.js', import.meta.url)), 'utf8')
 
-describe('public/sw.js — push handlers wired, offline behavior untouched', () => {
+describe('public/sw.js — push handlers wired, fetch-strategy invariants intact', () => {
   it('registers exactly one push and one notificationclick handler (appended)', () => {
     expect(SW_SOURCE.match(/self\.addEventListener\('push'/g)).toEqual(["self.addEventListener('push'"])
     expect(SW_SOURCE.match(/self\.addEventListener\('notificationclick'/g)).toEqual([
@@ -510,7 +512,7 @@ describe('public/sw.js — push handlers wired, offline behavior untouched', () 
     expect(clickSection).toContain('openWindow(target)')
   })
 
-  it('OFFLINE BEHAVIOR UNCHANGED — the load-bearing fetch strategy invariants survive', () => {
+  it('FETCH-STRATEGY INVARIANTS SURVIVE v3 — the load-bearing rules in public/sw.js', () => {
     // /api/** is never cached, never served from cache (the money honesty rule).
     expect(SW_SOURCE).toContain("pathname.startsWith('/api/')")
     // HTML navigations fall back to the precached offline shell.

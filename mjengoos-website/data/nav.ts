@@ -1,6 +1,10 @@
 import type { NavItem } from "@/types";
 
 /** Primary desktop/mobile navigation (§11 of the brief). */
+// Note (MW-12): /materials is linked from the FOOTER_COLUMNS Platform column
+// (sitemap priority 0.8) rather than NAV_ITEMS — the main nav is a flat
+// seven-item bar with no submenus, and an eighth item crowds the desktop
+// navbar next to the logo + "Sign in" + "Get Started".
 export const NAV_ITEMS: NavItem[] = [
   { label: "Platform", href: "/platform" },
   { label: "Solutions", href: "/solutions" },
@@ -21,6 +25,7 @@ export const FOOTER_COLUMNS: { title: string; items: NavItem[] }[] = [
       { label: "Land Verification", href: "/land-verification" },
       { label: "Professionals", href: "/professionals" },
       { label: "Marketplace", href: "/marketplace" },
+      { label: "Materials", href: "/materials" },
       { label: "Wallet", href: "/wallet" },
       { label: "AI", href: "/ai" },
     ],

@@ -20,8 +20,8 @@ import { NextResponse } from 'next/server'
  *
  * Honest facts baked into the text: simulated-by-default payment rails (Daraja
  * sandbox when env-configured), KES-only money,
- * ledger as source of truth, idempotent replays that never 409, single-instance
- * in-process rate buckets, and the one error shape { error, field? }.
+ * ledger as source of truth, idempotent replays that 409 on a payload mismatch,
+ * single-instance in-process rate buckets, and the one error shape { error, field? }.
  */
 
 const json = (schema: object) => ({ content: { 'application/json': { schema } } })
@@ -111,10 +111,12 @@ const idempotencyParam = {
   schema: { type: 'string', maxLength: 200 },
   description:
     'Money-mutation idempotency (spec §57): the FIRST successful run with a key is stored; ' +
-    'repeating the key replays that stored 200 body verbatim (adds top-level replayed: true and ' +
-    'scope). The replay happens even if the payload differs — 409 conflicts are NOT produced ' +
-    'today (kept from modules/wallet/http.ts withIdempotency). Failed runs are never recorded, ' +
-    'so a retry after a 4xx/5xx is always possible.',
+    'repeating the key with the SAME payload replays that stored 200 body verbatim (adds ' +
+    'top-level replayed: true and scope). Repeating the key with a DIFFERENT payload is ' +
+    'refused with 409 — the stored result is never silently replayed for a request it did ' +
+    'not produce (issue #75 / BE-9: the payload fingerprint is stored with the record by ' +
+    'modules/wallet/http.ts withIdempotency). Failed runs are never recorded, so a retry ' +
+    'after a 4xx/5xx is always possible.',
 }
 
 const walletIdParam = {
@@ -1486,10 +1488,12 @@ const spec = {
       '**Auth** — NextAuth credentials session (HttpOnly, signed JWT cookie `next-auth.session-token`). ' +
       'Wallet routes: finance+admin. Payments: finance, admin, or the project-pinned client. ' +
       'No API keys, no OAuth — cookie session only, same-origin.\n\n' +
-      '**Errors** — one shape everywhere: { error: string, field? } (400/401/403/404/422/429/500). ' +
+      '**Errors** — one shape everywhere: { error: string, field? } (400/401/403/404/409/422/429/500). ' +
       'The success shape is { ok: true, data, ... }; the `ok` flag never appears on errors.\n\n' +
-      '**Idempotency** — send Idempotency-Key on every money mutation; replays return the stored body ' +
-      '(replayed: true) and never 409.\n\n' +
+      '**Idempotency** — send Idempotency-Key on every money mutation; a key repeated with the ' +
+      'same payload returns the stored body (replayed: true); a key repeated with a DIFFERENT ' +
+      'payload is refused with 409 (the stored result is never replayed for a request it did ' +
+      'not produce).\n\n' +
       '**Pagination** — limit (1-200, default 50) + id cursor; responses carry nextCursor/hasMore.\n\n' +
       'This document is served unauthenticated at /api/openapi.json and is the SDK-generation seam ' +
       '(ARCHITECTURE.md roadmap). It covers exactly the 27 /api/v1 route paths — the wallet + payment surface, ' +

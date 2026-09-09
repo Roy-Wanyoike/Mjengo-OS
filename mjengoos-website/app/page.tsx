@@ -27,7 +27,7 @@ export const metadata: Metadata = {
 };
 
 /**
- * Homepage — composed from the 17 section components (§10).
+ * Homepage — composed from the 19 section components (§10).
  */
 export default function HomePage() {
   return (

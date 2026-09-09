@@ -1,4 +1,5 @@
 import { Camera, MapPin, Clock, FolderOpen, Sparkles, UserCheck, Database, ArrowRight } from "lucide-react";
+import Image from "next/image";
 import { Container } from "@/components/container";
 import { SectionHeading } from "@/components/section-heading";
 import { Reveal } from "@/components/reveal";
@@ -40,14 +41,18 @@ export function GroundTruth() {
           {/* Photo evidence chain */}
           <Reveal>
             <div className="relative">
-              {/* Real site photo with evidence overlay */}
+              {/* Real site photo with evidence overlay — next/image (MW-11):
+                  src goes through asset() so it carries the serving base
+                  path; the optimizer (and its optimized WebP variants) then
+                  resolves through the same prefix. */}
               <figure className="relative overflow-hidden rounded-xl border border-ink/10 shadow-[0_24px_64px_-28px_rgb(23_25_24/0.4)]">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
+                <Image
                   src={asset("/images/ground-truth.jpg")}
                   alt="Construction site in Kenya — workers on a walling phase with formwork and scaffolding"
+                  width={1200}
+                  height={795}
+                  sizes="(min-width: 1024px) 520px, 100vw"
                   className="aspect-[4/3] w-full object-cover"
-                  loading="lazy"
                 />
                 {/* Evidence overlay chips — the product's capture metadata */}
                 <div className="absolute left-3 top-3 flex flex-wrap gap-2">

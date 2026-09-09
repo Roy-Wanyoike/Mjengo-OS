@@ -56,6 +56,7 @@ export const POST = route(
         idempotencyKey: undefined, // handled by withIdempotency / natural keys in the service
         by: session.user.name,
       }),
+      body, // payload fingerprint: a key reused with a different body → 409 (BE-9)
     )
   },
 )

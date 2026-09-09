@@ -33,7 +33,7 @@ const ACCESS_CONTROL = [
   {
     icon: KeyRound,
     title: "Role-based access",
-    text: "Every account has a role — contractor, client or admin — and the server enforces what that role may do on every request. A client can approve and comment; they cannot rewrite site records. Permissions live server-side, never only in the interface.",
+    text: "Every account has a role — contractor, client, site supervisor, procurement, quantity surveyor, finance, supplier or admin — and the server enforces what that role may do on every request. A client can approve and comment; they cannot rewrite site records. Permissions live server-side, never only in the interface.",
   },
   {
     icon: Boxes,

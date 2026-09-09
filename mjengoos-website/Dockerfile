@@ -9,11 +9,13 @@
 #  deps:    node:20-slim + bun. `bun install --frozen-lockfile` from the
 #           site's own package.json + bun.lock. The site is an independent
 #           app: no Prisma, no auth, no database — nothing to generate.
-#  builder: `next build` under Node (exactly like CI). The two NEXT_PUBLIC_*
+#  builder: `next build` under Node (exactly like CI). The three NEXT_PUBLIC_*
 #           vars are BUILD args because Next.js inlines them at build time —
 #           switching serving modes means rebuilding the image, not re-running
 #           it. Defaults are the integrated mode (basePath /website,
-#           same-origin "Sign in") so the compose stack needs zero overrides.
+#           same-origin "Sign in", empty SITE_URL → dev-fallback origin, so
+#           set NEXT_PUBLIC_SITE_URL for any indexed deployment) so the
+#           compose stack needs zero overrides.
 #           Building requires no secrets — the site has none to dummy out
 #           (no DATABASE_URL / NEXTAUTH_* involved).
 #  runner:  node:20-slim, non-root `node` user, standalone server.js from
@@ -23,10 +25,12 @@
 #           The contact-form API appends to data/submissions.json, so
 #           /app/data is created writable for the non-root user.
 #
-#  BUILD-time env = the two NEXT_PUBLIC_* ARGs above (no secrets).
+#  BUILD-time env = the three NEXT_PUBLIC_* ARGs above (no secrets).
 #  RUNTIME env (docker run / compose): none required. PORT/HOSTNAME are
 #  preset; the web app reaches this container as WEBSITE_ORIGIN in its
-#  next.config.ts rewrite (http://website:3001 under compose).
+#  next.config.ts rewrite (http://website:3001 under compose). Optionally
+#  set TRUST_PROXY=1 at RUNTIME (see mjengoos-website/.env.example) only
+#  when a real appending proxy fronts this container directly.
 # ---------------------------------------------------------------------------
 
 FROM oven/bun:1 AS bun
@@ -51,12 +55,20 @@ COPY . .
 #   NEXT_PUBLIC_BASE_PATH=/website, "Sign in" → same-origin "/".
 # Standalone mode on its own domain instead:
 #   docker build --build-arg NEXT_PUBLIC_BASE_PATH= \
-#                --build-arg NEXT_PUBLIC_APP_URL=https://app.yourdomain.example …
+#                --build-arg NEXT_PUBLIC_APP_URL=https://app.yourdomain.example \
+#                --build-arg NEXT_PUBLIC_SITE_URL=https://yourdomain.example …
+# NEXT_PUBLIC_SITE_URL (MW-9) is the canonical public origin baked into
+# sitemap.xml / robots.txt / canonicals / OG-Twitter URLs. It must be the
+# origin the SITE IS BROWSED AT — in integrated mode that is the app's
+# public origin, and the sitemap then lists .../website/<page>. Omitting it
+# leaves every absolute URL pointing at the dev fallback localhost:3001.
 ARG NEXT_PUBLIC_BASE_PATH=/website
 ARG NEXT_PUBLIC_APP_URL=/
+ARG NEXT_PUBLIC_SITE_URL=
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH} \
-    NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
+    NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL} \
+    NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
 
 # Production build; then place the static assets + public/ inside the
 # standalone tree (what the root app's build script does with cp — done

@@ -1,6 +1,9 @@
 # MjengoOS — single-node self-host (SQLite + local disk uploads).
 #
-#   cp .env.example .env        # set NEXTAUTH_SECRET (openssl rand -hex 32)
+#   cp .env.example .env        # set NEXTAUTH_SECRET (openssl rand -hex 32
+#                                #   or -base64 32; required — compose refuses
+#                                #   to start without it, and the app's boot
+#                                #   guard fails closed in production)
 #                                #   and JOBS_RUN_TOKEN (same command) to
 #                                #   enable the jobs-tick scheduler below
 #   docker compose up -d --build
@@ -34,11 +37,23 @@ services:
                              #   passes everything) — the sidecar's credential
     environment:
       DATABASE_URL: "file:/app/db/custom.db"
+      # Auth session secret (issue #74 / BE-2): REQUIRED — interpolation aborts
+      # `docker compose up` when .env has no NEXTAUTH_SECRET (the compose-level
+      # twin of the app's runtime boot guard, src/backend/lib/next-auth-guard.ts,
+      # which fails closed in production on a missing/short secret). Generate:
+      #   openssl rand -hex 32     (or: openssl rand -base64 32)
+      NEXTAUTH_SECRET: "${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in .env (generate: openssl rand -hex 32)}"
       # /website/* rewrite target: the website service on the compose network
       # (local default when unset: http://127.0.0.1:3001 — see DEPLOYMENT.md §3).
       WEBSITE_ORIGIN: "http://website:3001"
       # Fixed public domain instead of a proxy? Set in .env:
       #   NEXTAUTH_URL=https://your-domain.example
+      # Webhook HMAC secrets for the two public field channels (USSD *384# and
+      # WhatsApp). Unset = the documented open demo posture; in production the
+      # app logs ONE loud warning per route until they are set (BE-6, issue #76).
+      # Set in .env (env_file passes them through, like JOBS_RUN_TOKEN):
+      #   USSD_WEBHOOK_SECRET=<openssl rand -hex 32>
+      #   WHATSAPP_WEBHOOK_SECRET=<openssl rand -hex 32>
     volumes:
       - app-db:/app/db                 # SQLite database (back this up!)
       - app-photos:/app/public/photos  # POST /api/upload photo uploads

@@ -4,8 +4,15 @@ import { db } from '@/backend/lib/db'
 import { applyAction, type ActionType } from '@/backend/lib/mjengo'
 import { withAuditContext } from '@/backend/lib/audit'
 import { clientIpFromHeaders, enforceRateLimit } from '@/backend/lib/rate-limit'
+import { warnIfWebhookSecretUnsetInProduction } from '@/backend/lib/webhook-secret-warning'
 
 export const dynamic = 'force-dynamic'
+
+// BE-6 (issue #76): the production posture warning — ONE loud line when this
+// route would accept unauthenticated writes (secret unset). No-op in dev/test
+// and once the secret is set; the fail-open behavior itself is unchanged and
+// stays documented below.
+warnIfWebhookSecretUnsetInProduction('api/whatsapp', 'WHATSAPP_WEBHOOK_SECRET')
 
 /**
  * WhatsApp webhook route (W4-3) — the honest seam for the field channel
@@ -54,7 +61,9 @@ export const dynamic = 'force-dynamic'
  *   · WHATSAPP_WEBHOOK_SECRET: when set, POSTs must carry `X-Signature:`
  *     lowercase-hex HMAC-SHA256 of the RAW request body under the secret
  *     (timing-safe compare — the same verifyWebhookSignature mechanics as
- *     the USSD route). Unset keeps the open demo posture, documented.
+ *     the USSD route). Unset keeps the open demo posture, documented — and,
+ *     since BE-6 (issue #76), logs ONE loud startup warning when
+ *     NODE_ENV=production, so the open posture cannot ship silently.
  *   · Rate limits: 20 req/min per phone PLUS 40 req/min per CLIENT-IP for
  *     EVERY POST (unlike USSD's PIN-only IP throttle — every WhatsApp POST
  *     carries a worker-identity attempt, so the IP bucket always applies).

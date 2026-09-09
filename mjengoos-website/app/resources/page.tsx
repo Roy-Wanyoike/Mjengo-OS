@@ -60,7 +60,7 @@ const TOURS: { icon: LucideIcon; title: string; description: string; href: strin
   {
     icon: Package,
     title: "Marketplace",
-    description: "Comparing supplier quotes with fair-price context from real projects.",
+    description: "Comparing supplier quotes with fair-price context from across the region.",
     href: "/marketplace",
   },
 ];
@@ -89,7 +89,7 @@ const PRODUCT_FAQS = [
   {
     question: "What does M-Pesa integration mean?",
     answer:
-      "It means MjengoOS records M-Pesa payments — the reference code, amount, timestamp and actor go into the project ledger. It does not move money and holds no deposits. Money moves through your own M-Pesa and bank accounts, as always.",
+      "It means MjengoOS records M-Pesa payments — the reference code, amount, timestamp and actor go into the project ledger. It does not move money and holds no deposits; M-Pesa payment initiation is in sandbox testing and production transfers are not enabled yet. Money moves through your own M-Pesa and bank accounts, as always.",
   },
 ];
 

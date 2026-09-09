@@ -38,7 +38,7 @@ always derived.
 | | |
 |---|---|
 | **Marketing site** (`/website`) | The public pitch: what MjengoOS is, who it's for, pricing, security. |
-| **Web app** (`:3000`) | The product: login gate → role-aware workspace with 13 tabs, offline outbox, PWA. |
+| **Web app** (`:3000`) | The product: login gate → role-aware workspace with 14 tabs, offline outbox, PWA. |
 | **Mobile shell** | Same app, phone-first: bottom nav (≤5 tabs + More sheet + camera quick-action). |
 | **Client share links** | `/?share=<token>` — diaspora clients approve milestones, comment on photos, decide invoices. No account. The token is the auth. |
 
@@ -290,7 +290,8 @@ src/
   mobile/       # phone-first shell: bottom nav, ≤5 tabs + More sheet + camera
   shared/       # isomorphic contracts: permissions matrix, CLIENT_ACTIONS allowlist
 mjengoos-website/  # marketing site (independent app, :3001, proxied at /website)
-prisma/            # schema.prisma (68 models), migrations/ (0–8), seed chain
+prisma/            # schema.prisma (68 models), migrations/ (0–8; +9 drift
+                #   reconcile in PR #86), seed chain
 ```
 
 ### REST API — `/api/v1`
@@ -323,7 +324,7 @@ Full module boundaries and the production migration roadmap
 | UI | Tailwind CSS 4, shadcn/ui + Radix primitives, lucide icons, cmdk palette |
 | State | Zustand (app store + persisted offline outbox) |
 | Auth | NextAuth v4 — credentials provider, JWT session cookies, scrypt hashes |
-| Data | Prisma 6 + SQLite (68-model schema, 9 additive migrations, double-entry ledger) |
+| Data | Prisma 6 + SQLite (68-model schema, `0_init` + 8 additive migrations, double-entry ledger) |
 | Validation | Zod 4 on every mutating route |
 | AI | z-ai-web-dev-sdk behind backend-only seams: `lib/ai.ts` (Copilot) and `modules/ai/` (Wave-6 advisory layer — chat/vision/transcribe/speak, `ai` flag default-off, 20s call cap) |
 | Runtime/tooling | Bun (install, seeds, dev), Node 20 for the production standalone server, Docker for self-host |
@@ -346,6 +347,10 @@ bunx prisma migrate deploy    # production path — or: bunx prisma db push
 bun run dev                   # → http://localhost:3000
 ```
 
+Migrations are complete — the full story (schema-drift reconcile via
+`9_schema_reconcile`, `migrate deploy` vs `db push`) lives in
+[DEPLOYMENT.md §4.1](./DEPLOYMENT.md).
+
 The database ships **empty** — seed the demo data. One command runs the
 whole chain in dependency order (an `intel` re-run is folded in after
 `money`, which wipes the notification kinds `intel.ts` owns):
@@ -363,7 +368,7 @@ bun prisma/seed.ts                    # base: 3 demo projects, phases, tasks,
                                       #   workers, materials, photos + inline
                                       #   professionals → land → supply →
                                       #   invoices → intel
-bun prisma/seed-extras/users.ts       # 7 demo login accounts (wipes ONLY User)
+bun prisma/seed-extras/users.ts       # 8 demo login accounts (wipes ONLY User)
 bun prisma/seed-extras/tasks.ts       # priorities, assignees, blockers
 bun prisma/seed-extras/domain.ts      # worker depth, driver leg, team roster
 bun prisma/seed-extras/evidence.ts    # zones, comments, notifications, audit
@@ -419,10 +424,15 @@ Recruiter-friendly, and all of it verifiable in the repo:
 - **Zod validation + raw-body caps on every mutating request** — including
   the public `POST /api/share` (strictObject schema, 64 KB cap checked before
   `JSON.parse`); scrypt password hashing with `timingSafeEqual`.
-- **PR-verified `main`** — the 13 foundation PRs were reviewed and CI-gated
-  (security hardening in #11, proxy-auth fix in #7); waves 3–6 landed as
-  locally-verified merge commits (full gate re-run per merge — lint, strict
-  typecheck, all 1,500+ tests) while GitHub push access was unavailable.
+- **PR-verified `main`** — the 13 foundation PRs were reviewed (security
+  hardening in #11, proxy-auth fix in #7; CI workflows landed with #10).
+  Waves 2–6 were built as locally-verified merge commits (full gate re-run
+  per merge — lint, strict typecheck, all 1,500+ tests) while push access
+  was unavailable, then published to GitHub as one audited PR — #85, merged
+  2026-09-09. Since then every change lands through a PR; CI jobs are
+  currently blocked from starting by the account's billing lock (see
+  [CI/CD](#cicd)), so the full gate is re-run locally per PR in the
+  meantime.
 
 Vulnerability disclosure policy: [SECURITY.md](./SECURITY.md).
 
@@ -453,15 +463,28 @@ form), health monitoring, SQLite backups, secrets handling — in
 
 ## CI/CD
 
-`.github/workflows/ci.yml` runs lint + strict typecheck + a real
-`next build` on every push/PR; `docker.yml` builds the Docker image on a
-GitHub runner (the dev sandbox has no docker CLI — CI is the verification).
-The unit suite — **1,513 tests across 54 vitest files** (`bun run test`) —
-is the local gate; every wave merge re-ran it in full (495 → 899 → 1,019 →
-1,102 → 1,244 → 1,513 tests across waves 1–6). PR runs
-auto-cancel on new commits. Workflows are currently paused by a
-billing lock on the account — they exist, are green on the last runs, and
-resume unchanged when billing is restored.
+Three workflows live in `.github/workflows/`, all triggered on every push to
+`main` and every pull request (PR runs auto-cancel on new commits):
+
+- **CI** (`ci.yml`) — `bun run lint` + strict `tsc --noEmit` for the web app
+  **and** the marketing site, an informational `bun audit` (non-blocking), and
+  a real `next build` (standalone) with a throwaway SQLite URL + dummy secret
+  — the production build must never require real env secrets.
+- **Tests** (`test.yml`) — the full vitest unit suite, **`bun run test`
+  (1,513 tests across 54 files)**, on every push/PR to `main`. No database or
+  secrets required — the tests are pure/unit-level by design.
+- **Docker** (`docker.yml`) — `docker build` for both production images
+  (webapp + marketing site) on a GitHub runner (the dev sandbox has no docker
+  CLI — CI is the image verification).
+
+The suite grew 495 → 899 → 1,019 → 1,102 → 1,244 → 1,513 tests across waves
+1–6, re-run in full on every wave merge. **Honest state:** the workflow
+definitions are active and fire on every push/PR, but every run to date has
+failed to start its jobs — the GitHub account is locked by a billing issue
+("The job was not started because your account is locked due to a billing
+issue."), so no run has ever gone green. Until billing is restored, the
+gates hold locally: each wave merge re-ran lint, strict typecheck and the
+full test suite in the worktree before pushing.
 
 ## Honesty notes (deliberate)
 
@@ -509,7 +532,7 @@ resume unchanged when billing is restored.
 | `src/mobile/` | Phone-first bottom nav |
 | `src/shared/` | Isomorphic contracts: `permissions.ts` role matrix, `client-actions.ts` allowlist |
 | `mjengoos-website/` | Marketing site (independent Next.js app, `:3001`, proxied at `/website`) |
-| `prisma/` | `schema.prisma` (68 models), `migrations/` (0_init + additive 1_mjengo_score … 8_trust_digest), `seed.ts` + `seed-extras/` |
+| `prisma/` | `schema.prisma` (68 models), `migrations/` (0_init + additive 1_mjengo_score … 8_trust_digest; 9_schema_reconcile closes the last drift — see DEPLOYMENT.md §4.1), `seed.ts` + `seed-extras/` |
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Build/run/test/deploy operations guide |

@@ -207,6 +207,14 @@ vi.mock('@/backend/lib/ai', () => ({
   extractJson: ai.extractJson,
   buildProjectDigest: ai.buildProjectDigest,
   parseDeliveryTranscript: ai.parseDeliveryTranscript,
+  // BE-4: voice-log ASR now goes through lib/ai's transcribeAudio (20s cap +
+  // singleton) instead of the route calling the SDK directly — route the mock
+  // at the same fake SDK asr seam so the ai.asrCreate assertions below keep
+  // meaning "the route really transcribed".
+  transcribeAudio: async (audioBase64: string) => {
+    const asr = (await ai.asrCreate({ file_base64: audioBase64 })) as { text?: unknown } | null
+    return typeof asr?.text === 'string' ? asr.text.trim() : ''
+  },
 }))
 
 vi.mock('z-ai-web-dev-sdk', () => ({

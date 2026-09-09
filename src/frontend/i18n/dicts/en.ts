@@ -785,4 +785,12 @@ export const enDict = {
   'share.note': 'Send this over WhatsApp or email. Regenerating invalidates the old link — and every draw pack it could open (the pack is served through the same token).',
   'share.previewLabel': 'Preview as client (read-only)',
   'share.previewHint': 'See exactly what your client sees.',
+  // ------------------------------------------------------------- W7 PWA offline (issue #78)
+  // (end-appended block — merge order W6-1 → W6-3 → W6-2 → W7; keep all)
+  'app.deadLink.title': 'This link no longer works',
+  'app.deadLink.body': '{error}. Ask the site team to send a fresh link from MjengoOS.',
+  'app.offline.banner': 'Offline — saving to on-device queue',
+  'app.offline.pending': '({count} pending sync)',
+  'app.offline.aiOffline': 'AI features need connectivity.',
+  'app.unknownRole': 'Unknown role “{role}” — showing a safe, minimal view (Overview only). Ask an admin to fix your account role.',
 } satisfies Dict

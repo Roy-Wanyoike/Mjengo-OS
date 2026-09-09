@@ -1,7 +1,22 @@
 import type { MetadataRoute } from "next";
 import { SITE } from "@/lib/site";
 
+/**
+ * Fixed last-modified date (YYYY-MM-DD), NOT `new Date()`: this sitemap is a
+ * static route generated at build time, so a dynamic date would stamp every
+ * rebuild as "just modified" even when no page changed. Bump this constant
+ * when a deploy actually changes page content.
+ */
+const SITE_LAST_MODIFIED = "2026-09-09";
+
+/**
+ * Public sitemap. URLs join the canonical origin (NEXT_PUBLIC_SITE_URL, MW-9)
+ * WITH the serving base path (NEXT_PUBLIC_BASE_PATH) — under the integrated
+ * /website proxy the sitemap must list e.g. https://host/website/platform,
+ * because that prefixed URL is the one crawlers can actually reach.
+ */
 export default function sitemap(): MetadataRoute.Sitemap {
+  const origin = `${SITE.url}${SITE.basePath}`;
   const routes = [
     { path: "", priority: 1.0 },
     { path: "/platform", priority: 0.9 },
@@ -30,8 +45,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
   ];
 
   return routes.map((r) => ({
-    url: `${SITE.url}${r.path}`,
-    lastModified: new Date(),
+    url: `${origin}${r.path}`,
+    lastModified: SITE_LAST_MODIFIED,
     changeFrequency: "monthly" as const,
     priority: r.priority,
   }));

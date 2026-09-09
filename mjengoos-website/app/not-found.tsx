@@ -1,6 +1,14 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { Container } from "@/components/container";
 import { Button } from "@/components/button";
+
+export const metadata: Metadata = {
+  title: "Page Not Found",
+  description:
+    "The page you're looking for isn't on the record. Get back to solid ground — the MjengoOS homepage and platform tour.",
+  robots: { index: false, follow: false },
+};
 
 export default function NotFound() {
   return (

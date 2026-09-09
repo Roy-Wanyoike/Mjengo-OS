@@ -52,6 +52,7 @@ export const POST = route(
         note: body.note,
         by: session.user.name,
       }),
+      body, // payload fingerprint: a key reused with a different body → 409 (BE-9)
     )
   },
 )

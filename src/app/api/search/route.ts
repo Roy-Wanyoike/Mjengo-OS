@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
-import { withGuard } from '@/backend/lib/guard'
+import { route } from '@/backend/lib/route-kit'
 
 // Global search (spec §80) — SQLite LIKE (ASCII case-insensitive by default)
 // across the real entities: projects, land parcels, workers, suppliers +
@@ -11,6 +11,13 @@ import { withGuard } from '@/backend/lib/guard'
 // Scoping: client-role sessions are pinned to THEIR project (session.user.
 // projectId); contractor/admin/finance search across all projects. LIKE
 // wildcards in the query are stripped so users can't inject % / _ patterns.
+//
+// BE-11 (issue #77): the route runs through route-kit with the standard
+// per-principal token bucket — 60 searches/min (the sibling GET posture,
+// e.g. notifications.get). It was the only guarded JSON route without a
+// limiter; each request scans ≤300 rows × ~10 tables, and signed-in users
+// could poll it unbounded. No behavior change otherwise: same guard (any
+// signed-in role), same 500 'Search failed' catch.
 
 export const dynamic = 'force-dynamic'
 
@@ -191,26 +198,33 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   return groups
 }
 
-export const GET = withGuard(async (req: NextRequest, session) => {
-  try {
-    const raw = new URL(req.url).searchParams.get('q') ?? ''
-    if (raw.length > MAX_QUERY) {
-      return NextResponse.json({ ok: true, q: raw.slice(0, MAX_QUERY), groups: [], note: `Query capped at ${MAX_QUERY} characters` })
-    }
-    const q = sanitize(raw).toLowerCase()
-    if (q.length < 2) {
-      return NextResponse.json({ ok: true, q: raw, groups: [], note: 'Type at least 2 characters' })
-    }
+export const GET = route(
+  {
+    scope: 'api/search GET',
+    // BE-11 (issue #77): the standard limiter — 60/min per principal.
+    rateLimit: { bucket: 'search', limit: 60, windowMs: 60_000 },
+  },
+  async (req: NextRequest, session) => {
+    try {
+      const raw = new URL(req.url).searchParams.get('q') ?? ''
+      if (raw.length > MAX_QUERY) {
+        return NextResponse.json({ ok: true, q: raw.slice(0, MAX_QUERY), groups: [], note: `Query capped at ${MAX_QUERY} characters` })
+      }
+      const q = sanitize(raw).toLowerCase()
+      if (q.length < 2) {
+        return NextResponse.json({ ok: true, q: raw, groups: [], note: 'Type at least 2 characters' })
+      }
 
-    // Client-role sessions are pinned to their own project; every other role
-    // searches across all projects.
-    const role = session.user.role
-    const pinned = role === 'client' ? (session.user.projectId ?? 'none') : null
-    const groups = await searchAll(q, pinned)
+      // Client-role sessions are pinned to their own project; every other role
+      // searches across all projects.
+      const role = session.user.role
+      const pinned = role === 'client' ? (session.user.projectId ?? 'none') : null
+      const groups = await searchAll(q, pinned)
 
-    return NextResponse.json({ ok: true, q: raw, scopedTo: pinned, groups })
-  } catch (e) {
-    console.error('[api/search]', e)
-    return NextResponse.json({ error: 'Search failed' }, { status: 500 })
-  }
-})
+      return NextResponse.json({ ok: true, q: raw, scopedTo: pinned, groups })
+    } catch (e) {
+      console.error('[api/search]', e)
+      return NextResponse.json({ error: 'Search failed' }, { status: 500 })
+    }
+  },
+)

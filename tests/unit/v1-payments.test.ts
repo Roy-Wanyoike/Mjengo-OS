@@ -140,6 +140,7 @@ vi.mock('@/backend/modules/wallet/service', () => svc)
 
 import { db } from '@/backend/lib/db'
 import { POST as paymentsPost } from '@/app/api/v1/payments/route'
+import { payloadFingerprint } from '@/backend/modules/wallet/http'
 import { invalidateFlagCache } from '@/backend/modules/intel/flags'
 
 const dbStub = () =>
@@ -346,17 +347,32 @@ describe('POST /api/v1/payments — body validation (zod strictObject)', () => {
 // ---------------------------------------------------------------- idempotency
 
 describe('POST /api/v1/payments — Idempotency-Key (real withIdempotency)', () => {
-  it("first keyed run records under the REQUEST's project; the repeat replays, service runs once", async () => {
+  it("first keyed run records under the REQUEST's project (payload fingerprint stored); the same-payload repeat replays, service runs once", async () => {
     sessionFor('finance')
     const first = await paymentsPost(payReq({ paymentRequestId: 'pr-1' }, { 'idempotency-key': 'pay-1' }))
     expect(first.status).toBe(200)
     expect(state().idemRows).toEqual([
-      { key: 'pay-1', scope: 'v1.payment.pay', projectId: 'p-1', responseBody: JSON.stringify(PAY_RESULT) },
+      {
+        key: 'pay-1',
+        scope: 'v1.payment.pay',
+        projectId: 'p-1',
+        responseBody: JSON.stringify({ payloadHash: payloadFingerprint({ paymentRequestId: 'pr-1' }), body: PAY_RESULT }),
+      },
     ])
-    const replay = await paymentsPost(payReq({ paymentRequestId: 'pr-2' }, { 'idempotency-key': 'pay-1' }))
+    const replay = await paymentsPost(payReq({ paymentRequestId: 'pr-1' }, { 'idempotency-key': 'pay-1' }))
     expect(replay.status).toBe(200)
     expect(await bodyOf(replay)).toEqual({ ok: true, data: PAY_RESULT, replayed: true, scope: 'v1.payment.pay' })
     expect(svc.payPaymentRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('a key reused for a DIFFERENT payment request → 409 (BE-9: the stored result is never replayed for a request it did not produce)', async () => {
+    sessionFor('finance')
+    await paymentsPost(payReq({ paymentRequestId: 'pr-1' }, { 'idempotency-key': 'pay-1b' }))
+    svc.payPaymentRequest.mockClear()
+    const conflict = await paymentsPost(payReq({ paymentRequestId: 'pr-2' }, { 'idempotency-key': 'pay-1b' }))
+    expect(conflict.status).toBe(409)
+    expect((await bodyOf(conflict)).error).toMatch(/different payload/i)
+    expect(svc.payPaymentRequest).not.toHaveBeenCalled()
   })
 })
 

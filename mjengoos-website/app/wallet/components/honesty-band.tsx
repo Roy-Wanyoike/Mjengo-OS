@@ -25,6 +25,7 @@ export function HonestyBand() {
               "MjengoOS holds no deposits. Money never sits with the platform.",
               "There is no escrow custody and no regulatory licence behind the wallet.",
               "Payments are made by people, through their own channels — MjengoOS records them: method, reference, timestamp, actor.",
+              "M-Pesa payment initiation is in sandbox testing; production transfers are not enabled yet. Nothing in the product moves your money today.",
               "If anyone tells you MjengoOS 'keeps' your project money, they have been misled — correct them with this page.",
             ].map((point, i) => (
               <Reveal as="li" key={point} delay={i * 70} className="flex items-start gap-3">

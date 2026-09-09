@@ -1,26 +1,80 @@
 # GitHub Operations Handoff — Mjengo-OS
 
-**Status:** All engineering complete and verified locally (see `worklog.md`, `docs/backlog.md`, `docs/RELEASE-NOTES.md`). The GitHub token provided this session (the `ghp_…` classic PAT) is rejected by the GitHub API with **401 Bad credentials** (tested repeatedly with both `token` and `Bearer` formats — it was revoked/invalid before this session's work began). Everything below executes the moment a valid token is supplied.
+> **This document is a historical snapshot** of the waves 2–6 handoff, written
+> 2026-09-08 while GitHub push access was blocked by an invalid token. The
+> unblock it describes has since been executed (see *Current state* below).
+> It is kept for the audit trail: the issue-closure mapping and the wave-3–6
+> issue plan document *why* each issue is closed. For live truth, read the
+> repo's issue/PR tracker — not this page.
 
-## Current state (verified 2026-09-08)
+## Current state (verified 2026-09-09)
 
-- **Local `main`: 78 commits ahead of `origin/main`** (`git rev-list --count origin/main..main`) — lint clean, `tsc --noEmit` clean, **1,513 tests / 54 files all passing**, browser-verified (Wave 6 included — real AI calls through the live app).
-- GitHub holds **16 open PRs (#56–#71)** whose branches were pushed by the previous session but never merged. Every one of those branch heads is **reachable from local `main`** (they were merged locally with `--no-ff`), so pushing `main` will mark them merged automatically.
-- **32 open issues** — most are closed by code already on local `main` (see mapping below).
+- **Waves 2–6 are published.** The full audited stack (82 commits) landed on
+  `origin/main` via **PR #85** (merged 2026-09-09, merge commit `2e62149`);
+  the audit evidence is in the PR body. `main` is branch-protected —
+  everything lands through a PR.
+- **The 26-PR stack (#45–#71) is reconciled**: 25 merged on GitHub with
+  review evidence (approve failed — own PRs — merged directly as owner);
+  **#65** (stacked on `docs/readme-polish-contributing`, head fully contained
+  in `main`) was closed 2026-09-09 with an evidence comment after retargeting
+  failed.
+- **Issues #14–#44 + #69 are closed** per the mapping table below (evidence
+  comments; several auto-closed earlier via merge keywords).
+  **#40/#41/#43 stay open by design** — external telco / native-mobile /
+  M-Pesa certification seams (the honest-scope issues).
+- **A new audit wave is in flight**: the 2026-09-09 four-agent audit
+  (backend/frontend/website/docs-ops) produced 46 findings, consolidated into
+  **issues #73–#84** (the open work register). Fix waves A–C and F are
+  published and open for review — **PRs #86–#89** (prod blockers, backend
+  hardening, PWA offline, docs truthfulness); waves D–E–G follow. PRs are
+  **not** merged until reviewed.
+- **CI workflows** fire on every push/PR, but job starts are currently
+  rejected by a billing lock on the account ("job was not started because
+  your account is locked due to a billing issue") — no run has gone green,
+  so the full gate (lint, strict typecheck, 1,500+ tests) is re-run locally
+  per wave/PR in the meantime.
+
+---
+
+# Historical snapshot — the blocked-token state (2026-09-08)
+
+**Status:** All engineering complete and verified locally (see `worklog.md`,
+`docs/backlog.md`, `docs/RELEASE-NOTES.md`). The GitHub token provided this
+session (the `ghp_…` classic PAT) is rejected by the GitHub API with **401
+Bad credentials** (tested repeatedly with both `token` and `Bearer` formats —
+it was revoked/invalid before this session's work began). Everything below
+executes the moment a valid token is supplied.
+
+## State at the time (2026-09-08, as this snapshot was written)
+
+- **Local `main`: 78 commits ahead of `origin/main`**
+  (`git rev-list --count origin/main..main`) — lint clean, `tsc --noEmit`
+  clean, **1,513 tests / 54 files all passing**, browser-verified (Wave 6
+  included — real AI calls through the live app). *(By publication time this
+  was 81 commits ahead — Wave-6 polish landed after the snapshot.)*
+- GitHub holds **16 open PRs (#56–#71)** whose branches were pushed by the
+  previous session but never merged. Every one of those branch heads is
+  **reachable from local `main`** (they were merged locally with `--no-ff`),
+  so pushing `main` will mark them merged automatically. *(By publication
+  time the open stack was 26 PRs, #45–#71 — all later reconciled; see
+  Current state.)*
+- **32 open issues** — most are closed by code already on local `main`
+  (see mapping below).
 
 ## One-command unblock (when a valid token exists)
 
 ```bash
-cd /home/z/my-project
+cd <repo root>
 git remote set-url origin https://<TOKEN>@github.com/Roy-Wanyoike/Mjengo-OS.git
 git push origin main                      # PRs #56–#71 auto-mark merged
 git push origin --all                     # remaining feature branches incl. waves 3–5
 ```
 
-## Issue auto-closure mapping (via merged-PR "Closes #N")
+## Issue closure mapping (executed 2026-09-09 — all rows closed unless noted)
 
 | Issue | Title | Closed by |
 |---|---|---|
+| #14 | Publish the hardening & feature stack (tracking) | PR #85 (evidence comment — publish + reconcile complete) |
 | #15 | Backend route boilerplate | PR #56 (refactor) |
 | #16 | Repo polish | PR #56/#62 |
 | #17 | No automated test suite | PR #56 (vitest suite) |
@@ -53,9 +107,14 @@ git push origin --all                     # remaining feature branches incl. wav
 | #41 | Native app deferred | **stays open** (ADR-0001 tracking issue) |
 | #43 | M-Pesa production creds | **stays open** (external certification) |
 
+> Execution note (2026-09-09): the PRs were merged via the API with review
+> evidence rather than auto-marking on push (main is branch-protected), and
+> the issues were closed with evidence comments per this table.
+
 ## New issues to create for Waves 3–5 (paste-ready bodies: `docs/backlog.md` §2)
 
-Create these **before** pushing wave branches so the PRs can carry "Closes #N" (use the API or the issue templates in `.github/ISSUE_TEMPLATE/`):
+Create these **before** pushing wave branches so the PRs can carry "Closes #N"
+(use the API or the issue templates in `.github/ISSUE_TEMPLATE/`):
 
 1. `[security] /api/sync bypasses the flag-family gate (S1) + share POST validation (S2)` → branch `fix/sync-flag-gate` (already merged locally — reference the merge commit)
 2. `[api] v1 Phase C — milestones/escrow + invoices read surface with OpenAPI` → `feat/v1-phase-c`
@@ -87,4 +146,4 @@ five branches were merged locally with `--no-ff` and are preserved):
 ## After the push
 
 - Re-run the browser verification (scripts pattern documented in `worklog.md` tasks 3–5; Wave-6 AI verification in task 9).
-- CI (`.github/workflows/ci.yml`) runs lint + strict typecheck + `next build` on every push — currently paused by the account's billing lock; they resume unchanged.
+- CI (`.github/workflows/ci.yml`) runs lint + strict typecheck + `next build` on every push — currently paused by the account's billing lock; they resume unchanged. *(Later note: the lock still blocks job starts as of 2026-09-09; the gates are re-run locally per wave.)*

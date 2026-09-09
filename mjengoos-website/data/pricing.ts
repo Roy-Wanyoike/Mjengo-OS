@@ -13,7 +13,7 @@ export const PRICING_TIERS: PricingTier[] = [
     tagline: "For the first projects building on MjengoOS.",
     features: [
       "Full platform — all modules",
-      "Up to 3 active projects",
+      "We onboard up to 3 active projects during Early Access (soft limit, managed onboarding)",
       "Unlimited team members per project",
       "Offline capture & sync",
       "Direct line to the product team",
@@ -21,7 +21,7 @@ export const PRICING_TIERS: PricingTier[] = [
     ],
     cta: { label: "Request access", href: "/signup" },
     highlight: true,
-    footnote: "We're onboarding projects in Nairobi & Kiambu first.",
+    footnote: "We're preparing to onboard the first Nairobi & Kiambu projects.",
   },
   {
     name: "Team",
@@ -32,7 +32,7 @@ export const PRICING_TIERS: PricingTier[] = [
       "Everything in Early Access",
       "Unlimited active projects",
       "Supplier marketplace participation",
-      "AI photo & voice analysis included",
+      "AI photo & voice analysis — opt-in, enabled per project",
       "Audit ledger export",
       "Priority support",
     ],
@@ -85,6 +85,6 @@ export const PRICING_FAQS: FaqItem[] = [
   {
     question: "How do you handle payments?",
     answer:
-      "M-Pesa references are recorded against payments — the reference code, timestamp and actor go into the ledger. MjengoOS records payments; it does not move them.",
+      "M-Pesa references are recorded against payments — the reference code, timestamp and actor go into the ledger. MjengoOS records payments; it does not move them. M-Pesa payment initiation is in sandbox testing; production transfers are not enabled yet — when that changes, this page will say so.",
   },
 ];

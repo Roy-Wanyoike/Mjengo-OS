@@ -6,9 +6,9 @@ import { AfricaBuilt } from "./components/africa-built";
 import { AiCtaBand } from "./components/cta-band";
 
 export const metadata: Metadata = {
-  title: "AI",
+  title: "AI Site Intelligence",
   description:
-    "AI that works with your project data. Photo progress analysis, Swahili voice notes turned into structured records, document and plan intelligence, and anomaly detection — advisory by design, with human review on every high-risk path. Built for African sites.",
+    "AI that works with your project data. Photo progress analysis, Swahili voice notes turned into structured records, document and plan intelligence, and anomaly detection — advisory by design, with human review on every high-risk path. Enabled per project during the pilot (opt-in). Built for African sites.",
   alternates: { canonical: "/ai" },
 };
 
@@ -23,7 +23,15 @@ export default function AiPage() {
       <PageHero
         eyebrow="AI, grounded"
         title="AI that works with your project data."
-        description="The intelligence layer runs on what your site actually produced — photos, voice notes, deliveries, budgets. AI amplifies the record; it never replaces the people accountable for it."
+        description={
+          <>
+            The intelligence layer runs on what your site actually produced — photos,
+            voice notes, deliveries, budgets. AI amplifies the record; it never replaces
+            the people accountable for it. During the pilot, AI features are enabled per
+            project (flag-gated and opt-in, off by default) — ask when you request access
+            and we&apos;ll switch them on for your project.
+          </>
+        }
       />
 
       <CapabilitiesGrid />

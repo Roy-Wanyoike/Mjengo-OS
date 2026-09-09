@@ -94,8 +94,12 @@ export const POST = route(
     if (!projectId && body.ownerType === 'project') {
       return v1Err(400, 'projectId required for project wallets (body or a project-bound session)', 'projectId')
     }
-    return await withIdempotency(req, 'v1.wallet.create', projectId ?? null, () =>
-      createWallet(projectId ?? 'platform', body),
+    return await withIdempotency(
+      req,
+      'v1.wallet.create',
+      projectId ?? null,
+      () => createWallet(projectId ?? 'platform', body),
+      body, // payload fingerprint: a key reused with a different body → 409 (BE-9)
     )
   },
 )

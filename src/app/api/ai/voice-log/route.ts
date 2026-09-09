@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import ZAI from 'z-ai-web-dev-sdk'
-import { buildProjectDigest, parseDeliveryTranscript } from '@/backend/lib/ai'
+import { buildProjectDigest, parseDeliveryTranscript, transcribeAudio } from '@/backend/lib/ai'
 import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
@@ -56,9 +55,12 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
       return NextResponse.json({ error: 'Audio too large (max ~9MB)' }, { status: 400 })
     }
 
-    const zai = await ZAI.create()
-    const asr = await zai.audio.asr.create({ file_base64: audioBase64 })
-    const rawTranscript = (asr.text ?? '').trim()
+    // BE-4 (issue #76): ASR goes through lib/ai.ts's transcribeAudio — the
+    // same 20s Promise.race + SDK singleton as the rest of the legacy AI
+    // seam. This route used to call ZAI.create() + zai.audio.asr.create
+    // directly with NO cap: one stuck ASR request held the route open for
+    // its full maxDuration (120s).
+    const rawTranscript = await transcribeAudio(audioBase64)
     if (!rawTranscript) {
       return NextResponse.json({ error: 'Could not hear any speech in that voice note' }, { status: 400 })
     }
