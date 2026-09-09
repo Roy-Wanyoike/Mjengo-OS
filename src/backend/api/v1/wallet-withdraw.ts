@@ -2,6 +2,7 @@ import { FINANCE_ROLES } from '@/backend/lib/guard'
 import { route } from '@/backend/lib/route-kit'
 import { withdrawWallet, walletWithBalance } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
+import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { withdrawBody, walletRef } from './schemas'
 import { mapServiceError, v1Err, V1_MUTATION_LIMIT } from './respond'
 
@@ -19,6 +20,9 @@ type Ctx = { params: Promise<{ id: string }> }
  *   { amount (positive number ≤ 10^9, max 2dp), destination?: 'mpesa'|'bank',
  *     note? (≤500), currency?: 'KES', projectId? }
  * Invalid body → 400 { error, field }; unknown wallet → 404 (was 400).
+ *
+ * Feature flag (spec §81, task 9-a): gated by `wallet` — OFF → 403 for
+ * non-admin sessions (admins bypass; see flags.ts).
  */
 export const POST = route(
   {
@@ -29,6 +33,11 @@ export const POST = route(
     onError: (e) => mapServiceError('wallets/:id/withdraw POST', e, 'Withdrawal failed'),
   },
   async (req, session, body, ctx: Ctx) => {
+    // Feature flag (spec §81, task 9-a) — the uniform wallet gate, BEFORE the
+    // idempotency record and any ledger write.
+    const flagDenied = await requireFlagOn('wallet', session)
+    if (flagDenied) return flagDenied
+
     const { id } = await ctx.params
     const idRef = walletRef.safeParse(id)
     if (!idRef.success) return v1Err(400, idRef.error.issues[0].message, 'id')
