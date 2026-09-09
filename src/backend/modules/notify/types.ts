@@ -46,8 +46,16 @@ export interface NotifyOptions {
    * (NOTIFY_SMS_WEBHOOK_URL — see channels.ts); otherwise the row honestly
    * stays 'logged' and nothing is sent. The attempt never throws into the
    * caller — the outcome lands in deliveryStatus/deliveryDetail.
+   *
+   * Recipient preference gate (issue #36): pass `userId` when the call site
+   * knows WHICH app user it is texting — notify() consults that user's
+   * recorded preferences (User.notificationPrefs, JSON { kind: { inApp } })
+   * before the send. A kind the recipient opted out of ({ inApp: false })
+   * skips the SMS attempt entirely (no fetch; honest skip reason in
+   * deliveryDetail). Without `userId` — or with no/opted-in prefs for the
+   * kind — the attempt proceeds (fail-open: today's behavior).
    */
-  sms?: { to: string }
+  sms?: { to: string; userId?: string }
 }
 
 /** Delivery lifecycle of an external channel row (in-app 'logged' is the default). */
