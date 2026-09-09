@@ -307,7 +307,7 @@ function PhotoPanel({ online }: { online: boolean }) {
                 <p className="text-sm">Drop a site photo here, or</p>
               </div>
             )}
-            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={onFile} aria-label="Upload site photo" />
+            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" capture="environment" className="sr-only" onChange={onFile} aria-label="Upload site photo" />
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileRef.current?.click()}>
               <Upload className="w-4 h-4" aria-hidden /> {preview ? 'Change photo' : 'Upload photo'}
             </Button>

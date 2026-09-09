@@ -1,6 +1,8 @@
 {
   "name": "MjengoOS",
   "short_name": "MjengoOS",
+  "id": "/",
+  "lang": "en",
   "description": "Offline-first construction site OS for Kenya — attendance, materials, money and evidence on any connection.",
   "start_url": "/",
   "scope": "/",

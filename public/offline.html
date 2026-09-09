@@ -3,8 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>MjengoOS — offline</title>
+  <title>MjengoOS — offline · nje ya mtandao</title>
   <meta name="theme-color" content="#1c1917" />
+  <!-- Bilingual (issue #78 / FE-11): both languages are always in the DOM; the
+       saved UI language (the same `mjengo-os-settings` store the app's Settings
+       tab and I18nProvider persist) is moved to the top. No network, no flash —
+       the inline script runs before first paint. -->
+  <script>
+    try {
+      var saved = JSON.parse(localStorage.getItem('mjengo-os-settings') || '{}')
+      if (saved && saved.state && saved.state.language === 'sw') {
+        document.documentElement.lang = 'sw'
+      }
+    } catch (e) { /* unreadable or unavailable → English stays first */ }
+  </script>
   <style>
     /* Self-contained (served by the service worker with no network): the app's
        stone palette, amber accent, system monospace. */
@@ -39,12 +51,19 @@
       display: flex; align-items: center; justify-content: center;
     }
     .mark svg { width: 34px; height: 34px; }
+    .bilingual { display: flex; flex-direction: column; gap: 18px; }
+    /* Default order: English first, Kiswahili second. Saved sw → Kiswahili
+       first (both always visible — bilingual, never hidden). */
+    .sw { order: 2; }
+    html[lang="sw"] .sw { order: 1; }
+    html[lang="sw"] .en { order: 2; }
     h1 { margin: 0 0 8px; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
-    p { margin: 0 0 20px; font-size: 14px; line-height: 1.6; color: #57534e; /* stone-600 */ }
+    h1 small { display: block; font-size: 11px; font-weight: 500; color: #a8a29e; margin-top: 2px; }
+    p { margin: 0 0 12px; font-size: 14px; line-height: 1.6; color: #57534e; /* stone-600 */ }
     p strong { color: #1c1917; }
     .queue {
       display: block;
-      margin: 0 0 20px;
+      margin: 0;
       padding: 10px 12px;
       border-radius: 10px;
       background: #fef3c7;          /* amber-100 */
@@ -63,12 +82,20 @@
       color: #fafaf9;
       font: inherit;
       font-weight: 600;
-      padding: 12px 22px;
+      padding: 10px 22px;
       min-height: 44px;
       cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1px;
+      width: 100%;
     }
+    button .en { font-size: 14px; }
+    button .sw { font-size: 12px; font-weight: 500; opacity: 0.85; }
     button:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
-    .hint { margin-top: 16px; font-size: 12px; color: #a8a29e; }
+    .hint { margin-top: 16px; font-size: 12px; color: #a8a29e; line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -81,11 +108,26 @@
         <rect x="3.6" y="15.6" width="16.8" height="1.9" rx="0.95" fill="#f59e0b"/>
       </svg>
     </div>
-    <h1>You&rsquo;re offline</h1>
-    <p>MjengoOS keeps saving to the <strong>on-device queue</strong>. Records you capture now sync automatically once the network returns.</p>
-    <span class="queue">offline → queue → sync (money &amp; evidence actions replay from the outbox)</span>
-    <button type="button" onclick="window.location.replace('/')">Retry connection</button>
-    <p class="hint">This page was served from the device by the MjengoOS service worker.</p>
+    <div class="bilingual">
+      <section class="en" lang="en">
+        <h1>You&rsquo;re offline <small>English</small></h1>
+        <p>MjengoOS keeps saving to the <strong>on-device queue</strong>. Records you capture now sync automatically once the network returns.</p>
+        <span class="queue">offline &rarr; queue &rarr; sync (money &amp; evidence actions replay from the outbox)</span>
+      </section>
+      <section class="sw" lang="sw">
+        <h1>Uko nje ya mtandao <small>Kiswahili</small></h1>
+        <p>MjengoOS bado inahifadhi kwenye <strong>foleni ya kifaa</strong>. Rekodi unazochukua sasa zitajisawazisha yenyewe mtandao ukirudi.</p>
+        <span class="queue">nje ya mtandao &rarr; foleni &rarr; usawazishaji (vitendo vya pesa na uthibitisho vinarudiwa kutoka kwenye outbox)</span>
+      </section>
+    </div>
+    <button type="button" onclick="window.location.replace('/')">
+      <span class="en" lang="en">Retry connection</span>
+      <span class="sw" lang="sw">Jaribu kuunganisha tena</span>
+    </button>
+    <p class="hint">
+      <span class="en" lang="en">This page was served from the device by the MjengoOS service worker.</span>
+      <span class="sw" lang="sw">Ukurasa huu umetolewa na service worker ya MjengoOS kutoka kwenye kifaa chako.</span>
+    </p>
   </main>
 </body>
 </html>

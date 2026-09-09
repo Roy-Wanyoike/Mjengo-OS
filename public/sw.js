@@ -1,20 +1,35 @@
 /**
- * MjengoOS service worker (v2 — offline shell).
+ * MjengoOS service worker (v3 — offline app shell · issue #78 / audit FE-1).
  *
- * Replaces the former kill-switch worker. Strategy:
+ * Strategy:
  *   - /api/**        → network-only. NEVER cached, NEVER served from cache.
- *   - HTML navigations → network-first; when the network fails, the precached
- *     offline.html shell is served instead (successful HTML responses are NOT
- *     cached — no stale-shell trap between dev recompiles).
- *   - Immutable static assets (icons, photos, manifest, offline shell) →
+ *   - HTML navigations → network-first → last-good cached app shell → the
+ *     precached offline.html. In PRODUCTION the '/' shell is cached on every
+ *     successful network fetch and served only when the network fails, so an
+ *     offline RELOAD boots the real app (data + outbox live client-side in
+ *     localStorage). In DEV the v2 no-stale-shell rule stays: HTML is never
+ *     cached and never served from cache — the dev server recompiles the same
+ *     URL into different HTML on every edit.
+ *   - /photos/**     → cache-first with an LRU cap (~100 entries, issue #78 /
+ *     FE-8) in a version-independent cache: photo files are immutable
+ *     content-keyed bytes, but months of site photos would grow CacheStorage
+ *     unbounded on a low-storage Android and the browser's answer to quota
+ *     pressure is evicting CacheStorage wholesale — which would silently kill
+ *     the offline shell + icons too.
+ *   - Immutable static assets (icons, manifest, offline shell, logo) →
  *     cache-first (same-origin, 200 responses only).
  *   - /_next/static/** → network-first with cache fallback — dev chunk URLs
  *     are stable-named but recompiled, so cache-first would serve stale code.
  *   - Non-GET and HMR paths → untouched, straight to the network.
  */
 
-const VERSION = 'mjengoos-2f-2'
+const VERSION = 'mjengoos-2f-3'
 const STATIC_CACHE = `mjengoos-static-${VERSION}`
+// Photos outlive SW versions: immutable, content-keyed files (public/photos/
+// <cuid>), so they live in a version-INDEPENDENT cache capped by the LRU
+// below. Wiping them on every VERSION bump (v2 behavior) would re-download
+// months of site photos for no honesty gain — a photo's bytes never change.
+const PHOTO_CACHE = 'mjengoos-photos'
 
 const PRECACHE_URLS = [
   '/offline.html',
@@ -22,6 +37,17 @@ const PRECACHE_URLS = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
 ]
+
+// Dev vs prod for the HTML-shell rule (shouldCacheNavigationHtml semantics —
+// sw-handlers.ts is the unit-tested statement). sw.js is ONE static file
+// registered by both `next dev` and the production server (layout.tsx) with
+// no build step, so the honest runtime signal is the SW's own origin
+// hostname: the dev server serves from localhost/127.0.0.1, production
+// deployments never do. Dev keeps v2's no-stale-shell rule; dev on a LAN
+// hostname keeps the prod rule (a stale dev shell at worst — the next VERSION
+// bump wipes it).
+const IS_DEV =
+  self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1'
 
 // ---------------- install ----------------
 
@@ -41,17 +67,96 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
-      // Keep only the current version's cache. This also wipes every legacy
-      // cache name from the earlier PWA era (kill-switch leftovers, old
-      // versions) so nothing stale can ever be served.
+      // Keep the current version's static cache AND the version-independent
+      // photo cache (its LRU catalog lives inside it). Everything else is
+      // deleted — every legacy cache name from the earlier PWA era
+      // (kill-switch leftovers), every older STATIC_CACHE version — so
+      // nothing stale can ever be served.
       const names = await caches.keys()
       await Promise.all(
-        names.filter((n) => n !== STATIC_CACHE).map((n) => caches.delete(n)),
+        names
+          .filter((n) => n !== STATIC_CACHE && n !== PHOTO_CACHE)
+          .map((n) => caches.delete(n)),
       )
       await self.clients.claim()
     })(),
   )
 })
+
+// ---------------- photo LRU (issue #78 / FE-8) ----------------
+//
+// photoLruEvictions semantics (sw-handlers.ts, unit-tested): when the photo
+// set exceeds PHOTO_CACHE_CAP, delete the least-recently-used entries first;
+// entries with no recorded use count as oldest; ties keep the cache's own key
+// order. Recency lives in an in-SW Map persisted as a tiny JSON catalog
+// INSIDE the photo cache (opaque key below) so it survives SW restarts; if
+// the catalog is unreadable the LRU degrades gracefully to key order.
+
+const PHOTO_LRU_KEY = '/__mjengoos/photo-lru.json'
+const PHOTO_CACHE_CAP = 100 // mirrors sw-handlers.PHOTO_CACHE_CAP
+/** Map<photoUrl, lastUsedEpochMs> — Map insertion order is the recency order. */
+let photoLru = null
+
+async function ensurePhotoLru() {
+  if (photoLru) return photoLru
+  photoLru = new Map()
+  try {
+    const catalog = await caches.match(PHOTO_LRU_KEY)
+    if (catalog) {
+      const json = await catalog.json()
+      if (json && Array.isArray(json.entries)) {
+        for (const entry of json.entries) {
+          if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'number') {
+            photoLru.set(entry[0], entry[1])
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Unreadable catalog → start fresh; existing entries degrade to oldest.
+  }
+  return photoLru
+}
+
+async function persistPhotoLru(lru) {
+  try {
+    const cache = await caches.open(PHOTO_CACHE)
+    await cache.put(
+      PHOTO_LRU_KEY,
+      new Response(JSON.stringify({ entries: [...lru.entries()] }), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+  } catch (e) {
+    // Best-effort persist: losing the catalog only softens the LRU.
+  }
+}
+
+/** Record a use of a photo URL (recency), then persist the catalog. */
+async function touchPhotoLru(url) {
+  const lru = await ensurePhotoLru()
+  lru.delete(url)
+  lru.set(url, Date.now())
+  await persistPhotoLru(lru)
+}
+
+/** Delete the least-recently-used entries until the set is within the cap. */
+async function trimPhotoCache(cache) {
+  const keys = await cache.keys()
+  const photoKeys = keys
+    .map((request) => request.url)
+    .filter((u) => new URL(u).pathname.startsWith('/photos/'))
+  const lru = await ensurePhotoLru()
+  const excess = photoKeys.length - PHOTO_CACHE_CAP
+  if (excess <= 0) return
+  // photoLruEvictions inline mirror: never-touched (absent from the map)
+  // counts as 0 = oldest; stable tiebreak on the cache's own key order.
+  const doomed = photoKeys
+    .map((url, i) => ({ url, i, at: lru.get(url) ?? 0 }))
+    .sort((a, b) => a.at - b.at || a.i - b.i)
+    .slice(0, excess)
+  await Promise.all(doomed.map((d) => cache.delete(d.url)))
+}
 
 // ---------------- fetch ----------------
 
@@ -80,18 +185,33 @@ self.addEventListener('fetch', (event) => {
   // Only same-origin requests are ours to manage.
   if (url.origin !== self.location.origin) return
 
-  // HTML navigations: network-first → offline shell fallback.
+  // HTML navigations: network-first → last-good shell → offline shell
+  // (issue #78 / FE-1). Production only — see IS_DEV above.
   if (request.mode === 'navigate') {
     event.respondWith(
       (async () => {
+        // navigationShellKey semantics (sw-handlers.ts, unit-tested): the APP
+        // serves exactly ONE HTML route, the client-side app at '/', so the
+        // shell is cached/served under the single key '/'. Query strings
+        // (?share=, ?projectId=) are read by the booted client — the server
+        // HTML is identical. The shell is NOT auth-gated server-side (login
+        // is an app state; anonymous and signed-in visitors get the same
+        // HTML), so caching it exposes nothing. (The proxied marketing site
+        // at /website and /offline.html itself stay on the v2 rule: network
+        // first, offline.html fallback, never cached.)
+        const shellKey = url.pathname === '/' ? '/' : null
         try {
-          // Deliberately NOT cached on success: dev recompiles and auth-gated
-          // server HTML must never go stale in a cache.
-          return await fetch(request)
+          const response = await fetch(request)
+          if (response.ok && !IS_DEV && shellKey) {
+            const cache = await caches.open(STATIC_CACHE)
+            await cache.put(shellKey, response.clone())
+          }
+          return response
         } catch {
-          const shell = await caches.match('/offline.html')
+          const shell = !IS_DEV && shellKey ? await caches.match(shellKey) : undefined
           return (
             shell ||
+            (await caches.match('/offline.html')) ||
             new Response('Offline', {
               status: 503,
               headers: { 'Content-Type': 'text/plain' },
@@ -103,7 +223,36 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Immutable, never-recompiled assets: cache-first (icons, photos, manifest,
+  // /photos/**: cache-first with the LRU cap (issue #78 / FE-8). Same-origin
+  // 200 responses only; the cache is version-independent so SW updates do
+  // not re-download months of immutable site photos.
+  if (url.pathname.startsWith('/photos/')) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(PHOTO_CACHE)
+        const cached = await cache.match(request)
+        if (cached) {
+          // Recency is recorded fire-and-forget: serving must not wait on it.
+          void touchPhotoLru(request.url)
+          return cached
+        }
+        try {
+          const response = await fetch(request)
+          if (response.ok) {
+            await cache.put(request, response.clone())
+            await touchPhotoLru(request.url)
+            await trimPhotoCache(cache)
+          }
+          return response
+        } catch {
+          return new Response('', { status: 504 })
+        }
+      })(),
+    )
+    return
+  }
+
+  // Immutable, never-recompiled assets: cache-first (icons, manifest,
   // offline shell, static logo). /_next/static/** is deliberately NOT here —
   // in dev, Turbopack serves chunks from STABLE filenames whose content
   // changes on every recompile; caching those cache-first would serve stale
@@ -111,7 +260,6 @@ self.addEventListener('fetch', (event) => {
   // pre-edit chunk after reload). Chunks therefore go network-first below.
   const isImmutableAsset =
     url.pathname.startsWith('/icons/') ||
-    url.pathname.startsWith('/photos/') ||
     url.pathname === '/manifest.webmanifest' ||
     url.pathname === '/offline.html' ||
     url.pathname === '/logo.svg'
@@ -177,11 +325,11 @@ self.addEventListener('fetch', (event) => {
 //
 // The canonical, unit-tested logic lives in src/frontend/sw-handlers.ts
 // (pure functions). This inline wiring mirrors it 1:1 because public/sw.js
-// is a STATIC script — no bundler step — and the offline behavior above is
-// load-bearing and deliberately untouched: this section is strictly
-// APPENDED; the install/activate/fetch handlers are byte-identical to the
-// pre-push version (tests/unit/push-routes.test.ts pins both the payload
-// contract and this wiring by reading the file).
+// is a STATIC script — no bundler step — and the offline strategy above is
+// load-bearing and deliberately hand-rolled: this section is strictly
+// APPENDED after the fetch strategy (tests/unit/push-routes.test.ts pins
+// the payload contract + wiring by reading the file; the v3 strategy pins
+// live in tests/unit/sw-offline-shell.test.ts).
 
 self.addEventListener('push', (event) => {
   // Parse defensively (sw-handlers.parsePushPayload semantics): a malformed

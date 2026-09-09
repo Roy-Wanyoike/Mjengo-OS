@@ -618,4 +618,13 @@ export const enDict = {
   'trustDigest.runFailed': 'The digest did not generate',
   'trustDigest.runFailedFallback': 'the server refused it (flag, role or provider state)',
   'trustDigest.runNetwork': 'Could not reach the server — the digest did not generate.',
+
+  // ------------------------------------------------------------- W7 PWA offline (issue #78)
+  // (end-appended block — merge order W6-1 → W6-3 → W6-2 → W7; keep all)
+  'app.deadLink.title': 'This link no longer works',
+  'app.deadLink.body': '{error}. Ask the site team to send a fresh link from MjengoOS.',
+  'app.offline.banner': 'Offline — saving to on-device queue',
+  'app.offline.pending': '({count} pending sync)',
+  'app.offline.aiOffline': 'AI features need connectivity.',
+  'app.unknownRole': 'Unknown role “{role}” — showing a safe, minimal view (Overview only). Ask an admin to fix your account role.',
 } satisfies Dict
