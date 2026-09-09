@@ -22,10 +22,14 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-9 px-4 py-2 has-[>svg]:px-3",
-        sm: "h-8 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5",
-        lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
-        icon: "size-9",
+        // FE-5 (issue #80): 44px default / 40px sm / 48px lg touch targets —
+        // WCAG 2.5.5-grade for dusty/gloved field use. twMerge (cn) keeps any
+        // explicit compact override (h-6/h-7/h-8…) winning over these sizes,
+        // so dense table rows stay dense on purpose.
+        default: "h-11 px-4 py-2 has-[>svg]:px-3",
+        sm: "h-10 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5",
+        lg: "h-12 rounded-md px-6 has-[>svg]:px-4",
+        icon: "size-11",
       },
     },
     defaultVariants: {

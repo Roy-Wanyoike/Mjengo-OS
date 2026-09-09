@@ -95,7 +95,9 @@ function OutboxRow({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-sm font-medium text-stone-900 truncate">{item.label}</p>
-          <p className="text-[11px] text-stone-400 mt-0.5">
+          {/* FE-4 (issue #80): stone-600 on white (6.99:1) — the outbox meta
+              line (type · queued-ago · attempts) was stone-400 2.31:1. */}
+          <p className="text-[11px] text-stone-600 mt-0.5">
             {item.type} · {t('outbox.queuedAgo', { when: formatDistanceToNow(new Date(item.createdAt), { addSuffix: true }) })}
             {item.syncStatus === 'failed' && item.retryCount ? ` · ${t('outbox.attempts', { count: item.retryCount })}` : ''}
           </p>
@@ -129,7 +131,7 @@ function OutboxRow({
               </Button>
             )}
             {item.conflictRule === 'server-wins' && (
-              <span className="text-[10px] text-stone-400 self-center">
+              <span className="text-[10px] text-stone-600 self-center">
                 {t('outbox.serverWinsNote')}
               </span>
             )}
@@ -205,7 +207,7 @@ export function SyncOutboxPanel() {
       <SheetContent side="right" className="sm:max-w-md w-full p-0 gap-0">
         <SheetHeader className="p-4 pb-3 border-b border-stone-100">
           <SheetTitle className="text-base text-stone-900">{t('outbox.title')}</SheetTitle>
-          <SheetDescription className="text-xs text-stone-400">
+          <SheetDescription className="text-xs text-stone-600">
             {outbox.length === 0
               ? t('outbox.empty')
               : conflicts.length > 0
@@ -219,7 +221,7 @@ export function SyncOutboxPanel() {
           <div className="px-4 py-10 text-center flex-1" role="status">
             <CloudOff className="w-6 h-6 text-stone-300 mx-auto" aria-hidden />
             <p className="mt-2 text-sm text-stone-500">{t('outbox.allCaughtUp')}</p>
-            <p className="mt-1 text-xs text-stone-400">
+            <p className="mt-1 text-xs text-stone-600">
               {t('outbox.emptyHint')}
             </p>
           </div>
@@ -243,7 +245,7 @@ export function SyncOutboxPanel() {
                 <TriangleAlert className="w-4 h-4" aria-hidden /> {t('outbox.retryFailed', { count: failed.length })}
               </Button>
             ) : (
-              <p className="w-full text-center text-[11px] text-stone-400 px-2">
+              <p className="w-full text-center text-[11px] text-stone-600 px-2">
                 {t('outbox.conflictsStay')}
               </p>
             )}

@@ -168,10 +168,13 @@ export function LoginScreen() {
                 {DEMO_ACCOUNTS.map((acc) => {
                   const roleLabel = t(`role.${acc.role}`)
                   return (
+                    // FE-7 (issue #80): no listitem role on these buttons —
+                    // an explicit listitem role would override the native
+                    // button semantics for assistive tech. The container
+                    // keeps role="list"; the buttons announce themselves.
                     <button
                       key={acc.email}
                       type="button"
-                      role="listitem"
                       disabled={busy}
                       onClick={() => {
                         setEmail(acc.email)
@@ -185,7 +188,9 @@ export function LoginScreen() {
                         <span className="block text-sm font-medium text-stone-800 truncate">
                           {roleLabel} · <span className="font-mono text-xs">{acc.email}</span>
                         </span>
-                        <span className="block text-[11px] text-stone-400 truncate">{t(acc.hintKey)}</span>
+                        {/* FE-4 (issue #80): stone-600 on white (6.99:1) — the old
+                            stone-400 was 2.31:1, unreadable in field light. */}
+                        <span className="block text-[11px] text-stone-600 truncate">{t(acc.hintKey)}</span>
                       </span>
                       <span className="text-[11px] font-bold text-amber-700 shrink-0 group-hover:text-amber-800">
                         {t('login.demo.fill')}
@@ -198,7 +203,8 @@ export function LoginScreen() {
           </CardContent>
         </Card>
 
-        <p className="mt-4 text-center text-xs text-stone-400 px-4">
+        {/* FE-4 (issue #80): stone-600 on stone-100 — same 2.31:1 fix. */}
+        <p className="mt-4 text-center text-xs text-stone-600 px-4">
           {t('login.shareNote')}
         </p>
 
@@ -207,7 +213,7 @@ export function LoginScreen() {
         <p className="mt-2 text-center text-xs px-4">
           <a
             href="/website"
-            className="text-stone-400 underline decoration-stone-300 underline-offset-2 hover:text-amber-700 hover:decoration-amber-500 transition-colors"
+            className="text-stone-600 underline decoration-stone-400 underline-offset-2 hover:text-amber-700 hover:decoration-amber-500 transition-colors"
           >
             {t('login.website')} →
           </a>

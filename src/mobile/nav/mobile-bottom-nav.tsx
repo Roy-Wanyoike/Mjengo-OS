@@ -64,6 +64,12 @@ export function MobileBottomNav({
                 <button
                   type="button"
                   role="tab"
+                  // FE-7 (issue #80): completes the tabs pattern — pairs with
+                  // the app shell's role="tabpanel" (app.tsx), like the header
+                  // strip's `mjengo-tab-<key>` ids. Distinct id namespace so
+                  // the two strips never collide in the DOM.
+                  id={`mjengo-mtab-${key}`}
+                  aria-controls={`mjengo-panel-${key}`}
                   aria-selected={active}
                   tabIndex={active ? 0 : -1}
                   onClick={() => onTabChange(key)}
