@@ -6,9 +6,10 @@
 // lastError) with on-demand trigger buttons: each enqueues a job and calls
 // POST /api/jobs/run (the cron-callee endpoint) which drains the queue.
 //
-// HONEST copy: nothing schedules these jobs automatically today — they run
-// on demand here; in production a scheduler (cron) would call the run route
-// on an interval.
+// HONEST copy: nothing schedules these jobs automatically in a bare `next
+// dev` — they run on demand here. Production wiring exists: the compose
+// `jobs-tick` sidecar / systemd timer / any cron calls POST /api/jobs/run
+// with a JOBS_RUN_TOKEN bearer (see DEPLOYMENT.md §7.3).
 
 import { useCallback, useEffect, useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'

@@ -2,6 +2,7 @@ import { FINANCE_ROLES } from '@/backend/lib/guard'
 import { route } from '@/backend/lib/route-kit'
 import { walletWithBalance } from '@/backend/modules/wallet/service'
 import { jsonOk } from '@/backend/modules/wallet/http'
+import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { validateQuery, walletRef, walletScopedQuery } from './schemas'
 import { mapServiceError, v1Err, V1_READ_LIMIT } from './respond'
 
@@ -17,6 +18,9 @@ type Ctx = { params: Promise<{ id: string }> }
  *
  * B5-APIV1: `:id` validated as id-or-code; unknown wallet → 404 (not-found
  * family only — other errors no longer masquerade as 404).
+ *
+ * Feature flag (spec §81, task 9-a): gated by `wallet` — OFF → 403 for
+ * non-admin sessions (admins bypass; see flags.ts).
  */
 export const GET = route(
   {
@@ -25,7 +29,11 @@ export const GET = route(
     rateLimit: { bucket: 'v1.wallet.balance', limit: V1_READ_LIMIT, windowMs: 60_000 },
     onError: (e) => mapServiceError('wallets/:id/balance GET', e, 'Wallet not found'),
   },
-  async (req, _session, _body, ctx: Ctx) => {
+  async (req, session, _body, ctx: Ctx) => {
+    // Feature flag (spec §81, task 9-a) — the uniform wallet gate.
+    const flagDenied = await requireFlagOn('wallet', session)
+    if (flagDenied) return flagDenied
+
     const { id } = await ctx.params
     const idRef = walletRef.safeParse(id)
     if (!idRef.success) return v1Err(400, idRef.error.issues[0].message, 'id')

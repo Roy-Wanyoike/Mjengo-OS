@@ -1,11 +1,10 @@
-import { mkdir, writeFile } from 'fs/promises'
-import path from 'path'
 import { randomBytes } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { route, genericError } from '@/backend/lib/route-kit'
 import { OWNER_ROLES, type GuardSession } from '@/backend/lib/guard'
 import { enforceRateLimit } from '@/backend/lib/rate-limit'
+import { getStorageDriver } from '@/backend/lib/storage'
 import { saveDocument, sniffDocumentMime, sniffImageMime } from '@/backend/modules/documents/service'
 import {
   isDocumentCategory,
@@ -45,10 +44,16 @@ import {
 //    title, expiresAt) at reviewStatus 'pending' and returns
 //    { ok, attachment: { id, storageKey, category, reviewStatus } }.
 //
-// NOTE: files written at runtime are served by the Next dev server; in a
-// frozen production build, public/ is snapshotted at build time — a durable
-// object store with signed URLs would replace this seam (§53, documented,
-// not hidden).
+// NOTE (task 9-b): the photo write now goes through the storage driver seam
+// (src/backend/lib/storage — local-disk default, S3/R2/MinIO env-gated), so
+// a multi-instance deployment can point uploads at object storage. The
+// local-disk driver's behavior is byte-identical to the old direct fs write;
+// the frozen-build caveat below still applies to THAT driver (public/ is
+// snapshotted at build time in a production build). The presigned client-
+// direct flow (POST /api/upload/presign → PUT → /api/upload/confirm) exists
+// for drivers that can presign. Document mode (public/docs via the documents
+// service) is deliberately NOT yet driver-mediated — see DEPLOYMENT.md's
+// object-storage driver matrix.
 //
 // Route-kit note: the two modes have DIFFERENT rate-limit buckets chosen
 // only after the body is parsed, so the per-mode limits stay in this handler
@@ -140,12 +145,16 @@ export const POST = route(
       )
     }
 
-    const dir = path.join(process.cwd(), 'public', 'photos')
-    await mkdir(dir, { recursive: true })
+    // Task 9-b: write through the storage driver. Local-disk default keeps
+    // byte-identical behavior (public/photos/<name>, URL /photos/<name>);
+    // the S3-compatible driver lands the bytes in the bucket and the URL is
+    // its publicUrl (CDN base or presigned GET). Key shape, caps and the
+    // response contract above are unchanged.
+    const driver = getStorageDriver()
     const name = `upp-${Date.now()}-${randomBytes(3).toString('hex')}.${ext}`
-    await writeFile(path.join(dir, name), buf)
+    await driver.put(name, buf, mime)
 
-    return NextResponse.json({ ok: true, url: `/photos/${name}`, bytes: buf.length })
+    return NextResponse.json({ ok: true, url: driver.publicUrl(name), bytes: buf.length })
   },
 )
 

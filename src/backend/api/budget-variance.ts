@@ -19,12 +19,19 @@ import { buildBudgetVarianceReport } from '@/backend/modules/reports/service'
 //       { ok: true, data: { project: { id, name, budgetTotal, spent,
 //         remaining, spentPct, progressPct },
 //         phases: [ { id, name, budget, spent, variance, variancePct,
-//           progressPct, txCount, topTransactions: [ { id, note, amount,
-//           date } ] } ],
-//         categories: [ { key, label, spent, txCount, share } ] } }
+//           progressPct, txCount, codedSpent, codedTxnCount,
+//           topTransactions: [ { id, note, amount, date } ] } ],
+//         categories: [ { key, label, spent, txCount, share } ],
+//         phaseAttribution: { mode, codedSpent, codedTxnCount,
+//           milestoneDerivedSpent, milestoneDerivedTxnCount,
+//           estimatedSpent, estimatedTxnCount } } }
 //     variance = budget − spent (positive = under budget).
-//     Per-phase spent is an allocation (Transaction has no phaseId) — see the
-//     honest derivation notes in src/backend/modules/reports/service.ts.
+//     Per-phase spend is a three-tier attribution (issue #39): REAL phase
+//     cost-codes (Transaction.phaseId) count directly; pre-code rows derive
+//     exactly through milestone linkage; the uncoded remainder is the
+//     documented budget-share estimate — phaseAttribution states which mode
+//     produced the numbers. See the derivation notes in
+//     src/backend/modules/reports/service.ts.
 export const GET = route(
   {
     scope: 'api/reports/budget-variance GET',
