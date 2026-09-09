@@ -2,11 +2,51 @@
 
 What shipped, wave by wave, in words a non-engineer can follow — written for
 recruiters, investors and operators. Everything listed here **exists in this
-repository and is pinned by tests** (1,513 tests across 54 vitest files at
+repository and is pinned by tests** (1,645 tests across 66 vitest files at
 the time of writing); nothing is roadmap dressed up as shipped. What is
 deliberately simulated is listed in [the honest small print](#the-honest-small-print).
 For the engineering detail behind each wave, see [ARCHITECTURE.md](../ARCHITECTURE.md)
 and the [README](../README.md).
+
+---
+
+## v0.2.5 — The production-readiness audit wave
+
+A four-team audit (backend security, frontend UX, marketing website, docs &
+operations) of the entire codebase, followed by fixes for every blocker it
+found — tracked openly in issues #73–#84, closed by PRs #86–#92.
+
+**Money and data safety (the blockers):**
+- The database migration history had drifted behind the schema — a fresh
+  deployment would have started with a broken database. Migrations are now
+  complete and verified: a brand-new install comes up correct (issue #73).
+- Production logins now refuse to start without a proper sign-in secret
+  instead of silently falling back to an insecure one (issue #74).
+- Money transfers can no longer double-pay when a phone drops offline at the
+  wrong moment: retries now recognize themselves and return the original
+  result (issue #75).
+
+**Offline promise (the field core):**
+- A supervisor who closes the app offline and reopens it now sees their
+  project data and queued actions — not a "you're offline" card (issue #78).
+- The Kiswahili translation now covers the actual field work: attendance,
+  materials, the offline queue, money toasts, share links (issue #79).
+
+**Trust surfaces:**
+- The marketing website's honesty sweep: no traction claims, AI features
+  marked as pilot-enabled, privacy policy now names its real service
+  providers, contact channel made real (issues #81, #82).
+- The app is harder to crash: any render error shows a branded recovery
+  card instead of a white screen; rapid project switches can't show stale
+  data; server errors now say what actually failed (issue #80).
+- Backend hardening: request size caps on the last uncapped routes, loud
+  warnings when webhook secrets are unset, one stuck background job can no
+  longer stall the queue (issues #76, #77).
+- Docs now tell the truth about CI, versions and counts (issue #83).
+
+**The honest small print (unchanged):** M-Pesa is sandbox-only until
+certification (#43), USSD is a faithful simulation until a telco deal (#40),
+and native apps are deliberately deferred in favour of the PWA (#41).
 
 ---
 

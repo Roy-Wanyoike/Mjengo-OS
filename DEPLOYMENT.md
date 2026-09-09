@@ -166,7 +166,7 @@ bun prisma/seed.ts                   # base: 3 demo projects, phases, tasks,
                                      #   alerts, recaps + (inline, in order)
                                      #   professionals → land → supply →
                                      #   invoices → intel
-bun prisma/seed-extras/users.ts      # 7 demo login accounts (wipes ONLY User)
+bun prisma/seed-extras/users.ts      # 8 demo login accounts (wipes ONLY User)
 bun prisma/seed-extras/tasks.ts      # task v2: priorities, assignees,
                                      #   blockers, overdue escalation case
 bun prisma/seed-extras/domain.ts     # worker depth, delivery driver leg,
