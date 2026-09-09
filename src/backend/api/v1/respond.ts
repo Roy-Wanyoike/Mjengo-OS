@@ -18,13 +18,12 @@
 //   401 no session (guard) · 403 role/tenant (guard + client pinning)
 //   404 unknown wallet / payment request / milestone / invoice
 //       (message-mapped — see below)
+//   409 Idempotency-Key reuse with a DIFFERENT payload (BE-9, issue #75:
+//       modules/wallet/http.ts withIdempotency compares the stored payload
+//       fingerprint and refuses to replay — same payload replays verbatim)
 //   422 structurally valid but nonsensical request (e.g. same-wallet transfer)
 //   429 rate limited (enforceRateLimit via route-kit's rateLimit slot, per-principal token bucket)
 //   500 unexpected failure — generic honest message, details in server logs
-//   409 is NOT produced today: a repeated Idempotency-Key unconditionally
-//   replays the stored response (modules/wallet/http.ts withIdempotency)
-//   even when the payload differs — kept as-is (existing behavior), see the
-//   OpenAPI Idempotency-Key description.
 
 import { NextResponse } from 'next/server'
 
