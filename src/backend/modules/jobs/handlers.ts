@@ -18,6 +18,11 @@
 // Handlers NEVER throw to the job runner (the runner catches + records the
 // failure), always return a JSON-able result, and emit their domain events via
 // the §59 bus — the event's default notification policy lands the bell row.
+//
+// BE-7 (issue #76): the runner (service.ts) races each handler invocation
+// against a per-handler timeout (DEFAULT_HANDLER_TIMEOUT_MS = 30s, override
+// JOBS_HANDLER_TIMEOUT_MS) — so a handler that hangs on a stuck TTS/AI/HTTP
+// call fails its row with a timeout lastError instead of stalling the drain.
 
 import { db } from '@/backend/lib/db'
 import { buildProjectDigest, llm } from '@/backend/lib/ai'
