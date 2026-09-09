@@ -4,15 +4,87 @@ import { overallProgress } from '@/backend/lib/mjengo'
 import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 
  
+// BE-4 (issue #76): the legacy AI seam gets the SAME discipline as
+// modules/ai/provider.ts — the SDK's own fetch has NO timeout, so every call
+// here is raced against a 20s cap (a stuck model API can no longer hold
+// analyze-photo/recap/voice-log open for the route's full maxDuration) and
+// the SDK instance is a module-level singleton (ZAI.create() re-reads the
+// config file on every call — worth avoiding per request). The pattern is
+// applied LOCALLY (provider.ts is untouched); on timeout the call throws a
+// clean, leak-free Error — callers already route failures through their own
+// try/catch + safeErrorMessage. The abandoned SDK request still finishes in
+// the background and is discarded.
+
+/** Hard cap on any single SDK call — 20s, then the attempt fails honestly
+ *  (same value as modules/ai/provider.ts AI_CALL_TIMEOUT_MS). */
+const AI_CALL_TIMEOUT_MS = 20_000
+
+/** Cached create() promise — null until first use, or after a failure. */
+let zaiPromise: Promise<ZAI> | null = null
+
+/**
+ * The lazy singleton: create the SDK once, cache the SUCCESS. A rejected
+ * create() resets the cache and rethrows to the caller's catch — the next
+ * call retries (config file dropped in later is picked up, no restart).
+ */
+async function getZaiSdk(): Promise<ZAI> {
+  if (!zaiPromise) {
+    zaiPromise = ZAI.create().catch((err: unknown) => {
+      zaiPromise = null // do not cache the failure — retry on the next call
+      throw err
+    })
+  }
+  return zaiPromise
+}
+
+/**
+ * Drop the cached SDK instance so the next call re-creates it (the test hook —
+ * the flags module's invalidateFlagCache() role; also correct after an
+ * operator changes .z-ai-config at runtime).
+ */
+export function resetLegacyAiSdkCache(): void {
+  zaiPromise = null
+}
+
+/** Race sentinel — the 20s cap fired before the SDK answered. */
+const TIMED_OUT = Symbol('legacy-zai-call-timeout')
+
+/**
+ * Race a legacy-seam SDK call against the 20s cap (the provider.ts idiom).
+ * The timer is cleared once the race settles, so a fast call never leaves a
+ * dangling (later-firing) handle; a timed-out call THROWS — llm()/
+ * visionMessage() are throwing-by-contract and their callers already catch.
+ */
+async function withAiTimeout<T>(label: string, p: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const raced = await Promise.race([
+      p,
+      new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), AI_CALL_TIMEOUT_MS)
+      }),
+    ])
+    if (raced === TIMED_OUT) {
+      throw new Error(`${label} timed out after ${AI_CALL_TIMEOUT_MS / 1000}s`)
+    }
+    return raced
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 export async function llm(systemPrompt: string, userPrompt: string, jsonMode = false): Promise<any> {
-  const zai = await ZAI.create()
-  const completion = await zai.chat.completions.create({
-    messages: [
-      { role: 'assistant', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    thinking: { type: 'disabled' },
-  })
+  const zai = await getZaiSdk()
+  const completion = await withAiTimeout(
+    'AI chat',
+    zai.chat.completions.create({
+      messages: [
+        { role: 'assistant', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      thinking: { type: 'disabled' },
+    }),
+  )
   const content = completion.choices[0]?.message?.content
   if (!content) throw new Error('Empty AI response')
   if (!jsonMode) return content
@@ -32,21 +104,41 @@ export function extractJson(text: string): any {
 }
 
 export async function visionMessage(prompt: string, base64: string, mime = 'image/jpeg') {
-  const zai = await ZAI.create()
-  const completion = await zai.chat.completions.createVision({
-    model: 'glm-5v-turbo',
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } },
-        ],
-      },
-    ],
-    thinking: { type: 'disabled' },
-  })
+  const zai = await getZaiSdk()
+  const completion = await withAiTimeout(
+    'AI vision',
+    zai.chat.completions.createVision({
+      model: 'glm-5v-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } },
+          ],
+        },
+      ],
+      thinking: { type: 'disabled' },
+    }),
+  )
   return completion.choices[0]?.message?.content ?? ''
+}
+
+/**
+ * Transcribe a base64 audio payload (BE-4): the voice-log route used to call
+ * ZAI.create() + zai.audio.asr.create DIRECTLY with no cap — one stuck ASR
+ * request held the route open for its full maxDuration (120s). Same 20s race
+ * and same singleton as llm()/visionMessage(); returns the trimmed transcript
+ * ('' when the model returned none — the caller decides what empty means).
+ */
+export async function transcribeAudio(audioBase64: string): Promise<string> {
+  const zai = await getZaiSdk()
+  const asr: unknown = await withAiTimeout(
+    'AI transcription',
+    zai.audio.asr.create({ file_base64: audioBase64 }),
+  )
+  const text = (asr as { text?: unknown } | null)?.text
+  return typeof text === 'string' ? text.trim() : ''
 }
 
 /** Compact project digest used to give AI endpoints real context. */
