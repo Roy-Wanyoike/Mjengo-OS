@@ -166,3 +166,88 @@ self.addEventListener('fetch', (event) => {
   // Everything else (RSC payloads, /_next/image, data fetches): network,
   // untouched.
 })
+
+// ---------------- push (W5-1 — web push notifications) ----------------
+//
+// The push half of the honest VAPID channel (WebPushProvider in
+// src/backend/modules/notify/channels.ts). Payload shape, exactly what the
+// provider sends (buildWebPushPayload): { title, body, projectId, kind } —
+// the click deep-link /?projectId=<id> is derived HERE from projectId; the
+// server never guesses app routing.
+//
+// The canonical, unit-tested logic lives in src/frontend/sw-handlers.ts
+// (pure functions). This inline wiring mirrors it 1:1 because public/sw.js
+// is a STATIC script — no bundler step — and the offline behavior above is
+// load-bearing and deliberately untouched: this section is strictly
+// APPENDED; the install/activate/fetch handlers are byte-identical to the
+// pre-push version (tests/unit/push-routes.test.ts pins both the payload
+// contract and this wiring by reading the file).
+
+self.addEventListener('push', (event) => {
+  // Parse defensively (sw-handlers.parsePushPayload semantics): a malformed
+  // payload shows the generic notification — the handler never crashes.
+  let payload = null
+  try {
+    payload = event.data ? event.data.json() : null
+  } catch (e) {
+    payload = null
+  }
+  const isPayload =
+    payload !== null &&
+    typeof payload === 'object' &&
+    typeof payload.title === 'string' &&
+    payload.title.trim() !== ''
+  const title = isPayload ? payload.title : 'MjengoOS'
+  const body = isPayload && typeof payload.body === 'string' ? payload.body : ''
+  const projectId =
+    isPayload && typeof payload.projectId === 'string' && payload.projectId !== '' ? payload.projectId : null
+  // Deep-link: /?projectId=<encoded> — encodeURIComponent stops an id with
+  // separators from smuggling extra params or a fragment.
+  const deepLink = projectId ? `/?projectId=${encodeURIComponent(projectId)}` : '/'
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: body,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      // Per-project tag: a second push for the same project REPLACES the
+      // previous notification instead of stacking them.
+      tag: projectId ? `mjengoos-${projectId}` : 'mjengoos',
+      data: { url: deepLink },
+    }),
+  )
+})
+
+// ---------------- notificationclick (W5-1 — deep-link to the project) ------
+//
+// Focus the app window (navigating it to the deep-link when it is elsewhere)
+// or open a new one at the deep-link (sw-handlers.clickTargetUrl semantics).
+// The target is ALWAYS a same-origin relative path from data.url, built
+// above from projectId — a payload can never steer the click off-origin.
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const raw = event.notification.data && event.notification.data.url
+  const path = typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/'
+  const target = self.location.origin + path
+  event.waitUntil(
+    (async () => {
+      const windowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      for (const client of windowClients) {
+        if (client.url.startsWith(self.location.origin + '/') && 'focus' in client) {
+          if (typeof client.navigate === 'function' && client.url.split('#')[0] !== target) {
+            try {
+              await client.navigate(target)
+            } catch (e) {
+              // navigate can be refused (transient activation rules / client
+              // being torn down) — focusing the existing window still lands
+              // the user in the app.
+            }
+          }
+          return await client.focus()
+        }
+      }
+      // No app window open → open the deep-link directly.
+      return await self.clients.openWindow(target)
+    })(),
+  )
+})

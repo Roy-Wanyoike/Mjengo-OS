@@ -1,6 +1,6 @@
 'use client'
 
-// Finder requests section (agent 2-c) — the procurement heart: purchase
+// Finder requests section — the procurement heart: purchase
 // requests & approvals (§2/§11), quotes comparison, purchase orders &
 // deliveries (§12/§13). The status ladders are honest and server-enforced:
 // decision buttons appear for the session role holding a PENDING approval;

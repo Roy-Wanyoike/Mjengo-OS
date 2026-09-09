@@ -17,6 +17,10 @@
 //
 // Offline story: when the store's online toggle is OFF the dispatch queues
 // in the on-device outbox — the screen says so, visibly.
+//
+// W4-3: this tab is the FIELD CHANNELS surface — the WhatsApp panel
+// (whatsapp-panel.tsx) renders below the USSD card: the other honest
+// out-of-app capture line, exercised through the public webhook seam.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
@@ -27,6 +31,7 @@ import { Button } from '@/frontend/ui/button'
 import { Phone, PhoneCall, PhoneOff, Delete, Smartphone, WifiOff, Info } from 'lucide-react'
 import { toast } from 'sonner'
 import { useT } from '@/frontend/i18n/provider'
+import { WhatsAppPanel } from '@/frontend/mjengo/whatsapp-panel'
 
 // ---------------- LCD session types ----------------
 
@@ -588,6 +593,9 @@ export function UssdTab() {
           </CardContent>
         </Card>
       </section>
+
+      {/* W4-3 — the WhatsApp field line: same surface, other honest seam */}
+      <WhatsAppPanel />
     </div>
   )
 }

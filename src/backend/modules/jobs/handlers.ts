@@ -4,9 +4,16 @@
 //   · runAnomalyScan      — same logic as POST /api/ai/anomaly-scan
 //   · runDailyRecap       — same logic as POST /api/ai/recap
 //   · runWeeklyDigest     — reuses modules/intel generateDigest (imported)
+//   · runTrustDigest      — W6-2: the weekly bilingual (EN+SW) trust digest
+//                           via modules/ai/trust-digest (deterministic text +
+//                           TTS voice note; skips honestly while the ai flag
+//                           is off — the job has no session, the engine's
+//                           own flag gate is the switch)
 //   · runReconciliation   — reuses invoices computeLedgerConsistency
 //   · runOverdueCheck     — overdue tasks + absent workers today
 //   · runBudgetCheck      — budget pace watch (90% / 100%)
+//   · runDarajaReconcile  — wallet: re-drive missed M-Pesa STK callbacks
+//                           (src/backend/modules/wallet/daraja-reconcile.ts)
 //
 // Handlers NEVER throw to the job runner (the runner catches + records the
 // failure), always return a JSON-able result, and emit their domain events via
@@ -22,6 +29,8 @@ import {
   computeAttendanceFraudFindings, computeCostVarianceFindings, computeDuplicatePurchaseFindings,
   overallProgress, type AttendanceAuditRow, type CostCategory, type DuplicateOrderRow, type EngineFinding,
 } from '@/backend/modules/intel/engine'
+import { runDarajaReconcile } from '@/backend/modules/wallet/daraja-reconcile'
+import { buildTrustDigest } from '@/backend/modules/ai/trust-digest'
 
 /** Nairobi/EAT date string (UTC+3) — the platform's "today". */
 function todayEAT(): string {
@@ -285,6 +294,49 @@ export async function runWeeklyDigest(projectId?: string | null): Promise<Digest
   return { projectId: pid, digestId: digest.id, weekStart: digest.weekStart, summary: digest.summary }
 }
 
+// ---------------- digest.trust (W6-2) ----------------
+
+export interface TrustDigestJobResult {
+  projectId: string
+  digests: Array<{ id: string; lang: 'en' | 'sw'; audioStatus: string }>
+  /** Set when nothing was generated (flag off / project missing) — the honest skip. */
+  skipped: string | null
+}
+
+/**
+ * Weekly TRUST digest (W6-2): generate BOTH languages (the job is the
+ * bilingual weekly path — EN for the site team, SW for the diaspora
+ * client), one append-only TrustDigest row each, then ONE 'digest.trust'
+ * event (the policy lands ONE in-app notification row, not two). While the
+ * `ai` flag is off the engine refuses both generations and the job SKIPS
+ * honestly (skipped carries the reason; nothing was written, the SDK was
+ * never contacted) — the same discipline as the route/action gates.
+ */
+export async function runTrustDigest(projectId?: string | null): Promise<TrustDigestJobResult> {
+  const pid = await resolveProjectId(projectId)
+  const digests: TrustDigestJobResult['digests'] = []
+  let client: string | null = null
+  let skipReason: string | null = null
+  for (const lang of ['en', 'sw'] as const) {
+    const outcome = await buildTrustDigest(pid, { lang })
+    if (outcome.ok) {
+      digests.push({ id: outcome.digest.id, lang, audioStatus: outcome.digest.audioStatus })
+      client = outcome.digest.client
+    } else {
+      skipReason = outcome.error // refused: flag off or project missing
+    }
+  }
+  if (digests.length === 0) {
+    return { projectId: pid, digests, skipped: skipReason ?? 'Trust digest did not run' }
+  }
+  await emit(pid, 'digest.trust', {
+    langs: digests.map((d) => d.lang),
+    digestIds: digests.map((d) => d.id),
+    ...(client ? { client } : {}),
+  })
+  return { projectId: pid, digests, skipped: skipReason }
+}
+
 // ---------------- recap.daily ----------------
 
 export interface RecapJobResult {
@@ -297,8 +349,10 @@ export interface RecapJobResult {
 /**
  * Daily 6 PM client recap shared core: writes the Recap row, then emits
  * 'recap.daily' — the event policy lands the notification-center row as an
- * HONEST in-app entry (channel in_app, deliveryStatus 'logged'): nothing is
- * sent on WhatsApp until a provider is wired.
+ * HONEST in-app entry (channel in_app, deliveryStatus 'logged'): external
+ * delivery is opt-in via the notify channel seam (SMS webhook URL or the
+ * Africa's Talking env pair — see modules/notify/channels.ts) and is
+ * attempted only when configured.
  */
 export async function runDailyRecap(projectId?: string | null): Promise<RecapJobResult> {
   const digest = await buildProjectDigest(projectId)
@@ -515,21 +569,30 @@ export async function runBudgetCheck(projectId?: string | null): Promise<BudgetC
 export type JobType =
   | 'anomaly_scan'
   | 'digest.weekly'
+  | 'digest.trust'
   | 'recap.daily'
   | 'reconciliation'
   | 'overdue.check'
   | 'budget.check'
+  | 'wallet.reconcile'
 
 export const JOB_TYPES: readonly JobType[] = [
-  'anomaly_scan', 'digest.weekly', 'recap.daily', 'reconciliation', 'overdue.check', 'budget.check',
+  'anomaly_scan', 'digest.weekly', 'digest.trust', 'recap.daily', 'reconciliation', 'overdue.check', 'budget.check',
+  'wallet.reconcile',
 ]
 
 /** Handler registry — the job runner dispatches on these. */
 export const JOB_HANDLERS: Record<JobType, (payload: Record<string, unknown>, projectId?: string | null) => Promise<unknown>> = {
   anomaly_scan: (_payload, projectId) => runAnomalyScan(projectId),
   'digest.weekly': (_payload, projectId) => runWeeklyDigest(projectId),
+  'digest.trust': (_payload, projectId) => runTrustDigest(projectId),
   'recap.daily': (_payload, projectId) => runDailyRecap(projectId),
   reconciliation: (_payload, projectId) => runReconciliation(projectId),
   'overdue.check': (_payload, projectId) => runOverdueCheck(projectId),
   'budget.check': (_payload, projectId) => runBudgetCheck(projectId),
+  // Cross-project money sweep (no projectId — it scans every project's
+  // daraja.intent:* rows). Idempotent by construction: it re-drives the
+  // callback processor, whose dedupe + ledger idempotency key are the
+  // safety rails. See wallet/daraja-reconcile.ts.
+  'wallet.reconcile': () => runDarajaReconcile(),
 }

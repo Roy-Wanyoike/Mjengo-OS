@@ -58,14 +58,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-local-*
+/local-*
 .claude
 .z-ai-config
 *.log
 dev.log
 dev.out.log
-test
-prompt
 
 server.log
 # Skills directory
@@ -92,11 +90,13 @@ Caddyfile
 # runtime photo uploads (POST /api/upload writes here — not repo content)
 /public/photos/upp-*
 
-# reports & sandbox-only docs (architecture roadmap lives locally)
-docs/
+# sandbox-only docs (local reports/notes — published docs like docs/screenshots stay tracked)
+docs/reports/
+docs/*.local.md
 
 # sandbox environment scripts & template demos
-tests/
+# (tests/ was previously ignored as sandbox scratch — it now holds the real
+#  Vitest suite tracked on feat/test-suite; keep it commited)
 examples/
 *.pid
 

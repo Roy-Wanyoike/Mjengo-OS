@@ -9,15 +9,20 @@
 //    from the payload `by` (F3). The sessionless share-link path falls back to
 //    the payload actor, exactly like the invoices module.
 //  - A release debits the escrow ledger account, credits project EXPENSE and
-//    writes a Transaction (type 'milestone', costCode 'milestone', ledgerTxnId)
+//    writes a Transaction (type 'milestone', costCode 'milestone', ledgerTxnId,
+//    and — when the milestone carries one — the phaseId cost-code, issue #39)
 //    — all in ONE db.$transaction with the balance checked inside it (F2).
 //  - escrow.topup posts CASH→ESCROW ledger rows and keeps the wallet
 //    projection in sync in the same transaction (the ledger is the source of
 //    truth — spec §39).
+//  - W4-1: every approve also freezes ONE immutable DrawPack evidence bundle
+//    (modules/drawpack) AFTER the release transaction commits — a projection,
+//    never money; a pack failure never fails the release.
 
 import { db } from '@/backend/lib/db'
 import { postEscrowTopup, releaseMilestoneAtomic } from '@/backend/modules/wallet/service'
 import { currentActor, requireDeciderRole } from '@/backend/modules/wallet/session'
+import { createDrawPackForRelease } from '@/backend/modules/drawpack/service'
 
 export const MONEY_ACTIONS = [
   'escrow.topup', // { amount>0, method? ('mpesa'|'bank'|'card'), reference? } — posts CASH→ESCROW ledger rows atomically
@@ -177,10 +182,11 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
 
       if (decision === 'approve') {
         // Atomic: milestone update + escrow debit + EXPENSE credit + Transaction
-        // row (costCode 'milestone' + ledgerTxnId), balance re-checked INSIDE the
-        // transaction (F2).
+        // row (costCode 'milestone' + ledgerTxnId + phaseId cost-code — the
+        // milestone's phase, validated in-project inside the transaction),
+        // balance re-checked INSIDE the transaction (F2).
         const released = await releaseMilestoneAtomic(projectId, {
-          milestone: { id: milestone.id, name: milestone.name, amount: milestone.amount },
+          milestone: { id: milestone.id, name: milestone.name, amount: milestone.amount, phaseId: milestone.phaseId },
           decider,
           note,
         })
@@ -194,7 +200,25 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
             recipient: project?.client ?? null,
           },
         })
-        return { id, balance: released.balance, ledgerRef: released.ledgerRef }
+        // W4-1 (hook only — the release transaction above is untouched): the
+        // money has already moved atomically, so NOW freeze the evidence as it
+        // stands at decision time into ONE immutable, hash-stamped DrawPack —
+        // the portable proof bundle the diaspora client keeps / forwards.
+        // createDrawPackForRelease NEVER throws (a pack failure is audited,
+        // the release stands) and can never write a second pack (milestoneId
+        // is UNIQUE + the status ladder makes a release single-shot).
+        const drawPack = await createDrawPackForRelease(projectId, {
+          milestoneId: milestone.id,
+          milestoneName: milestone.name,
+          amount: milestone.amount,
+          evidencePhotoIds: parseEvidenceIds(milestone.evidencePhotoIds),
+          requestedAt: milestone.requestedAt,
+          decidedAt: new Date(),
+          ledgerRef: released.ledgerRef,
+          ledgerTxnId: released.ledgerTxnId,
+          decider,
+        })
+        return { id, balance: released.balance, ledgerRef: released.ledgerRef, drawPackId: drawPack?.id ?? null }
       }
 
       // reject — no money moves, decision history preserved

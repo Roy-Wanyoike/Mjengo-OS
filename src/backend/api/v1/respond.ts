@@ -1,5 +1,7 @@
 // /api/v1 response helpers (spec §64 API QUALITY — consistent errors,
-// pagination, rate limiting; B5-APIV1).
+// pagination, rate limiting; B5-APIV1). src/app/api/v1/respond.ts was the
+// old home — moved into src/backend/api/v1/ by the backend reorg (W-BACKEND);
+// the v1 route shims now re-export handlers from this directory.
 //
 // ERROR SHAPE (deliberate, kept consistent across the whole v1 surface):
 //   every error  → { error: string, field?: string [, retryAfterSec?] }
@@ -14,21 +16,33 @@
 // STATUS CODES:
 //   400 zod validation / bad cursor / business-rule message (service, honest)
 //   401 no session (guard) · 403 role/tenant (guard + client pinning)
-//   404 unknown wallet / payment request (message-mapped — see below)
+//   404 unknown wallet / payment request / milestone / invoice
+//       (message-mapped — see below)
 //   422 structurally valid but nonsensical request (e.g. same-wallet transfer)
-//   429 rate limited (enforceRateLimit, per-principal token bucket)
+//   429 rate limited (enforceRateLimit via route-kit's rateLimit slot, per-principal token bucket)
 //   500 unexpected failure — generic honest message, details in server logs
 //   409 is NOT produced today: a repeated Idempotency-Key unconditionally
 //   replays the stored response (modules/wallet/http.ts withIdempotency)
 //   even when the payload differs — kept as-is (existing behavior), see the
 //   OpenAPI Idempotency-Key description.
 
-import { NextResponse, type NextRequest } from 'next/server'
-import { enforceRateLimit } from '@/backend/lib/rate-limit'
+import { NextResponse } from 'next/server'
 
 /** v1 error body: { error, field? } — one shape for every failure. */
 export function v1Err(status: number, error: string, field?: string): NextResponse {
   return NextResponse.json({ error, ...(field ? { field } : {}) }, { status })
+}
+
+/**
+ * v1 success body: { ok: true, data, ...extra } — byte-identical to the
+ * wallet module's jsonOk (modules/wallet/http.ts), hoisted here for v1
+ * Phase B (projects + supply resources) so those routes do not import the
+ * wallet module just for the ok envelope. The wallet family keeps using
+ * jsonOk from its own module; the two must stay in sync (same spread, no
+ * extra keys).
+ */
+export function v1Ok(data: unknown, extra?: Record<string, unknown>): NextResponse {
+  return NextResponse.json({ ok: true, data, ...extra })
 }
 
 /** Service messages that mean "the addressed object does not exist (here)". */
@@ -36,6 +50,20 @@ const NOT_FOUND_MESSAGES = new Set([
   'Wallet not found',
   'Wallet belongs to a different project',
   'Payment request not found',
+  // Phase C (money governance): the money.ts / invoices.ts service variants —
+  // scoped to a project, e.g. from threeWayCheck's getInvoiceOrThrow.
+  'Milestone not found in this project',
+  'Invoice not found in this project',
+  // Phase D (site + procurement + land + intel reads): the exact single-line
+  // miss messages the domain modules throw — mjengo.ts team.remove /
+  // taskInProject, the supply service supplier lookups, the land service
+  // parcel ladder. Route-layer 404s (Worker/Task not found) answer the same
+  // shape directly; these entries map the SERVICE variants if one ever flows
+  // through a Phase D route's catch.
+  'Worker not found',
+  'Task not found in this project',
+  'Supplier not found',
+  'Parcel not found in this project',
 ])
 
 /**
@@ -61,29 +89,22 @@ export const V1_READ_LIMIT = 120
  *  requests count too (the limit fires before the replay, like every gate). */
 export const V1_MUTATION_LIMIT = 30
 
-/** 429 when the per-principal token bucket for this route is empty. */
-export async function v1Rate(
-  req: NextRequest,
-  bucket: string,
-  limit: number,
-): Promise<NextResponse | null> {
-  return enforceRateLimit(req, bucket, limit, 60_000)
-}
-
 // ---------------------------------------------------------------- pagination
 
 export type Page<T> = { items: T[]; nextCursor: string | null; hasMore: boolean }
 
 /**
- * Keyset pagination for BOUNDED lists (wallet list): slice the full,
- * deterministically ordered array (unique `code` ascending → total order).
- * `cursor` is the wallet id of the last item of the previous page; a cursor
- * that is not in the (possibly filtered) list → 400 (honest: stale or wrong).
+ * Keyset pagination for BOUNDED lists (wallet list — and, since Phase B, the
+ * project / task / order / delivery lists): slice the full, deterministically
+ * ordered array. `cursor` is the id of the last item of the previous page; a
+ * cursor that is not in the (possibly filtered) list → 400 (honest: stale or
+ * wrong). `noun` renders the 400 message ("a wallet", "a task", "an order").
  */
-export function pageOf<T extends { id: string }>(
+export function pageOfKind<T extends { id: string }>(
   all: T[],
   limit: number,
-  cursor?: string,
+  cursor: string | undefined,
+  noun: string,
 ): { ok: true; page: Page<T> } | { ok: false; response: NextResponse } {
   let start = 0
   if (cursor) {
@@ -91,7 +112,7 @@ export function pageOf<T extends { id: string }>(
     if (idx === -1) {
       return {
         ok: false,
-        response: v1Err(400, 'Unknown cursor — it must be the id of a wallet in this list', 'cursor'),
+        response: v1Err(400, `Unknown cursor — it must be the id of ${noun} in this list`, 'cursor'),
       }
     }
     start = idx + 1
@@ -99,4 +120,13 @@ export function pageOf<T extends { id: string }>(
   const items = all.slice(start, start + limit)
   const hasMore = start + limit < all.length
   return { ok: true, page: { items, nextCursor: hasMore ? items[items.length - 1]?.id ?? null : null, hasMore } }
+}
+
+/** Wallet-list pagination — pageOfKind with the wallet noun (same message as before). */
+export function pageOf<T extends { id: string }>(
+  all: T[],
+  limit: number,
+  cursor?: string,
+): { ok: true; page: Page<T> } | { ok: false; response: NextResponse } {
+  return pageOfKind(all, limit, cursor, 'a wallet')
 }

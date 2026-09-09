@@ -43,7 +43,7 @@ export function ProjectSwitcher({ projects, activeId, onSelect, onCreate }: Proj
         className="flex items-center gap-2 min-w-0 h-9 px-2.5 rounded-lg bg-stone-900 border border-stone-800 text-stone-200 hover:bg-stone-800 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
       >
         <Building2 className="w-4 h-4 text-amber-500 shrink-0" aria-hidden />
-        <span className="text-sm font-medium truncate max-w-28 sm:max-w-44">{active?.name ?? 'Select project'}</span>
+        <span className="text-sm font-medium truncate max-w-[5rem] sm:max-w-44">{active?.name ?? 'Select project'}</span>
         <ChevronDown className="w-4 h-4 text-stone-500 shrink-0" aria-hidden />
       </DropdownMenuTrigger>
 

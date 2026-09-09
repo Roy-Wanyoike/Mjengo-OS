@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
+import { safeErrorMessage } from '@/backend/lib/guard'
 import {
   extractDocument,
   reviewDocument,
@@ -9,9 +10,11 @@ import { isReviewDecision } from '@/backend/modules/documents/types'
 // Document intelligence API (MjengoOS backend wave B3, Doc A §60).
 //
 // POST { attachmentId, ocrTextHint? }  → run extraction (image → VLM seam;
-//   PDF → honest error unless a client-side ocrTextHint is supplied — this
-//   sandbox has no PDF text-extraction library and faking one would poison
-//   records). Response: { ok, simulated:false, model, confidence,
+//   PDF → SERVER-SIDE text-layer extraction, lib/pdf-text.ts — issue #42 —
+//   so no client hint is required; a caller-supplied ocrTextHint still
+//   takes precedence, and a PDF with no usable text layer / an encrypted
+//   PDF returns the same honest 400 error shape as before, never a faked
+//   extraction). Response: { ok, simulated:false, model, confidence,
 //   extraction } — extraction is DRAFT-ONLY: it writes the Attachment row's
 //   extraction fields and NEVER any official record (no BOQ / material
 //   request / invoice / ledger writes). reviewStatus resets to 'pending'
@@ -67,8 +70,9 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
     })
   } catch (e) {
     console.error('[api/ai/extract-document]', e)
+    // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
     return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : 'Document extraction failed' },
+      { ok: false, error: safeErrorMessage(e, 'Document extraction failed') },
       { status: 500 },
     )
   }
@@ -114,8 +118,9 @@ export const PUT = async (req: NextRequest): Promise<NextResponse> => {
     return NextResponse.json({ ok, ...rest, reviewedBy: name })
   } catch (e) {
     console.error('[api/ai/extract-document PUT]', e)
+    // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
     return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : 'Document review failed' },
+      { ok: false, error: safeErrorMessage(e, 'Document review failed') },
       { status: 500 },
     )
   }

@@ -16,6 +16,7 @@ export async function getSessionFromReq(req: NextRequest): Promise<GuardSession>
       name: String(token.name ?? ''),
       role: String(token.role ?? 'contractor'),
       projectId: token.projectId ?? null,
+      supplierId: token.supplierId ?? null,
     },
   }
 }
@@ -74,19 +75,37 @@ export const FINANCE_ROLES: readonly string[] = ['finance', 'admin']
 /** Roles that may execute payments on behalf of the payer queue (incl. the client). */
 export const PAYMENT_ROLES: readonly string[] = ['finance', 'admin', 'client']
 
-/** Every known staff/finance role (defensive: unknown roles still fail closed). */
+/** Every known staff/finance/supplier role (defensive: unknown roles still fail closed). */
 export const KNOWN_ROLES: readonly string[] = [
   'contractor', 'client', 'admin', 'finance', 'supervisor', 'procurement', 'qs',
+  'supplier',
 ]
 
 /**
  * Roles that operate the owner app (W1-PERM, spec §7 role matrix).
  * Mirrored client-side by src/shared/permissions.ts OWNER_ROLES — keep in sync.
  * `client` is intentionally absent: it boots the client surface, not the owner app.
+ * `supplier` (W5-3) is intentionally absent too: it boots the SupplierPortal
+ * surface (its own scoped reads via /api/supplier), never the owner app.
  */
 export const OWNER_ROLES: readonly string[] = [
   'contractor', 'admin', 'supervisor', 'procurement', 'qs', 'finance',
 ]
+
+// ---------------- supplier pinning (W5-3 — mirrors the client pin) ----------------
+
+/**
+ * The supplier-role tenant pin: the Supplier row a supplier session is
+ * ALLOWED to touch, taken ONLY from the session (server-stamped at login;
+ * payload copies are never trusted). Null = a supplier account with no link —
+ * callers fail closed (403 "no supplier linked"), exactly like a client
+ * session with no projectId.
+ */
+export function sessionSupplierId(session: NonNullable<GuardSession>): string | null {
+  if (session.user.role !== 'supplier') return null
+  const id = session.user.supplierId
+  return typeof id === 'string' && id.trim() ? id.trim() : null
+}
 
 type GuardedHandler<C> = (
   req: NextRequest,

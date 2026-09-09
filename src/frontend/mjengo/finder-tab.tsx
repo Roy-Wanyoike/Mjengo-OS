@@ -1,9 +1,9 @@
 'use client'
 
-// MjengoOS Finder tab (placeholder — agent 2-c replaces search/requests/
-// dashboard sections, 2-d replaces invoices-section; this file stays the
-// composition root). Sections: supplier search + compare, requests +
-// approvals + orders + delivery, invoices, procurement dashboard.
+// MjengoOS Finder tab — composition root: renders the dashboard, search,
+// requests and invoices sections from ./finder/sections/ (supplier search +
+// compare, requests + approvals + orders + delivery, invoices, procurement
+// dashboard).
 
 import { SearchSection } from '@/frontend/mjengo/finder/sections/search-section'
 import { RequestsSection } from '@/frontend/mjengo/finder/sections/requests-section'

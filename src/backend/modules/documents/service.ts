@@ -2,9 +2,11 @@
 //
 // Pipeline: upload (validated bytes → public/docs/<server-generated name> +
 // Attachment row with category/mime/size/title/expiresAt provenance) →
-// extract (image scan → VLM via the lib/ai.ts seam; PDF → honest limitation,
-// no OCR library exists in this sandbox, structured only when the caller
-// supplies ocrTextHint) → human review (approve/reject + AuditEvent).
+// extract (image scan → VLM via the lib/ai.ts seam; PDF → server-side
+// text-layer extraction via lib/pdf-text.ts — issue #42 — with the
+// caller's ocrTextHint still taking precedence; scanned PDFs with no
+// text layer fail HONESTLY, no OCR exists) → human review
+// (approve/reject + AuditEvent).
 //
 // HONEST DESIGN RULES (spec §60 "Never silently overwrite official records"):
 //   - extractDocument writes ONLY to the Attachment row's own extraction
@@ -14,24 +16,32 @@
 //     reviewStatus === 'approved'.
 //   - A successful re-extraction resets reviewStatus to 'pending' (the data
 //     changed, so a prior approval no longer describes what is stored).
-//   - PDFs: this environment has no PDF text-extraction library and faking
-//     one would poison records — the route returns an explicit error telling
-//     the user to upload a scan/photo of the document or provide ocrTextHint
-//     (client-side text-layer extraction, wired for the future).
+//   - PDFs: the TEXT LAYER is extracted server-side (lib/pdf-text.ts, a
+//     compact best-effort parser — its header documents the honest coverage
+//     limits: no OCR, no scanned PDFs, no encrypted files, best-effort CID
+//     fonts). A PDF with NO usable text layer (a scan) still returns an
+//     explicit error telling the user to upload an image of the document or
+//     provide ocrTextHint — a faked extraction would poison records.
 //
 // File security (§53): the on-disk file name is ALWAYS server-generated
 // (user-controlled fileName only lands in the DB as a display string, after
 // sanitizeFileName); the declared mime must match the decoded bytes' magic
-// number (sniffDocumentMime); size caps are enforced pre-write; the bucket
-// is the app's own public/docs tree (no external object storage in this
-// deployment — a signed-URL object store is the documented production seam).
+// number (sniffDocumentMime); size caps are enforced pre-write. The storage
+// site is the app's storage-driver seam (issue #37): the upload route passes
+// the active driver in, so local-disk keeps the exact public/docs layout and
+// S3-backed deploys land documents in the bucket. The driver-less default is
+// the historical direct write (kept for non-route callers and pinned by
+// byte-identity on the local-disk driver).
 
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, writeFile } from 'fs/promises'
 import path from 'path'
 import { randomBytes } from 'crypto'
 import { db } from '@/backend/lib/db'
 import { llm, extractJson, visionMessage } from '@/backend/lib/ai'
+import { extractPdfText } from '@/backend/lib/pdf-text'
 import { logAudit } from '@/backend/lib/audit'
+import { getStorageDriver } from '@/backend/lib/storage'
+import type { StorageAdapter } from '@/backend/lib/storage'
 import {
   isDocumentCategory,
   sanitizeFileName,
@@ -63,10 +73,55 @@ export function sniffDocumentMime(buf: Buffer): DocumentMimeType | null {
   return null
 }
 
-/** Absolute path for a public/docs storageKey (traversal stripped, defense in depth). */
-function docsPath(storageKey: string): string {
-  const safe = storageKey.replace(/^\/+/, '').replace(/\.\./g, '')
-  return path.join(process.cwd(), 'public', 'docs', path.basename(safe))
+/**
+ * Same magic-number approach for the LEGACY photo family (upload route's
+ * data:image/* path — W-AUDIT #4: it used to trust the declared MIME).
+ * Covers the four types that path accepts: PNG, JPEG, WebP (RIFF…WEBP) and
+ * GIF — or null when the bytes match none of them.
+ */
+export function sniffImageMime(buf: Buffer): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | null {
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return 'image/png'
+  }
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'image/jpeg'
+  }
+  if (
+    buf.length >= 12 &&
+    buf.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    buf.subarray(8, 12).toString('latin1') === 'WEBP'
+  ) {
+    return 'image/webp'
+  }
+  if (buf.length >= 6 && buf.subarray(0, 6).toString('latin1').startsWith('GIF8')) {
+    return 'image/gif'
+  }
+  return null
+}
+
+// ---------------------------------------------------------------- read (driver)
+
+/**
+ * Issue #37 read seam: resolve the stored object's bytes through the ACTIVE
+ * storage driver (local-disk passthrough read or an S3 GET via the same
+ * presign machinery the writes use) instead of assuming the local FS. The
+ * row's recorded storageKey is turned back into a driver key by the driver
+ * itself (keyFor) — a value the active driver cannot address (a row written
+ * by a different backend, a foreign URL shape) reads as MISSING, honestly,
+ * never guessed. Driver read errors (network, permissions) surface the same
+ * way: the caller's error says "missing or unreadable", which is the truth.
+ */
+async function readStoredDocumentBytes(storageKey: string): Promise<Buffer | null> {
+  const driver = getStorageDriver()
+  if (typeof driver.keyFor !== 'function' || typeof driver.read !== 'function') return null
+  const key = driver.keyFor(storageKey)
+  if (!key) return null
+  try {
+    const stored = await driver.read(key)
+    return stored ? stored.bytes : null
+  } catch {
+    return null // unreadable is unreadable — the caller reports it honestly
+  }
 }
 
 // ---------------------------------------------------------------- save (upload)
@@ -83,6 +138,15 @@ export interface SaveDocumentInput {
   entityId?: string
   expiresAt?: Date
   uploadedBy: { name: string; role: string; email: string }
+  /**
+   * Issue #37 transport seam: write through the storage driver instead of
+   * the direct public/docs write. The local-disk driver keeps the exact
+   * historical layout (`docs/<name>` key → public/docs/<name>, storageKey
+   * `/docs/<name>`); an S3-backed deployment lands the bytes in the bucket
+   * under `docs/` and records the driver's publicUrl. Omitted → the
+   * historical direct write, byte-identical (non-route callers).
+   */
+  driver?: Pick<StorageAdapter, 'put' | 'publicUrl'>
 }
 
 export interface SavedDocument {
@@ -94,19 +158,29 @@ export interface SavedDocument {
 }
 
 /**
- * Persist a validated document: server-generated file name under
- * public/docs/ (mkdir on demand — the directory is runtime state, not a
- * committed tree), then the Attachment row with §60 provenance metadata.
- * Audit event lands on the project when one is linked (AuditEvent.projectId
- * is non-nullable — unlinked uploads have no audit row; their provenance
- * lives on the Attachment row itself).
+ * Persist a validated document: server-generated file name (doc-<ts>-<hex>.<ext>)
+ * written through the transport the caller chose — the storage driver when
+ * one is passed (issue #37; local-disk layout byte-identical to the direct
+ * write, S3-backed deploys store documents in the bucket) or the historical
+ * direct public/docs write — then the Attachment row with §60 provenance
+ * metadata. Audit event lands on the project when one is linked
+ * (AuditEvent.projectId is non-nullable — unlinked uploads have no audit row;
+ * their provenance lives on the Attachment row itself).
  */
 export async function saveDocument(input: SaveDocumentInput): Promise<SavedDocument> {
   const cleanName = sanitizeFileName(input.fileName)
-  const dir = path.join(process.cwd(), 'public', 'docs')
-  await mkdir(dir, { recursive: true }) // created on demand, never committed
   const diskName = `doc-${Date.now()}-${randomBytes(3).toString('hex')}.${MIME_EXT[input.mimeType]}`
-  await writeFile(path.join(dir, diskName), input.bytes)
+  let storageKey: string
+  if (input.driver) {
+    const key = `docs/${diskName}`
+    await input.driver.put(key, input.bytes, input.mimeType)
+    storageKey = input.driver.publicUrl(key)
+  } else {
+    const dir = path.join(process.cwd(), 'public', 'docs')
+    await mkdir(dir, { recursive: true }) // created on demand, never committed
+    await writeFile(path.join(dir, diskName), input.bytes)
+    storageKey = `/docs/${diskName}`
+  }
 
   const category = isDocumentCategory(input.category) ? input.category : 'other'
   const attachment = await db.attachment.create({
@@ -114,7 +188,7 @@ export async function saveDocument(input: SaveDocumentInput): Promise<SavedDocum
       entityType: input.entityType?.slice(0, 60) || 'document',
       entityId: input.entityId?.slice(0, 60) || 'unattached',
       fileName: cleanName,
-      storageKey: `/docs/${diskName}`,
+      storageKey,
       kind: `${category}_doc`,
       uploadedBy: input.uploadedBy.email,
       projectId: input.projectId ?? null,
@@ -210,21 +284,26 @@ function normalizeExtraction(parsed: unknown): { extraction: DocumentExtraction;
 
 export interface ExtractOptions {
   /**
-   * Future seam (§60): text extracted from a PDF's text layer ELSEWHERE
-   * (client-side lib, upstream OCR service). When absent, PDFs honestly
-   * fail — this sandbox has no PDF text-extraction library and a faked
-   * extraction would poison downstream records.
+   * §60 seam: text extracted from a PDF's text layer ELSEWHERE (client-side
+   * lib, upstream OCR service). When present it WINS — the caller's own
+   * extraction is trusted over the server's. When absent, PDFs get
+   * server-side text-layer extraction (lib/pdf-text.ts, issue #42); a PDF
+   * with no usable text layer (a scan) honestly fails rather than faking.
    */
   ocrTextHint?: string
 }
 
 /**
- * Extract structured data from an uploaded document image (or a PDF WITH an
- * ocrTextHint) and persist it to the Attachment row. Image path uses the
- * VLM seam (lib/ai.ts visionMessage — model 'glm-5v-turbo'); hint path uses
- * the chat-LLM seam (llm, jsonMode) — the seam does not return the chat
- * model id, so that path's provenance label is 'zai-chat-llm' (pipeline
- * label, not a model version — the VLM path records the seam's pinned model).
+ * Extract structured data from an uploaded document (image scan → VLM;
+ * PDF → text layer → chat LLM) and persist it to the Attachment row.
+ * Image path uses the VLM seam (lib/ai.ts visionMessage — model
+ * 'glm-5v-turbo'); PDF path uses the chat-LLM seam (llm, jsonMode) with
+ * the text from ocrTextHint when the caller supplies one, ELSE the
+ * server-side text-layer extraction (lib/pdf-text.ts, issue #42) — both
+ * feed the IDENTICAL downstream parse path. The seam does not return the
+ * chat model id, so that path's provenance label is 'zai-chat-llm'
+ * (pipeline label, not a model version — the VLM path records the seam's
+ * pinned model).
  *
  * Draft-only by design: writes only ocrText / extractedJson /
  * extractionConfidence / extractionModel (and resets a stale review).
@@ -233,7 +312,7 @@ export async function extractDocument(attachmentId: string, opts: ExtractOptions
   const attachment = await db.attachment.findUnique({ where: { id: attachmentId } })
   if (!attachment) return { ok: false, error: 'Attachment not found' }
 
-  const buf = await readFile(docsPath(attachment.storageKey)).catch(() => null)
+  const buf = await readStoredDocumentBytes(attachment.storageKey)
   if (!buf || buf.length === 0) {
     return { ok: false, error: 'Stored file is missing or unreadable — re-upload the document' }
   }
@@ -246,13 +325,32 @@ export async function extractDocument(attachmentId: string, opts: ExtractOptions
   }
 
   if (mime === 'application/pdf') {
-    const hint = opts.ocrTextHint?.trim()
+    // The caller's own extraction (client-side text layer / upstream OCR)
+    // always WINS over the server's; only when absent do we run the
+    // server-side text-layer extraction (issue #42). Either way the text
+    // then flows through the IDENTICAL downstream parse path below.
+    let hint = opts.ocrTextHint?.trim()
     if (!hint) {
-      // HONEST LIMITATION — no OCR library in this sandbox. Do not fake it.
-      return {
-        ok: false,
-        error:
-          'PDF text extraction is not available in this environment — upload an image of the document, or provide ocrTextHint',
+      const extracted = extractPdfText(buf) // never throws
+      if (!extracted.ok) {
+        // HONEST LIMITATION — e.g. an encrypted PDF. Do not fake it.
+        return {
+          ok: false,
+          error:
+            `PDF text extraction failed (${extracted.reason}) — ` +
+            'upload an image of the document, or provide ocrTextHint',
+        }
+      }
+      hint = extracted.text.trim()
+      if (!hint) {
+        // HONEST LIMITATION — no text layer (a scan), and no OCR here.
+        // Same error shape the route has always returned for unusable PDFs.
+        return {
+          ok: false,
+          error:
+            'PDF has no extractable text layer (likely a scanned/image-only PDF) — ' +
+            'upload an image of the document, or provide ocrTextHint',
+        }
       }
     }
     const parsed = await llm(

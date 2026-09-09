@@ -1,4 +1,4 @@
-// Professionals directory module — service layer (agent 2-b).
+// Professionals directory module — service layer.
 //
 // Called from src/backend/actions/professionals.ts (never directly from a route):
 //   - upsert directory entries (name, category, licence body/number, county…)

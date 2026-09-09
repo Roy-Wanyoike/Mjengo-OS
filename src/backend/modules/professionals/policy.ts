@@ -1,4 +1,4 @@
-// Professionals module — role permissions (agent 2-b).
+// Professionals module — role permissions.
 //
 // Working rules (Finder spec + roadmap §9/§12), implemented for real:
 //   contractor  · add/edit directory entries · record credential checks

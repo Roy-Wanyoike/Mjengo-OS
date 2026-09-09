@@ -33,6 +33,8 @@ import type {
 //   · order sent              → kind order.sent, contractor
 //   · anomaly detected        → kind anomaly, contractor (act on the alert)
 //   · recap daily             → kind recap, client (diaspora evening update)
+//   · trust digest            → kind trust.digest, client (weekly EN/SW
+//                               "what your money did" — in-app 'logged' only)
 //   · ledger reconciled       → kind ledger.reconciled, contractor
 //   · project delayed         → kind project.delayed, contractor
 //   · attendance absent       → kind attendance.absent, contractor
@@ -88,6 +90,24 @@ const NOTIFY_POLICY: Record<string, NotifyPolicyEntry | null> = {
   // The intel digest service already notifies (kind digest.weekly) directly —
   // a second row here would duplicate the bell entry. Event row only.
   'digest.weekly': null,
+  // W6-2 diaspora trust digest: the weekly "what your money did" note is
+  // ready (text + optional voice note). HONEST CHANNEL: in_app with
+  // deliveryStatus 'logged' — nothing claims WhatsApp delivery (there is no
+  // WhatsApp provider); the client plays/downloads the voice note from the
+  // Intel tab or their share link and forwards it themselves.
+  'digest.trust': {
+    kind: 'trust.digest',
+    audienceRole: 'client',
+    channel: 'in_app',
+    recipient: (p) => (typeof p.client === 'string' ? p.client : undefined),
+    title: (p) => {
+      const langs = Array.isArray(p.langs) ? (p.langs as string[]) : []
+      const langLabel = langs.length === 2 ? 'EN+SW' : langs[0] === 'sw' ? 'Kiswahili' : 'English'
+      return `Trust digest ready — ${langLabel}`
+    },
+    body: (p) =>
+      'This week\u2019s "what your money did" digest is ready — every number is a ledger row. Read it (and play the voice note) in the Intel tab or your share link.',
+  },
   'ledger.reconciled': {
     kind: 'ledger.reconciled',
     audienceRole: 'contractor',

@@ -1,6 +1,6 @@
 'use client'
 
-// Finder procurement dashboard (agent 2-c — Finder spec §18/§20): money tiles
+// Finder procurement dashboard (Finder spec §18/§20): money tiles
 // (Required / Purchased / Committed / Remaining), status tiles (pending
 // requests, pending approvals, orders in transit, discrepancies), the
 // BOQ-lite per-material table with "Find suppliers for the remaining"

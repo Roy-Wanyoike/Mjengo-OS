@@ -28,7 +28,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/frontend/ui/alert-dialog'
-import { Bell, BellOff, Globe, Loader2, RotateCcw, ShieldAlert, User } from 'lucide-react'
+import { Bell, BellOff, Globe, Loader2, MonitorSmartphone, RotateCcw, ShieldAlert, User } from 'lucide-react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import { ROLE_LABELS } from '@/shared/permissions'
 import { useT } from '@/frontend/i18n/provider'
@@ -240,6 +240,222 @@ function NotificationPrefsCard() {
   )
 }
 
+// ---------------------------------------------------------------- web push
+// Server-backed (PushSubscription rows) via the W5-1 routes: GET
+// /api/push/subscribe is the honest config probe ({ configured, publicKey? } —
+// not configured → no fake subscribe, the card says so), POST
+// /api/push/subscribe stores the browser subscription for the session user,
+// POST /api/push/unsubscribe revokes the stored row. The browser-side
+// PushSubscription is created against the VAPID public key; sends only
+// happen when the server's VAPID pair is configured (fail-closed channel).
+
+/** base64url (VAPID public key) → Uint8Array for applicationServerKey. */
+function urlB64ToUint8Array(base64Url: string): Uint8Array<ArrayBuffer> {
+  const padding = '='.repeat((4 - (base64Url.length % 4)) % 4)
+  const base64 = (base64Url + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const raw = atob(base64)
+  const out = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i)
+  return out
+}
+
+interface PushConfig {
+  configured: boolean
+  publicKey?: string
+}
+
+function WebPushCard() {
+  const t = useT()
+  // Browser support is resolved AFTER mount (SSR renders the neutral loading
+  // state — no hydration mismatch, same discipline as the locale radio).
+  const [support, setSupport] = useState<'unknown' | 'ok' | 'no' | 'blocked'>('unknown')
+  const [config, setConfig] = useState<PushConfig | null>(null) // null = loading
+  const [error, setError] = useState<string | null>(null)
+  const [signedOut, setSignedOut] = useState(false) // 401: share-link visitor
+  const [hasBrowserSub, setHasBrowserSub] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [reload, setReload] = useState(0)
+
+  useEffect(() => {
+    const ok =
+      typeof window !== 'undefined' &&
+      'serviceWorker' in navigator &&
+      'PushManager' in window &&
+      'Notification' in window
+    setSupport(ok ? (Notification.permission === 'denied' ? 'blocked' : 'ok') : 'no')
+
+    if (!ok) return
+    // Existing browser subscription (drives the honest On/Off state).
+    navigator.serviceWorker.ready
+      .then((reg) => reg.pushManager.getSubscription())
+      .then((sub) => setHasBrowserSub(!!sub))
+      .catch(() => setHasBrowserSub(false))
+  }, [])
+
+  // Server config probe — 401 = share-link visitor (honest note, like the
+  // prefs card), not a fake error.
+  useEffect(() => {
+    let cancelled = false
+    setConfig(null)
+    setError(null)
+    setSignedOut(false)
+    fetch('/api/push/subscribe')
+      .then(async (r) => {
+        if (r.status === 401) {
+          if (!cancelled) setSignedOut(true)
+          return
+        }
+        if (!r.ok) {
+          const json = (await r.json().catch(() => null)) as { error?: string } | null
+          throw new Error(json?.error ?? `HTTP ${r.status}`)
+        }
+        const json = (await r.json()) as { configured?: boolean; publicKey?: string }
+        if (!cancelled) {
+          setConfig({ configured: !!json.configured, publicKey: typeof json.publicKey === 'string' ? json.publicKey : undefined })
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(t('settings.push.error.load', { error: e instanceof Error ? e.message : 'network error' }))
+      })
+    return () => {
+      cancelled = true
+    }
+    // t is captured for the catch's error wording only — never a fetch trigger
+    // (the effect keys on reload; same note as the prefs card above).
+  }, [reload])
+
+  /** Ask the browser for a subscription against the VAPID key, store it server-side. */
+  async function subscribe() {
+    if (!config?.publicKey) return
+    setBusy(true)
+    try {
+      const reg = await navigator.serviceWorker.ready
+      let sub = await reg.pushManager.getSubscription()
+      if (!sub) {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+          const perm = await Notification.requestPermission()
+          if (perm !== 'granted') throw new Error(t('settings.push.permission'))
+        } else if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+          throw new Error(t('settings.push.blocked'))
+        }
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlB64ToUint8Array(config.publicKey),
+        })
+      }
+      const r = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub.toJSON()),
+      })
+      if (!r.ok) {
+        const json = (await r.json().catch(() => null)) as { error?: string } | null
+        throw new Error(json?.error ?? `HTTP ${r.status}`)
+      }
+      setHasBrowserSub(true)
+      toast.success(t('settings.push.onToast'))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t('settings.push.error.action'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Revoke the stored row first (server address book), then the browser subscription. */
+  async function unsubscribe() {
+    setBusy(true)
+    try {
+      const reg = await navigator.serviceWorker.ready
+      const sub = await reg.pushManager.getSubscription()
+      if (sub) {
+        const r = await fetch('/api/push/unsubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        })
+        if (!r.ok) {
+          const json = (await r.json().catch(() => null)) as { error?: string } | null
+          throw new Error(json?.error ?? `HTTP ${r.status}`)
+        }
+        await sub.unsubscribe()
+      }
+      setHasBrowserSub(false)
+      toast.success(t('settings.push.offToast'))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t('settings.push.error.action'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const loading = config === null || support === 'unknown'
+
+  return (
+    <Card className="border-stone-200 shadow-sm">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-stone-900">
+          <MonitorSmartphone className="w-4 h-4 text-amber-600" aria-hidden /> {t('settings.push')}
+        </CardTitle>
+        <CardDescription>{t('settings.push.desc')}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {signedOut ? (
+          <div role="status" className="flex items-start gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3 text-sm text-stone-600 leading-relaxed">
+            <BellOff className="w-4 h-4 shrink-0 mt-0.5 text-stone-400" aria-hidden />
+            <span>{t('settings.push.signedOut')}</span>
+          </div>
+        ) : error ? (
+          <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
+            <span className="flex-1">{error}</span>
+            <Button variant="outline" size="sm" className="min-h-9 shrink-0" onClick={() => setReload((n) => n + 1)}>
+              {t('settings.push.retry')}
+            </Button>
+          </div>
+        ) : support === 'no' ? (
+          <div role="status" className="flex items-start gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3 text-sm text-stone-600 leading-relaxed">
+            <BellOff className="w-4 h-4 shrink-0 mt-0.5 text-stone-400" aria-hidden />
+            <span>{t('settings.push.unsupported')}</span>
+          </div>
+        ) : support === 'blocked' ? (
+          <div role="status" className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 leading-relaxed">
+            <BellOff className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
+            <span>{t('settings.push.blocked')}</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 min-h-11 rounded-lg border border-stone-200 px-3 sm:px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-stone-900">{t('settings.push.channel')}</p>
+              <p className="text-xs text-stone-500 truncate">
+                {loading
+                  ? t('settings.push.loading')
+                  : !config.configured
+                    ? t('settings.push.unconfigured')
+                    : hasBrowserSub
+                      ? t('settings.push.on')
+                      : t('settings.push.off')}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {busy && <Loader2 className="w-3.5 h-3.5 text-stone-400 animate-spin" aria-label={t('settings.push.busy')} />}
+              {loading || !config.configured ? null : hasBrowserSub ? (
+                <Button variant="outline" size="sm" className="min-h-9" disabled={busy} onClick={() => void unsubscribe()}>
+                  {t('settings.push.unsubscribe')}
+                </Button>
+              ) : (
+                <Button size="sm" className="min-h-9 bg-amber-600 hover:bg-amber-700 text-stone-950" disabled={busy} onClick={() => void subscribe()}>
+                  {t('settings.push.subscribe')}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+        <p className="text-xs text-stone-500 leading-relaxed">{t('settings.push.hint')}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
 // ---------------------------------------------------------------- tab
 
 /**
@@ -397,6 +613,10 @@ export function SettingsTab() {
 
       {/* Notifications — server-backed prefs (existing route, wired) */}
       <NotificationPrefsCard />
+
+      {/* Web push — browser subscriptions via the W5-1 routes (honest
+          config probe; disabled state when the server has no VAPID pair) */}
+      <WebPushCard />
 
       {/* Danger zone — local-only reset with confirm */}
       <Card className="border-red-200 shadow-sm">

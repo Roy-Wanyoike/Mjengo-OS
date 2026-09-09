@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto'
 
 import { db } from '@/backend/lib/db'
+import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 import { logAudit, summarizeAction, kindForAction } from '@/backend/lib/audit'
 import { TRUST_ACTIONS, applyTrustAction } from '@/backend/actions/trust'
 import { MONEY_ACTIONS, applyMoneyAction } from '@/backend/actions/money'
@@ -17,11 +18,13 @@ import { spendExternalInTx, reverseTransaction as reverseTransactionService } fr
 import { getProvider } from '@/backend/modules/wallet/providers'
 import { currentActor } from '@/backend/modules/wallet/session'
 import { INTEL_ACTIONS, applyIntelAction } from '@/backend/actions/intel'
+import { AI_ACTIONS, applyAiAction } from '@/backend/actions/ai'
 import { loadLandSlice } from '@/backend/modules/land/repository'
 import { loadProfessionalsSlice } from '@/backend/modules/professionals/repository'
 import { loadSupplySlice } from '@/backend/modules/supply/repository'
 import { loadInvoicesSlice } from '@/backend/modules/invoices/repository'
 import { loadIntelSlice } from '@/backend/modules/intel/repository'
+import { loadDrawPacks, type DrawPackLink } from '@/backend/modules/drawpack/service'
 import type { LandSlice } from '@/backend/modules/land/types'
 import type { ProfessionalsSlice } from '@/backend/modules/professionals/types'
 import type { SupplySlice } from '@/backend/modules/supply/types'
@@ -30,6 +33,7 @@ import type { IntelSlice } from '@/backend/modules/intel/types'
 import type { InventorySlice, BoqSlice } from '@/backend/modules/inventory/types'
 import type { FinanceSlice } from '@/backend/modules/wallet/types'
 import { supplyCan, type SupplyAction, type SupplyRole } from '@/backend/modules/supply/policy'
+import { assertSupplierScope } from '@/backend/modules/supply/supplier-scope'
 import type {
   Alert, Attendance, AuditEvent, Consumption, Delivery, EscrowWallet, Material, Milestone, Notification, OrderDelivery, Phase, PhotoComment, Project, ProjectTeam, Recap, SitePhoto, SiteZone, Task, Transaction, VariationOrder, Worker,
 } from '@prisma/client'
@@ -108,6 +112,10 @@ export interface ProjectPayload {
   inventory: InventorySlice
   boq: BoqSlice
   finance: FinanceSlice
+  // W4-1: link rows for the immutable evidence draw packs (released
+  // milestones link their pack through these; full packs come from the share
+  // GET drawPack branch).
+  drawPacks: DrawPackLink[]
 }
 
 export interface ProjectListItem {
@@ -200,7 +208,7 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
     : await db.project.findFirst({ orderBy: { createdAt: 'asc' } })
   if (!project) return null
 
-  const [phases, workers, materials, deliveries, consumptions, photos, alerts, transactions, recaps, escrow, milestones, variations, zones, notifications, auditEvents, photoComments, inventory, boq, finance] =
+  const [phases, workers, materials, deliveries, consumptions, photos, alerts, transactions, recaps, escrow, milestones, variations, zones, notifications, auditEvents, photoComments, inventory, boq, finance, drawPacks] =
     await Promise.all([
       db.phase.findMany({ where: { projectId: project.id }, orderBy: { order: 'asc' }, include: { tasks: { orderBy: { createdAt: 'asc' } } } }),
       db.worker.findMany({ where: { projectId: project.id }, orderBy: { name: 'asc' }, include: { attendances: { orderBy: { date: 'desc' } } } }),
@@ -221,6 +229,10 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
       loadInventorySlice(project.id),
       loadBoqSlice(project.id),
       loadFinanceSlice(project.id),
+      // W4-1: link rows only — the immutable packs themselves are served by
+      // GET /api/share?token=<t>&drawPack=<id> (the frozen bundle, hash and
+      // printable view data), never embedded in the live payload.
+      loadDrawPacks(project.id),
     ])
 
   const today = todayStr()
@@ -371,6 +383,7 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
     inventory,
     boq,
     finance,
+    drawPacks,
   }
 }
 
@@ -387,6 +400,9 @@ const TEAM_ROLES: readonly string[] = ['contractor', 'admin']
 
 /** Team-roster actions gated above (§33). */
 const TEAM_ACTIONS: readonly string[] = ['team.add', 'team.update', 'team.remove']
+
+/** Roles that may run an AI draw review (W6-1) — clients read notes via the share link. */
+const AI_REVIEW_ROLES: readonly string[] = ['contractor', 'admin']
 
 /** §33 professional roles a roster entry may carry. */
 const PROJECT_TEAM_ROLES: readonly string[] = ['contractor', 'supervisor', 'qs', 'architect', 'engineer', 'surveyor', 'client_rep']
@@ -543,13 +559,14 @@ export type ActionType =
   | (typeof INTEL_ACTIONS)[number]
   | (typeof INVENTORY_ACTIONS)[number]
   | (typeof WALLET_ACTIONS)[number]
+  | (typeof AI_ACTIONS)[number]
 
 export async function applyAction(type: ActionType, payload: any, projectIdArg?: string): Promise<any> {
   // Project resolution: explicit projectId arg > payload.projectId > first project
   const projectId = await resolveProjectId(projectIdArg, payload)
 
   // Optional actor override (used by the public share route / client role); never reaches handlers
-  const { __actor, __role, ...cleanPayload } = payload ?? {}
+  const { __actor, __role, __supplierId, ...cleanPayload } = payload ?? {}
 
   // ---- B1 domain role gates (Doc A §24/§26/§33) ------------------------------
   // The role stamp arrives via __role, written SERVER-side by every entry
@@ -568,6 +585,15 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
       `Only a contractor or admin may manage the project team roster — "${effectiveRole}" is not permitted (spec §33)`,
     )
   }
+  // W6-1/W6-2: AI actions are advisory-only, but they still cost provider
+  // calls and wear the platform's name — contractor/admin only (the client's
+  // read surface is the share link; supervisors/finance stay on the human
+  // paths).
+  if ((AI_ACTIONS as readonly string[]).includes(type) && !AI_REVIEW_ROLES.includes(effectiveRole)) {
+    throw new Error(
+      `Only a contractor or admin may run an AI review action — "${effectiveRole}" is not permitted. Clients read AI output through their share link.`,
+    )
+  }
   // §24 client-direct ordering: a client (or share-link) caller may reach the
   // supply loop ONLY through the seams supplyCan allows — request.create,
   // order.create and request.decide (the CLIENT_ACTIONS band-approval seam).
@@ -582,6 +608,16 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
       `Clients may raise material requests and place purchase orders — "${type}" stays with the site team (spec §24). ` +
         'Sign in as the site team, or ask them to run it.',
     )
+  }
+  // W5-3 supplier pin — the SAME dual-layer pattern, mirrored: the route layer
+  // stamps __role 'supplier' + __supplierId (session-derived, never
+  // payload-overridable — /api/actions rewrites any payload copy); HERE the
+  // shared path re-checks the allowlist and pins every id to the supplier's
+  // own rows before any handler runs. A supplier without a link, or a
+  // foreign/unknown id, is refused with the exact miss-error the service
+  // layer produces (indistinguishable from the id not existing).
+  if (effectiveRole === 'supplier' || __supplierId) {
+    await assertSupplierScope(type, cleanPayload, projectId, __supplierId ?? null)
   }
 
   let result: any
@@ -601,6 +637,8 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
     result = await applyInvoiceAction(type, cleanPayload, projectId)
   } else if ((INTEL_ACTIONS as readonly string[]).includes(type)) {
     result = await applyIntelAction(type, cleanPayload, projectId)
+  } else if ((AI_ACTIONS as readonly string[]).includes(type)) {
+    result = await applyAiAction(type, cleanPayload, projectId)
   } else if ((INVENTORY_ACTIONS as readonly string[]).includes(type)) {
     result = await applyInventoryAction(type, cleanPayload, projectId)
   } else if ((WALLET_ACTIONS as readonly string[]).includes(type)) {
@@ -890,6 +928,10 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
           data.verifiedByName = null
         }
       }
+      // Entity version (outbox conflict metadata): every mutation of a
+      // versioned row bumps it — online edits and offline sync flushes share
+      // this applier, so both bump. /api/sync rejects stale baseVersions.
+      data.version = existing.version + 1
       const task = await db.task.update({ where: { id }, data })
       return { id: task.id }
     }
@@ -897,20 +939,20 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
     case 'task.assign': {
       const { id, assignedToId } = payload
       if (!id) throw new Error('task id required')
-      await taskInProject(id, projectId) // scoping + existence
+      const existing = await taskInProject(id, projectId) // scoping + existence
       let workerId: string | null = null
       if (assignedToId !== null && assignedToId !== undefined && assignedToId !== '') {
         workerId = String(assignedToId)
         await assertWorkerInProject(workerId, projectId)
       }
-      const task = await db.task.update({ where: { id }, data: { assignedToId: workerId } })
+      const task = await db.task.update({ where: { id }, data: { assignedToId: workerId, version: existing.version + 1 } })
       return { id: task.id, assignedToId: workerId }
     }
 
     case 'task.block': {
       const { id, reason, blockedById } = payload
       if (!id) throw new Error('task id required')
-      await taskInProject(id, projectId) // scoping + existence
+      const existing = await taskInProject(id, projectId) // scoping + existence
       if (typeof reason !== 'string' || !reason.trim()) {
         throw new Error('A block reason is required — record why work stopped')
       }
@@ -920,6 +962,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
         await assertDependencyOk(id, depId, projectId)
         data.blockedById = depId
       }
+      data.version = existing.version + 1
       const task = await db.task.update({ where: { id }, data })
       return { id: task.id }
     }
@@ -933,6 +976,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
         // work resumes where it left off
         data.status = existing.progress > 0 ? 'in_progress' : 'pending'
       }
+      data.version = existing.version + 1
       const task = await db.task.update({ where: { id }, data })
       return { id: task.id }
     }
@@ -952,7 +996,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
           throw new Error(`Cannot complete "${existing.title}" — it depends on "${blocker.title}", which is not done yet`)
         }
       }
-      const task = await db.task.update({ where: { id }, data: { status: 'done', progress: 100 } })
+      const task = await db.task.update({ where: { id }, data: { status: 'done', progress: 100, version: existing.version + 1 } })
       return { id: task.id }
     }
 
@@ -974,7 +1018,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
       }
       const task = await db.task.update({
         where: { id },
-        data: { verifiedAt: new Date(), verifiedByName: actor.name?.trim() || actor.role },
+        data: { verifiedAt: new Date(), verifiedByName: actor.name?.trim() || actor.role, version: existing.version + 1 },
       })
       return { id: task.id, verifiedBy: task.verifiedByName }
     }
@@ -1029,7 +1073,12 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
           supplier: supplier || 'Unknown supplier',
           date: date ? new Date(date) : new Date(),
           source: source || 'manual',
-          rawTranscript: rawTranscript || null,
+          // Defense-in-depth: transcripts are scrubbed at the AI boundary
+          // (pii-scrub); scrub again in case a raw transcript reaches this
+          // applier through another client path (USSD/sync).
+          rawTranscript: (typeof rawTranscript === 'string' && rawTranscript)
+            ? scrubTranscriptPhones(rawTranscript).scrubbed
+            : rawTranscript || null,
         },
       })
       await db.transaction.create({
@@ -1069,13 +1118,21 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
             workerId, projectId, date: today, checkIn: new Date(), status: 'present',
             method: payload.method || 'app', wage: worker.dailyRate,
             verification: 'verified', // worker-initiated check-in carries device evidence
-            evidence: JSON.stringify([payload.method === 'ussd' ? 'ussd' : payload.method === 'kiosk_pin' ? 'pin' : 'device', 'device']),
+            // W4-3: worker-initiated WhatsApp check-in carries 'whatsapp'
+            // evidence (mirrors the 'ussd' stamp — never 'device').
+            evidence: JSON.stringify([
+              payload.method === 'ussd' ? 'ussd'
+                : payload.method === 'kiosk_pin' ? 'pin'
+                  : payload.method === 'whatsapp' ? 'whatsapp'
+                    : 'device',
+              'device',
+            ]),
           },
         })
       } else if (toggle === 'out' && !att.checkOut) {
-        att = await db.attendance.update({ where: { id: att.id }, data: { checkOut: new Date() } })
+        att = await db.attendance.update({ where: { id: att.id }, data: { checkOut: new Date(), version: att.version + 1 } })
       } else if (toggle === 'in' && !att.checkIn) {
-        att = await db.attendance.update({ where: { id: att.id }, data: { checkIn: new Date(), status: 'present', wage: worker.dailyRate } })
+        att = await db.attendance.update({ where: { id: att.id }, data: { checkIn: new Date(), status: 'present', wage: worker.dailyRate, version: att.version + 1 } })
       }
       return { id: att.id }
     }
@@ -1105,7 +1162,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
         }
         att = await db.attendance.update({
           where: { id: att.id },
-          data: { status, wage, overrideLog: JSON.stringify(overrideLog) },
+          data: { status, wage, overrideLog: JSON.stringify(overrideLog), version: att.version + 1 },
         })
       }
       return { id: att.id }
@@ -1416,7 +1473,7 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
       const posted = await db.$transaction(async (tx) => {
         const paid = await tx.attendance.updateMany({
           where: { id: { in: gate.unpaid.map((u) => u.id) } },
-          data: { paid: true },
+          data: { paid: true, version: { increment: 1 } }, // payroll stamps are row mutations too
         })
         void paid
         const spend = await spendExternalInTx(tx, projectId, {

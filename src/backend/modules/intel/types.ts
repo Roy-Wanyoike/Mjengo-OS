@@ -8,8 +8,12 @@
 // Every number in this module is deterministic and traceable to real rows —
 // no anonymous ratings, no opaque "AI scores".
 
-import type { RiskAssessment, IntelDigest, PricePoint, Supplier } from '@prisma/client'
+import type { RiskAssessment, IntelDigest, PricePoint, Supplier, MjengoScore } from '@prisma/client'
 import type { FlagMap } from './flags'
+import type { ScoreComponent, ScoreComponentKey } from './score'
+
+// Re-exported for the UI (the score section renders parsed components).
+export type { ScoreComponent } from './score'
 
 // ---- domain enums ----
 
@@ -18,7 +22,7 @@ export type FindingSeverity = 'info' | 'warning' | 'critical'
 
 /**
  * One rule hit inside RiskAssessment.findings (JSON string array).
- * Written by the risk engine (2-e); v1 seed rows carried a single `detail`
+ * Written by the risk engine; v1 seed rows carried a single `detail`
  * line — parseRiskFindings normalizes both shapes into this interface.
  */
 export interface RiskFinding {
@@ -113,6 +117,51 @@ export function parseDigestItems(raw: string): DigestItem[] {
   } catch {
     return []
   }
+}
+
+// ---- MjengoScore (contractor trust score, issue W3-3) ----
+
+/** Raw component as stored in MjengoScore.components (JSON string array). */
+interface RawScoreComponent {
+  key?: unknown
+  label?: unknown
+  weight?: unknown
+  value?: unknown
+  deduction?: unknown
+  evidence?: unknown
+}
+
+function isScoreComponentKey(v: unknown): v is ScoreComponentKey {
+  return (
+    v === 'evidence_backed_releases' || v === 'attendance_verification' || v === 'budget_discipline' ||
+    v === 'variation_discipline' || v === 'delivery_discrepancy' || v === 'invoice_disputes'
+  )
+}
+
+/** Parse a MjengoScore.components JSON string safely (never throws). */
+export function parseScoreComponents(raw: string): ScoreComponent[] {
+  let list: unknown
+  try {
+    list = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(list)) return []
+  return list
+    .map((item): ScoreComponent | null => {
+      if (!item || typeof item !== 'object') return null
+      const c = item as RawScoreComponent
+      if (!isScoreComponentKey(c.key)) return null
+      return {
+        key: c.key,
+        label: typeof c.label === 'string' ? c.label : c.key,
+        weight: typeof c.weight === 'number' ? c.weight : 0,
+        value: typeof c.value === 'number' ? c.value : null,
+        deduction: typeof c.deduction === 'number' ? c.deduction : null,
+        evidence: typeof c.evidence === 'string' ? c.evidence : '',
+      }
+    })
+    .filter((c): c is ScoreComponent => c !== null)
 }
 
 // ---- read-side computations (computed in repository, never in the UI) ----
@@ -221,6 +270,8 @@ export const HEALTH_INPUTS: Record<HealthDimensionKey, string> = {
  */
 export interface IntelSlice {
   risk: RiskAssessment | null
+  /** Latest MjengoScore row (append-only history; latest wins, older rows stay queryable). */
+  score: MjengoScore | null
   digests: IntelDigest[]
   pricePoints: PricePoint[]
   // computed (server-side) by the repository:
@@ -233,15 +284,24 @@ export interface IntelSlice {
 
 export const EMPTY_INTEL_SLICE: IntelSlice = {
   risk: null,
+  score: null,
   digests: [],
   pricePoints: [],
   priceTrends: [],
   suggestions: [],
   reliability: [],
   health: null,
-  flags: Object.fromEntries(
-    ['ai_progress', 'ai_voice', 'wallet', 'marketplace', 'land_verification', 'low_data'].map((k) => [k, true]),
-  ) as FlagMap,
+  // Keep in sync with FLAG_KEYS / FLAG_DEFAULTS in ./flags.ts (low_data was
+  // removed — task 9-a decision, see the flags.ts header; `ai` was added
+  // DEFAULT OFF — task 8-f, the Wave-6 AI provider seam).
+  flags: {
+    ai_progress: true,
+    ai_voice: true,
+    wallet: true,
+    marketplace: true,
+    land_verification: true,
+    ai: false,
+  } as FlagMap,
 }
 
 /** Supplier row shape the engine needs (subset of the Prisma Supplier model). */

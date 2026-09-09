@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { db } from '@/backend/lib/db'
 import { applyAction } from '@/backend/lib/mjengo'
 import { withAuditContext } from '@/backend/lib/audit'
-import { enforceRateLimit } from '@/backend/lib/rate-limit'
+import { clientIpFromHeaders, enforceRateLimit } from '@/backend/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,8 +37,20 @@ export const dynamic = 'force-dynamic'
  * to have authenticated the phone line; the worker's PIN is the identity
  * inside the session. HONEST: no real aggregator is wired to this route —
  * the response footer says 'MjengoOS sim' and GET describes the contract.
- * Rate limit: 20 req/min/phone via the shared in-process limiter (single
- * instance — see src/backend/lib/rate-limit.ts).
+ *
+ * W-AUDIT #2 hardening (both optional, demo-safe — unset = today's posture):
+ *   · Rate limits: 20 req/min/phone (unchanged) PLUS 40 req/min per CLIENT-IP
+ *     for PIN-bearing requests — the phone number is caller-supplied and
+ *     rotates freely, so it alone could never throttle a 4-digit-PIN brute
+ *     force from one host. The per-IP limit is honest for the demo posture;
+ *     a real aggregator multiplexes many MSISDNs per gateway IP, so it would
+ *     be raised or keyed on the aggregator's authenticated identity.
+ *   · USSD_WEBHOOK_SECRET: when set, POSTs must carry `X-Signature:`
+ *     lowercase-hex HMAC-SHA256 of the RAW request body under the secret —
+ *     aggregator authentication (the demo gateway-trust model then becomes
+ *     a shared-secret one). Unset keeps the open demo posture.
+ * Both use the shared in-process limiter (single instance — see
+ * src/backend/lib/rate-limit.ts).
  */
 
 const SERVICE_CODE = '*384#'
@@ -131,11 +144,50 @@ const ATTEND_STATUS: Record<string, { code: string; label: string }> = {
   '3': { code: 'half_day', label: 'HALF DAY' },
 }
 
+/** PIN-attempt rate limit (per client IP) — see file header. */
+const PIN_IP_LIMIT_PER_MIN = 40
+
+/** True when the menu path includes a worker PIN (attendance or balance). */
+function isPinAttempt(parts: string[]): boolean {
+  return (parts[0] === '1' || parts[0] === '2') && !!parts[1]
+}
+
+/**
+ * Verify X-Signature (hex HMAC-SHA256 of the raw body) when USSD_WEBHOOK_SECRET
+ * is set. Returns a 401 response when the header is missing or wrong, null when
+ * OK (or when the optional hardening is unset — the demo posture).
+ */
+function verifyWebhookSignature(req: NextRequest, raw: string): NextResponse | null {
+  const secret = process.env.USSD_WEBHOOK_SECRET
+  if (!secret) return null // unset = demo posture (gateway-trust), documented
+  const given = req.headers.get('x-signature')?.trim().toLowerCase() ?? ''
+  if (!given) {
+    return NextResponse.json(
+      { error: 'Missing X-Signature header — HMAC-SHA256 (hex) of the raw request body is required' },
+      { status: 401 },
+    )
+  }
+  const expected = createHmac('sha256', secret).update(raw).digest('hex')
+  const a = Buffer.from(given, 'utf8')
+  const b = Buffer.from(expected, 'utf8')
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return NextResponse.json({ error: 'Invalid X-Signature' }, { status: 401 })
+  }
+  return null
+}
+
 export async function POST(req: NextRequest) {
   try {
+    // Raw body once: the HMAC (when enabled) is computed over the RAW bytes,
+    // and the JSON parse follows from the same string.
+    const raw = await req.text()
+
+    const sigRejected = verifyWebhookSignature(req, raw)
+    if (sigRejected) return sigRejected
+
     let body: { sessionId?: unknown; phoneNumber?: unknown; text?: unknown }
     try {
-      body = (await req.json()) as typeof body
+      body = JSON.parse(raw) as typeof body
     } catch {
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     }
@@ -154,6 +206,21 @@ export async function POST(req: NextRequest) {
     }
     const rest = text.slice(SERVICE_CODE.length)
     const parts = rest ? rest.split('*').filter((p) => p !== '') : []
+
+    // PIN-bearing requests carry the worker's identity attempt — throttle them
+    // by the CLIENT-IP principal too (W-AUDIT #2: the phoneNumber is
+    // caller-supplied and rotates freely, so per-phone alone cannot stop a
+    // 4-digit brute force from one host). No XFF → 'anon' principal (loopback).
+    if (isPinAttempt(parts)) {
+      const ip = clientIpFromHeaders(req.headers)
+      const pinLimited = await enforceRateLimit(
+        req,
+        `ussd-pin-ip:${ip || 'anon'}`,
+        PIN_IP_LIMIT_PER_MIN,
+        60_000,
+      )
+      if (pinLimited) return pinLimited
+    }
 
     // ---- main menu ----
     if (parts.length === 0) return ussd(MENU_TEXT)
@@ -241,8 +308,9 @@ export async function GET() {
       '*384#*3': 'help text',
     },
     pinResolution: 'kiosk PIN (Worker.pin) first, else last 4 digits of the worker phone',
-    rateLimit: '20 requests/min/phone (in-process token bucket — single instance)',
+    rateLimit: '20 requests/min/phone + 40 PIN-attempts/min per client IP (in-process token bucket — single instance)',
     auth: 'unauthenticated by design (gateway-trust model); the worker PIN is the in-session identity',
+    signature: 'USSD_WEBHOOK_SECRET (optional env): when set, POST requires X-Signature — lowercase-hex HMAC-SHA256 of the raw request body under the secret; unset = open demo posture',
     honest:
       'No SMS/USSD aggregator is wired to this route — it speaks an Africa\'s Talking-style contract so one can be attached later. Attendance dispatches through the same domain actions (applyAction) as the app UI; every menu response is footered "MjengoOS sim".',
     contentType: 'text/plain; charset=utf-8',

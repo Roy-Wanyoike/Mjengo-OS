@@ -165,11 +165,24 @@ export function summarizeAction(type: string, payload: any, result: any): string
     case 'wallet.transfer': return `Wallet transfer KSh ${p.amount} ${result?.from ?? ''} → ${result?.to ?? ''}`
     case 'transaction.reverse': return `Transaction REVERSED — ${p.reason ?? 'correction'} (ledger ${result?.ledgerRef ?? ''})`
     case 'ledger.post': return `Manual journal posted (ledger ${result?.ref ?? ''})`
+    // Intel module
+    case 'risk.recompute': return `Risk score recomputed: ${result?.overallScore ?? '?'}/100 (${result?.findingsCount ?? 0} findings, rules v${String(result?.ruleVersion ?? '1').replace(/^v/, '')})`
+    case 'score.recompute': return result?.score === null || result?.score === undefined
+      ? `MjengoScore recomputed — no score yet (only ${result?.componentsCount ?? 0} of 6 components have data; describes, humans decide)`
+      : `MjengoScore recomputed: ${result.score}/100 (confidence ${result?.confidence ?? 'low'} · ${result?.componentsCount ?? '?'} of 6 components · describes, humans decide)`
+    // AI module (W6-1) — advisory only, humans decide
+    case 'ai.drawReview': return `AI draw review appended: verdict ${result?.verdict ?? 'advisory'} (confidence ${result?.confidence ?? 'low'} · ${result?.findingsCount ?? 0} finding(s) · advisory only, humans decide)`
+    // AI module (W6-2) — deterministic text + TTS voice note, humans decide
+    case 'ai.trustDigest': return `Trust digest appended (${result?.lang ?? 'en'}): ${result?.textHash?.slice(0, 12) ?? '?'} (audio ${result?.audioStatus ?? 'unavailable'} · every number is a ledger row · AI reads it aloud, it never decides)`
     default: return `Action: ${type}`
   }
 }
 
 export function kindForAction(type: string): string {
+  // W6-2: the trust-digest action lands under its own kind ('ai_digest' —
+  // the wave6-plan's audit kind) while the rest of the ai.* family keeps
+  // the W6-1 'ai_review' kind (unchanged history semantics).
+  if (type === 'ai.trustDigest') return 'ai_digest'
   const prefix = type.split('.')[0]
   const map: Record<string, string> = {
     task: 'task', phase: 'phase', delivery: 'delivery', consumption: 'material',
@@ -179,6 +192,8 @@ export function kindForAction(type: string): string {
     variation: 'variation', comment: 'comment', notification: 'notification', zone: 'site_map',
     payroll: 'wage',
     inventory: 'inventory', boq: 'boq', payment: 'payment', wallet: 'wallet', ledger: 'ledger',
+    score: 'mjengo_score', // MjengoScore recomputes (risk/digest/price/reliability stay 'action' — unchanged history semantics)
+    ai: 'ai_review', // W6-1: AI draw review appends (advisory notes — the kind the audit filter list exposes)
   }
   return map[prefix] ?? 'action'
 }

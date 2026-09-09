@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import { Header } from '@/frontend/mjengo/header'
@@ -24,6 +24,7 @@ import { CreateProjectDialog, type CreateProjectPayload } from '@/frontend/mjeng
 import { ShareDialog } from '@/frontend/mjengo/share-dialog'
 import { DiasporaBanner } from '@/frontend/mjengo/diaspora-banner'
 import { LoginScreen } from '@/frontend/auth/login-screen'
+import { SupplierPortal } from '@/frontend/mjengo/supplier/supplier-portal'
 import { MobileBottomNav } from '@/mobile/nav/mobile-bottom-nav'
 import { Skeleton } from '@/frontend/ui/skeleton'
 import { Card, CardContent } from '@/frontend/ui/card'
@@ -31,10 +32,12 @@ import { CloudOff, RefreshCw, HardHat, Link2Off, TriangleAlert } from 'lucide-re
 import { Button } from '@/frontend/ui/button'
 import { toast } from 'sonner'
 import { usePermissions, tabsForRole, landingForRole } from '@/shared/permissions'
+import { tabsVisibleForFlags } from '@/frontend/mjengo/nav/tab-meta'
 
 export type TabKey =
   | 'overview' | 'site' | 'materials' | 'finder' | 'fundis' | 'money'
   | 'land' | 'evidence' | 'intel' | 'copilot' | 'ussd' | 'audit' | 'settings'
+  | 'supplier'
 
 function BootSkeleton() {
   return (
@@ -77,10 +80,24 @@ export function MjengoApp() {
   // The client surface (share link or logged-in client) keeps its existing
   // tab set regardless of session; owner roles are filtered by permissions.ts
   // (fail closed for unknown roles → Overview only).
+  // Feature flags (spec §81, task 9-a): a flag OFF additionally hides its
+  // gated tab (money / finder) for NON-ADMIN sessions on every surface —
+  // admins bypass so they can toggle & test (same rule the server routes
+  // enforce via requireFlagOn; flags arrive on the payload's intel slice).
   const isShareClient = viewMode === 'client' && Boolean(shareToken)
   // Client surface = share-link client (no login) OR a logged-in client-role user
   const isClientSurface = viewMode === 'client' && (Boolean(shareToken) || clientRole)
-  const surfaceTabs: readonly TabKey[] = isClientSurface ? tabsForRole('client') : roleTabs
+  const surfaceTabs: readonly TabKey[] = useMemo(
+    () => tabsVisibleForFlags(
+      isClientSurface ? tabsForRole('client') : roleTabs,
+      data?.intel?.flags,
+      sessionRole,
+    ),
+    // Stable identity across renders (the mjengo:tab listener effect keys on
+    // this array) — recompute only when the role tab set, the flags or the
+    // session role actually change.
+    [isClientSurface, roleTabs, data?.intel?.flags, sessionRole],
+  )
 
   // Boot: while signed OUT, a ?share=<token> link (or a previously used token)
   // opens the public client "Virtual Site Visit" with NO login. Signed-in users
@@ -120,6 +137,15 @@ export function MjengoApp() {
         setTab('overview')
         void useMjengo.getState().load()
       }
+    } else if (role === 'supplier') {
+      // W5-3: supplier sessions boot the SupplierPortal (its own scoped read
+      // of /api/supplier — NEVER the owner app's project payload, which is
+      // buyer data and 403s for this role). Clear any stale share/client
+      // surface from a previous login in this browser; no load() — the portal
+      // fetches its own payload.
+      if (store.shareToken || store.viewMode === 'client' || store.clientRole || store.shareError) {
+        useMjengo.setState({ shareToken: null, shareError: null, viewMode: 'owner', clientRole: false })
+      }
     } else if (store.shareToken || store.viewMode === 'client' || store.clientRole || store.shareError) {
       useMjengo.setState({ shareToken: null, shareError: null, viewMode: 'owner', clientRole: false })
       void useMjengo.getState().load()
@@ -141,7 +167,7 @@ export function MjengoApp() {
     const role = String(session.user.role ?? 'contractor')
     if (landedFor.current === role) return
     landedFor.current = role
-    if (role === 'client') return
+    if (role === 'client' || role === 'supplier') return
     setTab(landingForRole(role))
   }, [status, session])
 
@@ -251,6 +277,13 @@ export function MjengoApp() {
   }
   if (status === 'unauthenticated' && !isClientSurface && !shareBooting) {
     return <LoginScreen />
+  }
+
+  // W5-3 supplier surface: a supplier session NEVER boots the owner app (its
+  // data is buyer-side; the server 403s the project payload for this role).
+  // The portal owns its own fetch (/api/supplier) + dispatch (/api/actions).
+  if (status === 'authenticated' && session?.user?.role === 'supplier') {
+    return <SupplierPortal />
   }
 
   // Welcome / onboarding screen — fresh install with no projects at all (owner app only)

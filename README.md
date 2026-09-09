@@ -1,1964 +1,525 @@
-# MjengoOS — Construction Site OS 🇰🇪
+# MjengoOS — Build with evidence 🇰🇪
 
-> **The evidence-backed operating system for construction.**
+An **evidence-based construction project OS for Kenya**: phase budgets on a
+double-entry ledger, escrow-backed milestones released against photo proof,
+**MjengoScore** (an evidence-derived contractor trust score), hash-stamped
+**evidence draw packs** for diaspora clients, an **advisory AI layer** (draw
+review, photo authenticity screening, a weekly trust digest with voice) that
+describes and never approves, `*384#` USSD and WhatsApp attendance for
+feature phones, and share links that let clients abroad watch their build
+without an account.
 
-MjengoOS is an **offline-first Construction Operating System** built for Kenya and emerging markets.
+[![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
+[![Prisma](https://img.shields.io/badge/Prisma-6-2D3748?logo=prisma)](https://www.prisma.io)
+[![Bun](https://img.shields.io/badge/Bun-1-000?logo=bun&logoColor=white)](https://bun.sh)
+[![Tests](https://img.shields.io/badge/Vitest-1%2C500%2B_tests-brightgreen?logo=vitest&logoColor=white)](https://vitest.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
-It connects **clients, developers, contractors, project managers, site supervisors, fundis, architects, engineers, quantity surveyors, surveyors, suppliers, warehouses, drivers, procurement teams, and financial systems** around one source of truth for a construction project.
+**Philosophy:** *don't just record what people say happened — record the
+evidence around what happened.* Reported vs verified, everywhere. The ledger
+never lies; AI never approves; payments are idempotent; closing stock is
+always derived.
 
-Construction sites are messy, distributed, cash-heavy, and often offline.
+## Contents
 
-MjengoOS turns that reality into a structured digital system without pretending that everything happened simply because someone entered it into a form.
+- [The product in one page](#the-product-in-one-page) · [Visual tour](#visual-tour)
+- [Demo accounts (seed data)](#demo-accounts-seed-data) · [Feature tour (the real tabs)](#feature-tour-the-real-tabs) · [The AI surface (honest by design)](#the-ai-surface-honest-by-design)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack) · [Quick start](#quick-start)
+- [Environment variables](#environment-variables) · [Security engineering](#security-engineering)
+- [i18n — English + Kiswahili](#i18n--english--kiswahili) · [Deployment](#deployment)
+- [CI/CD](#cicd) · [Honesty notes (deliberate)](#honesty-notes-deliberate)
+- [Project structure & docs](#project-structure--docs) · [License](#license)
 
-> **Don't just record what people say happened — record the evidence around what happened.**
+## The product in one page
 
-Every important event can be represented as:
+| | |
+|---|---|
+| **Marketing site** (`/website`) | The public pitch: what MjengoOS is, who it's for, pricing, security. |
+| **Web app** (`:3000`) | The product: login gate → role-aware workspace with 13 tabs, offline outbox, PWA. |
+| **Mobile shell** | Same app, phone-first: bottom nav (≤5 tabs + More sheet + camera quick-action). |
+| **Client share links** | `/?share=<token>` — diaspora clients approve milestones, comment on photos, decide invoices. No account. The token is the auth. |
 
-```text
-Reported
-   ↓
-Evidence captured
-   ↓
-Verified
-   ↓
-Recorded in the system
+### Visual tour
+
+**The marketing website** (`/website`, served by the web app's origin — one
+URL for the whole product):
+
+![MjengoOS marketing website hero](docs/screenshots/website-hero.png)
+
+**Sign-in gate** — every demo role is one tap away:
+
+![MjengoOS login screen with one-tap demo accounts](docs/screenshots/login.png)
+
+**Overview** — Day 47 · 37% complete · KSh 727K / KSh 4.5M budget burn-down,
+Project Health, alerts, daily recap, report exports:
+
+![Overview tab: KPIs, budget burn-down, project health](docs/screenshots/overview.png)
+
+**Money** — MjengoPay escrow on a double-entry ledger: KSh 1.2M in escrow,
+milestones with proof-of-work gates, variation orders, payment requests,
+balanced ledger view:
+
+![Money tab: escrow wallet, milestones, double-entry ledger](docs/screenshots/money.png)
+
+**Money → evidence draw pack** — the proof freezes the moment money moves: an
+immutable, SHA-256-stamped bundle of the evidence photos, ledger reference,
+open variations, attendance window and the MjengoScore at release — printable
+and forwardable through the client's share link:
+
+![Evidence draw pack: photos, ledger ref, content hash](docs/screenshots/draw-pack.png)
+
+**Money → AI draw review** (flag-gated, advisory-only) — a vision + LLM pass
+over the frozen pack's photos and its milestone/invoice/budget context
+produces a confidence-labeled advisory note with findings; the approval click
+stays human:
+
+![AI draw review: advisory note with verdict and findings](docs/screenshots/ai-draw-review.png)
+
+**Evidence → authenticity screen** — 64-bit perceptual-hash duplicate
+detection ("this photo paid for the foundation AND the slab") plus a vision
+phase-consistency pass over the evidence photos; every flag is advisory and
+source-labeled rule vs AI:
+
+![Evidence authenticity screen: duplicate and render-suspect flags](docs/screenshots/ai-authenticity.png)
+
+**Intel → trust digest** — a weekly "what your money did" digest whose every
+number is a ledger row (deterministic text, English + Kiswahili), read aloud
+as a voice note through the share link; an audio failure is honest and never
+degrades the text:
+
+![Trust digest: EN/SW text, score delta, voice note](docs/screenshots/ai-trust-digest.png)
+
+**Materials** — Site Store append-only stock ledger with derived closing
+stock, delivery log, consumption:
+
+![Materials tab: stock KPIs and Site Store ledger](docs/screenshots/materials.png)
+
+**Evidence** — the Bias-Free Ledger: append-only audit of every action with
+actor, IP, user-agent and request id:
+
+![Evidence tab: photo evidence and audit timeline](docs/screenshots/evidence.png)
+
+**Intel → MjengoScore** — a deterministic 0–100 contractor trust score
+computed from the project's evidence rows (releases, attendance, budget
+pace, variations, deliveries, invoices) with per-component deductions and
+an honest "describes, humans decide" label:
+
+![MjengoScore: trust ring, confidence, component breakdown](docs/screenshots/mjengo-score.png)
+
+**Phone-first** (`src/mobile` bottom nav) and the ⌘K command palette:
+
+<p>
+  <img src="docs/screenshots/mobile.png" alt="Mobile bottom-nav view" width="280">
+  <img src="docs/screenshots/command-palette.png" alt="Command palette (Ctrl+K)" width="560">
+</p>
+
+## Demo accounts (seed data)
+
+Seeded by `prisma/seed-extras/users.ts` so the full role matrix is explorable
+immediately. **These are intentional demo seeds, not real credentials.**
+
+| Email | Password | Role | Landing tab |
+|---|---|---|---|
+| `contractor@mjengo.os` | `mjengo2026` | Contractor — full owner app | Overview |
+| `client@mjengo.os` | `mjengo2026` | Client — read-only "Virtual Site Visit" + decisions | Overview |
+| `supplier@mjengo.os` | `supplier2026` | Supplier — scoped supplier portal (quotes to answer, orders to confirm/dispatch, invoices, catalog) | Supplier |
+| `admin@mjengo.os` | `admin2026` | Admin — owner app + feature flags + Audit tab | Overview |
+| `finance@mjengo.os` | `mjengo2026` | Finance — payment approvals, wallet ops, `/api/v1` | Money |
+| `supervisor@mjengo.os` | `mjengo2026` | Site Supervisor — site operations + evidence | Overview |
+| `procurement@mjengo.os` | `mjengo2026` | Procurement — closed-loop supply chain | Finder |
+| `qs@mjengo.os` | `mjengo2026` | Quantity Surveyor — BOQ, materials, costs | Materials |
+
+A **supplier** demo account ships with the Wave-5 supplier portal (shipped —
+see the supplier row in the feature tour).
+
+Diaspora clients with a **share link** need no account at all. Owner APIs are
+guarded server-side (401/403); client roles and share tokens can only run an
+explicit allowlist of actions (`src/shared/client-actions.ts` — approve
+milestones/variations/payment requests, decide client-band material requests,
+pay invoices, comment on photos, read notifications). Supplier accounts
+(`supplier@mjengo.os` above) run their own allowlist
+(`src/shared/supplier-actions.ts` — answer their quotes, confirm/dispatch
+their orders, maintain their catalog) pinned server-side to their linked
+Supplier row.
+
+## Feature tour (the real tabs)
+
+| Tab | What a user gets |
+|---|---|
+| **Overview** | KPIs, budget burn-down vs plan, **Project Health** (6 transparent dimensions with a "how this is computed" breakdown), digital-twin time-lapse, interactive site map, alerts, daily recap, **report exports** (Daily/Weekly/Financial/Procurement CSV + Weekly PDF), photo evidence with comment threads |
+| **Site Plan** | Phases → tasks, progress sliders, task priorities/assignees/blockers |
+| **Materials** | Inventory, delivery log (voice or manual), consumption, **Site Store** — append-only stock-movement ledger (opening/received/consumed/transferred/returned/damaged/adjusted) with derived closing stock + CSV export |
+| **Finder** | Procurement closed loop: BOQ → approval-rules engine (role bands, auto-approve within limit, chained client+finance over 250K) → RFQ + multi-line quotes → landed-cost comparison → PO lifecycle → **delivery verification** (per-line counts, damage, GPS, photos — ordered 50 / received 48 = discrepancy) → auto-posted Site Store movements → supplier invoices w/ client decision queue → **3-way match** (PO ↔ invoice ↔ delivery) → payments. Supplier directory + saved shortlists + price-history chips |
+| **Fundis** | **Workforce Trust**: verified vs reported vs exception attendance levels, daily muster roll, payroll gated on verification, kiosk PINs, check-in via app/USSD/kiosk QR, CSV export |
+| **Money** | **MjengoPay escrow on a double-entry ledger** (simulated money, real workflow): top-ups post balanced entries, milestone releases gated on photo proof, variation orders, payment requests with chained approval, reversals (history is never edited), cost codes, `PaymentProvider` seam (Daraja sandbox when configured), **evidence draw packs** — immutable, hash-stamped proof bundles frozen at every milestone release, served (and printable) through the revocable client share link — and a flag-gated **"Run AI review"** button on released milestones that appends an advisory note to the pack |
+| **Land** | Parcels + title-deed transcriptions, registry-search requests with deterministic consistency check, review gate, parcel timelines, printable **Property Passport**, professionals directory with verification ladder — honest: searches are recorded, not registry-confirmed |
+| **Evidence** | **Bias-Free Ledger** — append-only audit of every action with actor, IP, user-agent, request id and entity context; filters, anomaly feed, PDF reports; the **authenticity screen** — perceptual-hash duplicate detection + vision phase-consistency over evidence photos (advisory flags, source-labeled rule vs AI, flag-gated) |
+| **Intel** | Deterministic risk rules (weighted 5-rule score), **MjengoScore** — the contractor trust score derived from evidence rows (six traceable components, append-only history, gates nothing), weekly digest, regional price trends, supplier reliability from actual transactions, **background jobs** (anomaly scan, digest, reconciliation, overdue check), and the **AI trust digest** — a weekly EN/Swahili "what your money did" digest composed from ledger rows with an optional TTS voice note |
+| **AI Copilot** | Vision photo analysis (phase, PPE, material counts) with a working upload pipeline, Swahili voice-to-invoice, anomaly scan — behind the `ai_progress` feature flag; the Wave-6 advisory layer (draw review, authenticity, trust digest) rides its own `ai` flag — see [The AI surface](#the-ai-surface-honest-by-design) |
+| **Field channels — USSD + WhatsApp** | `*384#` muster-line simulation (menu → PIN → present/absent) dispatching real attendance records, plus the **WhatsApp field line**: workers text `PRESENT` / `ABSENT` / `HALF` / `BALANCE` or free text — the webhook contract is documented (`GET /api/whatsapp`), replies are footered "MjengoOS sim", and attendance + photo notes land through the same domain appliers the app uses (no Meta Cloud API wired — an honest seam) |
+| **Audit** | Admin-only drill-down into the full audit trail (contractors and clients don't see it) |
+| **Settings** | Profile, language (English/Kiswahili), local preferences, notification prefs — per-user, every role |
+| **Supplier** (supplier role only) | The supply side of the marketplace: scoped portal — RFQs waiting for their price, sent POs to confirm, confirmed orders to dispatch (writes the same delivery records the buyer verifies), their invoices with honest statuses, their catalog exactly as buyers' comparisons see it. Every read/mutation is server-pinned to the linked Supplier row (foreign ids → the same error as a miss) |
+
+**Role matrix** (mirrors `src/shared/permissions.ts` ↔ `src/backend/lib/guard.ts`):
+
+| Tab | Contractor | Admin | Supervisor | Finance | Procurement | QS | Client | Supplier |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| Overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Site Plan | ✅ | ✅ | ✅ | — | — | ✅ | ✅ | — |
+| Materials | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | — |
+| Finder | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Fundis | ✅ | ✅ | ✅ | — | — | — | ✅ | — |
+| Money | ✅ | ✅ | — | ✅ | — | — | ✅ | — |
+| Land | ✅ | ✅ | — | — | — | — | ✅ | — |
+| Evidence | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Intel | ✅ | ✅ | — | — | — | — | ✅ | — |
+| AI Copilot | ✅ | ✅ | ✅ | — | — | — | — | — |
+| USSD | ✅ | ✅ | ✅ | — | — | — | ✅ | — |
+| Audit | — | ✅ | — | — | — | — | — | — |
+| Settings | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Supplier portal | — | — | — | — | — | — | — | ✅ |
+
+Unknown roles fail closed (one safe tab + an honest notice), client-side and
+server-side, in the same commit.
+
+**Also in the box:** multi-project workspace with global search (⌘K palette
+navigates tabs, switches projects, runs quick actions), offline-first sync
+(persisted outbox, server-side dedupe by outbox id — a lost HTTP response can
+never double-post money), Data Saver photo downscaling, installable PWA
+(`/api/*` is never cached — no stale money or evidence), notification center
+with honest `deliveryStatus: logged` state, and a feature-flag system that
+actually closes its feature when off — on `/api/actions`, per-item on the
+offline `/api/sync` drain, and by allowlist on the share link.
+
+## The AI surface (honest by design)
+
+Wave 6 added an advisory AI layer over the evidence substrate. The design
+goal was not "AI features" — it was **AI output a bank could read without
+trusting the model**:
+
+- **One seam, flag-gated, dark by default.** Every Wave-6 feature calls
+  `AiProvider` (`src/backend/modules/ai/` — chat / vision / transcribe /
+  speak) resolved through `resolveAiProvider(flags)`. The `ai` flag ships
+  **DEFAULT OFF**; an admin opts in through the flags popover, and a flag-off
+  install never contacts the SDK (test-pinned: `sdk.create` call count 0).
+- **Advisory only — AI never approves.** Draw-review notes and authenticity
+  insights gate nothing: no action, ledger path or release ladder reads them
+  (grep-pinned non-influence tests). The human decision columns
+  (`reviewedBy`/`decidedBy` …) exist in the schema and nothing writes them.
+- **No model-authored numbers.** Every digit run the model emits is redacted
+  before storage (`redactModelFigures`); the trust-digest text is composed
+  deterministically from ledger rows in EN + Kiswahili — the model only reads
+  it aloud (TTS), never authors it. Every digest figure traces to a row.
+- **Honest failure states, never a fake analysis.** Provider unreachable,
+  timeout (20s per-call cap), empty or unparseable answers → `{ ok: false }`
+  leak-free errors and **no row written**; a failed TTS leg degrades the audio,
+  never the digest text (verified live: the Kiswahili voice timed out honestly
+  and the text survived).
+- **Append-only, like everything else here.** `AiReviewNote`, `PhotoHash`,
+  `AiInsight` and `TrustDigest` rows are append-only (no update/delete path
+  exists anywhere), latest wins, full history kept.
+- **Real, measured, live.** With the flag on and `.z-ai-config` present (the
+  SDK self-configures — **no new env vars**), the same models answer the app:
+  chat ≈ 300 ms, single-photo vision ≈ 720 ms; production measurement raised
+  the per-call cap 8 s → 20 s (commit `ec6bc87`). During browser
+  verification the vision pass correctly flagged the seeded demo photos as
+  **render-suspect** (they are stock renders — the AI was right), and a real
+  draw review returned verdict `advisory` ("roof trusses installed ahead of
+  milestone scope").
+
+The pre-existing Copilot routes (`/api/ai/recap`, `analyze-photo`, …) keep
+their older `ai_progress`/`ai_voice` flags; the Wave-6 layer is the new,
+stricter seam. Engineering detail: [ARCHITECTURE.md](./ARCHITECTURE.md) ·
+release story: [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) · plan:
+[docs/wave6-plan.md](./docs/wave6-plan.md).
+
+## Architecture
+
+```mermaid
+flowchart TB
+    U["Browser / phone (PWA)"]
+
+    subgraph ONE["One origin · :3000"]
+        direction TB
+        NEXT["Next.js 16 App Router<br/>src/app/page.tsx<br/>login gate · owner app · client/share views"]
+        REWRITE["/website rewrite<br/>(next.config.ts)"]
+        API["Guarded API routes<br/>src/app/api/**<br/>NextAuth v4 · role guards · rate limits · idempotency"]
+    end
+
+    subgraph SITE["Marketing site · :3001"]
+        WEB["mjengoos-website<br/>(independent Next.js app)"]
+    end
+
+    subgraph BACK["src/backend — server-only"]
+        BIZ["actions/ + modules/<br/>supply · inventory · wallet · ledger · invoices<br/>intel · notify · land · professionals · events · ai"]
+        JOBS["Job runner<br/>JobRecord queue<br/>POST /api/jobs/run"]
+        AIS["AI seams (backend-only)<br/>lib/ai.ts (Copilot routes) ·<br/>modules/ai/ (Wave-6 advisory layer:<br/>chat · vision · transcribe · speak,<br/>ai flag, 20s cap)"]
+    end
+
+    DB[("SQLite + Prisma 6<br/>68-model schema<br/>double-entry ledger")]
+
+    U --> NEXT
+    U -->|"/website"| REWRITE
+    REWRITE --> WEB
+    WEB -->|"Sign in → webapp /"| NEXT
+    NEXT --> API
+    API --> BIZ
+    JOBS --> BIZ
+    BIZ --> AIS
+    BIZ --> DB
 ```
 
-The platform brings together:
+One Node process, one SQLite file, one uploads directory — no message queue,
+no external services. The marketing site runs as a second Next.js app on
+`:3001`, proxied through the web app at `/website` so a single origin serves
+the whole product; its **Sign in** button lands on the webapp login screen.
 
-* 📸 Evidence-backed site progress
-* 🤖 AI construction intelligence
-* 📱 Offline-first field operations
-* 👷 Workforce and fundi management
-* 📦 BOQ, materials and inventory
-* 🛒 Procurement and supplier discovery
-* 🚚 Delivery verification
-* 💰 Project finance and cost control
-* 🏦 Double-entry financial ledger
-* 🔐 Milestone-based payments and escrow
-* 🏠 Property and land verification
-* 👨🏾‍🔧 Professional verification
-* 📲 USSD/SMS workflows
-* 🌍 Regional supplier and material intelligence
-* 👤 Remote and diaspora client visibility
-* 📄 Construction document management
-* 🔔 Multi-channel notifications
-* 📊 Project intelligence and reporting
+### Source layout
 
----
-
-## Why MjengoOS?
-
-Construction management software often assumes:
-
-* reliable internet,
-* smartphones for everyone,
-* accurate manual reporting,
-* centralized teams,
-* clean procurement processes,
-* trustworthy inventory updates,
-* and easy access to financial systems.
-
-Real construction sites don't work that way.
-
-A site may have:
-
-* intermittent connectivity,
-* supervisors working from phones,
-* fundis without smartphones,
-* materials purchased from multiple hardware stores,
-* deliveries arriving at different times,
-* handwritten invoices,
-* cash and mobile-money transactions,
-* changing quantities,
-* incomplete documentation,
-* remote clients,
-* multiple subcontractors,
-* and project information scattered across WhatsApp, paper, spreadsheets and conversations.
-
-MjengoOS is designed around those constraints.
-
-### Our core principle
-
-> **The physical world is the source of truth. Software should capture, verify, reconcile and explain it.**
-
----
-
-# Core Principles
-
-## 1. Evidence First
-
-MjengoOS distinguishes between:
-
-```text
-Reported ≠ Verified
+```
+src/
+  app/          # Next.js App Router — page + /api/** routes (framework-fixed)
+  frontend/     # web UI: mjengo/ (tabs), ui/ (shadcn), auth/, i18n/ (en+sw), hooks/
+  backend/      # SERVER-ONLY: lib/ (guard, auth, audit, rate-limit, ai) +
+                #   actions/ + modules/ (one folder per domain — incl.
+                #   modules/ai/, the Wave-6 advisory AI seam)
+  mobile/       # phone-first shell: bottom nav, ≤5 tabs + More sheet + camera
+  shared/       # isomorphic contracts: permissions matrix, CLIENT_ACTIONS allowlist
+mjengoos-website/  # marketing site (independent app, :3001, proxied at /website)
+prisma/            # schema.prisma (68 models), migrations/ (0–8), seed chain
 ```
 
-A supervisor saying that 500 bags of cement arrived is a report.
+### REST API — `/api/v1`
 
-A delivery containing:
+The typed integration surface, documented live as **OpenAPI 3.1** at
+`/api/openapi.json` (29 documented paths): **27 `/api/v1` paths** — wallets
+(7 routes incl. deposit/transfer/withdraw with idempotency keys), payments,
+projects (list/detail/tasks/deliveries), supply orders, **milestones**
+(list/detail with the full release ladder), **invoices** (list/detail with
+the **3-way-match verdict**: PO ↔ invoice ↔ delivery) and **escrow**
+(ledger-derived — the balance is computed from double-entry ledger entries,
+never a stored projection), plus the Phase-D read surface — **workers**
+(list/detail), **attendance**, task detail, **suppliers**, **parcels**
+(land), project **intel** and **budget-variance** — plus two app-level GETs
+(`/api/audit`, `/api/reports/budget-variance`). One error shape
+(`{ error, field? }`), zod strictObject validation, keyset pagination,
+per-principal rate limits and scope pinning (a client session can only ever
+see its own project).
 
-* supplier,
-* purchase order,
-* quantity,
-* timestamp,
-* location,
-* receiving user,
-* delivery note,
-* photos,
-* and proof of delivery
+Full module boundaries and the production migration roadmap
+(SQLite → PostgreSQL, monolith → services, `PaymentProvider` seams): see
+[ARCHITECTURE.md](./ARCHITECTURE.md).
 
-provides evidence.
+## Tech stack
 
-The platform preserves that distinction.
+| Layer | Choice |
+|---|---|
+| Framework | Next.js 16 (App Router, Turbopack, standalone output), React 19 |
+| Language | TypeScript, `strict` — CI fails on any error |
+| UI | Tailwind CSS 4, shadcn/ui + Radix primitives, lucide icons, cmdk palette |
+| State | Zustand (app store + persisted offline outbox) |
+| Auth | NextAuth v4 — credentials provider, JWT session cookies, scrypt hashes |
+| Data | Prisma 6 + SQLite (68-model schema, 9 additive migrations, double-entry ledger) |
+| Validation | Zod 4 on every mutating route |
+| AI | z-ai-web-dev-sdk behind backend-only seams: `lib/ai.ts` (Copilot) and `modules/ai/` (Wave-6 advisory layer — chat/vision/transcribe/speak, `ai` flag default-off, 20s call cap) |
+| Runtime/tooling | Bun (install, seeds, dev), Node 20 for the production standalone server, Docker for self-host |
 
----
+## Quick start
 
-## 2. AI Never Approves
+Prerequisites: [Bun](https://bun.sh) ≥ 1.1 (or Node 20+), openssl.
 
-AI can:
+```bash
+git clone https://github.com/Roy-Wanyoike/Mjengo-OS.git mjengo
+cd mjengo
+bun install
 
-* analyze,
-* classify,
-* extract,
-* detect,
-* predict,
-* recommend,
-* summarize,
-* and flag anomalies.
+cp .env.example .env
+#   DATABASE_URL=file:../db/custom.db      (repo-relative; db/ is gitignored)
+#   NEXTAUTH_SECRET=$(openssl rand -hex 32)
 
-AI cannot silently approve:
-
-* payments,
-* financial transactions,
-* material purchases,
-* inventory adjustments,
-* contractual changes,
-* milestone completion,
-* or other high-impact actions.
-
-AI produces **recommendations and evidence**, while authorized humans remain accountable for decisions.
-
----
-
-## 3. The Ledger Never Lies
-
-Financial truth is maintained through an **immutable double-entry ledger**.
-
-Transactions are not silently overwritten.
-
-Corrections happen through compensating entries.
-
-```text
-Debit
-  +
-Credit
-  =
-Balanced transaction
+bunx prisma generate
+bunx prisma migrate deploy    # production path — or: bunx prisma db push
+bun run dev                   # → http://localhost:3000
 ```
 
-Financial records are separated from AI recommendations and operational projections.
+The database ships **empty** — seed the demo data. One command runs the
+whole chain in dependency order (an `intel` re-run is folded in after
+`money`, which wipes the notification kinds `intel.ts` owns):
 
----
-
-## 4. Payments Are Idempotent
-
-Every payment operation must be safe against:
-
-* retries,
-* duplicated requests,
-* duplicated callbacks,
-* network failures,
-* provider timeouts,
-* worker crashes,
-* and webhook duplication.
-
-The same payment request must never accidentally become two payments.
-
----
-
-## 5. Closing Stock Is Derived
-
-Inventory is not simply:
-
-```text
-Current Stock = whatever someone typed
+```bash
+bun run seed   # = seed.ts + users → tasks → domain → evidence → money
+               #   → intel (re-run) → trust — fail-fast, with step notes
 ```
 
-Instead:
+The individual steps, if you want partial re-seeds (each extras script
+wipes only its own models — partial re-seeds are safe):
 
-```text
-Opening Stock
-+ Verified Receipts
-+ Approved Adjustments
-- Verified Issues
-- Verified Consumption
-- Verified Transfers
-=
-Closing Stock
+```bash
+bun prisma/seed.ts                    # base: 3 demo projects, phases, tasks,
+                                      #   workers, materials, photos + inline
+                                      #   professionals → land → supply →
+                                      #   invoices → intel
+bun prisma/seed-extras/users.ts       # 7 demo login accounts (wipes ONLY User)
+bun prisma/seed-extras/tasks.ts       # priorities, assignees, blockers
+bun prisma/seed-extras/domain.ts      # worker depth, driver leg, team roster
+bun prisma/seed-extras/evidence.ts    # zones, comments, notifications, audit
+bun prisma/seed-extras/money.ts       # escrow, milestones, ledger, payment requests
+bun prisma/seed-extras/trust.ts       # attendance trust history + PINs
 ```
 
-Inventory movements form an auditable chain.
+Then sign in with a demo account above. Scripts: `bun run lint`,
+`bunx tsc --noEmit`, `bun run db:push`, `bun run site:dev` (marketing site),
+`bun run build` / `start` (standalone production server).
 
----
+### Environment variables
 
-## 6. Offline Is a First-Class State
+| Variable | Value | Why |
+|---|---|---|
+| `DATABASE_URL` | required | SQLite file URL (`file:../db/custom.db` local, `file:/app/db/custom.db` in Docker) |
+| `NEXTAUTH_SECRET` | required, stable | Signs/encrypts JWT session cookies. Rotating it signs everyone out. |
+| `AUTH_TRUST_HOST` | `1` behind a proxy | Makes next-auth v4's `detectOrigin` honor `x-forwarded-host`/`-proto` — without it, proxied sign-in silently pins to `http://localhost:3000` and breaks (PR #7). |
+| `NEXTAUTH_URL` | **unset** | The origin is derived per request, so redirects/cookies always target the host the user actually browses. Set only for one fixed public domain. |
 
-Offline operation is not an error condition.
+Cookies are policy-switched per request in `src/backend/lib/auth.ts`: https
+(proxied) traffic gets `SameSite=None; Secure` (the only combination browsers
+send inside cross-site iframes); direct localhost keeps next-auth's `lax`
+defaults.
 
-It is a normal operating mode.
+## Security engineering
 
-```text
-ONLINE
-  ↓
-Capture locally
-  ↓
-OFFLINE
-  ↓
-Queue mutations
-  ↓
-Continue working
-  ↓
-NETWORK RETURNS
-  ↓
-Synchronize
-  ↓
-Validate
-  ↓
-Resolve conflicts
-  ↓
-SERVER CONFIRMS
+Recruiter-friendly, and all of it verifiable in the repo:
+
+- **Per-route rate limiting + login lockout** — in-process buckets on auth,
+  share, project, AI and sync routes; lockout after repeated failures
+  (`src/backend/lib/rate-limit.ts`).
+- **Login-timing equalization** — a burn-hash comparison runs even when the
+  user doesn't exist, so response timing can't distinguish "no such user"
+  from "wrong password" (`src/backend/lib/auth.ts`).
+- **Error redaction** — public routes never echo internals; audit context is
+  recorded, not leaked (PR #11).
+- **Crypto share tokens** — client share links use a crypto-random
+  **96-bit** token (`randomBytes(12)`), rotated on demand; never `Math.random`
+  (`src/backend/lib/mjengo.ts`).
+- **Idempotency everywhere money moves** — `IdempotencyRecord` dedupe +
+  `Idempotency-Key` headers on payment routes; the offline sync dedupes by
+  outbox id, so a lost response can't double-post.
+- **Fail-closed authorization** — server guards are the enforcement point
+  (`src/backend/lib/guard.ts`); the client matrix is only navigation. Unknown
+  roles get one safe tab.
+- **Feature-flag gates on every mutation path** — a flag set OFF closes its
+  feature on `/api/actions` (route-level gate), on offline `/api/sync`
+  (per-item: a denied outbox item writes nothing — no ledger row, no
+  idempotency record, the batch continues) and on the share link (its action
+  allowlist contains no flagged families). One shared gate definition:
+  `src/backend/lib/action-flag-gate.ts`; admins keep the documented bypass.
+- **Zod validation + raw-body caps on every mutating request** — including
+  the public `POST /api/share` (strictObject schema, 64 KB cap checked before
+  `JSON.parse`); scrypt password hashing with `timingSafeEqual`.
+- **PR-verified `main`** — the 13 foundation PRs were reviewed and CI-gated
+  (security hardening in #11, proxy-auth fix in #7); waves 3–6 landed as
+  locally-verified merge commits (full gate re-run per merge — lint, strict
+  typecheck, all 1,500+ tests) while GitHub push access was unavailable.
+
+Vulnerability disclosure policy: [SECURITY.md](./SECURITY.md).
+
+## i18n — English + Kiswahili
+
+The whole UI flows through `t()` with real dictionaries
+(`src/frontend/i18n/dicts/{en,sw}.ts`). Switch under **Settings → Language /
+Lugha**. The Kiswahili note is honest: core chrome (nav, Settings, Overview
+headings, command palette) is translated; deep tab bodies translate
+progressively — no half-translated screen pretends otherwise.
+
+![Kiswahili UI: Overview in Kiswahili](docs/screenshots/kiswahili.png)
+
+## Deployment
+
+Docker quick start:
+
+```bash
+cp .env.example .env        # set NEXTAUTH_SECRET (openssl rand -hex 32)
+docker compose up -d --build  # → http://localhost:3000 (migrations run on boot)
 ```
 
----
-
-# What MjengoOS Does
-
-## 🏗️ Project Management
-
-Manage an entire construction project from planning to handover.
-
-Features include:
-
-* project creation
-* project templates
-* project phases
-* milestones
-* tasks
-* dependencies
-* schedules
-* Gantt views
-* Kanban workflows
-* project health
-* project timeline
-* daily site reports
-* site diary
-* issues
-* blockers
-* observations
-* inspections
-* punch lists
-* snagging
-* RFIs
-* submittals
-* drawings
-* drawing revisions
-* contracts
-* variations
-* change orders
-* project documents
-
----
-
-# 📸 Evidence & Site Intelligence
-
-MjengoOS creates an evidence layer around the physical construction site.
-
-Capture:
-
-* photos
-* videos
-* GPS coordinates
-* timestamps
-* users
-* devices
-* site locations
-* descriptions
-* related tasks
-* related milestones
-* related deliveries
-* related materials
-* related issues
-
-Evidence can be associated with project events.
-
-Example:
-
-```text
-Material Delivery
-      │
-      ├── Purchase Order
-      ├── Supplier
-      ├── Quantity
-      ├── Delivery Vehicle
-      ├── GPS
-      ├── Timestamp
-      ├── Delivery Note
-      ├── Photos
-      ├── Receiver
-      └── Proof of Delivery
-```
-
-This allows the project timeline to become an evidence-backed record of what happened.
-
----
-
-# 🤖 AI Construction Intelligence
-
-AI is built around project evidence rather than replacing project governance.
-
-### AI capabilities
-
-* construction progress analysis
-* photo classification
-* construction-stage detection
-* visible-work analysis
-* document extraction
-* BOQ extraction
-* invoice extraction
-* quotation extraction
-* receipt extraction
-* drawing analysis
-* contract document analysis
-* voice-to-text
-* Swahili voice logging
-* voice-to-invoice
-* voice-to-inventory
-* spending anomaly detection
-* material-consumption anomaly detection
-* progress-vs-spending analysis
-* project risk detection
-* project summaries
-* construction copilot
-* supplier intelligence
-* price intelligence
-* cash-flow forecasting
-
-### AI evidence pipeline
-
-```text
-Photo / Document / Voice
-          ↓
-      Object Storage
-          ↓
-      AI Processing
-          ↓
-   Structured Analysis
-          ↓
-    Confidence Score
-          ↓
- Human Review (when required)
-          ↓
-      Project Record
-```
-
-Every important AI decision should preserve:
-
-* model
-* model version
-* prompt/version
-* timestamp
-* input reference
-* output
-* confidence
-* reviewer
-* approval status
-
----
-
-# 👷 Workforce & Fundi Management
-
-Construction workers should not need a smartphone to exist in the digital system.
-
-MjengoOS supports:
-
-* workers
-* fundis
-* subcontractors
-* trade leads
-* supervisors
-* attendance
-* timesheets
-* rates
-* assignments
-* worker profiles
-* trade classification
-* workforce status
-* supervisor-assisted attendance
-* worker trust levels
-
-Attendance can originate from:
-
-```text
-Worker
-Supervisor
-USSD
-Admin
-```
-
-Every attendance record maintains provenance.
-
-Example:
-
-```text
-Worker: John
-Date: 2026-09-04
-Status: Present
-Recorded By: Supervisor
-Method: Supervisor-assisted
-Time: 07:42
-Location: Site
-```
-
-Corrections require an auditable reason.
-
-MjengoOS can flag suspicious patterns as:
-
-> **Anomaly detected — review recommended**
-
-It does not automatically accuse workers or supervisors of fraud.
-
----
-
-# 📱 Offline-First Field Operations
-
-Construction sites must continue working when connectivity disappears.
-
-The mobile application uses local persistence and synchronization.
-
-Offline-capable workflows include:
-
-* attendance
-* site reports
-* photos
-* tasks
-* material requests
-* inventory operations
-* delivery receiving
-* inspections
-* issues
-* progress updates
-* notes
-* evidence capture
-
-Mutations contain metadata such as:
-
-```text
-operation_id
-device_id
-user_id
-entity_id
-operation_type
-payload
-created_at
-sync_status
-```
-
-Synchronization states:
-
-```text
-PENDING
-SYNCING
-SYNCED
-FAILED
-CONFLICT
-```
-
-Conflicts are never silently hidden.
-
----
-
-# 📲 USSD & SMS
-
-MjengoOS is designed for construction environments where not everyone owns a smartphone.
-
-USSD/SMS workflows can support:
-
-* attendance
-* check-in
-* check-out
-* worker assignment confirmation
-* delivery notifications
-* approval notifications
-* important project alerts
-* payment notifications
-
-This allows workers to participate without requiring a smartphone.
-
----
-
-# 📦 BOQ, Materials & Inventory
-
-Materials are connected from planning to physical consumption.
-
-```text
-BOQ
- ↓
-Budget
- ↓
-Material Request
- ↓
-Procurement
- ↓
-Purchase Order
- ↓
-Supplier
- ↓
-Delivery
- ↓
-Verification
- ↓
-Inventory
- ↓
-Consumption
- ↓
-Project Cost
-```
-
-Inventory supports:
-
-* warehouses
-* stores
-* stock levels
-* stock movements
-* material receipts
-* material issues
-* transfers
-* consumption
-* adjustments
-* reconciliation
-* low-stock alerts
-* batch/lot tracking where required
-
----
-
-# 🛒 Procurement
-
-MjengoOS connects project requirements with procurement execution.
-
-Workflow:
-
-```text
-Material Request
-       ↓
-Budget Validation
-       ↓
-Inventory Check
-       ↓
-Supplier Discovery
-       ↓
-RFQ
-       ↓
-Quotes
-       ↓
-Price Comparison
-       ↓
-Approval
-       ↓
-Purchase Order
-       ↓
-Supplier Confirmation
-       ↓
-Invoice
-       ↓
-Payment
-       ↓
-Delivery
-       ↓
-Proof of Delivery
-       ↓
-Inventory Update
-       ↓
-Reconciliation
-```
-
-Procurement teams can compare:
-
-* unit price
-* supplier
-* quantity
-* availability
-* delivery cost
-* taxes/fees
-* total landed cost
-* estimated delivery time
-* supplier reliability
-* historical pricing
-
----
-
-# 🏪 Supplier & Hardware Finder
-
-Find construction suppliers and hardware stores by:
-
-* county
-* region
-* town
-* distance
-* material
-* price
-* availability
-* delivery capability
-* verification status
-
-Supplier profiles can contain:
-
-* business information
-* contacts
-* location
-* products
-* pricing
-* stock status
-* minimum order quantity
-* delivery options
-* quotations
-* invoices
-* verification
-* transaction history
-
-Availability is explicitly classified.
-
-```text
-LIVE
-RECENTLY VERIFIED
-SUPPLIER REPORTED
-UNKNOWN
-```
-
-MjengoOS never pretends supplier inventory is real-time unless there is a reliable source for that information.
-
----
-
-# 🚚 Delivery & Logistics
-
-Materials should not become inventory merely because someone created a purchase order.
-
-Delivery workflows include:
-
-* dispatch
-* pickup
-* transport assignment
-* driver
-* vehicle
-* destination
-* tracking
-* delivery status
-* proof of delivery
-* receiving
-* quantity verification
-* damage reporting
-* photos
-* delivery notes
-* inventory reconciliation
-
-A delivery can therefore connect:
-
-```text
-Supplier
-   ↓
-Purchase Order
-   ↓
-Shipment
-   ↓
-Driver
-   ↓
-Site
-   ↓
-Proof of Delivery
-   ↓
-Inventory
-```
-
----
-
-# 💰 Construction Finance
-
-MjengoOS provides project-level financial visibility.
-
-Track:
-
-* project budgets
-* cost plans
-* actual costs
-* commitments
-* invoices
-* payment certificates
-* variations
-* change orders
-* labor costs
-* material costs
-* subcontractor costs
-* equipment costs
-* delivery costs
-* budget variance
-* forecast costs
-* cash flow
-
----
-
-# 🏦 Universal Wallet & Financial Infrastructure
-
-MjengoOS is designed to integrate with a reusable financial infrastructure layer.
-
-The wallet is separated from the construction domain.
-
-```text
-MjengoOS
-   │
-   ▼
-Wallet API
-   │
-   ▼
-Financial Ledger
-   │
-   ├── M-Pesa
-   ├── Bank
-   ├── Mobile Money
-   ├── Payment Providers
-   └── Other Rails
-```
-
-The financial system supports:
-
-* wallets
-* accounts
-* double-entry ledger
-* payment requests
-* payment approvals
-* payment states
-* provider integrations
-* webhooks
-* reconciliation
-* idempotency
-* transaction history
-* multi-currency support
-* limits
-* financial audit trails
-
-### Payment state machine
-
-```text
-REQUESTED
-   ↓
-VALIDATED
-   ↓
-APPROVED
-   ↓
-PROCESSING
-   ↓
-PENDING
-   ↓
-CONFIRMED
-   ↓
-LEDGER POSTED
-   ↓
-RECONCILED
-```
-
-Failures are explicit and recoverable.
-
----
-
-# 🔐 Milestone Escrow
-
-Construction payments can be linked to project milestones.
-
-Example:
-
-```text
-Milestone Created
-      ↓
-Work Completed
-      ↓
-Evidence Submitted
-      ↓
-Progress Reviewed
-      ↓
-Milestone Approved
-      ↓
-Payment Authorized
-      ↓
-Payment Provider
-      ↓
-Ledger
-      ↓
-Recipient
-```
-
-AI may provide evidence and recommendations.
-
-**AI does not approve financial releases.**
-
----
-
-# 🏠 Property & Land Verification
-
-Before construction begins, MjengoOS can establish a property verification record.
-
-The property module can contain:
-
-* parcel information
-* title information
-* uploaded documents
-* official search results
-* survey information
-* boundary information
-* professional verification
-* ownership information where legally accessible
-* encumbrances
-* cautions
-* restrictions
-* verification status
-* verification history
-* red flags
-
-Verification statuses include:
-
-```text
-VERIFIED
-PARTIALLY VERIFIED
-PENDING
-UNABLE TO VERIFY
-REJECTED
-```
-
-MjengoOS does not claim government-level verification unless the relevant official source or authorized professional confirms it.
-
----
-
-# 👨🏾‍🔧 Professional Verification
-
-Construction depends on qualified professionals.
-
-MjengoOS supports professional profiles for:
-
-* architects
-* engineers
-* quantity surveyors
-* surveyors
-* project managers
-* contractors
-* site supervisors
-* inspectors
-* other construction professionals
-
-Professional records can include:
-
-* profession
-* registration authority
-* registration number
-* verification status
-* evidence
-* verification date
-* project associations
-
-The platform must never fabricate professional credentials or registration numbers.
-
----
-
-# 👤 Remote & Diaspora Client Experience
-
-A client should not have to travel to a construction site to understand what is happening.
-
-The client dashboard provides:
-
-* project progress
-* physical progress
-* budget
-* spending
-* remaining budget
-* milestones
-* recent site photos
-* site reports
-* materials purchased
-* deliveries
-* inventory
-* issues
-* approvals
-* invoices
-* documents
-* project timeline
-* alerts
-
-### Remote project experience
-
-```text
-Site
- ↓
-Evidence
- ↓
-MjengoOS
- ↓
-Verified Project State
- ↓
-Client Dashboard
-```
-
-Clients can approve:
-
-* material requests
-* purchase orders
-* variations
-* budget changes
-* invoices
-* milestone completion
-* payments
-* contractor requests
-
----
-
-# 📄 Document Intelligence
-
-Construction produces enormous amounts of documents.
-
-MjengoOS supports:
-
-* BOQs
-* invoices
-* quotations
-* receipts
-* contracts
-* drawings
-* permits
-* land documents
-* delivery notes
-* payment certificates
-* inspection reports
-* site reports
-
-Documents can be:
-
-```text
-Uploaded
-   ↓
-Stored
-   ↓
-Indexed
-   ↓
-Extracted
-   ↓
-Classified
-   ↓
-Linked to Project Entities
-```
-
-AI extraction always preserves the original document.
-
----
-
-# 🔔 Notifications
-
-MjengoOS supports multi-channel notifications.
-
-Potential channels include:
-
-* in-app
-* push
-* email
-* SMS
-* WhatsApp
-* USSD
-
-Notifications cover:
-
-* approvals
-* payments
-* deliveries
-* low stock
-* project risks
-* milestone updates
-* worker events
-* procurement events
-* important project changes
-
----
-
-# 📊 Project Intelligence
-
-MjengoOS provides an explainable project health model.
-
-Health can consider:
-
-```text
-Schedule
-Budget
-Physical Progress
-Procurement
-Inventory
-Quality
-Safety
-Attendance
-Issues
-```
-
-Example:
-
-```text
-PROJECT HEALTH
-
-Schedule       ████████░░
-Budget         █████████░
-Progress       ███████░░░
-Procurement    █████████░
-Inventory      ████████░░
-Quality        █████████░
-```
-
-The system should explain **why** a project is considered healthy or at risk.
-
----
-
-# 🧭 Unified Project Timeline
-
-Every important project event can become part of a unified timeline.
-
-Example:
-
-```text
-Project Created
-      ↓
-Land Verified
-      ↓
-BOQ Approved
-      ↓
-Material Requested
-      ↓
-Supplier Selected
-      ↓
-Purchase Order Approved
-      ↓
-Payment Completed
-      ↓
-Delivery Received
-      ↓
-Inventory Updated
-      ↓
-Site Progress Captured
-      ↓
-Inspection Completed
-      ↓
-Milestone Approved
-      ↓
-Payment Released
-```
-
-This becomes the project's operational memory.
-
----
-
-# 🔐 Security & Governance
-
-MjengoOS is designed for multi-tenant environments.
-
-Security includes:
-
-* organization isolation
-* project-level authorization
-* RBAC
-* fine-grained permissions
-* authentication
-* session management
-* audit logging
-* immutable financial history
-* secure file access
-* signed URLs
-* encryption
-* secrets management
-* rate limiting
-* API validation
-* idempotency
-* abuse protection
-* security headers
-* structured security events
-
-Every sensitive operation should have:
-
-```text
-WHO
-WHAT
-WHEN
-WHERE
-WHY
-RESULT
-EVIDENCE
-```
-
----
-
-# 🏛️ Architecture
-
-MjengoOS follows a **modular architecture** designed to begin as a modular monolith while maintaining clear boundaries for future service extraction.
-
-```text
-                        ┌─────────────────────┐
-                        │     Web Client       │
-                        │     Next.js          │
-                        └──────────┬──────────┘
-                                   │
-                        ┌──────────▼──────────┐
-                        │   Mobile Client      │
-                        │ React Native / Expo  │
-                        └──────────┬──────────┘
-                                   │
-                     ┌─────────────▼─────────────┐
-                     │       API / Backend       │
-                     │     Java 25 / Spring     │
-                     └─────────────┬─────────────┘
-                                   │
-        ┌──────────────────────────┼──────────────────────────┐
-        │                          │                          │
-        ▼                          ▼                          ▼
-  PostgreSQL                  Temporal                    NATS
-  + PostGIS                  Workflows                 JetStream
-        │                          │                          │
-        ▼                          ▼                          ▼
-     Redis                  Long-running                 Events
-                              Processes
-        │
-        ▼
- Object Storage
- R2 / S3
-```
-
----
-
-# 🧩 Domain Modules
-
-The backend is organized around business domains.
-
-```text
-identity
-organizations
-projects
-workforce
-construction
-boq
-inventory
-procurement
-suppliers
-warehouses
-deliveries
-finance
-payments
-wallet
-documents
-property
-professionals
-notifications
-ai
-audit
-reporting
-```
-
-Each domain owns its:
-
-* entities
-* business rules
-* services
-* repositories
-* APIs
-* events
-* workflows
-* authorization rules
-* tests
-
----
-
-# 🛠️ Technology Stack
-
-## Web
-
-* Next.js
-* React
-* TypeScript
-* Tailwind CSS
-* shadcn/ui
-* Radix UI
-* TanStack Query
-* React Hook Form
-* Zod
-
-## Mobile
-
-* React Native
-* Expo
-* TypeScript
-* SQLite
-* Offline synchronization
-
-## Backend
-
-* Java 25 LTS
-* Spring Boot
-* Spring Security
-* Hibernate / JPA
-* Flyway
-* REST
-* OpenAPI 3.1
-
-## Database
-
-* PostgreSQL
-* PostGIS
-
-## Distributed Workflows
-
-* Temporal
-
-Used for long-running and failure-sensitive workflows such as:
-
-* payments
-* procurement
-* deliveries
-* approvals
-* notifications
-* AI processing
-* verification
-* scheduled reports
-
-## Messaging
-
-* NATS JetStream
-
-Used for domain events and asynchronous processing.
-
-## Cache
-
-* Redis
-
-## Identity
-
-* Keycloak
-* OpenID Connect
-* OAuth 2.x
-
-## Object Storage
-
-* Cloudflare R2 / S3-compatible storage
-
-Used for:
-
-* photos
-* videos
-* documents
-* evidence
-* AI artifacts
-
-## Infrastructure
-
-* Docker
-* Kubernetes
-* Helm
-* Terraform / OpenTofu
-* Argo CD
-* GitHub Actions
-
-## Observability
-
-* OpenTelemetry
-* Prometheus
-* Grafana
-* Loki
-* Tempo
-
-## Testing
-
-* JUnit
-* Mockito
-* Testcontainers
-* Vitest
-* Playwright
-
----
-
-# 🌍 Kenya-First, Africa-Ready
-
-MjengoOS is designed around Kenyan construction realities while maintaining an architecture that can expand across Africa.
-
-Kenya-native considerations include:
-
-* M-Pesa
-* mobile money
-* bank payments
-* USSD
-* SMS
-* WhatsApp
-* KRA-related financial workflows
-* eTIMS-compatible invoice workflows where applicable
-* NCA-related construction workflows
-* land/property verification
-* county/region-based suppliers
-* local hardware stores
-* local construction professionals
-
-Future regional expansion can support:
-
-* Tanzania
-* Uganda
-* Rwanda
-* Ethiopia
-* Ghana
-* Nigeria
-* South Africa
-* other African markets
-
-Localization should be treated as a domain capability rather than hardcoded business logic.
-
----
-
-# 👥 Supported Roles
-
-MjengoOS supports project-specific roles including:
-
-* Client
-* Developer
-* Project Manager
-* Main Contractor
-* Site Manager
-* Site Supervisor
-* Foreman
-* Clerk of Works
-* Architect
-* Quantity Surveyor
-* Structural Engineer
-* Civil Engineer
-* MEP Engineer
-* Land Surveyor
-* Procurement Officer
-* Storekeeper
-* Safety Officer
-* Quality Inspector
-* Subcontractor
-* Trade Lead
-* Fundi
-* Worker
-* Equipment Manager
-* Driver
-* Supplier
-* Warehouse Manager
-* Finance Officer
-* Organization Administrator
-* Auditor
-* Read-only user
-
-A user may have different roles across different projects.
-
----
-
-# 🔄 Example End-to-End Workflow
-
-Consider a client building a house in Kenya.
-
-```text
-1. Client creates project
-          ↓
-2. Property information added
-          ↓
-3. Land verification initiated
-          ↓
-4. Professionals assigned
-          ↓
-5. BOQ uploaded
-          ↓
-6. BOQ extracted and reviewed
-          ↓
-7. Budget established
-          ↓
-8. Construction phases created
-          ↓
-9. Material request created
-          ↓
-10. Nearby suppliers discovered
-          ↓
-11. Quotes collected
-          ↓
-12. Quotes compared
-          ↓
-13. Client approves purchase
-          ↓
-14. Purchase order created
-          ↓
-15. Supplier confirms
-          ↓
-16. Payment initiated
-          ↓
-17. Payment confirmed
-          ↓
-18. Delivery dispatched
-          ↓
-19. Material arrives at site
-          ↓
-20. Supervisor verifies delivery
-          ↓
-21. Proof of delivery captured
-          ↓
-22. Inventory updated
-          ↓
-23. Workers record attendance
-          ↓
-24. Site photos captured
-          ↓
-25. AI analyzes progress
-          ↓
-26. Human reviews where necessary
-          ↓
-27. Project progress updated
-          ↓
-28. Milestone completed
-          ↓
-29. Client reviews evidence
-          ↓
-30. Milestone payment approved
-          ↓
-31. Ledger records transaction
-          ↓
-32. Project timeline updated
-```
-
-This is the core MjengoOS philosophy:
-
-> **Connect money, materials, people and physical evidence into one coherent project history.**
-
----
-
-# 📁 Repository Structure
-
-A high-level repository structure:
-
-```text
-mjengo-os/
-│
-├── backend/
-│   ├── src/
-│   │   └── main/
-│   │       └── java/
-│   │           └── com/
-│   │               └── mjengoos/
-│   │                   ├── identity/
-│   │                   ├── organizations/
-│   │                   ├── projects/
-│   │                   ├── workforce/
-│   │                   ├── construction/
-│   │                   ├── boq/
-│   │                   ├── inventory/
-│   │                   ├── procurement/
-│   │                   ├── suppliers/
-│   │                   ├── warehouses/
-│   │                   ├── deliveries/
-│   │                   ├── finance/
-│   │                   ├── payments/
-│   │                   ├── wallet/
-│   │                   ├── documents/
-│   │                   ├── property/
-│   │                   ├── professionals/
-│   │                   ├── notifications/
-│   │                   ├── ai/
-│   │                   ├── audit/
-│   │                   └── reporting/
-│   │
-│   └── src/test/
-│
-├── web/
-│   ├── app/
-│   ├── components/
-│   ├── features/
-│   ├── lib/
-│   └── tests/
-│
-├── mobile/
-│   ├── app/
-│   ├── features/
-│   ├── database/
-│   ├── sync/
-│   └── tests/
-│
-├── website/
-│   └── # Marketing website
-│
-├── infrastructure/
-│   ├── docker/
-│   ├── kubernetes/
-│   ├── helm/
-│   ├── terraform/
-│   └── argocd/
-│
-├── docs/
-│   ├── architecture/
-│   ├── api/
-│   ├── security/
-│   ├── operations/
-│   └── product/
-│
-└── README.md
-```
-
----
-
-# 🚀 Production Engineering Principles
-
-MjengoOS is designed for production rather than a prototype.
-
-The platform should support:
-
-* horizontal scaling
-* graceful shutdown
-* health checks
-* readiness/liveness probes
-* rolling deployments
-* zero-downtime migrations
-* backward-compatible APIs
-* database migrations
-* automated backups
-* disaster recovery
-* retry policies
-* dead-letter handling
-* idempotency
-* distributed tracing
-* metrics
-* structured logging
-* rate limiting
-* circuit breakers
-* failure isolation
-* secure secrets
-* audit trails
-* automated testing
-
-### Failure philosophy
-
-A service failure should not corrupt the project.
-
-For example:
-
-```text
-AI unavailable
-    ↓
-Construction operations continue
-    ↓
-AI analysis = PENDING
-    ↓
-Retry later
-```
-
-Or:
-
-```text
-Payment provider timeout
-    ↓
-Payment = PENDING
-    ↓
-Temporal retries / reconciliation
-    ↓
-Provider confirmation
-    ↓
-Ledger update
-```
-
-The system should degrade gracefully instead of pretending a failure never occurred.
-
----
-
-# 🧪 Quality Standards
-
-A feature is not considered complete simply because a screen exists.
-
-A feature is considered production-ready only when the relevant layers exist:
-
-```text
-UI
-+
-API
-+
-Business Logic
-+
-Database
-+
-Authorization
-+
-Validation
-+
-Error Handling
-+
-Auditability
-+
-Offline Support (when required)
-+
-Observability
-+
-Tests
-+
-Documentation
-```
-
-No fake integrations.
-
-No silent failures.
-
-No placeholder business logic presented as production functionality.
-
-No financial state stored only in frontend state.
-
-No AI-generated result treated as unquestionable truth.
-
----
-
-# 🔒 Data Integrity Invariants
-
-The following principles are architectural invariants.
-
-### Financial
-
-```text
-Every posted financial transaction balances.
-```
-
-### Payments
-
-```text
-Same idempotency key ≠ duplicate payment.
-```
-
-### Inventory
-
-```text
-Closing stock is derived from inventory movements.
-```
-
-### AI
-
-```text
-AI recommendations cannot directly authorize sensitive actions.
-```
-
-### Evidence
-
-```text
-Evidence retains provenance.
-```
-
-### Audit
-
-```text
-Important mutations are auditable.
-```
-
-### Offline
-
-```text
-Offline mutations are not silently discarded.
-```
-
-### Conflicts
-
-```text
-Financial and inventory conflicts require deterministic resolution or human review.
-```
-
----
-
-# 🗺️ Product Roadmap
-
-## Phase 1 — Construction Foundation
-
-* Organizations
-* Users
-* Roles
-* Projects
-* Phases
-* Tasks
-* Milestones
-* Site reports
-* Photos
-* Documents
-* Workforce
-* Attendance
-* BOQ
-* Budgets
-* Inventory
-
-## Phase 2 — Procurement & Physical Operations
-
-* Suppliers
-* Warehouses
-* Material finder
-* Price comparison
-* RFQs
-* Purchase orders
-* Delivery management
-* Proof of delivery
-* Inventory reconciliation
-
-## Phase 3 — Financial Infrastructure
-
-* Project finance
-* Invoices
-* Payment requests
-* Double-entry ledger
-* Wallet integration
-* Payment providers
-* Reconciliation
-* Milestone payments
-* Escrow workflows
-
-## Phase 4 — Offline & Africa Connectivity
-
-* Offline mobile
-* Synchronization
-* Conflict resolution
-* USSD
-* SMS
-* WhatsApp
-* Low-bandwidth optimization
-
-## Phase 5 — AI Construction Intelligence
-
-* Document intelligence
-* Photo progress analysis
-* Voice-to-record
-* Voice-to-invoice
-* AI project copilot
-* Spending anomalies
-* Material anomalies
-* Progress intelligence
-* Forecasting
-
-## Phase 6 — Verification & Trust
-
-* Property verification
-* Surveyor verification
-* Professional verification
-* Contractor verification
-* Evidence scoring
-* Trust profiles
-* Project reputation
-
-## Phase 7 — Construction Network
-
-* Supplier marketplace
-* Professional marketplace
-* Equipment marketplace
-* Transport network
-* Regional price intelligence
-* Construction data intelligence
-
----
-
-# 🧠 The MjengoOS Data Model
-
-At the center of the platform is a relationship between:
-
-```text
-PEOPLE
-  │
-  ├── Workers
-  ├── Professionals
-  ├── Contractors
-  ├── Suppliers
-  └── Clients
-        │
-        ▼
-PROJECT
-        │
-        ├── Property
-        ├── BOQ
-        ├── Budget
-        ├── Schedule
-        ├── Workforce
-        ├── Procurement
-        ├── Inventory
-        ├── Deliveries
-        ├── Evidence
-        ├── Documents
-        ├── Milestones
-        ├── Issues
-        └── Financial Activity
-```
-
-Everything ultimately contributes to the project's state.
-
----
-
-# 🌐 The Long-Term Vision
-
-MjengoOS is not intended to become another construction task-management application.
-
-The long-term vision is a **Construction Operating System** where:
-
-```text
-Land
- ↓
-Planning
- ↓
-Professionals
- ↓
-BOQ
- ↓
-Budget
- ↓
-Procurement
- ↓
-Suppliers
- ↓
-Payments
- ↓
-Logistics
- ↓
-Materials
- ↓
-Inventory
- ↓
-Workers
- ↓
-Site Execution
- ↓
-Evidence
- ↓
-Progress
- ↓
-Inspections
- ↓
-Milestones
- ↓
-Finance
- ↓
-Completion
- ↓
-Handover
-```
-
-all exist inside one connected system.
-
-The goal is to make construction more:
-
-**Transparent.**
-
-**Accountable.**
-
-**Measurable.**
-
-**Verifiable.**
-
-**Accessible.**
-
-**Efficient.**
-
----
-
-# 🇰🇪 Built for Kenya. Designed for Africa.
-
-MjengoOS starts with Kenya because the problem is concrete and immediate.
-
-But the underlying problem exists across Africa:
-
-* fragmented construction supply chains
-* unreliable connectivity
-* informal labor
-* fragmented payments
-* poor project visibility
-* material price volatility
-* limited access to verified professionals
-* weak documentation
-* remote property owners
-* disconnected financial and operational systems
-
-MjengoOS aims to become the infrastructure connecting those pieces.
-
----
-
-# 📜 Philosophy
-
-> **Don't just record what people say happened — record the evidence around what happened.**
-
-> **Reported is not verified.**
-
-> **AI assists; humans remain accountable.**
-
-> **The ledger never lies.**
-
-> **Payments must be idempotent.**
-
-> **Inventory must be derived.**
-
-> **Offline is a normal state.**
-
-> **Every important action should have provenance.**
-
-> **Trust should be earned through evidence, not assumed.**
-
----
-
-# 🛠️ Development Status
-
-MjengoOS is under active development.
-
-The repository is being built toward production readiness with a strong emphasis on:
-
-* correctness
-* security
-* reliability
-* offline-first operation
-* financial integrity
-* evidence-based workflows
-* scalable architecture
-* African market requirements
-* AI-assisted construction intelligence
-
-Features are implemented incrementally and validated across the full stack before being considered complete.
-
----
-
-# 🤝 Contributing
-
-Contributions are welcome.
-
-Before implementing a feature:
-
-1. Inspect the existing architecture.
-2. Check whether the capability already exists.
-3. Identify the appropriate domain.
-4. Reuse existing abstractions where possible.
-5. Avoid duplicating business logic.
-6. Preserve data integrity.
-7. Add tests.
-8. Update documentation.
-9. Ensure authorization is enforced.
-10. Consider offline behavior where applicable.
-11. Consider auditability.
-12. Consider failure and retry behavior.
-
-Pull requests should clearly explain:
-
-* the problem
-* the solution
-* architectural impact
-* database changes
-* API changes
-* security considerations
-* testing
-* migration requirements
-* operational considerations
-
----
-
-# 📄 License
-
-License information will be added as the project reaches its community release stage.
-
----
-
-## MjengoOS
-
-**Construction sites are physical.**
-
-**Their data should reflect reality.**
-
-**Build with evidence.**
+The image is two Debian stages (bun builder → `node:20-slim` runner,
+non-root, `prisma migrate deploy` on boot). Full guide — env vars, seed
+chain, self-host without Docker, reverse proxy (the PR #7 lessons in nginx
+form), health monitoring, SQLite backups, secrets handling — in
+[DEPLOYMENT.md](./DEPLOYMENT.md). Health probe: `GET /api/health`.
+
+## CI/CD
+
+`.github/workflows/ci.yml` runs lint + strict typecheck + a real
+`next build` on every push/PR; `docker.yml` builds the Docker image on a
+GitHub runner (the dev sandbox has no docker CLI — CI is the verification).
+The unit suite — **1,513 tests across 54 vitest files** (`bun run test`) —
+is the local gate; every wave merge re-ran it in full (495 → 899 → 1,019 →
+1,102 → 1,244 → 1,513 tests across waves 1–6). PR runs
+auto-cancel on new commits. Workflows are currently paused by a
+billing lock on the account — they exist, are green on the last runs, and
+resume unchanged when billing is restored.
+
+## Honesty notes (deliberate)
+
+- Payment rails default to **simulated** (labeled in the UI): the ledger,
+  approval workflow, idempotency and reversal mechanics are real. A M-Pesa
+  Daraja **sandbox** provider ships behind the `PaymentProvider` seam and
+  activates only when its env credentials are set — no licensed rail is
+  claimed, and no real money moves.
+- Notifications are in-app by default; SMS is optional and comes in two
+  honest flavors behind the same provider seam — a generic webhook
+  (`NOTIFY_SMS_WEBHOOK_URL`, credentials stay in your gateway) or a direct
+  Africa's Talking provider (`AT_API_KEY` + `AT_USERNAME`, the API key
+  lives in app env — the documented tradeoff). Either way rows honestly
+  record `sent`/`failed` + delivery detail — nothing pretends to have
+  sent when no provider is configured.
+- Land verification records evidence; it never claims government
+  confirmation. Supplier verification is a platform ladder, never conflated
+  with state licensing.
+- USSD is a faithful simulation of the `*384#` flow that dispatches real
+  attendance records; no telco gateway is wired yet.
+- The WhatsApp field line is the same honest pattern: a documented webhook
+  contract, a keyword grammar and a simulator, with real attendance and
+  photo-comment rows written through the app's own appliers — but no Meta
+  Cloud API is wired; every reply is footered "MjengoOS sim".
+- **The Wave-6 AI layer ships dark.** The `ai` flag is DEFAULT OFF — an
+  admin opts in; with it off, no AI route, action or job contacts the SDK
+  (test-pinned). AI output is advisory-only and confidence-labeled — no
+  action, score or ledger path reads it.
+- **No model-authored numbers.** Model-emitted figures are redacted before
+  storage; the trust digest's text (and every figure in it) is composed
+  deterministically from ledger rows — the model only voices it. AI rows
+  (`AiReviewNote`, `PhotoHash`, `AiInsight`, `TrustDigest`) are append-only.
+- **AI failures are honest.** Unavailable SDK, timeout (20s cap) or empty
+  answers write no row and fake nothing; when the Kiswahili TTS leg timed
+  out during live verification the digest text survived — the text is the
+  product, the audio is the bonus.
+
+## Project structure & docs
+
+| Path | What |
+|---|---|
+| `src/app/` | App Router: one page (`page.tsx`) + `/api/**` (auth, projects, actions, sync, share, upload, search, flags, notifications, jobs/run, audit, reports, health, ussd, whatsapp, 7 AI routes) + the `/api/v1` REST surface (27 OpenAPI-documented paths) + `/api/openapi.json` |
+| `src/frontend/` | Web UI: `mjengo/` tab surfaces, `ui/` shadcn primitives, `auth/`, `i18n/`, `hooks/` (use-mjengo payload facade + offline outbox) |
+| `src/backend/` | Server-only: `lib/` (guard, auth, audit, rate-limit, db, ai, mjengo dispatcher, perceptual-hash), `actions/`, `modules/` per domain — incl. `modules/ai/` (the Wave-6 seam + draw-review / authenticity / trust-digest engines) |
+| `src/mobile/` | Phone-first bottom nav |
+| `src/shared/` | Isomorphic contracts: `permissions.ts` role matrix, `client-actions.ts` allowlist |
+| `mjengoos-website/` | Marketing site (independent Next.js app, `:3001`, proxied at `/website`) |
+| `prisma/` | `schema.prisma` (68 models), `migrations/` (0_init + additive 1_mjengo_score … 8_trust_digest), `seed.ts` + `seed-extras/` |
+| `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Build/run/test/deploy operations guide |
+| [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) | Plain-language release notes — v0.1 → v0.2.4, wave by wave |
+| [docs/backlog.md](./docs/backlog.md) | PM release plan (waves 3–6) with paste-ready issue texts |
+| [docs/wave6-plan.md](./docs/wave6-plan.md) | Wave-6 release plan (research → specs → paste-ready issue texts) + the market-gap research it rests on (`docs/research/`) |
+| [SECURITY.md](./SECURITY.md) | Vulnerability reporting policy |
+
+Roadmap lives in [GitHub issues](https://github.com/Roy-Wanyoike/Mjengo-OS/issues).
+
+## License
+
+[MIT](./LICENSE) — Copyright (c) 2026 Roy Wanyoike.

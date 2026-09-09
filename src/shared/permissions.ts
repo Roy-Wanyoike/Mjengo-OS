@@ -24,14 +24,16 @@ import type { TabKey } from '@/frontend/mjengo/app'
 export const ALL_TABS: readonly TabKey[] = [
   'overview', 'site', 'materials', 'finder', 'fundis', 'money',
   'land', 'evidence', 'intel', 'copilot', 'ussd', 'audit', 'settings',
+  'supplier',
 ]
 
 // ---------------------------------------------------------------- role registry
 // Mirrors guard.ts KNOWN_ROLES / OWNER_ROLES / FINANCE_ROLES / PAYMENT_ROLES.
 
-/** Mirror of guard.ts KNOWN_ROLES (staff + client roles the platform ships). */
+/** Mirror of guard.ts KNOWN_ROLES (staff + client + supplier roles the platform ships). */
 export const KNOWN_ROLES: readonly string[] = [
   'contractor', 'client', 'admin', 'finance', 'supervisor', 'procurement', 'qs',
+  'supplier',
 ]
 
 /** Mirror of guard.ts OWNER_ROLES — roles that boot the full owner app. */
@@ -58,13 +60,23 @@ const PAYMENT_ROLES: readonly string[] = ['finance', 'admin', 'client']
  * Unknown roles → ['overview'] (fail closed).
  */
 export const ROLE_TABS: Readonly<Record<string, readonly TabKey[]>> = {
-  contractor: ALL_TABS.filter((t) => t !== 'audit'),
-  admin: ALL_TABS,
+  contractor: ALL_TABS.filter((t) => t !== 'audit' && t !== 'supplier'),
+  // Admin gets everything EXCEPT the supplier portal tab: the 'supplier' tab
+  // renders SupplierPortal, which is the supplier-role surface only — admin
+  // reads the same domain through the buyer side (Finder). The tab universe
+  // stays complete via ALL_TABS; the matrix keeps it supplier-only.
+  admin: ALL_TABS.filter((t) => t !== 'supplier'),
   supervisor: ['overview', 'site', 'materials', 'finder', 'fundis', 'evidence', 'copilot', 'ussd', 'settings'],
   finance: ['overview', 'money', 'finder', 'evidence', 'settings'],
   procurement: ['overview', 'finder', 'materials', 'evidence', 'settings'],
   qs: ['overview', 'site', 'materials', 'finder', 'evidence', 'settings'],
-  client: ALL_TABS.filter((t) => t !== 'copilot' && t !== 'audit'),
+  client: ALL_TABS.filter((t) => t !== 'copilot' && t !== 'audit' && t !== 'supplier'),
+  // W5-3: the supplier surface is the dedicated SupplierPortal — this row is
+  // the CLIENT MIRROR of that truth (fail closed): a supplier sees exactly the
+  // 'supplier' tab (the portal) + settings (per-user prefs), never any
+  // client/contractor tab. Server side the same boundary is enforced by the
+  // 403s on /api/project, /api/sync and the v1 project-scoped reads.
+  supplier: ['supplier', 'settings'],
 }
 
 /** Fail-closed fallback for unknown/missing roles: the one safe tab. */
@@ -79,12 +91,14 @@ export const ROLE_LABELS: Readonly<Record<string, string>> = {
   supervisor: 'Site Supervisor',
   procurement: 'Procurement Officer',
   qs: 'Quantity Surveyor',
+  supplier: 'Supplier',
 }
 
 /**
  * Post-login landing tab per role (task W1-PERM):
- * finance → Money, procurement → Finder, qs → Materials,
- * everyone else → Overview. Unknown → Overview (fail closed).
+ * finance → Money, procurement → Finder, qs → Materials, supplier → the
+ * Supplier portal (W5-3), everyone else → Overview. Unknown → Overview
+ * (fail closed).
  */
 export const ROLE_LANDING: Readonly<Record<string, TabKey>> = {
   contractor: 'overview',
@@ -94,6 +108,7 @@ export const ROLE_LANDING: Readonly<Record<string, TabKey>> = {
   procurement: 'finder',
   qs: 'materials',
   client: 'overview',
+  supplier: 'supplier',
 }
 
 // ---------------------------------------------------------------- helpers
@@ -185,6 +200,8 @@ export function usePermissions() {
     landingTab: landingForRole(role),
     /** Client surface (handled outside the ROLE_TABS flow). */
     isClient: role === 'client',
+    /** W5-3: supplier sessions boot the SupplierPortal surface. */
+    isSupplier: role === 'supplier',
     /** Owner app roles (mirror of guard.ts OWNER_ROLES). */
     isOwner: role !== null && OWNER_ROLES.includes(role),
     /** Permission check bound to this session's role. */

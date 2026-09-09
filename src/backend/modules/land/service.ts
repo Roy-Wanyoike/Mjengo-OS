@@ -1,4 +1,4 @@
-// Land & Property module — service layer (domain logic, agent 2-a).
+// Land & Property module — service layer (domain logic).
 //
 // Called from src/backend/actions/land.ts (never directly from a route):
 //   - create/update parcels and set honest record status (searching/verified/flagged)

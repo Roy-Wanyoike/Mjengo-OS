@@ -31,6 +31,15 @@ interface SearchGroup {
 
 const MAX_PER_GROUP = 5
 
+// S6 hardening — bounds the scan regardless of table size. Each source table
+// loads at most MAX_SCAN rows (recent-first where an order exists) before the
+// in-memory LIKE filter; a matching row beyond the window is honestly missed
+// rather than the route loading unbounded tables into memory.
+const MAX_SCAN = 300
+
+/** Cap the query itself — a giant string would still be scanned against every row. */
+const MAX_QUERY = 100
+
 /** Strip LIKE wildcards so % and _ are treated literally. */
 function sanitize(q: string): string {
   return q.replace(/[%_]/g, ' ').trim()
@@ -42,16 +51,17 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
     await Promise.all([
       projectId
         ? db.project.findMany({ where: { id: projectId } })
-        : db.project.findMany({ orderBy: { createdAt: 'asc' } }),
-      db.landParcel.findMany({ where: { ...scope }, include: { project: { select: { name: true } } } }),
-      db.worker.findMany({ where: { ...scope }, include: { project: { select: { name: true } } } }),
-      db.supplier.findMany({}),
-      db.catalogItem.findMany({ include: { supplier: { select: { businessName: true, county: true } } } }),
-      db.materialRequest.findMany({ where: { ...scope }, include: { project: { select: { name: true } }, lines: true } }),
-      db.purchaseOrder.findMany({ where: { ...scope }, include: { project: { select: { name: true } }, supplier: { select: { businessName: true } } } }),
-      db.transaction.findMany({ where: { ...scope }, include: { project: { select: { name: true } } } }),
-      db.invoice.findMany({ where: { ...scope }, include: { project: { select: { name: true } } } }),
-      db.notification.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, include: { project: { select: { name: true } } } }),
+        : db.project.findMany({ orderBy: { createdAt: 'asc' }, take: MAX_SCAN }),
+      db.landParcel.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
+      // Worker has no timestamp column — a bare take still bounds the scan.
+      db.worker.findMany({ where: { ...scope }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
+      db.supplier.findMany({ orderBy: { createdAt: 'desc' }, take: MAX_SCAN }),
+      db.catalogItem.findMany({ orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { supplier: { select: { businessName: true, county: true } } } }),
+      db.materialRequest.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } }, lines: true } }),
+      db.purchaseOrder.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } }, supplier: { select: { businessName: true } } } }),
+      db.transaction.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
+      db.invoice.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
+      db.notification.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
     ])
 
   const has = (s: string | null | undefined) => Boolean(s && s.toLowerCase().includes(q))
@@ -184,6 +194,9 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
 export const GET = withGuard(async (req: NextRequest, session) => {
   try {
     const raw = new URL(req.url).searchParams.get('q') ?? ''
+    if (raw.length > MAX_QUERY) {
+      return NextResponse.json({ ok: true, q: raw.slice(0, MAX_QUERY), groups: [], note: `Query capped at ${MAX_QUERY} characters` })
+    }
     const q = sanitize(raw).toLowerCase()
     if (q.length < 2) {
       return NextResponse.json({ ok: true, q: raw, groups: [], note: 'Type at least 2 characters' })

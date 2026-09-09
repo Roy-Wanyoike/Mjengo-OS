@@ -16,8 +16,11 @@ import { Textarea } from '@/frontend/ui/textarea'
 import type { ProjectPayload } from '@/backend/lib/mjengo'
 import type { PaymentRequestRow } from '@/backend/modules/wallet/types'
 import { EMPTY_FINANCE_SLICE } from '@/backend/modules/wallet/types'
+import type { DrawPackLink } from '@/backend/modules/drawpack/service'
+import { DrawPackViewer } from '@/frontend/mjengo/draw-pack-viewer'
+import { useT } from '@/frontend/i18n/provider'
 import {
-  Banknote, BookOpen, Camera, Check, CheckCheck, Hourglass, ImageOff, Lock, Minus, Plus, Send, ShieldCheck, TrendingUp, Wallet, X,
+  Banknote, BookOpen, Camera, Check, CheckCheck, FileCheck2, Hourglass, ImageOff, Loader2, Lock, Minus, Plus, Send, ShieldCheck, Sparkles, TrendingUp, Wallet, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, dateShort } from '@/frontend/lib/format'
@@ -201,8 +204,17 @@ function EscrowConsistencyChip({ escrow }: { escrow: NonNullable<ProjectPayload[
 export function MoneyTab() {
   const { data, dispatch, online, outbox, viewMode, actionBusy, clientRole, shareToken } = useMjengo()
   const { data: session } = useSession()
+  const t = useT()
   const sessionRole = String(session?.user?.role ?? '')
   const busy = actionBusy !== null
+
+  // W4-1: the immutable evidence pack of a released milestone, opened in the
+  // DrawPackViewer (fetched read-only through the share token).
+  const [packTarget, setPackTarget] = useState<DrawPackLink | null>(null)
+
+  // W6-1: the milestone whose AI draw review is currently running (spinner
+  // state for the "Run AI review" affordance; null when idle).
+  const [aiReviewBusyId, setAiReviewBusyId] = useState<string | null>(null)
 
   // top-up dialog
   const [topupOpen, setTopupOpen] = useState(false)
@@ -277,6 +289,24 @@ export function MoneyTab() {
     .filter((m) => m.status === 'released')
     .reduce((s, m) => s + m.amount, 0)
   const pendingCount = data.milestones.filter((m) => m.status === 'release_requested').length
+
+  // W4-1 draw packs: link rows ride on the payload (stale persisted payloads
+  // pre-W4-1 may lack them — fall back to empty until the next refresh).
+  const drawPacks = data.drawPacks ?? []
+  const packFor = (milestoneId: string) => drawPacks.find((p) => p.milestoneId === milestoneId) ?? null
+  // The token that serves the pack: the share-link session's own token, or
+  // the project's token on owner/preview surfaces (the payload carries it).
+  const packToken = shareToken ?? data.project.shareToken
+
+  // W6-1: the AI surface is flag-gated (payload intel slice; stale persisted
+  // payloads may lack it — fail closed to hidden). Clients never see the
+  // trigger (they read notes through the pack viewer; running a review is
+  // contractor/admin work, enforced server-side).
+  const aiFlagOn = !isClient && data.intel?.flags?.ai === true
+
+  /** Verdict label for toasts (the three sanitized values the parse emits). */
+  const aiVerdictLabel = (verdict: string) =>
+    t(verdict === 'consistent' || verdict === 'escalate' ? `aiReview.verdict.${verdict}` : 'aiReview.verdict.advisory')
 
   const photoById = (id: string) => data.photos.find((p) => p.id === id)
   const phaseName = (phaseId: string | null) =>
@@ -412,6 +442,63 @@ export function MoneyTab() {
     }
   }
 
+  // ---------------- W6-1: AI draw review ----------------
+
+  /**
+   * Run one advisory AI review of a released milestone's frozen draw pack.
+   * Deliberately NOT the offline outbox path: the vision + LLM calls run
+   * server-side against the provider, so an offline queue would only defer
+   * a review of evidence that keeps moving — the honest state is "needs a
+   * connection now". The direct /api/actions fetch (not dispatch()) is so
+   * the honest server error — flag off, provider unavailable, provider
+   * failure — reaches the toast verbatim instead of dying in a console.
+   */
+  async function runAiReview(m: MilestoneRow) {
+    const pack = packFor(m.id)
+    if (!pack) return
+    if (!online) {
+      toast.error(t('aiReview.needsOnline'))
+      return
+    }
+    const live = useMjengo.getState().data
+    if (!live) return
+    setAiReviewBusyId(m.id)
+    try {
+      const res = await fetch('/api/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'ai.drawReview',
+          payload: { drawPackId: pack.id },
+          projectId: live.project.id,
+        }),
+      })
+      const json = (await res.json().catch(() => null)) as {
+        ok?: boolean
+        error?: string
+        result?: { verdict?: string; findingsCount?: number }
+      } | null
+      if (res.ok && json?.ok && json.result) {
+        toast.success(t('aiReview.runOk', {
+          verdict: aiVerdictLabel(String(json.result.verdict ?? 'advisory')),
+          count: json.result.findingsCount ?? 0,
+        }))
+        // Open the pack viewer — it fetches the pack fresh through the share
+        // token, note included (latest wins).
+        setPackTarget(pack)
+      } else {
+        // Honest failure states: flag off, pack not found, provider
+        // unavailable, provider failure — the server message is the copy.
+        const errText = typeof json?.error === 'string' && json.error.trim() ? json.error.trim() : t('aiReview.runFailedFallback')
+        toast.error(`${t('aiReview.runFailed')} — ${errText}`)
+      }
+    } catch {
+      toast.error(t('aiReview.runNetwork'))
+    } finally {
+      setAiReviewBusyId(null)
+    }
+  }
+
   async function payRequest(pr: PaymentRequestRow) {
     // Money action — online only; the fresh payload after dispatch carries the
     // ledger ref for the honest toast.
@@ -435,6 +522,9 @@ export function MoneyTab() {
 
   return (
     <div className="space-y-6">
+      {/* W4-1 print isolation — only #draw-pack-print-root is visible on paper */}
+      <style>{`@media print { body * { visibility: hidden !important; } #draw-pack-print-root, #draw-pack-print-root * { visibility: visible !important; } #draw-pack-print-root { position: fixed !important; inset: 0 !important; overflow: visible !important; background: white !important; } }`}</style>
+
       {/* KPI row */}
       <section className="grid grid-cols-2 gap-4 lg:grid-cols-4" aria-label="MjengoPay KPIs">
         <Card className="border-stone-200 shadow-sm">
@@ -557,6 +647,46 @@ export function MoneyTab() {
                             {m.decidedAt ? ` · ${dateShort(m.decidedAt)}` : ''}
                             {m.decisionNote ? ` — “${m.decisionNote}”` : ''}
                           </p>
+                        )}
+
+                        {/* W4-1: the immutable evidence pack of this release —
+                            the frozen bundle a diaspora client keeps/forwards,
+                            served read-only through the share token. */}
+                        {m.status === 'released' && packFor(m.id) && (
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="min-h-11 gap-1.5 border-amber-200 bg-amber-50/50 text-amber-900 hover:bg-amber-50 hover:text-amber-900"
+                              onClick={() => setPackTarget(packFor(m.id))}
+                              aria-label={t('drawPack.aria', { milestone: m.name })}
+                            >
+                              <FileCheck2 className="h-4 w-4" aria-hidden /> {t('drawPack.view')}
+                              <span className="hidden font-mono text-[10px] text-amber-700 sm:inline">
+                                {formatKES(packFor(m.id)!.amount)} · {packFor(m.id)!.ledgerRef}
+                              </span>
+                            </Button>
+                            {/* W6-1: run the advisory AI review of this frozen
+                                pack — hidden when the ai flag is off (or the
+                                viewer is a client surface); the server refuses
+                                honestly regardless. */}
+                            {aiFlagOn && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="min-h-11 gap-1.5"
+                                disabled={busy || aiReviewBusyId === m.id}
+                                onClick={() => void runAiReview(m)}
+                                aria-label={t('aiReview.runAria', { milestone: m.name })}
+                                data-testid={`run-ai-review-${m.id}`}
+                              >
+                                {aiReviewBusyId === m.id
+                                  ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                                  : <Sparkles className="h-4 w-4" aria-hidden />}
+                                {aiReviewBusyId === m.id ? t('aiReview.running') : t('aiReview.run')}
+                              </Button>
+                            )}
+                          </div>
                         )}
 
                         {/* evidence photos */}
@@ -1399,6 +1529,17 @@ export function MoneyTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ---------------- W4-1: evidence draw pack viewer ---------------- */}
+      {packTarget && packToken && (
+        <DrawPackViewer
+          open
+          onClose={() => setPackTarget(null)}
+          packId={packTarget.id}
+          shareToken={packToken}
+          milestoneName={packTarget.milestoneName}
+        />
+      )}
     </div>
   )
 }

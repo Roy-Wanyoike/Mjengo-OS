@@ -1,6 +1,6 @@
 'use client'
 
-// Finder invoices section (agent 2-d) — the money end of the Finder loop:
+// Finder invoices section — the money end of the Finder loop:
 // draft → submitted → CLIENT decision (approve / reject / dispute) → payment
 // recording (method + reference → ONE Transaction ledger entry, visible in
 // the project spend totals + here) → printable record.

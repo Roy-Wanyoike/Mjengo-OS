@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, ListChecks, Boxes, PackageSearch, Users, Wallet, Landmark,
-  Camera, ScrollText, Radar, Sparkles, Phone, Settings,
+  Camera, ScrollText, Radar, Sparkles, Phone, Settings, Truck,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { TabKey } from '@/frontend/mjengo/app'
@@ -38,6 +38,10 @@ export const TAB_META: readonly TabMeta[] = [
   { key: 'ussd', label: 'nav.ussd', shortLabel: 'nav.short.ussd', icon: Phone },
   { key: 'audit', label: 'nav.audit', shortLabel: 'nav.short.audit', icon: ScrollText },
   { key: 'settings', label: 'nav.settings', shortLabel: 'nav.short.settings', icon: Settings },
+  // W5-3: the supplier-role surface (SupplierPortal renders it full-screen —
+  // the meta entry keeps the tab universe and the permission matrix in sync:
+  // 'supplier' is in ALL_TABS and ONLY the supplier role's tab list).
+  { key: 'supplier', label: 'nav.supplier', shortLabel: 'nav.short.supplier', icon: Truck },
 ]
 
 /** Metadata for one tab id (always found — every TabKey is in TAB_META). */
@@ -48,4 +52,54 @@ export function metaFor(key: TabKey): TabMeta {
 /** Ordered metadata for a set of tab ids. */
 export function metaForAll(keys: readonly TabKey[]): TabMeta[] {
   return keys.map(metaFor)
+}
+
+// ---------------- feature-flag tab gating (spec §81, task 9-a) ----------------
+
+/**
+ * Flag key → the tab whose ENTRY it gates. Mirrors the server-side map in
+ * src/backend/modules/intel/flags.ts (the per-flag enforcement table) — keep
+ * the two in sync. `land_verification` is NOT here: the Land tab hosts the
+ * professionals directory too (a separate module with no flag), so that flag
+ * gates the parcels SECTION inside the tab (see land-tab.tsx), not the tab.
+ */
+export const FLAG_GATED_TABS: Readonly<Record<string, TabKey>> = {
+  wallet: 'money',
+  marketplace: 'finder',
+}
+
+/**
+ * Client mirror of the server gate (requireFlagOn in modules/intel/flags.ts):
+ * a flag OFF hides its feature's entry for NON-ADMIN sessions — admins bypass
+ * on both sides (their routes pass AND their entries stay visible) so they
+ * can toggle & test. `flags` is the payload's intel.flags map; undefined =
+ * flags not loaded yet → treated as ON, matching the pre-existing
+ * ai_progress pattern (`flags?.x !== false`).
+ */
+export function flagOnFor(
+  flags: Record<string, boolean> | null | undefined,
+  key: string,
+  role: string | null | undefined,
+): boolean {
+  if (role === 'admin') return true
+  return flags?.[key] !== false
+}
+
+/**
+ * Filter a role's tab list by the flag-gated entries (order preserved). Used
+ * by all three navigation surfaces — app.tsx (active-tab snapping + tab
+ * events), header.tsx (desktop strip) and mobile/nav (bottom bar) — so a
+ * hidden tab is hidden everywhere and a stale active tab snaps to the
+ * role's landing tab.
+ */
+export function tabsVisibleForFlags(
+  tabs: readonly TabKey[],
+  flags: Record<string, boolean> | null | undefined,
+  role: string | null | undefined,
+): readonly TabKey[] {
+  if (!flags) return tabs
+  return tabs.filter((key) => {
+    const gated = Object.entries(FLAG_GATED_TABS).find(([, tab]) => tab === key)
+    return !gated || flagOnFor(flags, gated[0], role)
+  })
 }
