@@ -8,6 +8,7 @@ import { Separator } from '@/frontend/ui/separator'
 import { Switch } from '@/frontend/ui/switch'
 import { Copy, Eye, RefreshCw, Share2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useT } from '@/frontend/i18n/provider'
 
 export interface ShareDialogProps {
   open: boolean
@@ -19,13 +20,14 @@ export interface ShareDialogProps {
 }
 
 export function ShareDialog({ open, onOpenChange, shareUrl, previewing, onPreviewingChange, onRegenerate }: ShareDialogProps) {
+  const t = useT()
   async function copyLink() {
     if (!shareUrl) return
     try {
       await navigator.clipboard.writeText(shareUrl)
-      toast.success('Link copied')
+      toast.success(t('share.linkCopied'))
     } catch {
-      toast.error('Could not copy — long-press or select the link to copy manually')
+      toast.error(t('share.copyFailed'))
     }
   }
 
@@ -35,30 +37,30 @@ export function ShareDialog({ open, onOpenChange, shareUrl, previewing, onPrevie
         <DialogHeader>
           <DialogTitle className="text-stone-900 flex items-center gap-2">
             <Eye className="w-5 h-5 text-amber-600" aria-hidden />
-            Share with client
+            {t('share.title')}
           </DialogTitle>
           <DialogDescription>
-            Your client gets a read-only live view: photo evidence, progress, budget position — no editing. Every released milestone also carries an immutable evidence pack (W4-1) they can view, print and forward with the hash verified.
+            {t('share.desc')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-1">
           <div className="space-y-2">
-            <Label htmlFor="share-url">Client link</Label>
+            <Label htmlFor="share-url">{t('share.linkLabel')}</Label>
             <div className="flex items-center gap-2">
               <Input
                 id="share-url"
                 readOnly
-                value={shareUrl ?? 'Generating link…'}
-                placeholder="Generating link…"
+                value={shareUrl ?? t('share.generating')}
+                placeholder={t('share.generating')}
                 className="font-mono text-xs text-stone-600 bg-stone-50"
-                aria-label="Read-only client share link"
+                aria-label={t('share.aria.link')}
               />
               <Button
                 size="icon"
                 onClick={() => void copyLink()}
                 disabled={!shareUrl}
-                aria-label="Copy share link"
+                aria-label={t('share.aria.copy')}
                 className="shrink-0 h-9 w-9 bg-amber-600 hover:bg-amber-700 text-white"
               >
                 <Copy className="w-4 h-4" aria-hidden />
@@ -71,11 +73,11 @@ export function ShareDialog({ open, onOpenChange, shareUrl, previewing, onPrevie
               disabled={!shareUrl}
               className="gap-1.5 text-stone-500 hover:text-stone-800 h-8"
             >
-              <RefreshCw className="w-3.5 h-3.5" aria-hidden /> Regenerate link
+              <RefreshCw className="w-3.5 h-3.5" aria-hidden /> {t('share.regenerate')}
             </Button>
             <p className="text-[11px] text-stone-400 flex items-start gap-1.5">
               <Share2 className="w-3 h-3 mt-0.5 shrink-0" aria-hidden />
-              Send this over WhatsApp or email. Regenerating invalidates the old link — and every draw pack it could open (the pack is served through the same token).
+              {t('share.note')}
             </p>
           </div>
 
@@ -83,14 +85,14 @@ export function ShareDialog({ open, onOpenChange, shareUrl, previewing, onPrevie
 
           <div className="flex items-center justify-between gap-4 rounded-xl border border-stone-200 bg-stone-50 p-3.5">
             <div className="min-w-0">
-              <Label htmlFor="preview-switch" className="text-sm font-medium text-stone-800">Preview as client (read-only)</Label>
-              <p className="text-xs text-stone-500 mt-0.5">See exactly what your client sees.</p>
+              <Label htmlFor="preview-switch" className="text-sm font-medium text-stone-800">{t('share.previewLabel')}</Label>
+              <p className="text-xs text-stone-500 mt-0.5">{t('share.previewHint')}</p>
             </div>
             <Switch
               id="preview-switch"
               checked={previewing}
               onCheckedChange={onPreviewingChange}
-              aria-label="Preview as client (read-only)"
+              aria-label={t('share.previewLabel')}
               className="data-[state=checked]:bg-amber-500"
             />
           </div>

@@ -312,52 +312,52 @@ export function MoneyTab() {
   const phaseName = (phaseId: string | null) =>
     phaseId ? data.phases.find((p) => p.id === phaseId)?.name ?? null : null
 
-  const offlineNote = `Saved on-device — queued (${outbox.length})`
+  const offlineNote = t('field.savedQueued', { count: outbox.length })
 
   // ---------------- handlers ----------------
 
   async function topUp() {
     const amount = Number(tAmount)
-    if (!tAmount || Number.isNaN(amount) || amount <= 0) { toast.error('Enter a top-up amount greater than zero'); return }
+    if (!tAmount || Number.isNaN(amount) || amount <= 0) { toast.error(t('money.error.topupAmount')); return }
     const ok = await dispatch('escrow.topup', { amount, method: tMethod }, `Escrow top-up ${formatKES(amount)}`)
     if (ok) {
-      toast.success(online ? `${formatKES(amount)} added to the escrow wallet` : offlineNote)
+      toast.success(online ? t('money.topupOk', { amount: formatKES(amount) }) : offlineNote)
       setTopupOpen(false); setTAmount('')
-    } else toast.error('Top-up failed')
+    } else toast.error(t('money.topupFailed'))
   }
 
   async function createMilestone() {
     const amount = Number(msAmount)
-    if (!msName.trim()) { toast.error('Give the milestone a name'); return }
-    if (!msAmount || Number.isNaN(amount) || amount <= 0) { toast.error('Milestone amount must be greater than zero'); return }
+    if (!msName.trim()) { toast.error(t('money.error.msName')); return }
+    if (!msAmount || Number.isNaN(amount) || amount <= 0) { toast.error(t('money.error.msAmount')); return }
     const ok = await dispatch('milestone.create', {
       name: msName.trim(), amount, phaseId: msPhase === 'none' ? undefined : msPhase,
     }, `Milestone: ${msName.trim()}`)
     if (ok) {
-      toast.success(online ? `${msName.trim()} locked at ${formatKES(amount)}` : offlineNote)
+      toast.success(online ? t('money.milestoneLocked', { name: msName.trim(), amount: formatKES(amount) }) : offlineNote)
       setMsOpen(false); setMsName(''); setMsAmount(''); setMsPhase('none')
-    } else toast.error('Could not create milestone')
+    } else toast.error(t('money.milestoneFailed'))
   }
 
   async function attachEvidence() {
     if (!evidenceTarget) return
-    if (!selectedPhotos.size) { toast.error('Select at least one photo'); return }
+    if (!selectedPhotos.size) { toast.error(t('money.error.selectPhoto')); return }
     const ok = await dispatch('milestone.evidence', {
       id: evidenceTarget.id, photoIds: Array.from(selectedPhotos),
     }, `Evidence on ${evidenceTarget.name}`)
     if (ok) {
-      toast.success(online ? `${selectedPhotos.size} evidence photo(s) attached to "${evidenceTarget.name}"` : offlineNote)
+      toast.success(online ? t('money.evidenceAttached', { count: selectedPhotos.size, name: evidenceTarget.name }) : offlineNote)
       setEvidenceTarget(null)
-    } else toast.error('Could not attach evidence')
+    } else toast.error(t('money.evidenceFailed'))
   }
 
   async function requestRelease() {
     if (!releaseTarget) return
     const ok = await dispatch('milestone.requestRelease', { id: releaseTarget.id }, `Release request: ${releaseTarget.name}`)
     if (ok) {
-      toast.success(online ? `Release requested — ${clientName} will decide` : offlineNote)
+      toast.success(online ? t('money.releaseRequested', { name: clientName }) : offlineNote)
       setReleaseTarget(null)
-    } else toast.error('Could not request release — evidence may be missing')
+    } else toast.error(t('money.releaseFailed'))
   }
 
   async function decideMilestone(m: MilestoneRow, decision: 'approve' | 'reject') {
@@ -366,30 +366,30 @@ export function MoneyTab() {
     }, `Milestone ${decision}: ${m.name}`)
     if (ok) {
       toast.success(decision === 'approve'
-        ? `${formatKES(m.amount)} released to contractor`
-        : `Release rejected — "${m.name}"`)
+        ? t('money.milestoneApproved', { amount: formatKES(m.amount) })
+        : t('money.milestoneRejected', { name: m.name }))
       setRejectTarget(null); setRejectNote('')
       setApproveConfirm(null)
     } else {
       toast.error(decision === 'approve'
-        ? 'Could not approve — check the escrow balance'
-        : 'Could not record the rejection')
+        ? t('money.approveFailed')
+        : t('money.rejectFailed'))
     }
   }
 
   async function submitVariation() {
     const amount = Number(vAmount)
-    if (!vTitle.trim() || !vDesc.trim()) { toast.error('Title and description are required'); return }
-    if (!vAmount || Number.isNaN(amount) || amount <= 0) { toast.error('Enter the budget impact amount'); return }
+    if (!vTitle.trim() || !vDesc.trim()) { toast.error(t('money.error.varFields')); return }
+    if (!vAmount || Number.isNaN(amount) || amount <= 0) { toast.error(t('money.error.varAmount')); return }
     const budgetImpact = vSign * amount
     const ok = await dispatch('variation.submit', {
       title: vTitle.trim(), description: vDesc.trim(), budgetImpact,
       phaseId: vPhase === 'none' ? undefined : vPhase,
     }, `Variation: ${vTitle.trim()}`)
     if (ok) {
-      toast.success(online ? `Variation submitted — awaiting ${clientName}` : offlineNote)
+      toast.success(online ? t('money.variationSubmitted', { name: clientName }) : offlineNote)
       setVOpen(false); setVTitle(''); setVDesc(''); setVAmount(''); setVPhase('none')
-    } else toast.error('Could not submit variation')
+    } else toast.error(t('money.variationFailed'))
   }
 
   async function decideVariation(v: VariationRow, decision: 'approve' | 'reject') {
@@ -398,20 +398,20 @@ export function MoneyTab() {
     }, `Variation ${decision}: ${v.title}`)
     if (ok) {
       toast.success(decision === 'approve'
-        ? `Budget ${v.budgetImpact >= 0 ? 'increased' : 'reduced'} by ${formatKES(Math.abs(v.budgetImpact))}`
-        : `Variation rejected — "${v.title}"`)
+        ? (v.budgetImpact >= 0 ? t('money.variationIncreased', { amount: formatKES(Math.abs(v.budgetImpact)) }) : t('money.variationReduced', { amount: formatKES(Math.abs(v.budgetImpact)) }))
+        : t('money.variationRejected', { title: v.title }))
       setRejectTarget(null); setRejectNote('')
       setApproveConfirm(null)
-    } else toast.error('Could not record the decision')
+    } else toast.error(t('money.decisionFailed'))
   }
 
   // ---------------- payment request handlers (F-MONEY) ----------------
 
   async function createPaymentRequest() {
     const amount = Number(prAmount)
-    if (!prDesc.trim()) { toast.error('Describe what the payment is for'); return }
-    if (!prAmount || Number.isNaN(amount) || amount <= 0) { toast.error('Payment request amount must be greater than zero'); return }
-    if (!prPayee.trim()) { toast.error('Who gets paid? (payee)'); return }
+    if (!prDesc.trim()) { toast.error(t('money.error.prDesc')); return }
+    if (!prAmount || Number.isNaN(amount) || amount <= 0) { toast.error(t('money.error.prAmount')); return }
+    if (!prPayee.trim()) { toast.error(t('money.error.prPayee')); return }
     const related: { relatedEntityType?: string; relatedEntityId?: string } = {}
     if (prLink !== 'none') {
       const [kind, id] = prLink.split(':')
@@ -422,9 +422,9 @@ export function MoneyTab() {
       description: prDesc.trim(), amount, payee: prPayee.trim(), method: prMethod, ...related,
     }, `Payment request: ${formatKES(amount)} to ${prPayee.trim()}`)
     if (ok) {
-      toast.success(online ? `Payment request submitted — awaiting approval` : offlineNote)
+      toast.success(online ? t('money.prSubmitted') : offlineNote)
       setPrOpen(false); setPrDesc(''); setPrAmount(''); setPrPayee(''); setPrMethod('mpesa'); setPrLink('none')
-    } else toast.error('Could not create the payment request')
+    } else toast.error(t('money.prFailed'))
   }
 
   async function decidePaymentRequest(pr: PaymentRequestRow, decision: 'approve' | 'reject', note?: string) {
@@ -433,12 +433,12 @@ export function MoneyTab() {
     }, `Payment request ${decision}: ${pr.requestCode}`)
     if (ok) {
       toast.success(decision === 'approve'
-        ? `${pr.requestCode} approved — ${formatKES(pr.amount)} ready to pay`
-        : `${pr.requestCode} rejected — the requester can revise and re-submit`)
+        ? t('money.prApproved', { code: pr.requestCode, amount: formatKES(pr.amount) })
+        : t('money.prRejected', { code: pr.requestCode }))
       setPrReject(null); setPrNote('')
       setPrApprove(null)
     } else {
-      toast.error('Could not record the decision — the server blocked it (role or status)')
+      toast.error(t('money.prDecisionFailed'))
     }
   }
 
@@ -503,7 +503,7 @@ export function MoneyTab() {
     // Money action — online only; the fresh payload after dispatch carries the
     // ledger ref for the honest toast.
     if (!online) {
-      toast.error('Payments need a connection — money actions are online-only')
+      toast.error(t('money.payNeedsOnline'))
       return
     }
     const ok = await dispatch('payment.pay', { id: pr.id }, `Pay ${pr.requestCode}`)
@@ -511,10 +511,10 @@ export function MoneyTab() {
       const fresh = useMjengo.getState().data?.finance?.paymentRequests.find((p) => p.id === pr.id)
       const ledgerRef = fresh?.ledgerRef
       toast.success(ledgerRef
-        ? `${pr.requestCode} paid — ${formatKES(pr.amount)} to ${pr.payee} recorded (ledger ${ledgerRef})`
-        : `${pr.requestCode} paid — ${formatKES(pr.amount)} to ${pr.payee} recorded in the ledger`)
+        ? t('money.prPaidRef', { code: pr.requestCode, amount: formatKES(pr.amount), payee: pr.payee, ref: ledgerRef })
+        : t('money.prPaid', { code: pr.requestCode, amount: formatKES(pr.amount), payee: pr.payee }))
     } else {
-      toast.error('Payment was not recorded — the server blocked it (approval, role or escrow balance)')
+      toast.error(t('money.payBlocked'))
     }
   }
 

@@ -7,20 +7,31 @@
  * fail the build when:
  *   · a key is added to one dictionary and forgotten in the other;
  *   · a component calls t() with a literal key no dictionary knows
- *     (sampled: settings-tab — the biggest consumer — plus the nav surface);
+ *     (sampled: settings-tab — the biggest consumer — plus the nav surface,
+ *     and the W7 field-surface files: use-mjengo, sync-outbox-panel,
+ *     materials/fundis/money/share — issue #79);
  *   · the canonical TAB_META navigation labels drift from the dicts (a
- *     missing tab label renders a raw key string in the navbar).
+ *     missing tab label renders a raw key string in the navbar);
+ *   · the {var} placeholder SET of a key drifts between en and sw (a
+ *     translation that drops {name} would render the literal "{name}");
+ *   · a W7 field-surface file regresses to a raw English toast literal
+ *     instead of a t() call (the "no English toast on the field path"
+ *     acceptance of issue #79).
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { enDict } from '@/frontend/i18n/dicts/en'
 import { swDict } from '@/frontend/i18n/dicts/sw'
+import { translate } from '@/frontend/i18n/provider'
 import { TAB_META } from '@/frontend/mjengo/nav/tab-meta'
 import { ALL_TABS, KNOWN_ROLES, ROLE_LABELS } from '@/shared/permissions'
 
 const enKeys = new Set(Object.keys(enDict))
 const swKeys = new Set(Object.keys(swDict))
+
+const readSrc = (rel: string) =>
+  readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), 'utf8')
 
 describe('en/sw dictionaries carry the exact same key set', () => {
   it('sw is missing nothing that en has', () => {
@@ -95,5 +106,95 @@ describe('settings tab: every literal t() key resolves in both dictionaries', ()
     }
     expect(enKeys.has('role.unknown')).toBe(true)
     expect(swKeys.has('role.unknown')).toBe(true)
+  })
+})
+
+describe('en/sw values carry the same {var} placeholder set (issue #79)', () => {
+  const placeholders = (s: string) =>
+    [...String(s).matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map((m) => m[1]).sort().join(',')
+
+  it('every key interpolates the same vars in both languages', () => {
+    for (const [k, v] of Object.entries(enDict)) {
+      expect(placeholders(v), `en.${k} placeholder set`).toBe(placeholders(swDict[k]))
+    }
+    for (const [k, v] of Object.entries(swDict)) {
+      expect(placeholders(v), `sw.${k} placeholder set`).toBe(placeholders(enDict[k]))
+    }
+  })
+})
+
+describe('W7 field surface (issue #79): every literal t() key resolves in both dictionaries', () => {
+  // use-mjengo.ts uses a store-level t() (locale read imperatively) — the
+  // literal-key sampling below covers it like any component.
+  const FIELD_SURFACE_FILES = [
+    'src/frontend/hooks/use-mjengo.ts',
+    'src/frontend/mjengo/sync-outbox-panel.tsx',
+    'src/frontend/mjengo/materials-tab.tsx',
+    'src/frontend/mjengo/fundis-tab.tsx',
+    'src/frontend/mjengo/share-dialog.tsx',
+    'src/frontend/mjengo/money-tab.tsx',
+  ] as const
+
+  const literalKeysIn = (src: string) => [
+    ...src.matchAll(/\bt\(\s*'([a-zA-Z0-9_.]+)'/g),
+    ...src.matchAll(/\bt\(\s*"([a-zA-Z0-9_.]+)"/g),
+  ].map((m) => m[1])
+
+  it('the samples actually found keys (guard against a silent regex drift)', () => {
+    for (const file of FIELD_SURFACE_FILES) {
+      const keys = literalKeysIn(readSrc(file))
+      expect(keys.length, `${file} sampled no t() keys`).toBeGreaterThan(4)
+    }
+  })
+
+  it('every sampled key exists in both dictionaries', () => {
+    for (const file of FIELD_SURFACE_FILES) {
+      for (const key of new Set(literalKeysIn(readSrc(file)))) {
+        expect(enKeys.has(key), `en.ts is missing "${key}" (used by ${file})`).toBe(true)
+        expect(swKeys.has(key), `sw.ts is missing "${key}" (used by ${file})`).toBe(true)
+      }
+    }
+  })
+})
+
+describe('W7 field surface (issue #79): no raw English toast literals on the field path', () => {
+  // A toast whose first argument starts with a quote is a raw string; a
+  // template literal is tolerated ONLY when it starts with ${t( (the
+  // aiReview.runFailed pattern). Variable/server passthroughs (json.error,
+  // msg, ternaries around t()) are fine by construction.
+  const RAW_TOAST = /toast\.(?:success|error|info|warning)\(\s*(?:['"]|`(?!\$\{t\())/g
+
+  it('component files render every toast through t()', () => {
+    const files = [
+      'src/frontend/mjengo/sync-outbox-panel.tsx',
+      'src/frontend/mjengo/materials-tab.tsx',
+      'src/frontend/mjengo/fundis-tab.tsx',
+      'src/frontend/mjengo/share-dialog.tsx',
+      'src/frontend/mjengo/money-tab.tsx',
+    ]
+    for (const file of files) {
+      const offending = [...readSrc(file).matchAll(RAW_TOAST)].map(() => file)
+      expect(offending, `${file} still fires raw-literal toasts`).toEqual([])
+    }
+  })
+
+  it('the W7 sync/dispatch toasts exist in both dictionaries (use-mjengo store-level t())', () => {
+    const src = readSrc('src/frontend/hooks/use-mjengo.ts')
+    for (const key of [
+      'sync.backOnlineDraining', 'sync.backOnlineConflicts', 'sync.backOnline',
+      'sync.doneConflicts', 'sync.doneFailed', 'sync.doneOk', 'sync.retrying',
+      'sync.readOnlyClient',
+    ]) {
+      expect(src.includes(`t('${key}'`), `use-mjengo.ts no longer uses ${key}`).toBe(true)
+      expect(enKeys.has(key), `en.ts is missing "${key}"`).toBe(true)
+      expect(swKeys.has(key), `sw.ts is missing "${key}"`).toBe(true)
+    }
+  })
+
+  it('interpolates {vars} through the real translate() in both languages', () => {
+    expect(translate(enDict, 'field.savedQueued', { count: 2 })).toBe('Saved on-device — queued (2)')
+    expect(translate(swDict, 'field.savedQueued', { count: 2 })).toBe('Imehifadhiwa kwenye kifaa — (2) zinangojea kusawazishwa')
+    expect(translate(enDict, 'sync.serverRefused', { reason: 'stale version' })).toBe('Server refused: stale version')
+    expect(translate(swDict, 'sync.serverRefused', { reason: 'toleo la zamani' })).toBe('Seva imekataa: toleo la zamani')
   })
 })
