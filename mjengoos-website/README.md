@@ -34,9 +34,16 @@ manifest serving 500s).
 Production build (uses the repo-standard standalone flow):
 
 ```bash
-bun run build          # next build
+bun run build          # next build (emits .next/ + .next/standalone/)
 bun run start          # next start -p 3001
 ```
+
+> `next build` emits `.next/standalone/` (the Docker runner ships exactly
+> that — `node server.js`). Starting with `next start` prints Next's
+> `"next start" does not work with "output: standalone"` warning — expected
+> and benign here: the full `.next/` build output is still produced and
+> served (verified: all routes 200). The warning is advisory for setups that
+> rely on the traced-only output.
 
 Quality gates:
 
@@ -152,6 +159,29 @@ bun run start   # port 3001 — front with nginx/Caddy/CDN as desired
 
 Set `NEXT_PUBLIC_SITE_URL` to the public origin and `NEXT_PUBLIC_APP_URL`
 to the app's public origin (e.g. `https://app.mjengoos.com`).
+
+### Docker
+
+The site ships its own multi-stage image — the same conventions as the root
+app's `Dockerfile` (full contract in the root `DEPLOYMENT.md` §6.5): a
+bun-install deps stage, a `next build` stage where `NEXT_PUBLIC_BASE_PATH` /
+`NEXT_PUBLIC_APP_URL` are **build ARGs** (defaulting to the integrated mode
+`/website` + `/`), and a `node:20-slim` non-root runner on port 3001 that
+serves the standalone output (`node server.js`).
+
+```bash
+docker build -t mjengoos-website .
+docker run -d -p 3001:3001 mjengoos-website    # → http://localhost:3001/website
+# standalone-domain build instead (no basePath, "Sign in" → app origin):
+docker build -t mjengoos-website \
+  --build-arg NEXT_PUBLIC_BASE_PATH= \
+  --build-arg NEXT_PUBLIC_APP_URL=https://app.mjengoos.com .
+```
+
+Under the repo's `docker-compose.yml` the site runs as the `website` service:
+internal port 3001 only, reached through the web app's `/website/*` rewrite
+(`WEBSITE_ORIGIN=http://website:3001`), with its own healthcheck and a
+`website-data` volume for contact-form submissions.
 
 ---
 

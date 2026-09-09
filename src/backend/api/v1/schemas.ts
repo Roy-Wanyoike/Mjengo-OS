@@ -178,6 +178,89 @@ export const walletScopedQuery = z.strictObject({
   projectId: projectIdRef.optional(),
 })
 
+// ---------------------------------------------------------------- Phase B (projects + supply)
+
+/** Free-text search (?q=) — trimmed, non-empty, ≤ 100 chars. */
+export const searchText = z
+  .string('q must be a string')
+  .trim()
+  .min(1, 'q must not be empty')
+  .max(100, 'q must be at most 100 characters')
+
+/**
+ * Project status filter. The column is a free-form string, but the three
+ * values below are the only ones the app writes today ('active' is the
+ * schema default) — any other stored value stays visible unfiltered and
+ * simply never matches a filter.
+ */
+export const projectStatusFilter = z.enum(['active', 'completed', 'on_hold'], {
+  error: 'status must be one of active, completed, on_hold',
+})
+
+/** Task status filter (the four documented Task.status values). */
+export const taskStatusFilter = z.enum(['pending', 'in_progress', 'done', 'blocked'], {
+  error: 'status must be one of pending, in_progress, done, blocked',
+})
+
+/** PurchaseOrder status filter (supply/types.ts OrderStatus, 9 values). */
+export const orderStatusFilter = z.enum(
+  [
+    'draft', 'pending_approval', 'approved', 'sent', 'confirmed',
+    'delivering', 'delivered', 'closed', 'cancelled',
+  ],
+  {
+    error:
+      'status must be one of draft, pending_approval, approved, sent, confirmed, delivering, delivered, closed, cancelled',
+  },
+)
+
+/** OrderDelivery status filter (the model comment's documented set). */
+export const deliveryStatusFilter = z.enum(
+  ['dispatched', 'in_transit', 'arrived', 'received', 'discrepancy'],
+  { error: 'status must be one of dispatched, in_transit, arrived, received, discrepancy' },
+)
+
+/** PurchaseOrder id OR orderCode — both are 2-40 chars of [A-Za-z0-9_-]. */
+export const orderRef = z
+  .string('order reference must be a string')
+  .regex(/^[A-Za-z0-9_-]{2,40}$/, 'order reference must be 2-40 characters (order id or code, e.g. PO-2026-000012)')
+
+/** GET /api/v1/projects query (?q= search + ?status= filter + pagination). */
+export const projectsListQuery = z.strictObject({
+  q: searchText.optional(),
+  status: projectStatusFilter.optional(),
+  ...listQuery,
+})
+
+/** GET /api/v1/projects/:id — no query params (unknown keys rejected). */
+export const projectDetailQuery = z.strictObject({})
+
+/** GET /api/v1/projects/:id/tasks query. */
+export const projectTasksQuery = z.strictObject({
+  status: taskStatusFilter.optional(),
+  ...listQuery,
+})
+
+/** GET /api/v1/projects/:id/deliveries query. */
+export const projectDeliveriesQuery = z.strictObject({
+  status: deliveryStatusFilter.optional(),
+  ...listQuery,
+})
+
+/**
+ * GET /api/v1/supply/orders query. projectId is REQUIRED — the Finder
+ * surface is project-scoped (mirrors /api/reports/budget-variance's
+ * no-default-project-guessing rule).
+ */
+export const supplyOrdersQuery = z.strictObject({
+  projectId: projectIdRef,
+  status: orderStatusFilter.optional(),
+  ...listQuery,
+})
+
+/** GET /api/v1/supply/orders/:id — no query params (unknown keys rejected). */
+export const supplyOrderDetailQuery = z.strictObject({})
+
 // ---------------------------------------------------------------- parse helpers
 
 export type Parsed<T> = { ok: true; data: T } | { ok: false; response: NextResponse }

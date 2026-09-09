@@ -44,7 +44,14 @@ export async function loadSupplySlice(projectId: string): Promise<SupplySlice> {
         lines: true,
         supplier: true,
         request: true,
-        deliveries: { include: { lines: true }, orderBy: { createdAt: 'desc' } },
+        // Evidence photos replay with the delivery (issue "Photo attachments
+        // on delivery verification"): the join row carries the line scope
+        // (deliveryLineId — the discrepancy evidence), the Attachment row
+        // carries storageKey (the URL the UI renders, same as site photos).
+        deliveries: {
+          include: { lines: true, photos: { include: { attachment: true }, orderBy: { createdAt: 'asc' } } },
+          orderBy: { createdAt: 'desc' },
+        },
       },
     }),
     db.savedSupplier.findMany({
