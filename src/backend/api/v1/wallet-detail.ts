@@ -2,6 +2,7 @@ import { FINANCE_ROLES } from '@/backend/lib/guard'
 import { route } from '@/backend/lib/route-kit'
 import { walletWithBalance } from '@/backend/modules/wallet/service'
 import { jsonOk } from '@/backend/modules/wallet/http'
+import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { validateQuery, walletRef, walletScopedQuery } from './schemas'
 import { mapServiceError, v1Err, V1_READ_LIMIT } from './respond'
 
@@ -18,6 +19,9 @@ type Ctx = { params: Promise<{ id: string }> }
  * like W-0001 are a documented lookup path, so a strict 20-40 cuid rule
  * would reject them); unknown wallet → 404 (was a catch-all 404 before —
  * now only the not-found family maps to 404, business errors 400).
+ *
+ * Feature flag (spec §81, task 9-a): gated by `wallet` — OFF → 403 for
+ * non-admin sessions (admins bypass; see flags.ts).
  */
 export const GET = route(
   {
@@ -26,7 +30,11 @@ export const GET = route(
     rateLimit: { bucket: 'v1.wallet.get', limit: V1_READ_LIMIT, windowMs: 60_000 },
     onError: (e) => mapServiceError('wallets/:id GET', e, 'Wallet not found'),
   },
-  async (req, _session, _body, ctx: Ctx) => {
+  async (req, session, _body, ctx: Ctx) => {
+    // Feature flag (spec §81, task 9-a) — the uniform wallet gate.
+    const flagDenied = await requireFlagOn('wallet', session)
+    if (flagDenied) return flagDenied
+
     const { id } = await ctx.params
     const idRef = walletRef.safeParse(id)
     if (!idRef.success) return v1Err(400, idRef.error.issues[0].message, 'id')

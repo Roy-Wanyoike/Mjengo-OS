@@ -49,3 +49,53 @@ export function metaFor(key: TabKey): TabMeta {
 export function metaForAll(keys: readonly TabKey[]): TabMeta[] {
   return keys.map(metaFor)
 }
+
+// ---------------- feature-flag tab gating (spec §81, task 9-a) ----------------
+
+/**
+ * Flag key → the tab whose ENTRY it gates. Mirrors the server-side map in
+ * src/backend/modules/intel/flags.ts (the per-flag enforcement table) — keep
+ * the two in sync. `land_verification` is NOT here: the Land tab hosts the
+ * professionals directory too (a separate module with no flag), so that flag
+ * gates the parcels SECTION inside the tab (see land-tab.tsx), not the tab.
+ */
+export const FLAG_GATED_TABS: Readonly<Record<string, TabKey>> = {
+  wallet: 'money',
+  marketplace: 'finder',
+}
+
+/**
+ * Client mirror of the server gate (requireFlagOn in modules/intel/flags.ts):
+ * a flag OFF hides its feature's entry for NON-ADMIN sessions — admins bypass
+ * on both sides (their routes pass AND their entries stay visible) so they
+ * can toggle & test. `flags` is the payload's intel.flags map; undefined =
+ * flags not loaded yet → treated as ON, matching the pre-existing
+ * ai_progress pattern (`flags?.x !== false`).
+ */
+export function flagOnFor(
+  flags: Record<string, boolean> | null | undefined,
+  key: string,
+  role: string | null | undefined,
+): boolean {
+  if (role === 'admin') return true
+  return flags?.[key] !== false
+}
+
+/**
+ * Filter a role's tab list by the flag-gated entries (order preserved). Used
+ * by all three navigation surfaces — app.tsx (active-tab snapping + tab
+ * events), header.tsx (desktop strip) and mobile/nav (bottom bar) — so a
+ * hidden tab is hidden everywhere and a stale active tab snaps to the
+ * role's landing tab.
+ */
+export function tabsVisibleForFlags(
+  tabs: readonly TabKey[],
+  flags: Record<string, boolean> | null | undefined,
+  role: string | null | undefined,
+): readonly TabKey[] {
+  if (!flags) return tabs
+  return tabs.filter((key) => {
+    const gated = Object.entries(FLAG_GATED_TABS).find(([, tab]) => tab === key)
+    return !gated || flagOnFor(flags, gated[0], role)
+  })
+}
