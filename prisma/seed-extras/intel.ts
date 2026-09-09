@@ -38,14 +38,15 @@ export async function seedIntel(db: PrismaClient): Promise<void> {
 
   // ---------------- feature flags (spec §81 — F-INSIGHT) ----------------
   // The runtime also creates these lazily (modules/intel/flags.ts ensureRows),
-  // so this is a belt-and-braces seed: 6 keys, all enabled by default.
+  // so this is a belt-and-braces seed: 5 keys, all enabled by default.
+  // Keep in sync with FLAG_KEYS (low_data was removed — task 9-a decision,
+  // see the flags.ts header).
   const FLAG_SEED: Array<{ key: string; description: string }> = [
     { key: 'ai_progress', description: 'AI progress (photo analysis)' },
     { key: 'ai_voice', description: 'AI voice logging' },
     { key: 'wallet', description: 'Wallet & payment requests' },
     { key: 'marketplace', description: 'Supplier marketplace (Finder)' },
     { key: 'land_verification', description: 'Land verification ladder' },
-    { key: 'low_data', description: 'Low-data mode option' },
   ]
   for (const f of FLAG_SEED) {
     await db.featureFlag.upsert({ where: { key: f.key }, create: { ...f, enabled: true }, update: {} })
