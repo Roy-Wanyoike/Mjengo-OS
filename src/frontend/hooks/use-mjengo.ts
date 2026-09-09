@@ -3,7 +3,21 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { toast } from 'sonner'
+import { useLocalePrefs } from '@/frontend/i18n/store'
+import { translate } from '@/frontend/i18n/provider'
+import { enDict } from '@/frontend/i18n/dicts/en'
+import { swDict } from '@/frontend/i18n/dicts/sw'
 import type { ProjectPayload, ProjectListItem, ActionType, WorkerWithAttendance } from '@/backend/lib/mjengo'
+
+/**
+ * Toast-time translator (W7 · issue #79 — sync/dispatch toasts). This zustand
+ * store lives OUTSIDE React render, so the useT() hook can't be used here;
+ * instead the locale is read imperatively from the i18n prefs store at
+ * call time (same {var} interpolation as useT — see provider.translate).
+ * Toast strings only — another wave owns the dispatch logic itself.
+ */
+const t = (key: string, vars?: Record<string, string | number>): string =>
+  translate(useLocalePrefs.getState().language === 'sw' ? swDict : enDict, key, vars)
 
 /** Per-item sync lifecycle (spec §40): pending → syncing → synced | failed | conflict. */
 export type OutboxSyncStatus = 'pending' | 'syncing' | 'synced' | 'failed' | 'conflict'
@@ -684,13 +698,13 @@ export const useMjengo = create<MjengoState>()(
         if (v && !wasOnline) {
           if (pendingCount > 0) {
             // Real reconnection (or ending a simulated-offline run): drain the queue.
-            toast.success('Back online — syncing queued actions')
+            toast.success(t('sync.backOnlineDraining'))
             void get().syncNow()
           } else if (conflictCount > 0) {
             // Nothing queued, but unresolved conflicts still need a human decision (§41).
-            toast.info(`Back online — ${conflictCount} sync conflict${conflictCount > 1 ? 's' : ''} still need${conflictCount > 1 ? '' : 's'} your decision`)
+            toast.info(t('sync.backOnlineConflicts', { count: conflictCount }))
           } else {
-            toast.success('Back online')
+            toast.success(t('sync.backOnline'))
           }
         }
       },
@@ -743,7 +757,7 @@ export const useMjengo = create<MjengoState>()(
           }
         }
         if (viewMode === 'client') {
-          toast.info('Read-only client view — site data is managed by the site team')
+          toast.info(t('sync.readOnlyClient'))
           return false
         }
         const { online } = get()
@@ -865,12 +879,12 @@ export const useMjengo = create<MjengoState>()(
             })
             if (conflicts > 0) {
               toast.warning(
-                `Synced ${synced} of ${results.length} — ${conflicts} conflict${conflicts > 1 ? 's' : ''} need${conflicts > 1 ? '' : 's'} your decision (server data differs)`,
+                t('sync.doneConflicts', { synced, total: results.length, conflicts }),
               )
             } else if (failed > 0) {
-              toast.error(`Synced ${synced}, ${failed} failed — retry them from the sync controls`)
+              toast.error(t('sync.doneFailed', { synced, failed }))
             } else if (synced > 0) {
-              toast.success(`Synced ${synced} action${synced > 1 ? 's' : ''}`)
+              toast.success(t('sync.doneOk', { count: synced }))
             }
             return { synced, failed, conflicts }
           }
@@ -898,7 +912,7 @@ export const useMjengo = create<MjengoState>()(
       resolveConflict: async (id, choice) => {
         const item = get().outbox.find((o) => o.id === id)
         if (!item || item.syncStatus !== 'conflict') {
-          toast.error('That item is not an unresolved conflict')
+          toast.error(t('sync.notUnresolved'))
           return false
         }
         if (choice === 'keep-server') {
@@ -909,11 +923,11 @@ export const useMjengo = create<MjengoState>()(
           })
           // Reload server truth so the local optimistic write is visibly undone.
           await get().load()
-          toast.success(`Kept the server version — "${item.label}" discarded (reason kept in sync history)`)
+          toast.success(t('sync.keptServer', { label: item.label }))
           return true
         }
         // keep-mine: force one honest re-apply of the local version.
-        if (get().syncing) { toast.info('A sync is running — try again in a moment'); return false }
+        if (get().syncing) { toast.info(t('sync.syncRunning')); return false }
         set({ syncing: true })
         try {
           const res = await fetch('/api/sync', {
@@ -934,20 +948,20 @@ export const useMjengo = create<MjengoState>()(
               projects: (json.projects ?? get().projects) as ProjectListItem[],
               lastSyncAt: Date.now(),
             })
-            toast.success(`Your version was applied — "${item.label}"`)
+            toast.success(t('sync.keptMine', { label: item.label }))
             return true
           }
           if (json?.ok && r && 'conflict' in r) {
             // Deterministic refusal (financial rows: server always wins). Stays a conflict.
             set({ outbox: get().outbox.map((o) => (o.id === id ? { ...o, conflictReason: r.reason } : o)) })
-            toast.error(`Server refused: ${r.reason}`)
+            toast.error(t('sync.serverRefused', { reason: r.reason }))
             return false
           }
-          const msg = r && 'error' in r ? r.error : (json?.error ?? 'Could not apply your version')
+          const msg = r && 'error' in r ? r.error : (json?.error ?? t('sync.applyFailed'))
           toast.error(msg)
           return false
         } catch {
-          toast.error('Network error — resolve again when online')
+          toast.error(t('sync.resolveNetwork'))
           return false
         } finally {
           set({ syncing: false })
@@ -957,9 +971,9 @@ export const useMjengo = create<MjengoState>()(
       /** One manual retry pass for hard-failed items — no auto-retry loops. */
       retryAll: () => {
         const failed = get().outbox.filter((o) => o.syncStatus === 'failed')
-        if (!failed.length) { toast.info('Nothing failed is waiting to retry'); return }
+        if (!failed.length) { toast.info(t('sync.nothingFailed')); return }
         set({ outbox: get().outbox.map((o) => (o.syncStatus === 'failed' ? { ...o, syncStatus: 'pending' as const } : o)) })
-        toast.success(`Retrying ${failed.length} failed action${failed.length > 1 ? 's' : ''} — one attempt, no loops`)
+        toast.success(t('sync.retrying', { count: failed.length }))
         void get().syncNow()
       },
     }),

@@ -28,6 +28,8 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, timeEAT, dateShort } from '@/frontend/lib/format'
+import { useT } from '@/frontend/i18n/provider'
+import type { TranslateFn } from '@/frontend/i18n/types'
 
 // ---------------- shared bits ----------------
 
@@ -47,8 +49,13 @@ const EXCEPTION_REASONS: Array<{ value: string; label: string }> = [
   { value: 'other', label: 'Other' },
 ]
 
-function reasonLabel(v?: string | null): string {
-  return EXCEPTION_REASONS.find((r) => r.value === v)?.label ?? (v || 'Exception')
+function reasonLabel(v?: string | null, t?: TranslateFn): string {
+  const r = EXCEPTION_REASONS.find((r) => r.value === v)
+  // With a translator (W7 · issue #79) the reason renders in the active
+  // locale where it reaches users — toasts + the exception dialog; the bare
+  // English label remains the fallback for badge/table call sites.
+  if (r && t) return t(`fundis.exc.${r.value}`)
+  return r?.label ?? (v || 'Exception')
 }
 
 /** EAT "today" — mirrors the server's todayStr() so lookups match todayStatus. */
@@ -207,6 +214,7 @@ interface PayrollResult {
 
 export function FundisTab() {
   const { data, dispatch, online, outbox, viewMode, load } = useMjengo()
+  const t = useT()
   const [addOpen, setAddOpen] = useState(false)
   const [addBusy, setAddBusy] = useState(false)
   const [editWorker, setEditWorker] = useState<EditWorkerData | null>(null)
@@ -252,14 +260,16 @@ export function FundisTab() {
 
   async function checkIn(workerId: string, workerName: string) {
     const ok = await dispatch('attendance.checkin', { workerId, toggle: 'in', method: 'app' }, `Check in ${workerName}`)
-    if (ok) toast.success(online ? `${workerName} checked in — evidence level recorded on the attendance row` : `Checked in on-device — queued (${outbox.length})`)
-    else toast.error('Check-in failed')
+    if (ok) toast.success(online
+      ? t('fundis.checkinOk', { name: workerName })
+      : t('fundis.checkinQueued', { count: outbox.length }))
+    else toast.error(t('fundis.checkinFailed'))
   }
 
   async function checkOut(workerId: string, workerName: string) {
     const ok = await dispatch('attendance.checkin', { workerId, toggle: 'out' }, `Check out ${workerName}`)
-    if (ok) toast.success(`${workerName} checked out`)
-    else toast.error('Check-out failed')
+    if (ok) toast.success(t('fundis.checkoutOk', { name: workerName }))
+    else toast.error(t('fundis.checkoutFailed'))
   }
 
   /** Status edits go through the override flow (reason required, history preserved). */
@@ -281,11 +291,11 @@ export function FundisTab() {
         ? await dispatch('attendance.override', { id: attId, to, reason, by: 'Site Manager' }, `${worker.name} → ${STATUS_LABELS[to]}`)
         : await dispatch('attendance.record', { records: JSON.stringify([{ workerId: worker.id, status: to }]), verification: 'reported', recordedBy: 'Site Manager' }, `Record ${worker.name} ${STATUS_LABELS[to]}`)
       if (ok) {
-        toast.success(`${worker.name}: ${STATUS_LABELS[to]} — override logged`)
+        toast.success(t('fundis.overrideOk', { name: worker.name, status: STATUS_LABELS[to] }))
         setOverrideFor(null)
         setOverrideReason('')
       } else {
-        toast.error('Override failed')
+        toast.error(t('fundis.overrideFailed'))
       }
     } finally {
       setOverrideBusy(false)
@@ -303,10 +313,10 @@ export function FundisTab() {
         'Save daily muster',
       )
       if (ok) {
-        toast.success(`Muster saved — ${records.length} crew records (manager-reported)`)
+        toast.success(t('fundis.musterSaved', { count: records.length }))
         setMusterOpen(false)
       } else {
-        toast.error('Muster save failed')
+        toast.error(t('fundis.musterFailed'))
       }
     } finally {
       setMusterBusy(false)
@@ -323,12 +333,12 @@ export function FundisTab() {
         `Log exception for ${exceptionFor.name}`,
       )
       if (ok) {
-        toast.success(`Exception logged — ${exceptionFor.name} (${reasonLabel(exReason)})`)
+        toast.success(t('fundis.exceptionLogged', { name: exceptionFor.name, reason: reasonLabel(exReason, t) }))
         setExceptionFor(null)
         setExReason('')
         setExNote('')
       } else {
-        toast.error('Could not log exception')
+        toast.error(t('fundis.exceptionFailed'))
       }
     } finally {
       setExBusy(false)
@@ -344,7 +354,7 @@ export function FundisTab() {
   async function runPayroll(force = false) {
     if (!data) return
     if (!online) {
-      toast.error('Payroll needs a connection — money actions are online-only')
+      toast.error(t('fundis.payrollNeedsOnline'))
       return
     }
     setPayrollBusy(true)
@@ -357,7 +367,7 @@ export function FundisTab() {
       })
       const json = await res.json()
       if (!json.ok) {
-        toast.error(json.error ?? 'Payroll failed')
+        toast.error(json.error ?? t('fundis.payrollFailed'))
         return
       }
       const result = json.result as PayrollResult
@@ -366,15 +376,19 @@ export function FundisTab() {
       } else if ((result.paid ?? 0) > 0) {
         toast.success(
           result.forced
-            ? `Payroll forced through — ${result.paid} fundis paid ${formatKES(result.amount)} (exceptions stay on record; ledger ${result.ledgerRef ?? '—'})`
-            : `Paid ${result.paid} fundis — ${formatKES(result.amount)} recorded on the ledger${result.ledgerRef ? ` (${result.ledgerRef})` : ''} (simulated rails)`,
+            ? t('fundis.payrollForced', { count: result.paid ?? 0, amount: formatKES(result.amount), ref: result.ledgerRef ?? '—' })
+            : t('fundis.payrollPaid', {
+                count: result.paid ?? 0,
+                amount: formatKES(result.amount),
+                ref: result.ledgerRef ? ` (${result.ledgerRef})` : '',
+              }),
         )
       } else {
-        toast.info('Nothing to pay — no unpaid wages for today')
+        toast.info(t('fundis.nothingToPay'))
       }
       await load()
     } catch {
-      toast.error('Payroll failed — network error')
+      toast.error(t('fundis.payrollNetwork'))
     } finally {
       setPayrollBusy(false)
     }
@@ -403,7 +417,7 @@ export function FundisTab() {
     if (!data) return
     const filename = `${projectFilePrefix(data)}-attendance.csv`
     downloadCSV(filename, attendanceCSV(data))
-    toast.success(`${filename} downloaded`)
+    toast.success(t('field.exported', { file: filename }))
   }
 
   function openEdit(worker: WorkerWithAttendance) {
@@ -736,7 +750,7 @@ export function FundisTab() {
                 </SelectTrigger>
                 <SelectContent>
                   {EXCEPTION_REASONS.map((r) => (
-                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                    <SelectItem key={r.value} value={r.value}>{reasonLabel(r.value, t)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

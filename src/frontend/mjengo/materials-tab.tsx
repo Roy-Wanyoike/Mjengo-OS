@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/fron
 import { Boxes, Truck, PackageMinus, Mic, Camera, Hand, Phone, Plus, PackageSearch, Download, Warehouse, AlertTriangle, ArrowLeftRight, Flame, ClipboardList } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, dateShort } from '@/frontend/lib/format'
+import { useT } from '@/frontend/i18n/provider'
 import { downloadCSV, materialsLedgerCSV, projectFilePrefix } from '@/frontend/mjengo/export-utils'
 import type { InventoryItemRow, StockMovementType } from '@/backend/modules/inventory/types'
 
@@ -26,6 +27,7 @@ function SourceBadge({ source }: { source: string }) {
 
 export function MaterialsTab() {
   const { data, dispatch, online, outbox, viewMode } = useMjengo()
+  const t = useT()
   const [deliveryOpen, setDeliveryOpen] = useState(false)
   const [consumptionOpen, setConsumptionOpen] = useState(false)
   const [materialOpen, setMaterialOpen] = useState(false)
@@ -52,30 +54,30 @@ export function MaterialsTab() {
     if (!data) return
     const filename = `${projectFilePrefix(data)}-materials-ledger.csv`
     downloadCSV(filename, materialsLedgerCSV(data))
-    toast.success(`${filename} downloaded`)
+    toast.success(t('field.exported', { file: filename }))
   }
 
   async function addMaterial() {
     const unitPrice = Number(mPrice)
-    if (!mName.trim() || !mUnit.trim()) { toast.error('Material name and unit are required'); return }
-    if (!mPrice || Number.isNaN(unitPrice) || unitPrice < 0) { toast.error('Unit price must be 0 or more'); return }
+    if (!mName.trim() || !mUnit.trim()) { toast.error(t('mat.error.nameUnit')); return }
+    if (!mPrice || Number.isNaN(unitPrice) || unitPrice < 0) { toast.error(t('mat.error.unitPrice')); return }
     setMaterialBusy(true)
     const ok = await dispatch('material.create', {
       name: mName.trim(), unit: mUnit.trim(), unitPrice,
     }, `Add material ${mName.trim()}`)
     setMaterialBusy(false)
     if (ok) {
-      toast.success(online ? `${mName.trim()} added to the catalog` : `Saved on-device — queued (${outbox.length})`)
+      toast.success(online ? t('mat.materialAdded', { name: mName.trim() }) : t('field.savedQueued', { count: outbox.length }))
       setMaterialOpen(false); setMName(''); setMUnit(''); setMPrice('')
     } else {
-      toast.error('Could not add material — it may already exist')
+      toast.error(t('mat.addFailed'))
     }
   }
 
   async function logDelivery() {
     const m = mat(dMaterial)
     const qty = Number(dQty)
-    if (!m || !qty || qty <= 0) { toast.error('Pick a material and a valid quantity'); return }
+    if (!m || !qty || qty <= 0) { toast.error(t('mat.error.pickQty')); return }
     const ok = await dispatch('delivery.create', {
       materialId: m.id, quantity: qty,
       unitCost: Number(dCost) > 0 ? Number(dCost) : m.unitPrice,
@@ -83,25 +85,25 @@ export function MaterialsTab() {
     }, `Delivery: ${qty} ${m.unit} ${m.name}`)
     if (ok) {
       toast.success(online
-        ? `Logged ${qty} ${m.unit} of ${m.name} + auto M-Pesa entry`
-        : `Saved on-device — queued (${outbox.length})`)
+        ? t('mat.deliveryLogged', { qty, unit: m.unit, name: m.name })
+        : t('field.savedQueued', { count: outbox.length }))
       setDeliveryOpen(false); setDQty(''); setDCost(''); setDSupplier('')
-    } else toast.error('Failed to log delivery')
+    } else toast.error(t('mat.deliveryFailed'))
   }
 
   async function logConsumption() {
     const m = mat(cMaterial)
     const qty = Number(cQty)
-    if (!m || !qty || qty <= 0) { toast.error('Pick a material and a valid quantity'); return }
+    if (!m || !qty || qty <= 0) { toast.error(t('mat.error.pickQty')); return }
     const ok = await dispatch('consumption.create', {
       materialId: m.id, quantity: qty,
       phaseName: data?.phases.find((p) => p.id === cPhase)?.name ?? null,
       note: cNote.trim() || null,
     }, `Used ${qty} ${m.unit} ${m.name}`)
     if (ok) {
-      toast.success(online ? 'Consumption logged' : `Saved on-device — queued (${outbox.length})`)
+      toast.success(online ? t('mat.consumptionLogged') : t('field.savedQueued', { count: outbox.length }))
       setConsumptionOpen(false); setCQty(''); setCNote('')
-    } else toast.error('Failed to log consumption')
+    } else toast.error(t('mat.consumptionFailed'))
   }
 
   return (
@@ -269,7 +271,7 @@ export function MaterialsTab() {
               <div className="space-y-2 col-span-2">
                 <Label>Material</Label>
                 <Select value={dMaterial} onValueChange={(v) => { setDMaterial(v); const m = mat(v); if (m) setDCost(String(m.unitPrice)) }}>
-                  <SelectTrigger><SelectValue placeholder="Choose material" /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder={t('mat.ph.chooseMaterial')} /></SelectTrigger>
                   <SelectContent>
                     {data.materials.map((m) => <SelectItem key={m.id} value={m.id}>{m.name} (KSh {m.unitPrice}/{m.unit})</SelectItem>)}
                   </SelectContent>
@@ -277,7 +279,7 @@ export function MaterialsTab() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="qty">Quantity</Label>
-                <Input id="qty" type="number" min="1" value={dQty} onChange={(e) => setDQty(e.target.value)} placeholder="e.g. 50" />
+                <Input id="qty" type="number" min="1" value={dQty} onChange={(e) => setDQty(e.target.value)} placeholder={t('mat.ph.qty')} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="cost">Unit cost (KSh)</Label>
@@ -285,7 +287,7 @@ export function MaterialsTab() {
               </div>
               <div className="space-y-2 col-span-2">
                 <Label htmlFor="supplier">Supplier</Label>
-                <Input id="supplier" value={dSupplier} onChange={(e) => setDSupplier(e.target.value)} placeholder="e.g. Karioke Hardware" />
+                <Input id="supplier" value={dSupplier} onChange={(e) => setDSupplier(e.target.value)} placeholder={t('mat.ph.supplier')} />
               </div>
             </div>
           </div>
@@ -308,7 +310,7 @@ export function MaterialsTab() {
               <div className="space-y-2 col-span-2">
                 <Label>Material</Label>
                 <Select value={cMaterial} onValueChange={setCMaterial}>
-                  <SelectTrigger><SelectValue placeholder="Choose material" /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder={t('mat.ph.chooseMaterial')} /></SelectTrigger>
                   <SelectContent>
                     {data.materials.map((m) => <SelectItem key={m.id} value={m.id}>{m.name} (on site: {m.onSiteQty})</SelectItem>)}
                   </SelectContent>
@@ -321,7 +323,7 @@ export function MaterialsTab() {
               <div className="space-y-2">
                 <Label>Phase</Label>
                 <Select value={cPhase} onValueChange={setCPhase}>
-                  <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder={t('mat.ph.optional')} /></SelectTrigger>
                   <SelectContent>
                     {data.phases.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
                   </SelectContent>
@@ -329,7 +331,7 @@ export function MaterialsTab() {
               </div>
               <div className="space-y-2 col-span-2">
                 <Label htmlFor="note">Note</Label>
-                <Input id="note" value={cNote} onChange={(e) => setCNote(e.target.value)} placeholder="e.g. Mortar for courses 13-14" />
+                <Input id="note" value={cNote} onChange={(e) => setCNote(e.target.value)} placeholder={t('mat.ph.note')} />
               </div>
             </div>
           </div>
@@ -349,16 +351,16 @@ export function MaterialsTab() {
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
               <Label htmlFor="mname">Material name</Label>
-              <Input id="mname" value={mName} onChange={(e) => setMName(e.target.value)} placeholder="e.g. Binding Wire" />
+              <Input id="mname" value={mName} onChange={(e) => setMName(e.target.value)} placeholder={t('mat.ph.materialName')} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="munit">Unit</Label>
-                <Input id="munit" value={mUnit} onChange={(e) => setMUnit(e.target.value)} placeholder="e.g. kg / bag / tonne" />
+                <Input id="munit" value={mUnit} onChange={(e) => setMUnit(e.target.value)} placeholder={t('mat.ph.unit')} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="mprice">Unit price (KSh)</Label>
-                <Input id="mprice" type="number" min="0" value={mPrice} onChange={(e) => setMPrice(e.target.value)} placeholder="e.g. 250" />
+                <Input id="mprice" type="number" min="0" value={mPrice} onChange={(e) => setMPrice(e.target.value)} placeholder={t('mat.ph.price')} />
               </div>
             </div>
           </div>
@@ -413,6 +415,7 @@ function isLowStock(item: InventoryItemRow): boolean {
 
 function SiteStoreCard() {
   const { data, dispatch, online, outbox, viewMode, actionBusy } = useMjengo()
+  const t = useT()
   const [movementOpen, setMovementOpen] = useState(false)
   const [mType, setMType] = useState('received')
   const [mItem, setMItem] = useState('')
@@ -436,7 +439,7 @@ function SiteStoreCard() {
   const damagedTotal = items.reduce((s, i) => s + i.damagedQty, 0)
   const transfersTotal = movements.filter((m) => m.type === 'transferred_out').length
   const lowCount = items.filter(isLowStock).length
-  const offlineNote = `Saved on-device — queued (${outbox.length})`
+  const offlineNote = t('field.savedQueued', { count: outbox.length })
 
   const lastMovementByItem = new Map<string, { reference: string | null; createdAt: string; type: string }>()
   for (const m of movements) {
@@ -460,10 +463,10 @@ function SiteStoreCard() {
 
   async function recordMovement() {
     const qty = Number(mQty)
-    if (!(qty > 0)) { toast.error('Quantity must be greater than zero'); return }
-    if (isNewLine && !mName.trim()) { toast.error('Material name is required for a new stock line'); return }
-    if (!isNewLine && !selectedItem) { toast.error('Pick a stock line to move'); return }
-    if (mType === 'transfer' && !mTo.trim()) { toast.error('A destination location is required for a transfer'); return }
+    if (!(qty > 0)) { toast.error(t('mat.error.qtyPositive')); return }
+    if (isNewLine && !mName.trim()) { toast.error(t('mat.error.lineName')); return }
+    if (!isNewLine && !selectedItem) { toast.error(t('mat.error.pickLine')); return }
+    if (mType === 'transfer' && !mTo.trim()) { toast.error(t('mat.error.transferDest')); return }
 
     let payload: Record<string, unknown> = { qty }
     let label = ''
@@ -509,10 +512,10 @@ function SiteStoreCard() {
 
     const ok = await dispatch(action, payload, label)
     if (ok) {
-      toast.success(online ? `${label} — Site Store ledger updated` : offlineNote)
+      toast.success(online ? t('mat.movementUpdated', { label }) : offlineNote)
       setMovementOpen(false)
     } else {
-      toast.error('Could not record the movement — check the quantity against closing stock')
+      toast.error(t('mat.movementFailed'))
     }
   }
 
@@ -669,11 +672,11 @@ function SiteStoreCard() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2 col-span-2">
                   <Label htmlFor="ss-material">Material (creates or tops up the stock line)</Label>
-                  <Input id="ss-material" value={mName} onChange={(e) => setMName(e.target.value)} placeholder="e.g. Cement 50kg (32.5N)" />
+                  <Input id="ss-material" value={mName} onChange={(e) => setMName(e.target.value)} placeholder={t('mat.ph.ssMaterial')} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="ss-unit">Unit</Label>
-                  <Input id="ss-unit" value={mUnit} onChange={(e) => setMUnit(e.target.value)} placeholder="bag" />
+                  <Input id="ss-unit" value={mUnit} onChange={(e) => setMUnit(e.target.value)} placeholder={t('mat.ph.ssUnit')} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="ss-loc">Location</Label>
@@ -684,7 +687,7 @@ function SiteStoreCard() {
               <div className="space-y-2">
                 <Label>Stock line</Label>
                 <Select value={mItem} onValueChange={setMItem}>
-                  <SelectTrigger aria-label="Stock line"><SelectValue placeholder="Choose a stock line" /></SelectTrigger>
+                  <SelectTrigger aria-label="Stock line"><SelectValue placeholder={t('mat.ph.chooseStockLine')} /></SelectTrigger>
                   <SelectContent>
                     {items.map((i) => (
                       <SelectItem key={i.id} value={i.id}>
@@ -704,7 +707,7 @@ function SiteStoreCard() {
               {isNewLine && (
                 <div className="space-y-2">
                   <Label htmlFor="ss-cost">Unit cost (KSh)</Label>
-                  <Input id="ss-cost" type="number" min="0" value={mCost} onChange={(e) => setMCost(e.target.value)} placeholder="optional" />
+                  <Input id="ss-cost" type="number" min="0" value={mCost} onChange={(e) => setMCost(e.target.value)} placeholder={t('mat.ph.optionalLower')} />
                 </div>
               )}
             </div>
@@ -712,20 +715,20 @@ function SiteStoreCard() {
             {mType === 'transfer' && (
               <div className="space-y-2">
                 <Label htmlFor="ss-to">To location</Label>
-                <Input id="ss-to" value={mTo} onChange={(e) => setMTo(e.target.value)} placeholder="e.g. Slab store" />
+                <Input id="ss-to" value={mTo} onChange={(e) => setMTo(e.target.value)} placeholder={t('mat.ph.toLocation')} />
               </div>
             )}
             {mType === 'consumed' && (
               <div className="space-y-2">
                 <Label htmlFor="ss-ref">Reference (e.g. phase or work order)</Label>
-                <Input id="ss-ref" value={mRef} onChange={(e) => setMRef(e.target.value)} placeholder="optional" />
+                <Input id="ss-ref" value={mRef} onChange={(e) => setMRef(e.target.value)} placeholder={t('mat.ph.optionalLower')} />
               </div>
             )}
             <div className="space-y-2">
               <Label htmlFor="ss-note">
                 {mType === 'damage' ? 'Damage note' : mType === 'adjust' ? 'Reason' : 'Note'}
               </Label>
-              <Input id="ss-note" value={mNote} onChange={(e) => setMNote(e.target.value)} placeholder={mType === 'damage' ? 'e.g. 4 bags set by rain' : 'optional'} />
+              <Input id="ss-note" value={mNote} onChange={(e) => setMNote(e.target.value)} placeholder={mType === 'damage' ? t('mat.ph.damageNote') : t('mat.ph.optionalLower')} />
             </div>
             {selectedItem && !isNewLine && (
               <p className="text-[11px] text-stone-400">
