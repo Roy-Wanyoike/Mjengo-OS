@@ -101,9 +101,9 @@ cookies, no PII. See `lib/analytics.ts` for the event list.
 ```text
 mjengoos-website/
 ├── app/                  Next.js App Router pages
-│   ├── page.tsx          Homepage — 17 composed sections
+│   ├── page.tsx          Homepage — 19 composed sections
 │   ├── layout.tsx        Root layout: fonts, metadata, navbar/footer, analytics
-│   ├── (14 route dirs)   platform, solutions/[slug], land-verification,
+│   ├── (17 route dirs)   platform, solutions/[slug], land-verification,
 │   │                     professionals, materials, marketplace, wallet, ai,
 │   │                     projects, pricing, about, contact, signup,
 │   │                     resources, security, privacy, terms
