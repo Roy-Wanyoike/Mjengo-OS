@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/terms" },
 };
 
-const LAST_UPDATED = "31 August 2026";
+const LAST_UPDATED = "9 September 2026";
 
 export default function TermsPage() {
   return (
@@ -78,10 +78,12 @@ export default function TermsPage() {
                 MjengoOS is not a bank or financial institution.
               </strong>{" "}
               It does not take deposits, hold client money in escrow, lend, or
-              move funds. The &ldquo;wallet&rdquo; is a ledger: it records
-              commitments, approvals, payments and their references. Money
-              itself moves through your own bank and M-Pesa accounts, between
-              the parties to your project — never through us.
+              move funds today — M-Pesa payment initiation is in sandbox
+              testing, and production transfers are not enabled yet. The
+              &ldquo;wallet&rdquo; is a ledger: it records commitments,
+              approvals, payments and their references. Money itself moves
+              through your own bank and M-Pesa accounts, between the parties
+              to your project — never into our custody.
             </p>
           </LegalSection>
 
@@ -205,15 +207,23 @@ export default function TermsPage() {
                 className="font-medium text-forest-800 underline decoration-forest-800/30 underline-offset-4 hover:decoration-forest-800"
               >
                 contact us
-              </SiteLink>{" "}
-              or{" "}
-              <a
-                href={`mailto:${SITE.contactEmail}`}
-                className="font-medium text-forest-800 underline decoration-forest-800/30 underline-offset-4 hover:decoration-forest-800"
-              >
-                {SITE.contactEmail}
-              </a>
-              .
+              </SiteLink>
+              . The contact form is our primary channel — there is no public
+              MjengoOS mailbox yet, and one will be named here the day it
+              exists.
+              {SITE.contactEmail && (
+                <>
+                  {" "}
+                  You can also write to{" "}
+                  <a
+                    href={`mailto:${SITE.contactEmail}`}
+                    className="font-medium text-forest-800 underline decoration-forest-800/30 underline-offset-4 hover:decoration-forest-800"
+                  >
+                    {SITE.contactEmail}
+                  </a>
+                  .
+                </>
+              )}
             </p>
           </LegalSection>
         </Reveal>

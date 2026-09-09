@@ -1,4 +1,5 @@
 import { Eye, Ear, BrainCircuit, Radar, Mic, ArrowRight, AlertTriangle } from "lucide-react";
+import Image from "next/image";
 import { Container } from "@/components/container";
 import { SectionHeading } from "@/components/section-heading";
 import { Reveal } from "@/components/reveal";
@@ -103,16 +104,30 @@ export function AI() {
                 <div className="bg-white p-4">
                   <p className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-mute">Before · Day 18</p>
                   <div className="mt-2 overflow-hidden rounded-lg">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={asset("/images/foundation.jpg")} alt="Foundation phase of a building under construction with formwork" className="aspect-[4/3] w-full object-cover" loading="lazy" />
+                    {/* next/image (MW-11): src through asset() keeps the
+                        serving base path; sizes matches the half-card slot. */}
+                    <Image
+                      src={asset("/images/foundation.jpg")}
+                      alt="Foundation phase of a building under construction with formwork"
+                      width={1200}
+                      height={896}
+                      sizes="(min-width: 1024px) 260px, (min-width: 640px) 45vw, 90vw"
+                      className="aspect-[4/3] w-full object-cover"
+                    />
                   </div>
                   <p className="mt-2 text-[12.5px] font-medium text-ink">Foundation</p>
                 </div>
                 <div className="bg-white p-4">
                   <p className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-mute">Current · Day 47</p>
                   <div className="relative mt-2 overflow-hidden rounded-lg">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={asset("/images/ground-truth.jpg")} alt="Ground floor walls substantially complete with formwork for ring beam" className="aspect-[4/3] w-full object-cover" loading="lazy" />
+                    <Image
+                      src={asset("/images/ground-truth.jpg")}
+                      alt="Ground floor walls substantially complete with formwork for ring beam"
+                      width={1200}
+                      height={795}
+                      sizes="(min-width: 1024px) 260px, (min-width: 640px) 45vw, 90vw"
+                      className="aspect-[4/3] w-full object-cover"
+                    />
                     <span className="absolute right-2 top-2 rounded-md bg-earth-500 px-2 py-0.5 text-[10.5px] font-bold text-ink">82%</span>
                   </div>
                   <p className="mt-2 text-[12.5px] font-medium text-ink">Ground floor walls</p>

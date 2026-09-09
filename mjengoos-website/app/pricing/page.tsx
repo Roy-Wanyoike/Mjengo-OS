@@ -32,7 +32,7 @@ const ALWAYS_INCLUDED = [
   {
     icon: ScanSearch,
     title: "AI assistance",
-    text: "Photo, voice and anomaly analysis on your own project record.",
+    text: "Photo, voice and anomaly analysis on your own project record — opt-in, enabled per project during the pilot.",
   },
   {
     icon: FileDown,

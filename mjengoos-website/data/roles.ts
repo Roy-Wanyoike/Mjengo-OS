@@ -1,8 +1,11 @@
 import type { RoleDefinition } from "@/types";
 
 /**
- * The nine roles of the MjengoOS role-based experience (§30).
- * Used by the homepage RoleSwitcher, /solutions index and /solutions/[slug].
+ * The six role cards of the MjengoOS role-based experience (§30) — client,
+ * site supervisor, contractor, professional, supplier and finance — plus
+ * the admin switcher card appended below (six cards + admin, matching the
+ * product's seeded demo roles). Used by the homepage RoleSwitcher, the
+ * /solutions index and /solutions/[slug].
  */
 export const ROLES: RoleDefinition[] = [
   {
