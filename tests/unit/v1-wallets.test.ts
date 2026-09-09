@@ -30,9 +30,12 @@
  *     business messages passed through by mapServiceError, 500 only for
  *     non-Error failures (with a server log).
  *   · IDEMPOTENCY (real modules/wallet/http.ts over the db stub): a repeated
- *     Idempotency-Key replays the stored body with { replayed: true, scope },
- *     never re-running the service; failures are never recorded (retry stays
- *     possible); the flag gate and the 422 guard fire BEFORE the record.
+ *     Idempotency-Key with the SAME payload replays the stored body with
+ *     { replayed: true, scope }, never re-running the service; a key reused
+ *     with a DIFFERENT payload is refused 409 (BE-9 — the stored payload
+ *     fingerprint rides the record, no schema change); failures are never
+ *     recorded (retry stays possible); the flag gate and the 422 guard fire
+ *     BEFORE the record.
  *   · ENVELOPE — every success is { ok: true, data, …extra } (jsonOk); the
  *     list carries nextCursor/hasMore TOP-LEVEL, the transactions page
  *     carries them INSIDE data (documented divergence — the array key stays
@@ -208,6 +211,7 @@ import { GET as walletTxnsGet } from '@/app/api/v1/wallets/[id]/transactions/rou
 import { POST as walletDepositPost } from '@/app/api/v1/wallets/[id]/deposit/route'
 import { POST as walletWithdrawPost } from '@/app/api/v1/wallets/[id]/withdraw/route'
 import { POST as walletTransferPost } from '@/app/api/v1/wallets/[id]/transfer/route'
+import { payloadFingerprint } from '@/backend/modules/wallet/http'
 import { PROVIDER_METHODS } from '@/backend/modules/wallet/providers'
 import { invalidateFlagCache } from '@/backend/modules/intel/flags'
 
@@ -890,7 +894,7 @@ describe('POST /api/v1/wallets/:id/deposit — credit from a cash rail', () => {
     expect(dbStub().idempotencyRecord.create).not.toHaveBeenCalled()
   })
 
-  it('Idempotency-Key: first run records, the repeat REPLAYS without re-running the service', async () => {
+  it('Idempotency-Key: first run records (with the payload fingerprint), the repeat REPLAYS without re-running the service', async () => {
     sessionFor('finance')
     const first = await bodyOf(
       await walletDepositPost(jsonReq(url, 'POST', { amount: 1_000 }, { 'idempotency-key': 'dep-1' }), ctx('w-1')),
@@ -899,12 +903,15 @@ describe('POST /api/v1/wallets/:id/deposit — credit from a cash rail', () => {
     expect(state().idemRows).toEqual([
       {
         key: 'dep-1', scope: 'v1.wallet.deposit', projectId: 'p-1',
-        responseBody: JSON.stringify({ walletCode: 'W-0001', ledgerRef: 'LT-0006', balance: 2_450 }),
+        responseBody: JSON.stringify({
+          payloadHash: payloadFingerprint({ amount: 1_000 }),
+          body: { walletCode: 'W-0001', ledgerRef: 'LT-0006', balance: 2_450 },
+        }),
       },
     ])
     svc.depositWallet.mockClear()
     const replay = await bodyOf(
-      await walletDepositPost(jsonReq(url, 'POST', { amount: 999 }, { 'idempotency-key': 'dep-1' }), ctx('w-1')),
+      await walletDepositPost(jsonReq(url, 'POST', { amount: 1_000 }, { 'idempotency-key': 'dep-1' }), ctx('w-1')),
     )
     expect(svc.depositWallet).not.toHaveBeenCalled()
     expect(replay).toEqual({
@@ -913,6 +920,26 @@ describe('POST /api/v1/wallets/:id/deposit — credit from a cash rail', () => {
       replayed: true,
       scope: 'v1.wallet.deposit',
     })
+  })
+
+  it('Idempotency-Key reused with a DIFFERENT payload → 409, nothing replayed, service never re-runs (BE-9)', async () => {
+    sessionFor('finance')
+    await walletDepositPost(jsonReq(url, 'POST', { amount: 1_000 }, { 'idempotency-key': 'dep-1x' }), ctx('w-1'))
+    svc.depositWallet.mockClear()
+    const conflict = await walletDepositPost(
+      jsonReq(url, 'POST', { amount: 999 }, { 'idempotency-key': 'dep-1x' }), ctx('w-1'),
+    )
+    expect(conflict.status).toBe(409)
+    expect(await bodyOf(conflict)).toEqual({
+      error: expect.stringMatching(/different payload/i) as unknown as string,
+    })
+    expect(svc.depositWallet).not.toHaveBeenCalled()
+    // the stored record is untouched — a same-payload retry still replays
+    const replay = await walletDepositPost(
+      jsonReq(url, 'POST', { amount: 1_000 }, { 'idempotency-key': 'dep-1x' }), ctx('w-1'),
+    )
+    expect(replay.status).toBe(200)
+    expect((await bodyOf(replay)).replayed).toBe(true)
   })
 
   it('the x-idempotency-key spelling dedupes too (both spellings, one wallet)', async () => {

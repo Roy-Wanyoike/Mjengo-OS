@@ -509,12 +509,39 @@ export async function depositWallet(projectId: string, p: any) {
   return { walletCode: wallet.code, ledgerRef, balance }
 }
 
+/**
+ * Deterministic natural idempotency key for wallet money mutations
+ * (issue #75 / BE-3): derived ONLY from immutable request content — the
+ * wallets/amounts involved, the wallet currency, the payment rail, the note
+ * and the actor — NEVER a timestamp. A client retry after a lost response
+ * re-derives the SAME key and replays the original ledger transaction
+ * instead of double-posting a second debit.
+ *
+ * Honest trade-off: two byte-identical but DISTINCT withdrawals (same
+ * wallet, amount, rail, note AND actor) are indistinguishable from a retry
+ * by construction — they replay the first result instead of paying twice.
+ * The money-safe direction: never double-pay. Clients that intend a second
+ * distinct movement send an Idempotency-Key header (the v1 routes dedupe
+ * on it) or a distinguishing note.
+ */
+function withdrawNaturalKey(wallet: { id: string; currency: string }, amount: number, p: any): string {
+  return `wallet.withdraw:${JSON.stringify([
+    wallet.id,
+    amount,
+    wallet.currency,
+    String(p.destination ?? 'mpesa'),
+    String(p.note ?? ''),
+    String(p.by ?? 'Finance'),
+  ])}`
+}
+
 export async function withdrawWallet(projectId: string, p: any) {
   const amount = Number(p.amount)
   if (!(amount > 0)) throw new Error('Withdrawal amount must be positive')
   const wallet = await resolveWallet(projectId, p.walletId)
   const cashCode = cashAccountForMethod(String(p.destination ?? 'mpesa'))
   const ledgerProjectId = wallet.ownerType === 'project' ? projectId : null
+  const idempotencyKey = p.idempotencyKey ?? withdrawNaturalKey(wallet, amount, p)
   const { ledgerRef, balance } = await db.$transaction(async (tx) => {
     // Balance re-checked INSIDE the transaction — no overdraft race.
     const account = await ensureAccountTx(tx, `WALLET:${wallet.code}`)
@@ -522,13 +549,20 @@ export async function withdrawWallet(projectId: string, p: any) {
     const debit = entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0)
     const credit = entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0)
     const current = credit - debit // liability account
+    // Replay check BEFORE the balance check: a retried withdrawal that
+    // (nearly) emptied the wallet must return the ORIGINAL result, not
+    // "Insufficient wallet balance" — the money already moved once.
+    const prior = idempotencyKey
+      ? await tx.ledgerTransaction.findUnique({ where: { idempotencyKey } })
+      : null
+    if (prior) return { ledgerRef: prior.ref, balance: current }
     if (current < amount) throw new Error(`Insufficient wallet balance: ${current} < ${amount}`)
     const ledgerTxn = await postLedgerTransactionInTx(tx, {
       projectId: ledgerProjectId,
       description: `Wallet ${wallet.code} withdrawal${p.note ? ` — ${p.note}` : ''}`,
       postedBy: String(p.by ?? 'Finance'),
       postedRole: 'finance',
-      idempotencyKey: p.idempotencyKey ?? `wallet.withdraw:${wallet.id}:${amount}:${Date.now()}`,
+      idempotencyKey,
       lines: [
         { accountCode: `WALLET:${wallet.code}`, side: 'debit', amount },
         { accountCode: cashCode, side: 'credit', amount },
@@ -539,25 +573,48 @@ export async function withdrawWallet(projectId: string, p: any) {
   return { walletCode: wallet.code, ledgerRef, balance }
 }
 
+/** Transfer-key twin of withdrawNaturalKey — from/to wallets + amount + content. */
+function transferNaturalKey(
+  from: { id: string; currency: string },
+  to: { id: string },
+  amount: number,
+  p: any,
+): string {
+  return `wallet.transfer:${JSON.stringify([
+    from.id,
+    to.id,
+    amount,
+    from.currency,
+    String(p.note ?? ''),
+    String(p.by ?? 'Finance'),
+  ])}`
+}
+
 export async function transferWallet(projectId: string, p: any) {
   const amount = Number(p.amount)
   if (!(amount > 0)) throw new Error('Transfer amount must be positive')
   const from = await resolveWallet(projectId, p.fromWalletId)
   const to = await resolveWallet(projectId, p.toWalletId)
   const ledgerProjectId = from.ownerType === 'project' ? projectId : null
+  const idempotencyKey = p.idempotencyKey ?? transferNaturalKey(from, to, amount, p)
   const { ledgerRef } = await db.$transaction(async (tx) => {
     const account = await ensureAccountTx(tx, `WALLET:${from.code}`)
     const entries = await tx.ledgerEntry.findMany({ where: { accountId: account.id } })
     const debit = entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0)
     const credit = entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0)
     const current = credit - debit
+    // Replay check BEFORE the balance check (same rule as withdraw).
+    const prior = idempotencyKey
+      ? await tx.ledgerTransaction.findUnique({ where: { idempotencyKey } })
+      : null
+    if (prior) return { ledgerRef: prior.ref }
     if (current < amount) throw new Error(`Insufficient wallet balance: ${current} < ${amount}`)
     const ledgerTxn = await postLedgerTransactionInTx(tx, {
       projectId: ledgerProjectId,
       description: `Wallet transfer ${from.code} → ${to.code}`,
       postedBy: String(p.by ?? 'Finance'),
       postedRole: 'finance',
-      idempotencyKey: p.idempotencyKey ?? `wallet.transfer:${from.id}:${to.id}:${amount}:${Date.now()}`,
+      idempotencyKey,
       lines: [
         { accountCode: `WALLET:${from.code}`, side: 'debit', amount },
         { accountCode: `WALLET:${to.code}`, side: 'credit', amount },

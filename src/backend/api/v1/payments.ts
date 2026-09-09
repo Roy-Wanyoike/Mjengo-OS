@@ -62,15 +62,20 @@ export const POST = route(
       }
     }
 
-    return await withIdempotency(req, 'v1.payment.pay', request.projectId, () =>
-      payPaymentRequest(request.projectId, {
-        id: request.id,
-        method: body.method,
-        reference: body.reference,
-        costCode: body.costCode,
-        paidBy: session.user.name,
-        paidByRole: session.user.role,
-      }),
+    return await withIdempotency(
+      req,
+      'v1.payment.pay',
+      request.projectId,
+      () =>
+        payPaymentRequest(request.projectId, {
+          id: request.id,
+          method: body.method,
+          reference: body.reference,
+          costCode: body.costCode,
+          paidBy: session.user.name,
+          paidByRole: session.user.role,
+        }),
+      body, // payload fingerprint: a key reused with a different body → 409 (BE-9)
     )
   },
 )
