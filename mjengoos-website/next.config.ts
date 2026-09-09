@@ -10,6 +10,20 @@ import type { NextConfig } from "next";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH?.replace(/\/+$/, "") || undefined;
 
 const nextConfig: NextConfig = {
+  // Emit .next/standalone/server.js like the main app (root next.config.ts)
+  // so the Docker runner image ships only the traced runtime — not the
+  // 600+ MB node_modules tree (`next start` keeps working locally: Next 16
+  // still produces the full .next/ build output alongside the standalone copy).
+  output: "standalone",
+  // Pin the standalone/tracing root to THIS directory. Next 16 otherwise
+  // infers a workspace root by walking up for lockfiles/.git — inside the
+  // repo that is the monorepo root, and the standalone output then nests
+  // under .next/standalone/mjengoos-website/ (context-dependent). Pinning
+  // keeps the layout deterministic everywhere: server.js + the traced
+  // node_modules land directly in .next/standalone/, exactly what the
+  // Dockerfile's runner stage copies. Builds always run from this dir
+  // (package.json script / Docker WORKDIR).
+  outputFileTracingRoot: process.cwd(),
   basePath,
   reactStrictMode: true,
   poweredByHeader: false,

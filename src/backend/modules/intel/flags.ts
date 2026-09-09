@@ -2,14 +2,77 @@
 //
 // Flags live in the FeatureFlag table (one row per key, default enabled),
 // created lazily on first read so a fresh install needs no seed step. A 30s
-// in-memory cache keeps the payload cheap; writes invalidate it immediately.
-// NEXT_FLAGS_OFF (comma list) is an env override for local/CI runs that forces
-// flags off regardless of the table.
+// in-memory cache keeps the payload cheap; writes invalidate it immediately
+// (a route gate may therefore serve a value up to 30s stale after a toggle —
+// the documented tradeoff). NEXT_FLAGS_OFF (comma list) is an env override
+// for local/CI runs that forces flags off regardless of the table.
 //
-// The ONLY behavior currently gated on a flag is the Copilot photo-analysis
-// button (ai_progress). Everything else is read-only state surfaced to the
-// admin popover — honest, no dead toggles pretending to do something.
+// ENFORCEMENT (task 9-a, "every flag gates its feature or is honestly
+// removed"): every flag below gates its feature SERVER-SIDE — a flag OFF
+// makes the feature's API routes answer 403 `Feature disabled by feature
+// flag (<key>)` for NON-ADMIN sessions (admins bypass so they can toggle and
+// test), and the UI hides/disables the feature's entry point for non-admins
+// (admins keep it, same rule — mirrored client-side in nav/tab-meta.ts and
+// copilot-tab.tsx, keep in sync). The uniform helper is requireFlagOn(),
+// exported at the bottom of this file.
+//
+// Per-flag enforcement map (keep in sync with the call sites):
+//   · ai_progress       → POST /api/ai/analyze-photo (the Copilot photo-
+//                         analysis route) + the Copilot "Analyze with vision
+//                         AI" button. The button was always gated; the route
+//                         was not — it is now.
+//   · ai_voice          → POST /api/ai/voice-log (Swahili ASR → delivery log)
+//                         + the voice panel's record/upload/sample buttons.
+//                         /api/ai/parse-text is deliberately NOT gated by
+//                         this flag: it is the typed-note path, not voice.
+//   · wallet            → the USER-FACING wallet & payment-request surface:
+//                         the WALLET_ACTIONS family on POST /api/actions
+//                         (payment.request/decide/pay, wallet.create/deposit/
+//                         withdraw/transfer, transaction.reverse,
+//                         ledger.post — the money-tab actions and the API
+//                         client surface) plus the whole /api/v1 wallets +
+//                         payments REST family, plus the Money tab entry.
+//                         BOUNDARY (honest): this flag does NOT gate internal
+//                         ledger postings driven by other flows — invoice.pay
+//                         (invoices module → provider seam → ledger), the
+//                         escrow/milestone governance ladder (escrow.topup,
+//                         milestone.*, variation.* — the client's release
+//                         flow must survive), delivery.create expense posting
+//                         and the verified Daraja webhook callback (a machine
+//                         path, not a session) all keep posting while the
+//                         flag is off. The share-link surface (/api/share)
+//                         and the offline sync drain (/api/sync) dispatch some
+//                         of the same action types through their own
+//                         cross-cutting routes — outside this flag's
+//                         enforcement; documented as a follow-up, not
+//                         silently ignored.
+//   · marketplace       → the Finder loop: the SUPPLY_ACTIONS family on
+//                         POST /api/actions (supplier/catalog upserts,
+//                         request/quote/order/delivery/rule lifecycle,
+//                         supply.compare) + the Finder tab entry. invoice.*
+//                         (the invoices module that shares the Finder tab)
+//                         is NOT gated by this flag.
+//   · land_verification → the land module ladder: the LAND_ACTIONS family
+//                         on POST /api/actions (parcel.create/update/
+//                         setStatus, parcelDoc.attach, search.request/
+//                         receive/review) + the parcels section of the Land
+//                         tab. The professionals directory
+//                         (PROFESSIONALS_ACTIONS — a separate module that
+//                         shares the Land tab) is NOT gated by this flag.
+//
+// REMOVED FLAG — low_data (decision, task 9-a): it gated nothing and had no
+// coherent server-side behavior to gate. The real low-data feature is the
+// per-device Data Saver preference (spec §74 — the header's data-mode
+// selector + client-side photo downscaling in the copilot tab): a user
+// preference stored in the browser, not an admin rollout switch. A server
+// "compact payloads" mode would be a new API surface — a product feature,
+// not a flag. Removed from FLAG_KEYS/FLAG_LABELS here, from the admin
+// popover (header.tsx FLAG_ROWS), the intel seed (prisma/seed-extras/
+// intel.ts) and EMPTY_INTEL_SLICE (intel/types.ts). A stale `low_data`
+// FeatureFlag row in an existing database is inert: reads filter to
+// FLAG_KEYS and setFlag rejects the key.
 
+import { NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 
 export const FLAG_KEYS = [
@@ -18,7 +81,6 @@ export const FLAG_KEYS = [
   'wallet',
   'marketplace',
   'land_verification',
-  'low_data',
 ] as const
 
 export type FlagKey = (typeof FLAG_KEYS)[number]
@@ -31,7 +93,6 @@ export const FLAG_LABELS: Record<FlagKey, string> = {
   wallet: 'Wallet & payment requests',
   marketplace: 'Supplier marketplace (Finder)',
   land_verification: 'Land verification ladder',
-  low_data: 'Low-data mode option',
 }
 
 const CACHE_TTL_MS = 30_000
@@ -91,4 +152,48 @@ export async function setFlag(key: string, enabled: boolean): Promise<FlagMap> {
 /** Drop the in-memory cache so the next read hits the table (used after writes). */
 export function invalidateFlagCache(): void {
   cache = null
+}
+
+// ---------------------------------------------------------------- enforcement
+
+/**
+ * Roles that bypass flag gating: admins can toggle flags, so they keep the
+ * feature while it is off — otherwise a flag could never be exercised before
+ * rollout. The client-side mirror (which tabs/buttons stay visible) reads the
+ * same role the same way — keep the two in sync.
+ */
+export const FLAG_BYPASS_ROLES: readonly string[] = ['admin']
+
+/**
+ * The uniform 403 a gated route answers when its flag is off. Body shape
+ * matches the shared guard's 401/403 contract ({ error }) so /api/v1,
+ * /api/ai and /api/actions failures stay one family.
+ */
+export function featureDisabledResponse(key: FlagKey): NextResponse {
+  return NextResponse.json(
+    { error: `Feature disabled by feature flag (${key}) — an admin can re-enable it from the flags popover in the header` },
+    { status: 403 },
+  )
+}
+
+/**
+ * Route-level flag gate (task 9-a): returns a 403 response when `key` is OFF
+ * and the session is NOT a bypass role; null when the request may proceed
+ * (flag on, or an admin session). `session` is any GuardSession-shaped
+ * object, taken structurally so this file stays free of a guard.ts import
+ * (no import cycle, no next-auth pull); null sessions (share-token callers)
+ * are non-admins and are gated.
+ *
+ * Usage — the first check inside a guarded handler:
+ *   const denied = await requireFlagOn('wallet', session)
+ *   if (denied) return denied
+ */
+export async function requireFlagOn(
+  key: FlagKey,
+  session: { user?: { role?: unknown } } | null | undefined,
+): Promise<NextResponse | null> {
+  const role = session?.user?.role
+  if (typeof role === 'string' && FLAG_BYPASS_ROLES.includes(role)) return null
+  if (await isFlagOn(key)) return null
+  return featureDisabledResponse(key)
 }

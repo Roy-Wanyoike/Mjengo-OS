@@ -1,5 +1,12 @@
 import type { NextConfig } from "next";
 
+// Upstream origin of the marketing website (mjengoos-website/, a separate
+// Next.js app) for the /website/* rewrite below. Local dev default is the
+// site's own server on 127.0.0.1:3001; under docker-compose the service name
+// resolves instead — docker-compose.yml sets WEBSITE_ORIGIN=http://website:3001
+// on the app service.
+const WEBSITE_ORIGIN = process.env.WEBSITE_ORIGIN ?? "http://127.0.0.1:3001";
+
 const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: false,
@@ -25,10 +32,25 @@ const nextConfig: NextConfig = {
   // "Sign in" lands on this app's login screen at "/" — one origin, one
   // cookie domain. The website dev server must be running for /website.
   async rewrites() {
-    const upstream = process.env.WEBSITE_UPSTREAM || "http://127.0.0.1:3001";
     return [
-      { source: "/website", destination: `${upstream}/website` },
-      { source: "/website/:path*", destination: `${upstream}/website/:path*` },
+      { source: "/website", destination: `${WEBSITE_ORIGIN}/website` },
+      { source: "/website/:path*", destination: `${WEBSITE_ORIGIN}/website/:path*` },
+    ];
+  },
+  // Audit finding #3: baseline security headers on every response — the
+  // marketing site already sends these (mjengoos-website/next.config.ts);
+  // the app now matches. Deliberately NO X-Frame-Options and no CSP
+  // frame-ancestors: the preview gateway embeds this app in a cross-site
+  // iframe, so it must stay embeddable.
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        ],
+      },
     ];
   },
 };

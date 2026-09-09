@@ -3,7 +3,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { toast } from 'sonner'
-import type { ProjectPayload, ProjectListItem, ActionType } from '@/backend/lib/mjengo'
+import type { ProjectPayload, ProjectListItem, ActionType, WorkerWithAttendance } from '@/backend/lib/mjengo'
 
 /** Per-item sync lifecycle (spec §40): pending → syncing → synced | failed | conflict. */
 export type OutboxSyncStatus = 'pending' | 'syncing' | 'synced' | 'failed' | 'conflict'
@@ -26,6 +26,18 @@ export interface OutboxItem {
   conflictReason?: string
   conflictRule?: ConflictRule
   conflictAt?: number
+  /**
+   * Entity-version rejection metadata (issue "Outbox conflict metadata +
+   * entity versions") — set when the server REJECTED the item 'stale-version':
+   * the row moved on while this device was offline.
+   */
+  conflictStatus?: 'REJECTED'
+  /** The row's server version at rejection — what a re-send must re-base onto. */
+  conflictServerVersion?: number
+  /** The client version the rejected edit was authored against. */
+  conflictBaseVersion?: number
+  /** The server's deterministic suggestion (keep-server by policy — §41). */
+  suggestion?: 'keep-server'
   /** Last hard failure message (syncStatus 'failed'). */
   lastError?: string
   syncedAt?: number
@@ -36,11 +48,26 @@ export interface OutboxItem {
 /** One synced/resolved outbox item, retained (bounded) so nothing is silently lost (§52). */
 export type SyncHistoryItem = OutboxItem
 
-/** Per-item result contract of POST /api/sync (mirror of the route's SyncItemResult). */
+/**
+ * Per-item result contract of POST /api/sync (mirror of the route's
+ * SyncItemResult). The conflict arm's version-rejection metadata (status
+ * 'REJECTED' / serverVersion / baseVersion / suggestion) is optional —
+ * present only on 'stale-version' rejections.
+ */
 export type SyncItemResult =
   | { id: string; ok: true }
   | { id: string; ok: false; error: string }
-  | { id: string; ok: false; conflict: true; reason: string; rule: ConflictRule }
+  | {
+      id: string
+      ok: false
+      conflict: true
+      reason: string
+      rule: ConflictRule
+      status?: 'REJECTED'
+      serverVersion?: number
+      baseVersion?: number
+      suggestion?: 'keep-server'
+    }
 
 /** Body for POST /api/projects (matches CreateProjectPayload from the dialog). */
 export interface CreateProjectInput {
@@ -123,6 +150,75 @@ function normalizeOutboxItem(item: OutboxItem): OutboxItem {
 /** Retention cap for the synced/resolved history — the live queue is never pruned. */
 const SYNC_HISTORY_CAP = 50
 
+/** EAT "today" — mirrors the server's todayStr() so client-side row lookups line up. */
+function todayEAT(): string {
+  return new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10)
+}
+
+/** Task mutations whose server appliers version the Task row (mirror of the sync route's set). */
+const VERSIONED_TASK_TYPES = [
+  'task.update', 'task.assign', 'task.block', 'task.unblock', 'task.complete', 'task.verify',
+] as const
+
+/** The worker's local attendance row for a date (default today) — version if known. */
+function localAttendanceVersion(data: ProjectPayload, workerId: unknown, date?: string): number | null {
+  if (typeof workerId !== 'string' || !workerId) return null
+  const day = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayEAT()
+  const w = data.workers.find((x) => x.id === workerId)
+  const row = w?.attendances.find((a) => a.date === day) as { version?: number } | undefined
+  return row && typeof row.version === 'number' ? row.version : null
+}
+
+/**
+ * Optimistic attendance version bump (mirrors the server appliers): bump the
+ * worker's local day-row when one exists, so a second queued day-action for
+ * the same worker stamps the newer baseVersion.
+ */
+function bumpLocalAttendanceVersion(w: WorkerWithAttendance): void {
+  const row = w.attendances.find((a) => a.date === todayEAT()) as { version?: number } | undefined
+  if (row) {
+    const known = row.version
+    row.version = (typeof known === 'number' ? known : 1) + 1
+  }
+}
+
+/**
+ * Stamp the client's known entity version (issue "Outbox conflict metadata +
+ * entity versions") onto a queued offline action's payload: task.* by row id,
+ * attendance.* by the worker's day-row, the bulk muster roll per record. The
+ * server REJECTS a flush as 'stale-version' when the row moved on while the
+ * device was offline — never a silent last-write-wins overwrite. An absent
+ * stamp (row unknown / pre-version local data) applies exactly as today.
+ */
+function stampBaseVersion(data: ProjectPayload, type: string, payload: any): any {
+  if (!payload || typeof payload !== 'object') return payload
+  if ((VERSIONED_TASK_TYPES as readonly string[]).includes(type) && payload.id) {
+    const task = data.phases.flatMap((p) => p.tasks).find((t) => t.id === payload.id) as { version?: number } | undefined
+    if (task && typeof task.version === 'number') return { ...payload, baseVersion: task.version }
+    return payload
+  }
+  if (type === 'attendance.record' && typeof payload.records === 'string') {
+    try {
+      const records = JSON.parse(payload.records)
+      if (Array.isArray(records)) {
+        const stamped = records.map((r: any) => {
+          const v = localAttendanceVersion(data, r?.workerId)
+          return typeof v === 'number' ? { ...r, baseVersion: v } : r
+        })
+        return { ...payload, records: JSON.stringify(stamped) }
+      }
+    } catch {
+      // malformed records — the server answers the honest parse error; send as-is
+    }
+    return payload
+  }
+  if (type === 'attendance.checkin' || type === 'attendance.setStatus' || type === 'attendance.exception') {
+    const v = localAttendanceVersion(data, payload.workerId, payload.date)
+    return typeof v === 'number' ? { ...payload, baseVersion: v } : payload
+  }
+  return payload
+}
+
 /** Client-side optimistic reducer — mirrors the on-device SQLite write for queued actions. */
 function reduceLocal(data: ProjectPayload, type: string,
   payload: any): ProjectPayload {
@@ -138,6 +234,11 @@ function reduceLocal(data: ProjectPayload, type: string,
             else if (t.progress > 0 && t.status === 'pending') t.status = 'in_progress'
           }
           if (payload.status) t.status = payload.status
+          // Optimistic entity-version bump (mirrors the server applier): a
+          // SECOND offline edit of the same task must stamp the newer
+          // baseVersion, or the device would reject its own queued sequence.
+          const known = (t as { version?: number }).version
+          t.version = (typeof known === 'number' ? known : 1) + 1
         }
       }
       break
@@ -212,6 +313,7 @@ function reduceLocal(data: ProjectPayload, type: string,
     case 'attendance.checkin': {
       const w = d.workers.find((x) => x.id === payload.workerId)
       if (w) {
+        bumpLocalAttendanceVersion(w)
         if (!w.todayStatus.status) {
           w.todayStatus = { status: 'present', checkIn: new Date().toISOString(), checkOut: null, method: payload.method || 'geofence', wage: w.dailyRate, paid: false, verification: 'verified', exceptionReason: null }
           d.summary.fundisToday += 1
@@ -225,6 +327,7 @@ function reduceLocal(data: ProjectPayload, type: string,
     case 'attendance.setStatus': {
       const w = d.workers.find((x) => x.id === payload.workerId)
       if (w) {
+        bumpLocalAttendanceVersion(w)
         const prevWage = w.todayStatus.wage
         const wage = payload.status === 'present' ? w.dailyRate : payload.status === 'half_day' ? w.dailyRate / 2 : 0
         if (!w.todayStatus.status) d.summary.fundisToday += payload.status === 'absent' ? 0 : 1
@@ -669,19 +772,23 @@ export const useMjengo = create<MjengoState>()(
             // connection, server unreachable): mirror the simulated-offline
             // branch — optimistic local write + queue for sync — so a field
             // user never silently loses an action.
-            const item: OutboxItem = { id: uid(), type, payload, label, createdAt: Date.now(), projectId: projectId ?? null, syncStatus: 'pending', retryCount: 0 }
             const data = get().data
-            if (data) set({ data: reduceLocal(data, type, payload) })
+            const queuedPayload = data ? stampBaseVersion(data, type, payload) : payload
+            const item: OutboxItem = { id: uid(), type, payload: queuedPayload, label, createdAt: Date.now(), projectId: projectId ?? null, syncStatus: 'pending', retryCount: 0 }
+            if (data) set({ data: reduceLocal(data, type, queuedPayload) })
             set({ outbox: [...get().outbox, item] })
             return true
           } finally {
             set({ actionBusy: null })
           }
         }
-        // Offline: optimistic local write + queue for sync
-        const item: OutboxItem = { id: uid(), type, payload, label, createdAt: Date.now(), projectId: projectId ?? null, syncStatus: 'pending', retryCount: 0 }
+        // Offline: optimistic local write + queue for sync. The queued payload
+        // carries the client's known entity baseVersion (issue: outbox entity
+        // versions) so the server can reject a stale flush honestly.
         const data = get().data
-        if (data) set({ data: reduceLocal(data, type, payload) })
+        const queuedPayload = data ? stampBaseVersion(data, type, payload) : payload
+        const item: OutboxItem = { id: uid(), type, payload: queuedPayload, label, createdAt: Date.now(), projectId: projectId ?? null, syncStatus: 'pending', retryCount: 0 }
+        if (data) set({ data: reduceLocal(data, type, queuedPayload) })
         set({ outbox: [...get().outbox, item] })
         return true
       },
@@ -729,7 +836,19 @@ export const useMjengo = create<MjengoState>()(
               if (r.ok) { synced += 1; return { ...o, syncStatus: 'synced' as const, syncedAt: Date.now(), lastError: undefined } }
               if ('conflict' in r) {
                 conflicts += 1
-                return { ...o, syncStatus: 'conflict' as const, conflictReason: r.reason, conflictRule: r.rule, conflictAt: Date.now() }
+                return {
+                  ...o,
+                  syncStatus: 'conflict' as const,
+                  conflictReason: r.reason,
+                  conflictRule: r.rule,
+                  conflictAt: Date.now(),
+                  // Entity-version rejection metadata (stale-version rejections;
+                  // undefined on plain semantic conflicts — additive shape).
+                  conflictStatus: r.status,
+                  conflictServerVersion: r.serverVersion,
+                  conflictBaseVersion: r.baseVersion,
+                  suggestion: r.suggestion,
+                }
               }
               failed += 1
               return { ...o, syncStatus: 'failed' as const, lastError: r.error, retryCount: (o.retryCount ?? 0) + 1 }

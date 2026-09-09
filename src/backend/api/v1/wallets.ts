@@ -4,6 +4,7 @@ import { route } from '@/backend/lib/route-kit'
 import { createWallet, listWallets } from '@/backend/modules/wallet/service'
 import { jsonOk, withIdempotency } from '@/backend/modules/wallet/http'
 import { getProvider, PROVIDER_METHODS } from '@/backend/modules/wallet/providers'
+import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { walletCreateBody, walletsListQuery, validateQuery } from './schemas'
 import { mapServiceError, pageOf, v1Err, V1_MUTATION_LIMIT, V1_READ_LIMIT } from './respond'
 
@@ -25,6 +26,9 @@ import { mapServiceError, pageOf, v1Err, V1_MUTATION_LIMIT, V1_READ_LIMIT } from
  * code-ordered list in the route layer (listWallets stays read-only).
  * The ?providers=1 branch is a static rail introspection list — pagination
  * does not apply there.
+ *
+ * Feature flag (spec §81, task 9-a): the `wallet` flag gates this whole v1
+ * family — OFF → 403 for non-admin sessions (admins bypass; see flags.ts).
  */
 export const GET = route(
   {
@@ -33,7 +37,11 @@ export const GET = route(
     rateLimit: { bucket: 'v1.wallets.list', limit: V1_READ_LIMIT, windowMs: 60_000 },
     onError: (e) => mapServiceError('wallets GET', e, 'Failed to list wallets'),
   },
-  async (req) => {
+  async (req, session) => {
+    // Feature flag (spec §81, task 9-a) — the uniform wallet gate.
+    const flagDenied = await requireFlagOn('wallet', session)
+    if (flagDenied) return flagDenied
+
     const q = validateQuery(req, walletsListQuery)
     if (!q.ok) return q.response
     if (q.data.providers === '1') {
@@ -61,6 +69,9 @@ export const GET = route(
  * call with identical semantics):
  *   { label?, ownerType?: 'project'|'organization'|'supplier'|'user' (default
  *     'project'), ownerId?, projectId?, currency?: 'KES' }
+ *
+ * Feature flag (spec §81, task 9-a): gated by `wallet` — OFF → 403 for
+ * non-admin sessions (admins bypass; see flags.ts).
  */
 export const POST = route(
   {
@@ -71,6 +82,10 @@ export const POST = route(
     onError: (e) => mapServiceError('wallets POST', e, 'Failed to create wallet'),
   },
   async (req, session, body) => {
+    // Feature flag (spec §81, task 9-a) — the uniform wallet gate.
+    const flagDenied = await requireFlagOn('wallet', session)
+    if (flagDenied) return flagDenied
+
     const projectId =
       body.projectId ??
       (body.ownerType === 'project' ? session.user.projectId ?? undefined : undefined)

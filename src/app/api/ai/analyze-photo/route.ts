@@ -6,6 +6,7 @@ import { extractJson, visionMessage } from '@/backend/lib/ai'
 import { applyAction, getProjectPayload } from '@/backend/lib/mjengo'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
+import { requireFlagOn } from '@/backend/modules/intel/flags'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -25,6 +26,13 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
     ],
   })
   if (!gate.ok) return gate.response
+
+  // Feature flag (spec §81, task 9-a): ai_progress now gates the ROUTE too,
+  // not just the Copilot button — a flipped-off flag used to leave the API
+  // open to any site-team session. Non-admins get the uniform 403; admins
+  // bypass (requireFlagOn) so they can toggle and test.
+  const flagDenied = await requireFlagOn('ai_progress', gate.session)
+  if (flagDenied) return flagDenied
 
   try {
     const { dataUrl, url, photoId, phaseId, apply } = gate.body as {
