@@ -341,6 +341,9 @@ bun install
 cp .env.example .env
 #   DATABASE_URL=file:../db/custom.db      (repo-relative; db/ is gitignored)
 #   NEXTAUTH_SECRET=$(openssl rand -hex 32)
+#   ^ optional in dev — the app still boots, signs in AND serves guarded
+#     APIs without it (the guard mirrors next-auth v4's internal fallback
+#     secret — issue #94). REQUIRED in production (boot fails closed).
 
 bunx prisma generate
 bunx prisma migrate deploy    # production path — or: bunx prisma db push
@@ -385,7 +388,7 @@ Then sign in with a demo account above. Scripts: `bun run lint`,
 | Variable | Value | Why |
 |---|---|---|
 | `DATABASE_URL` | required | SQLite file URL (`file:../db/custom.db` local, `file:/app/db/custom.db` in Docker) |
-| `NEXTAUTH_SECRET` | required, stable | Signs/encrypts JWT session cookies. Rotating it signs everyone out. |
+| `NEXTAUTH_SECRET` | **production: required, stable**; dev: optional | Signs/encrypts JWT session cookies. Rotating it signs everyone out. Dev without it runs on next-auth v4's internal fallback secret (sign-in **and** guarded APIs work — issue #94); production boot fails closed (< 32 chars). |
 | `AUTH_TRUST_HOST` | `1` behind a proxy | Makes next-auth v4's `detectOrigin` honor `x-forwarded-host`/`-proto` — without it, proxied sign-in silently pins to `http://localhost:3000` and breaks (PR #7). |
 | `NEXTAUTH_URL` | **unset** | The origin is derived per request, so redirects/cookies always target the host the user actually browses. Set only for one fixed public domain. |
 

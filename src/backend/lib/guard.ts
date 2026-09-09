@@ -2,12 +2,30 @@ import { NextRequest, NextResponse } from 'next/server'
 // v4's types keep getToken in 'next-auth/jwt' (not the 'next-auth/next' barrel)
 import { getToken } from 'next-auth/jwt'
 import type { MjengoSessionUser } from '@/backend/lib/auth'
+import { devFallbackSecretCandidates } from '@/backend/lib/nextauth-fallback-secret'
 
 export type GuardSession = { user: MjengoSessionUser } | null
 
 /** JWT-decode the next-auth session straight off the request cookie. */
 export async function getSessionFromReq(req: NextRequest): Promise<GuardSession> {
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
+  // v4's own precedence: options.secret (NEXTAUTH_SECRET) ?? NEXTAUTH_SECRET
+  // env ?? AUTH_SECRET alias — the guard verifies with the SAME secret the
+  // route handler would have resolved (a dev who sets only AUTH_SECRET was
+  // previously in the same #94 failure mode).
+  const envSecret = process.env.NEXTAUTH_SECRET ?? process.env.AUTH_SECRET
+  let token = await getToken({ req, secret: envSecret })
+  // Issue #94 (dev quickstart): with no NEXTAUTH_SECRET, next-auth mints
+  // sessions on its internal fallback secret while getToken(undefined)
+  // cannot decode them — logged in, but every guarded API 401s. In dev we
+  // mirror v4's derivation (see nextauth-fallback-secret.ts) and accept the
+  // same tokens. Production is untouched: the #74 boot guard already fails
+  // closed there, and candidates() is empty without the env secret anyway.
+  if (!token?.email && !envSecret) {
+    for (const candidate of devFallbackSecretCandidates(req)) {
+      token = await getToken({ req, secret: candidate })
+      if (token?.email) break
+    }
+  }
   if (!token?.email) return null
   return {
     user: {
