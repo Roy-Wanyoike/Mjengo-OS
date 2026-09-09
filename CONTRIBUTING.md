@@ -54,9 +54,14 @@ bunx tsc --noEmit     # strict typecheck, 0 errors
 bun run test          # vitest — the full unit suite (1,513 tests / 54 files)
 ```
 
-All three must pass locally. CI re-runs lint and the strict typecheck on
-every push/PR and adds a real production build (it does not run the vitest
-suite — that's the local gate, and every merge to `main` re-ran it in full).
+All three must pass locally. CI runs the same gates on every push/PR:
+`ci.yml` re-runs lint and the strict typecheck (web app **and** marketing
+site) plus an informational `bun audit` and a real production build;
+`test.yml` runs the full vitest suite; `docker.yml` builds both production
+Docker images. One honest caveat: a billing lock on the GitHub account is
+currently preventing CI jobs from starting (workflows fire, jobs are
+rejected), so until it is restored the local run is the gate that actually
+executes — re-run the full suite before pushing.
 Touching the marketing site (`mjengoos-website/`)? Also run `bun run
 site:lint` and `bun run site:typecheck`.
 
@@ -69,8 +74,10 @@ site:lint` and `bun run site:typecheck`.
   waves 1–6; every merge re-ran the full suite).
 - **Linked to an issue** — open or comment on one first, so the *why* is
   recorded before the *how*.
-- **Left open for review** — every change lands through a reviewed, CI-gated
-  PR; don't expect direct commits to `main`.
+- **Left open for review** — every change lands through a reviewed PR, never
+  a direct commit to `main`; don't expect the CI badge to carry the review
+  while the account's billing lock blocks job starts (the gates are re-run
+  locally per PR).
 - **Honest scope** — state what works, what's simulated and what's deferred.
   This repo's culture is *reported vs verified, everywhere*; PRs follow it.
 

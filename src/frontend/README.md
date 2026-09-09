@@ -58,8 +58,9 @@ Copilot). Guarded against typing-in-input and open-dialog states.
 
 `i18n/` — `provider.tsx` (`useI18n`/`useT`, `{var}` interpolation), `store.ts`
 (persisted `mjengo-os-settings` locale), `types.ts`, `dicts/en.ts` +
-`dicts/sw.ts` (290 keys each), `dicts/check.ts` (compile-time parity assert +
-dev runtime validation). The provider is mounted once in `src/app/layout.tsx`.
+`dicts/sw.ts` (568 keys each, flat dot-notation), `dicts/check.ts`
+(compile-time parity assert + dev runtime validation). The provider is
+mounted once in `src/app/layout.tsx`.
 
 ## Client-side architecture: the payload facade + offline outbox
 
