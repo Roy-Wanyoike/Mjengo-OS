@@ -10,9 +10,11 @@ import { isReviewDecision } from '@/backend/modules/documents/types'
 // Document intelligence API (MjengoOS backend wave B3, Doc A §60).
 //
 // POST { attachmentId, ocrTextHint? }  → run extraction (image → VLM seam;
-//   PDF → honest error unless a client-side ocrTextHint is supplied — this
-//   sandbox has no PDF text-extraction library and faking one would poison
-//   records). Response: { ok, simulated:false, model, confidence,
+//   PDF → SERVER-SIDE text-layer extraction, lib/pdf-text.ts — issue #42 —
+//   so no client hint is required; a caller-supplied ocrTextHint still
+//   takes precedence, and a PDF with no usable text layer / an encrypted
+//   PDF returns the same honest 400 error shape as before, never a faked
+//   extraction). Response: { ok, simulated:false, model, confidence,
 //   extraction } — extraction is DRAFT-ONLY: it writes the Attachment row's
 //   extraction fields and NEVER any official record (no BOQ / material
 //   request / invoice / ledger writes). reviewStatus resets to 'pending'

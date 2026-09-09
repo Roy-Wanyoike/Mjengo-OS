@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto'
 
 import { db } from '@/backend/lib/db'
+import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 import { logAudit, summarizeAction, kindForAction } from '@/backend/lib/audit'
 import { TRUST_ACTIONS, applyTrustAction } from '@/backend/actions/trust'
 import { MONEY_ACTIONS, applyMoneyAction } from '@/backend/actions/money'
@@ -1035,7 +1036,12 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
           supplier: supplier || 'Unknown supplier',
           date: date ? new Date(date) : new Date(),
           source: source || 'manual',
-          rawTranscript: rawTranscript || null,
+          // Defense-in-depth: transcripts are scrubbed at the AI boundary
+          // (pii-scrub); scrub again in case a raw transcript reaches this
+          // applier through another client path (USSD/sync).
+          rawTranscript: (typeof rawTranscript === 'string' && rawTranscript)
+            ? scrubTranscriptPhones(rawTranscript).scrubbed
+            : rawTranscript || null,
         },
       })
       await db.transaction.create({

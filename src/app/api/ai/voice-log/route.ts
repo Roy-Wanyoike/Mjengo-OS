@@ -4,6 +4,7 @@ import { buildProjectDigest, parseDeliveryTranscript } from '@/backend/lib/ai'
 import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
+import { requireFlagOn } from '@/backend/modules/intel/flags'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -26,6 +27,11 @@ export const maxDuration = 120
  * this targets accidental full phone-number capture) is documented in
  * src/backend/lib/pii-scrub.ts; parseDeliveryTranscript re-applies the same
  * idempotent scrub on the shared parse seam (covers /api/ai/parse-text too).
+ *
+ * Feature flag (spec §81, task 9-a): ai_voice gates this ROUTE for
+ * non-admin sessions (the Copilot voice panel's record/upload/sample
+ * buttons are disabled by the same flag — see flags.ts for the map;
+ * /api/ai/parse-text, the typed-note path, is deliberately NOT gated).
  */
 export const POST = async (req: NextRequest): Promise<NextResponse> => {
   const gate = await enforceAiRoutePolicy(req, {
@@ -36,6 +42,12 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
     ],
   })
   if (!gate.ok) return gate.response
+
+  // Feature flag (spec §81, task 9-a): a flipped-off ai_voice used to change
+  // NOTHING — the route now answers the uniform 403 for non-admins (admins
+  // bypass so they can toggle and test).
+  const flagDenied = await requireFlagOn('ai_voice', gate.session)
+  if (flagDenied) return flagDenied
 
   try {
     const audioBase64 = gate.body.audioBase64 as string | undefined
