@@ -40,7 +40,7 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | Variable | Required | Value / semantics |
 |---|---|---|
 | `DATABASE_URL` | yes | SQLite file URL. Absolute path recommended in production (`file:/app/db/custom.db` in Docker). Relative paths resolve against the Prisma schema's directory. |
-| `NEXTAUTH_SECRET` | yes | 64-hex secret for JWT session-cookie encryption (`openssl rand -hex 32`). **Rotating it signs every user out.** |
+| `NEXTAUTH_SECRET` | yes | Secret for JWT session-cookie encryption — generate with `openssl rand -hex 32` (or `openssl rand -base64 32`), any value ≥ 32 chars. **Rotating it signs every user out.** In production (`NODE_ENV=production`) a missing or short (< 32 chars) secret is a **boot error** on the auth routes (`src/backend/lib/next-auth-guard.ts` fails closed, like `JOBS_RUN_TOKEN`); dev logs a one-time warning and keeps working. |
 | `NEXTAUTH_URL` | situational | Public base URL. **Leave UNSET when the app is reached through a reverse proxy / any host-varying gateway** — with `AUTH_TRUST_HOST=1` next-auth v4 derives the origin per request from `x-forwarded-host`/`-proto`, so redirects, callback URLs and cookie origins always match the host the user actually browses. Set it ONLY for a fixed public domain (`https://your-domain.example`). Pinning it to localhost behind a proxy breaks sign-in (PR #7). |
 | `AUTH_TRUST_HOST` | behind proxy: yes (`1`) | Makes next-auth v4's `detectOrigin` honor the proxy's forwarded host/proto headers instead of silently pinning every origin to `NEXTAUTH_URL` (or `http://localhost:3000`). Harmless for direct localhost access — keep it set whenever a proxy is involved. |
 | `WEBSITE_ORIGIN` | with the marketing site | Rewrite target for `/website/*` — the origin of the `mjengoos-website/` Next.js app. Default `http://127.0.0.1:3001` (the site's own server in local dev); under docker-compose set `http://website:3001` (service DNS — `docker-compose.yml` does this for you). |
@@ -92,7 +92,10 @@ bun install                       # uses bun.lock
 cp .env.example .env
 # edit .env:
 #   DATABASE_URL=file:../db/custom.db   (repo-relative; db/ is gitignored)
-#   NEXTAUTH_SECRET=$(openssl rand -hex 32)
+#   NEXTAUTH_SECRET=$(openssl rand -hex 32)     # or: openssl rand -base64 32
+#   (≥ 32 chars. In production a missing/short secret is a BOOT ERROR —
+#    see §3 NEXTAUTH_SECRET and src/backend/lib/next-auth-guard.ts; dev
+#    logs a one-time warning instead.)
 
 bunx prisma generate              # generate the Prisma client
 bunx prisma migrate deploy        # apply prisma/migrations/ (see §4.1)
@@ -106,37 +109,49 @@ The database ships **empty** — seed the demo data next.
 - **`bunx prisma migrate deploy`** — the production path. Applies
   `prisma/migrations/` in order and records them in `_prisma_migrations`.
   Baseline: `0_init` (the foundation schema, generated from
-  `prisma/schema.prisma`); then eight **additive-only** migrations:
+  `prisma/schema.prisma`); then nine **additive-only** migrations:
   `1_mjengo_score` (W3-3 trust score), `2_draw_pack` (W4-1 evidence
   bundles), `3_push_subscription` (W5-1 web push), `4_supplier_user_link`
-  (W5-3 — one `ALTER TABLE ADD COLUMN`), and the Wave-6 AI tables
-  `5_ai_review_note` / `6_photo_hash` / `7_ai_insight` / `8_trust_digest`.
-  68 models today; each migration is one `CREATE TABLE` (or one additive
-  `ALTER TABLE`) — zero data migration, safe, never drops data.
-- **Honest caveat (known, tracked):** the Wave-5 `DeliveryPhoto` model has a
-  row in `schema.prisma` but **no SQL migration** (it landed via `db push`
-  during development) — a fresh `migrate deploy` database would miss that
-  one table. The dev sandbox and the seeded DB are `db push`-synced and
-correct; the fix is a future additive migration (prisma/ changes are out of
-scope for the docs pass that documented this). Until then, `db push` (below)
-reconciles any drift.
+  (W5-3 — one `ALTER TABLE ADD COLUMN`), the Wave-6 AI tables
+  `5_ai_review_note` / `6_photo_hash` / `7_ai_insight` / `8_trust_digest`,
+  and `9_schema_reconcile` (issue #73 — the drift reconciliation, below).
+  68 models today; every migration is `CREATE TABLE` / `ALTER TABLE ADD
+  COLUMN` / `CREATE INDEX` — zero data migration, safe, never drops data.
+- **Drift status: RESOLVED (issue #73, migration `9_schema_reconcile`).**
+  Waves 2–6 let `schema.prisma` drift ahead of the migration history (five
+  pieces landed via `db push` and were never captured as SQL), so a fresh
+  `migrate deploy` used to boot a database missing `Task.version`,
+  `Attendance.version`, `Transaction.phaseId`, `Notification.deliveryDetail`
+  and the whole `DeliveryPhoto` table. `9_schema_reconcile` adds exactly
+  those pieces additively, so **migrations and `schema.prisma` now agree:
+  `bunx prisma migrate diff --from-migrations prisma/migrations
+  --to-schema-datamodel prisma/schema.prisma --script` is empty**, and a
+  fresh `migrate deploy` + the full §4.2 seed chain runs clean (verified on
+  a throwaway `file:/tmp/fresh.db`). The historical dev database was
+  baselined with `bunx prisma migrate resolve --applied 0_init …
+  9_schema_reconcile` (it was already `db push`-synced to the same shape —
+  verified with `migrate diff --from-url` — so the SQL was *not* re-executed
+  against it; `migrate status` reports up to date). Docker/production boots
+  (`prisma migrate deploy` in the image CMD) are migration-managed end to
+  end — `db push` is no longer needed to reconcile anything for deploys.
 - **`bunx prisma db push`** (or `bun run db:push`) — the prototyping path
-  used while the schema is still moving: pushes `schema.prisma` straight to
-  the DB, ignoring migrations. It still works after the baseline — push does
-  not read `_prisma_migrations` — but **once a real deployment exists, change
-  the schema only via new migrations** (`bunx prisma migrate dev --name x`
-  locally, commit the generated SQL, `migrate deploy` in production).
-- **`Transaction.phaseId` (issue #39, phase cost-codes)** is a further
-  additive schema change: a nullable column + FK to `Phase` (`SetNull` on
-  phase delete), zero data migration. Legacy rows and non-phase spend
-  (wages, unattributed expenses) legitimately stay `null` — the
-  budget-variance report then attributes them by its documented budget-share
-  estimate, while money posted through seams that KNOW the phase (milestone
-  releases, milestone payment requests, payer-attributed `invoice.pay`)
-  carries a real code and counts directly. The report's
+  for LOCAL schema experimentation: pushes `schema.prisma` straight to the
+  DB, ignoring migrations. It still works after the baseline — push does
+  not read `_prisma_migrations` — but **once a real deployment exists,
+  change the schema only via new migrations** (`bunx prisma migrate dev
+  --name x` locally, commit the generated SQL, `migrate deploy` in
+  production) so the migrate-managed path never drifts again.
+- **`Transaction.phaseId` (issue #39, phase cost-codes)** is an additive
+  schema change delivered by `9_schema_reconcile`: a nullable column + FK to
+  `Phase` (`SetNull` on phase delete), zero data migration. Legacy rows and
+  non-phase spend (wages, unattributed expenses) legitimately stay `null` —
+  the budget-variance report then attributes them by its documented
+  budget-share estimate, while money posted through seams that KNOW the
+  phase (milestone releases, milestone payment requests, payer-attributed
+  `invoice.pay`) carries a real code and counts directly. The report's
   `phaseAttribution.mode` (`real` / `mixed` / `estimated`) states which mode
-  produced the numbers. Apply via the path above; money math is untouched
-  (amounts, ledger double-entry, balances — this is attribution only).
+  produced the numbers. Money math is untouched (amounts, ledger
+  double-entry, balances — this is attribution only).
 - Seeding does NOT run automatically in any path; run it explicitly (§4.2).
 
 ### 4.2 Seed chain (exact order)
