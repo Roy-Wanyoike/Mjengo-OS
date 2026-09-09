@@ -16,7 +16,9 @@ import { markRead } from '@/backend/modules/notify/service'
 //
 // POST { projectId, ids?: string[] | 'all' } → sets read=true and readAt (only
 // where still null, preserving the first-read timestamp), strictly scoped to
-// the project. Client-role sessions may only touch their own project.
+// the project. Client-role sessions may only touch their own project; supplier
+// sessions may only touch a project they SERVE — one of their purchase
+// orders' projects (BE-12, the supplier-scope row-pin posture).
 //
 // GET (Doc A §42, backend wave) → the project's notifications with OPTIONAL
 // pagination/filter params — the default (no params) is the same newest-first
@@ -115,6 +117,30 @@ export const POST = route(
     // Client-role sessions see exactly their own project — never another one's rows.
     if (session.user.role === 'client' && session.user.projectId && session.user.projectId !== projectId) {
       return NextResponse.json({ error: 'Not permitted for this project' }, { status: 403 })
+    }
+
+    // BE-12 (issue #77): supplier sessions are scoped to the projects they
+    // SERVE — the projects their purchase orders live in (the same visibility
+    // /api/supplier's `projects` slice carries; the row-pin idiom of
+    // modules/supply/supplier-scope.ts applied at the route). Before this, a
+    // supplier session could mark notifications read for ANY project — a
+    // cross-tenant write every other route family already refuses. An unlinked
+    // supplier stamp fails closed (the actions.ts/sync.ts W5-3 posture); a
+    // project with no orders of theirs is refused with the same copy the
+    // client pin uses, so a foreign projectId is indistinguishable from a
+    // miss.
+    if (session.user.role === 'supplier') {
+      const supplierId = session.user.supplierId
+      if (!supplierId) {
+        return NextResponse.json({ error: 'Supplier account has no supplier linked' }, { status: 403 })
+      }
+      const served = await db.purchaseOrder.findFirst({
+        where: { supplierId, projectId },
+        select: { id: true },
+      })
+      if (!served) {
+        return NextResponse.json({ error: 'Not permitted for this project' }, { status: 403 })
+      }
     }
 
     let ids: string[] | 'all'

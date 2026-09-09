@@ -4,8 +4,15 @@ import { db } from '@/backend/lib/db'
 import { applyAction } from '@/backend/lib/mjengo'
 import { withAuditContext } from '@/backend/lib/audit'
 import { clientIpFromHeaders, enforceRateLimit } from '@/backend/lib/rate-limit'
+import { warnIfWebhookSecretUnsetInProduction } from '@/backend/lib/webhook-secret-warning'
 
 export const dynamic = 'force-dynamic'
+
+// BE-6 (issue #76): the production posture warning — ONE loud line when this
+// route would accept unauthenticated writes (secret unset). No-op in dev/test
+// and once the secret is set; the fail-open behavior itself is unchanged and
+// stays documented below.
+warnIfWebhookSecretUnsetInProduction('api/ussd', 'USSD_WEBHOOK_SECRET')
 
 /**
  * USSD gateway route (Doc A §56) — the endpoint an SMS/USSD aggregator
@@ -48,7 +55,9 @@ export const dynamic = 'force-dynamic'
  *   · USSD_WEBHOOK_SECRET: when set, POSTs must carry `X-Signature:`
  *     lowercase-hex HMAC-SHA256 of the RAW request body under the secret —
  *     aggregator authentication (the demo gateway-trust model then becomes
- *     a shared-secret one). Unset keeps the open demo posture.
+ *     a shared-secret one). Unset keeps the open demo posture — and, since
+ *     BE-6 (issue #76), logs ONE loud startup warning when
+ *     NODE_ENV=production, so the open posture cannot ship silently.
  * Both use the shared in-process limiter (single instance — see
  * src/backend/lib/rate-limit.ts).
  */

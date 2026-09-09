@@ -521,7 +521,15 @@ export const POST = route(
   {
     scope: 'api/sync',
     rateLimit: { bucket: 'sync', limit: 30, windowMs: 60_000 },
-    body: { onParseError: 'throw' },
+    // Loose body contract (legacy): parse errors surface through the generic
+    // 500 catch exactly as before. BE-5 (issue #76): raw-body cap BEFORE
+    // JSON.parse — /api/sync was (with /api/actions) the last JSON route that
+    // fully read + parsed an arbitrarily large body before per-item handling.
+    // 2 MB fits the payload shape: one BATCH of queued actions, each a few
+    // KB (attendance/task/material/milestone items — delivery photos ride
+    // /api/upload's 12MB cap, never this route). Exceeding it → 413 before
+    // any parse/decode; a lying Content-Length is re-checked post-read.
+    body: { onParseError: 'throw', maxBytes: 2 * 1_048_576 },
     onError: genericError(500, 'Sync failed'),
   },
   async (req, session, body) => {

@@ -58,7 +58,14 @@ export const POST = publicRoute(
     rateLimit: { bucket: 'actions', limit: 60, windowMs: 60_000 },
     // Loose body contract (legacy): parse errors surface through the route's
     // error mapper exactly as the old in-handler `await req.json()` did.
-    body: { onParseError: 'throw' },
+    // BE-5 (issue #76): raw-body cap BEFORE JSON.parse — closes the audit-#4
+    // family on the last two uncapped routes (upload 12MB / share 64KB /
+    // push 1MB / whatsapp+daraja 64KB). 1 MB is deliberately generous for a
+    // SINGLE action: the biggest payloads here are delivery.create's
+    // rawTranscript text and attendance.record's records JSON string (a few
+    // KB); photos NEVER ride this route (they go through /api/upload's 12MB
+    // cap + magic-number sniff). Exceeding it → 413 before any parse/decode.
+    body: { onParseError: 'throw', maxBytes: 1_048_576 },
     onError: safeError(400, 'Action failed', { okFalse: true }),
   },
   async (req, session, body) => {

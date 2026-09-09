@@ -85,6 +85,18 @@ export async function ensureExpenseAccount(projectId: string) {
   return ensureProjectAccount(projectId, `EXPENSE:${projectId}`, `Project Expense — ${projectId.slice(-6)}`, 'expense')
 }
 
+// BE-10 (issue #77) — honest limitation of this ref generator: the counter is
+// IN-PROCESS (module scope), so a multi-process deployment (compose scale,
+// any setup running several app instances against one DB) can mint the same
+// LX-<year>-<seq> concurrently. It CANNOT corrupt the ledger: LedgerTransaction.ref
+// is @unique (schema.prisma), so a collision fails CLOSED — the insert throws
+// (P2002) and the whole money $transaction rolls back; the caller surfaces an
+// honest 500 and the retry lands a fresh ref. No money is ever written twice
+// or lost. The same pattern (counter + Date.now()%1000 salt) is documented at
+// its other site in modules/wallet/service.ts. A DB-derived sequence
+// (max+1 in-tx, or retry-on-P2002) is the upgrade path if this ever runs
+// multi-process in production — deliberately not added now (single drain
+// process today; no premature machinery).
 let refCounter = 0
 export function nextLedgerRef(): string {
   const now = new Date()

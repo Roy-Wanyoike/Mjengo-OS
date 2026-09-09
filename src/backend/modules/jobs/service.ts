@@ -14,9 +14,18 @@
 // table to move it to; §48's dead-letter requirement is met honestly by the
 // row itself staying queryable in SQLite).
 // Equally honest gaps vs §48: NO jitter (there is a single drain process, so
-// there is nothing to de-synchronize), no per-handler circuit breaker and no
-// timeout wrapping (handlers run in-process; a hung handler stalls the drain —
-// the route's maxDuration is the only guard).
+// there is nothing to de-synchronize) and no per-handler circuit breaker.
+//
+// BE-7 (issue #76): every handler invocation IS raced against a timeout
+// (DEFAULT_HANDLER_TIMEOUT_MS = 30s, overridable via JOBS_HANDLER_TIMEOUT_MS,
+// re-read at drain time) — a hung handler (TTS/AI/HTTP) can no longer stall
+// the drainer: the row is marked 'failed' with a timeout lastError and the
+// drain CONTINUES. A timeout is TERMINAL (no §48 backoff retry) — a handler
+// that already hung a full window would re-hang on every retry, burning the
+// drain budget again; fail loudly once and let the operator re-enqueue. The
+// underlying (possibly still-hung) handler promise is abandoned, never
+// awaited again — in-process side effects it already made are the operator's
+// signal to check the row's lastError.
 //
 // HONEST execution model: jobs run on demand (the Intel "Background jobs"
 // card + POST /api/jobs/run). There is NO in-process scheduler today — in
@@ -58,6 +67,45 @@ export function retryBackoffMs(attempts: number): number {
   return Math.round(minutes * 60_000)
 }
 
+/** Default per-handler cap (BE-7): 30s — generous for TTS/AI calls, far below
+ *  the route's maxDuration, so a hung handler fails the row instead of the
+ *  whole drain. Override with JOBS_HANDLER_TIMEOUT_MS (parsed at drain time). */
+export const DEFAULT_HANDLER_TIMEOUT_MS = 30_000
+
+/** Raised when a handler invocation exceeds the per-handler timeout (BE-7). */
+class JobHandlerTimeoutError extends Error {}
+
+/**
+ * Per-handler timeout for this drain, from JOBS_HANDLER_TIMEOUT_MS — read at
+ * DRAIN time (not import time) so operators/tests can retune without a
+ * re-import. Invalid or unset values fall back to DEFAULT_HANDLER_TIMEOUT_MS
+ * (never 0/NaN — a zero cap would fail every handler instantly).
+ */
+function resolveHandlerTimeoutMs(): number {
+  const raw = Number.parseInt(process.env.JOBS_HANDLER_TIMEOUT_MS ?? '', 10)
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_HANDLER_TIMEOUT_MS
+}
+
+/**
+ * Race a handler promise against the timeout (the modules/ai/provider.ts
+ * Promise.race idiom, applied to the job runner). The losing side is
+ * abandoned: the timer is cleared once the race settles so a fast handler
+ * never leaves a dangling (later-firing, unhandled) rejection, and a hung
+ * handler promise is simply never awaited again.
+ */
+function raceWithHandlerTimeout<T>(p: Promise<T>, ms: number, jobType: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new JobHandlerTimeoutError(`Handler "${jobType}" timed out after ${ms}ms`)),
+      ms,
+    )
+  })
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
+
 /** Queue a job for immediate (or scheduled, via runAt) execution. */
 export async function enqueue(
   type: string,
@@ -81,9 +129,10 @@ export async function enqueue(
 /**
  * Drain due jobs — queued rows AND 'retrying' rows whose backoff has elapsed
  * (runAt <= now) — one at a time. Each job:
- *   queued/retrying → running (attempts+1, startedAt, lastAttemptAt) → handler →
+ *   queued/retrying → running (attempts+1, startedAt, lastAttemptAt) → handler
+ *   (raced against the per-handler timeout, BE-7) →
  *   done (result + finishedAt, retry count noted when attempts > 1)
- *   | failed (lastError + finishedAt) when attempts >= maxAttempts
+ *   | failed (lastError + finishedAt) when attempts >= maxAttempts OR timeout
  *   | retrying (lastError + runAt = now + backoff) otherwise.
  * Handler errors NEVER abort the drain — the failure is recorded on the row.
  * Stale 'running' rows (a drain that died mid-handler) are left untouched:
@@ -97,6 +146,7 @@ export async function runDueJobs(limit = 10): Promise<{ ran: number; results: Jo
     take: Math.min(Math.max(limit, 1), 25),
   })
 
+  const handlerTimeoutMs = resolveHandlerTimeoutMs()
   const results: JobRunResult[] = []
   for (const job of due) {
     const running = await db.jobRecord.update({
@@ -112,7 +162,7 @@ export async function runDueJobs(limit = 10): Promise<{ ran: number; results: Jo
       } catch {
         payload = {}
       }
-      const outcome = await handler(payload, job.projectId)
+      const outcome = await raceWithHandlerTimeout(handler(payload, job.projectId), handlerTimeoutMs, job.type)
       // A success after prior failures says so in the result JSON (additive
       // `retries` key — per-type parsers in the UI ignore unknown keys).
       const body: Record<string, unknown> =
@@ -135,11 +185,23 @@ export async function runDueJobs(limit = 10): Promise<{ ran: number; results: Jo
       })
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
-      const terminal = running.attempts >= running.maxAttempts
-      console.error(
-        `[jobs] ${job.type} (${running.attempts}/${running.maxAttempts} attempt(s)) failed${terminal ? ' — terminal' : ' — will retry'}:`,
-        message,
-      )
+      // BE-7: a timeout is TERMINAL regardless of attempts — a handler that
+      // already hung a full window would re-hang every retry, so the row
+      // fails loud and stays failed (see header). Ordinary thrown errors keep
+      // the historical §48 ladder untouched.
+      const timedOut = e instanceof JobHandlerTimeoutError
+      const terminal = timedOut || running.attempts >= running.maxAttempts
+      if (timedOut) {
+        console.error(
+          `[jobs] ${job.type} handler TIMED OUT after ${handlerTimeoutMs}ms — row marked 'failed' (terminal, no retry; re-enqueue after investigating):`,
+          message,
+        )
+      } else {
+        console.error(
+          `[jobs] ${job.type} (${running.attempts}/${running.maxAttempts} attempt(s)) failed${terminal ? ' — terminal' : ' — will retry'}:`,
+          message,
+        )
+      }
       if (terminal) {
         const row = await db.jobRecord.update({
           where: { id: job.id },

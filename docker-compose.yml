@@ -48,6 +48,12 @@ services:
       WEBSITE_ORIGIN: "http://website:3001"
       # Fixed public domain instead of a proxy? Set in .env:
       #   NEXTAUTH_URL=https://your-domain.example
+      # Webhook HMAC secrets for the two public field channels (USSD *384# and
+      # WhatsApp). Unset = the documented open demo posture; in production the
+      # app logs ONE loud warning per route until they are set (BE-6, issue #76).
+      # Set in .env (env_file passes them through, like JOBS_RUN_TOKEN):
+      #   USSD_WEBHOOK_SECRET=<openssl rand -hex 32>
+      #   WHATSAPP_WEBHOOK_SECRET=<openssl rand -hex 32>
     volumes:
       - app-db:/app/db                 # SQLite database (back this up!)
       - app-photos:/app/public/photos  # POST /api/upload photo uploads
