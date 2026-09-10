@@ -3,7 +3,13 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { db } from '@/backend/lib/db'
 import { applyAction } from '@/backend/lib/mjengo'
 import { withAuditContext } from '@/backend/lib/audit'
-import { clientIpFromHeaders, enforceRateLimit } from '@/backend/lib/rate-limit'
+import {
+  checkUssdPinLockout,
+  clearUssdPinFailures,
+  clientIpFromHeaders,
+  enforceRateLimit,
+  recordUssdPinFailure,
+} from '@/backend/lib/rate-limit'
 import { warnIfWebhookSecretUnsetInProduction } from '@/backend/lib/webhook-secret-warning'
 
 export const dynamic = 'force-dynamic'
@@ -58,8 +64,27 @@ warnIfWebhookSecretUnsetInProduction('api/ussd', 'USSD_WEBHOOK_SECRET')
  *     a shared-secret one). Unset keeps the open demo posture — and, since
  *     BE-6 (issue #76), logs ONE loud startup warning when
  *     NODE_ENV=production, so the open posture cannot ship silently.
- * Both use the shared in-process limiter (single instance — see
- * src/backend/lib/rate-limit.ts).
+ *
+ * Audit-wave-2 hardening (issues #105 BE-4 / #106 BE-9):
+ *   · 64 KB raw-body cap (declared Content-Length precheck + actual byte
+ *     count after the read, BEFORE JSON.parse and before the HMAC check) —
+ *     the whatsapp route's S2 gate mirrored 1:1; this was the only
+ *     unauthenticated JSON route without one.
+ *   · Per-PIN failure LOCKOUT: 5 wrong PINs for one phone within 15 min →
+ *     a 15-minute lock for that line (honest "locked, try later" reply,
+ *     correct PINs included — resolution is refused before any DB work).
+ *     Keyed per phone, tracked in the SHARED rate-limit tracker store
+ *     (in-process map, or db/ratelimit.db when RATE_LIMIT_STORE=sqlite —
+ *     see createUssdPinLockout in rate-limit.ts). A correct PIN clears the
+ *     count (consecutive-failure semantics).
+ *   · PHONE-TAIL PIN FALLBACK IS DROPPED when USSD_WEBHOOK_SECRET is set:
+ *     last-4-of-phone is DEMO posture only (anyone who knows the worker's
+ *     number can key it). With a real aggregator secret set — i.e. the
+ *     operator is running the shared-secret posture — only the stored kiosk
+ *     PIN (Worker.pin) resolves a worker. Secret unset → fallback stays
+ *     (documented demo posture, unchanged).
+ * All rate limiting + lockout use the shared limiter/tracker stores (single
+ * instance — see src/backend/lib/rate-limit.ts).
  */
 
 const SERVICE_CODE = '*384#'
@@ -86,6 +111,23 @@ function ussd(text: string): NextResponse {
   })
 }
 
+/** Raw-body cap mirroring POST /api/whatsapp's S2 gate (400, same family). */
+const MAX_BODY_BYTES = 64 * 1024
+
+/** 400 with the honest size message (same family as every other body error here). */
+function bodyTooLarge(): NextResponse {
+  return NextResponse.json(
+    { error: 'Request body too large — this endpoint accepts at most 64 KB' },
+    { status: 400 },
+  )
+}
+
+/** The honest locked-line reply (BE-9, issue #106) — names the wait. */
+function pinLockedText(msLeft: number): string {
+  const mins = Math.max(1, Math.ceil(msLeft / 60_000))
+  return `Too many wrong PINs. This line is locked for ${mins} more minute(s) — try again later.${USSD_FOOTER}`
+}
+
 /** Last 4 digits of a phone — the demo PIN, exactly like the UI simulation. */
 function phonePin(phone: string): string {
   return (phone || '').replace(/\D/g, '').slice(-4)
@@ -101,6 +143,10 @@ interface UssdWorker {
  * Resolve a worker by PIN across active workers (kiosk PIN first, then phone
  * last-4 — the same two-step the in-app simulation uses). First match wins;
  * PIN collisions across projects are possible in demo data (honest limit).
+ *
+ * BE-9 (issue #106): the phone-tail fallback is DEMO posture — when
+ * USSD_WEBHOOK_SECRET is set (a real aggregator secret, the shared-secret
+ * posture) it is SKIPPED and only the stored kiosk PIN resolves a worker.
  */
 async function resolveWorkerByPin(pin: string): Promise<UssdWorker | null> {
   if (!pin) return null
@@ -111,6 +157,7 @@ async function resolveWorkerByPin(pin: string): Promise<UssdWorker | null> {
     take: 1,
   })
   if (byKioskPin.length > 0) return byKioskPin[0]
+  if (process.env.USSD_WEBHOOK_SECRET) return null // shared-secret posture: kiosk PIN only
   const active = await db.worker.findMany({
     where: { active: true },
     select: { id: true, name: true, projectId: true, phone: true },
@@ -187,9 +234,15 @@ function verifyWebhookSignature(req: NextRequest, raw: string): NextResponse | n
 
 export async function POST(req: NextRequest) {
   try {
-    // Raw body once: the HMAC (when enabled) is computed over the RAW bytes,
-    // and the JSON parse follows from the same string.
+    // Raw body once — capped BEFORE anything else (BE-4, issue #105): the
+    // declared Content-Length precheck refuses an oversized request before
+    // the body is buffered at all; the post-read count catches a lying small
+    // header. The HMAC (when enabled) is computed over the RAW bytes and the
+    // JSON parse follows from the same string.
+    const declared = Number(req.headers.get('content-length') ?? '')
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return bodyTooLarge()
     const raw = await req.text()
+    if (Buffer.byteLength(raw, 'utf8') > MAX_BODY_BYTES) return bodyTooLarge()
 
     const sigRejected = verifyWebhookSignature(req, raw)
     if (sigRejected) return sigRejected
@@ -229,6 +282,12 @@ export async function POST(req: NextRequest) {
         60_000,
       )
       if (pinLimited) return pinLimited
+      // BE-9 (issue #106): per-PIN failure lockout — 5 wrong PINs for this
+      // phone in 15 min locks the line for 15 min. Refused BEFORE any DB
+      // work, correct PIN included; the tracker lives in the shared
+      // rate-limit store (see createUssdPinLockout in rate-limit.ts).
+      const lock = checkUssdPinLockout(phoneNumber)
+      if (lock.locked) return ussd(pinLockedText(lock.msLeft))
     }
 
     // ---- main menu ----
@@ -242,8 +301,12 @@ export async function POST(req: NextRequest) {
       if (!status) return ussd(ATTEND_USAGE)
       const worker = await resolveWorkerByPin(pin)
       if (!worker) {
+        // Wrong PIN → count it; the 5th within the window trips the lock NOW.
+        const trip = recordUssdPinFailure(phoneNumber)
+        if (trip.locked) return ussd(pinLockedText(trip.msLeft))
         return ussd(`PIN not recognised. Dial ${SERVICE_CODE} to restart.${USSD_FOOTER}`)
       }
+      clearUssdPinFailures(phoneNumber) // a correct PIN restarts the count
       // dispatchUssdAction throws on domain failure — the outer catch returns
       // the honest "could not record" text instead of a confirmation.
       if (status.code === 'present') {
@@ -270,8 +333,12 @@ ${worker.name} — ${status.label}. Asante!${USSD_FOOTER}`)
       if (!pin) return ussd(BALANCE_USAGE)
       const worker = await resolveWorkerByPin(pin)
       if (!worker) {
+        // Wrong PIN → count it (balance is an identity attempt too).
+        const trip = recordUssdPinFailure(phoneNumber)
+        if (trip.locked) return ussd(pinLockedText(trip.msLeft))
         return ussd(`PIN not recognised. Dial ${SERVICE_CODE} to restart.${USSD_FOOTER}`)
       }
+      clearUssdPinFailures(phoneNumber) // a correct PIN restarts the count
       const [agg, unpaidRows] = await Promise.all([
         db.attendance.aggregate({
           where: { workerId: worker.id, paid: false, status: { not: 'absent' } },
@@ -316,10 +383,16 @@ export async function GET() {
       '*384#*2*<workerPin>': 'unpaid wage balance for that worker',
       '*384#*3': 'help text',
     },
-    pinResolution: 'kiosk PIN (Worker.pin) first, else last 4 digits of the worker phone',
-    rateLimit: '20 requests/min/phone + 40 PIN-attempts/min per client IP (in-process token bucket — single instance)',
+    pinResolution:
+      'kiosk PIN (Worker.pin) first, else last 4 digits of the worker phone — ' +
+      'the phone-tail fallback is DEMO posture: it is dropped when USSD_WEBHOOK_SECRET is set ' +
+      '(shared-secret posture → only the stored kiosk PIN resolves)',
+    rateLimit:
+      '20 requests/min/phone + 40 PIN-attempts/min per client IP + 5 wrong PINs/phone ' +
+      'within 15 min → 15-minute line lockout (in-process token bucket / tracker store — single instance)',
     auth: 'unauthenticated by design (gateway-trust model); the worker PIN is the in-session identity',
     signature: 'USSD_WEBHOOK_SECRET (optional env): when set, POST requires X-Signature — lowercase-hex HMAC-SHA256 of the raw request body under the secret; unset = open demo posture',
+    bodyCap: '64 KB raw (Content-Length precheck + actual byte count, before JSON.parse) → 400 beyond',
     honest:
       'No SMS/USSD aggregator is wired to this route — it speaks an Africa\'s Talking-style contract so one can be attached later. Attendance dispatches through the same domain actions (applyAction) as the app UI; every menu response is footered "MjengoOS sim".',
     contentType: 'text/plain; charset=utf-8',

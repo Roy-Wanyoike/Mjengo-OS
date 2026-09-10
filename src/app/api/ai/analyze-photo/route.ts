@@ -4,7 +4,7 @@ import path from 'path'
 import { db } from '@/backend/lib/db'
 import { extractJson, visionMessage } from '@/backend/lib/ai'
 import { applyAction, getProjectPayload } from '@/backend/lib/mjengo'
-import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
+import { AI_PHOTO_MAX_BODY_BYTES, enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
 
@@ -13,9 +13,13 @@ export const maxDuration = 120
 
 export const POST = async (req: NextRequest): Promise<NextResponse> => {
   // W1-SEC gate: session → role allowlist (contractor/admin/supervisor) →
-  // 10 req/min/user → body shape (projectId must exist when supplied).
+  // 10 req/min/user → 6 MB raw-body cap (BE-5, issue #105 — the dataUrl used
+  // to arrive UNBOUNDED; now a declared Content-Length precheck + post-read
+  // count refuse it before JSON.parse) → body shape (projectId must exist
+  // when supplied).
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:analyze-photo',
+    maxBytes: AI_PHOTO_MAX_BODY_BYTES,
     fields: [
       { name: 'dataUrl', type: 'string' },
       { name: 'url', type: 'string' },

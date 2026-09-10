@@ -221,8 +221,9 @@ export const LOGIN_LOCKOUT_MS = 15 * 60 * 1000
 /** Raw lockout tracker row — persisted as-is by the store seam below. */
 export type LoginTracker = { failures: number; lastFailureAt: number; lockedUntil: number }
 
-/** Which of the two lockout key spaces a tracker belongs to. */
-export type LoginTrackerKind = 'email' | 'pair'
+/** Which of the lockout key spaces a tracker belongs to ('ussd' = the USSD
+ *  PIN lockout below — the same seam and lifecycle, a third key space). */
+export type LoginTrackerKind = 'email' | 'pair' | 'ussd'
 
 /**
  * Pluggable backing store for the lockout trackers (W3-b, issue #33): the
@@ -401,6 +402,113 @@ export function createLoginLockout(store: LoginTrackerStore): LoginLockout {
 /** The live lockout engine — bound to the env-resolved tracker store. */
 const defaultLoginLockout = createLoginLockout(loginTrackerStore)
 
+// ------------------------------------------------------------- USSD PIN lockout
+
+/**
+ * USSD PIN brute-force lockout (issue #106 / audit BE-9): 5 wrong PINs for
+ * one phone within 15 min → a 15-minute lock for that line.
+ *
+ * Design (issue #106 "keyed per phone" + "reuse the rate-limit store infra"):
+ *   · SINGLE tracker, keyed by the CALLER-SUPPLIED phoneNumber — the phone
+ *     IS the account under attack (a coworker who knows the number is the
+ *     recorded threat model). No second (phone|ip) key, unlike the login
+ *     lockout: the route's existing 40/min per-IP PIN throttle already
+ *     covers the rotating-source case.
+ *   · SAME LoginTrackerStore seam (in-process map, or the shared sqlite file
+ *     when RATE_LIMIT_STORE=sqlite — the 5th failure on process A is visible
+ *     to process B), tracked under the 'ussd' kind, same 5/15min/15min
+ *     lifecycle shape as the login lockout so the semantics cannot drift.
+ *     CONSECUTIVE-failure semantics: the route clears the tracker on every
+ *     successful PIN resolution, so only 5 wrong PINs IN A ROW trip it.
+ *   · `now` is injectable (default Date.now) so tests drive the window
+ *     without sleeping — the engine is a pure function of (store, now).
+ *   · Old sqlite store files created before the 'ussd' kind keep the legacy
+ *     CHECK(kind IN ('email','pair')) schema: those rows fail the constraint,
+ *     the store degrades to fail-open with its ONE warning, and deleting the
+ *     disposable db/ratelimit.db while stopped restores enforcement (the
+ *     store's documented reset semantics).
+ */
+export const USSD_PIN_FAILURE_LIMIT = 5
+export const USSD_PIN_WINDOW_MS = 15 * 60 * 1000
+export const USSD_PIN_LOCKOUT_MS = 15 * 60 * 1000
+
+export interface UssdPinLockout {
+  /** Is this line currently locked out? `msLeft` > 0 while locked. */
+  checkUssdPinLockout(phone: string): { locked: boolean; msLeft: number }
+  /** Record a wrong-PIN attempt; reports when THIS attempt trips the lock. */
+  recordUssdPinFailure(phone: string): { locked: boolean; msLeft: number }
+  /** A correct PIN: wipe the tracker (consecutive-failure semantics). */
+  clearUssdPinFailures(phone: string): void
+}
+
+const ussdPhoneLockKey = (phone: string): string => phone.trim()
+
+/** Lockout engine for the USSD line — mirrors createLoginLockout, phone-keyed.
+ * (`now` defaults to a CLOSURE over Date.now, not the Date.now reference, so
+ * vitest fake timers — which replace the global Date per test — are honored.) */
+export function createUssdPinLockout(
+  store: LoginTrackerStore,
+  now: () => number = () => Date.now(),
+): UssdPinLockout {
+  const kind: LoginTrackerKind = 'ussd'
+
+  const bump = (key: string, at: number): { locked: boolean; msLeft: number } => {
+    const t = store.getTracker(kind, key) ?? { failures: 0, lastFailureAt: 0, lockedUntil: 0 }
+    if (at - t.lastFailureAt > USSD_PIN_WINDOW_MS) t.failures = 0 // stale window → restart
+    t.failures += 1
+    t.lastFailureAt = at
+    const locked = t.failures >= USSD_PIN_FAILURE_LIMIT && !t.lockedUntil
+    if (locked) t.lockedUntil = at + USSD_PIN_LOCKOUT_MS
+    store.putTracker(kind, key, t)
+    return { locked, msLeft: Math.max(0, t.lockedUntil - at) }
+  }
+
+  return {
+    checkUssdPinLockout(phone) {
+      const key = ussdPhoneLockKey(phone)
+      const t = store.getTracker(kind, key)
+      if (!t) return { locked: false, msLeft: 0 }
+      const at = now()
+      if (t.lockedUntil > at) return { locked: true, msLeft: t.lockedUntil - at }
+      if (t.lockedUntil) store.deleteTracker(kind, key) // lock served → clean slate
+      return { locked: false, msLeft: 0 }
+    },
+
+    recordUssdPinFailure(phone) {
+      const key = ussdPhoneLockKey(phone)
+      const at = now()
+      return store.transact(() => bump(key, at))
+    },
+
+    clearUssdPinFailures(phone) {
+      store.deleteTracker(kind, ussdPhoneLockKey(phone))
+    },
+  }
+}
+
+/** The live USSD PIN lockout — bound to the env-resolved tracker store. */
+const defaultUssdPinLockout = createUssdPinLockout(loginTrackerStore)
+
+/** Is this USSD line currently locked out? `msLeft` > 0 while locked. */
+export function checkUssdPinLockout(phone: string): { locked: boolean; msLeft: number } {
+  return defaultUssdPinLockout.checkUssdPinLockout(phone)
+}
+
+/**
+ * Record a wrong-PIN attempt against the phone-keyed tracker. When the count
+ * reaches USSD_PIN_FAILURE_LIMIT inside the window the lock starts NOW — the
+ * return value says so, so the route can answer the honest locked reply on
+ * the very attempt that tripped it.
+ */
+export function recordUssdPinFailure(phone: string): { locked: boolean; msLeft: number } {
+  return defaultUssdPinLockout.recordUssdPinFailure(phone)
+}
+
+/** A correct PIN resolution wipes the tracker (consecutive-failure semantics). */
+export function clearUssdPinFailures(phone: string): void {
+  defaultUssdPinLockout.clearUssdPinFailures(phone)
+}
+
 function sweepLoginTrackers(now: number): void {
   loginTrackerStore.pruneTrackers(now, LOGIN_WINDOW_MS)
 }
@@ -438,6 +546,45 @@ export const AI_ROUTE_ROLES: readonly string[] = ['contractor', 'admin', 'superv
 /** Default AI route limit: 10 requests/min/user per route (Doc A §52). */
 export const AI_RATE_LIMIT_PER_MIN = 10
 
+/**
+ * Per-route raw-body caps for /api/ai/* (issue #105 / audit BE-5): the gate
+ * used to `await req.text()` UNBOUNDED before any size check — voice-log's
+ * 12 MB audioBase64 check ran only AFTER the whole body was buffered, and
+ * analyze-photo's dataUrl had no cap at all. Defaults small, opts up:
+ *   · 128 KB — every text/JSON route (parse-text, extract-document, recap,
+ *     anomaly-scan, authenticity-screen): prompts and hints, not payloads.
+ *   · 13 MB — voice-log: transport headroom over the route's own 12 MB
+ *     audioBase64 domain cap (JSON envelope + base64 overhead).
+ *   · 6 MB — analyze-photo: a dataUrl photo upload ceiling.
+ * Enforcement mirrors the whatsapp/ussd S2 gate exactly: declared
+ * Content-Length precheck (an oversized header is refused before the read)
+ * + actual byte count after the read, BEFORE JSON.parse.
+ */
+export const AI_ROUTE_DEFAULT_MAX_BODY_BYTES = 128 * 1024
+/** voice-log transport cap — headroom over its 12 MB audioBase64 domain cap. */
+export const AI_VOICE_LOG_MAX_BODY_BYTES = 13 * 1024 * 1024
+/** analyze-photo transport cap for dataUrl uploads. */
+export const AI_PHOTO_MAX_BODY_BYTES = 6 * 1024 * 1024
+
+/** '64 KB' / '13 MB' style label for the honest body-cap message. */
+export function formatByteCap(bytes: number): string {
+  const MB = 1024 * 1024
+  if (bytes >= MB && bytes % MB === 0) return `${bytes / MB} MB`
+  if (bytes >= 1024 && bytes % 1024 === 0) return `${bytes / 1024} KB`
+  return `${bytes} bytes`
+}
+
+/**
+ * 400 with the honest size message (the whatsapp/ussd bodyTooLarge family —
+ * same wording, same status, so every raw-body cap in the repo answers alike).
+ */
+function aiBodyTooLarge(maxBytes: number): NextResponse {
+  return NextResponse.json(
+    { error: `Request body too large — this endpoint accepts at most ${formatByteCap(maxBytes)}` },
+    { status: 400 },
+  )
+}
+
 export type AiBodyField = { name: string; type: 'string' | 'boolean' }
 
 export type AiPolicyResult =
@@ -452,7 +599,10 @@ export type AiPolicyResult =
  *   1. session via getSessionFromReq (guard.ts) → 401
  *   2. role allowlist AI_ROUTE_ROLES → 403 (honest message)
  *   3. rate limit (default 10/min per user, per route) → 429
- *   4. body shape: unknown top-level fields and mistyped fields → 400;
+ *   4. raw-body byte cap (default 128 KB, per-route `maxBytes` override for
+ *      the media routes — declared Content-Length precheck + post-read byte
+ *      count, BEFORE JSON.parse) → 400 honest size error
+ *   5. body shape: unknown top-level fields and mistyped fields → 400;
  *      a `projectId` that is present but not an existing Project → 404.
  * It lives in this module (not guard.ts) because wave-1 file ownership pins
  * guard.ts to W1-PERM — guard.ts is imported read-only here.
@@ -472,6 +622,8 @@ export async function enforceAiRoutePolicy(
     allowEmptyBody?: boolean
     limit?: number
     windowMs?: number
+    /** Per-route raw-body cap (default AI_ROUTE_DEFAULT_MAX_BODY_BYTES). */
+    maxBytes?: number
   },
 ): Promise<AiPolicyResult> {
   // 1. Session — no cookie, no AI.
@@ -503,10 +655,20 @@ export async function enforceAiRoutePolicy(
   )
   if (limited) return { ok: false, response: limited }
 
-  // 4. Body shape.
+  // 4. Body shape — the byte cap first (BE-5, issue #105): the declared
+  //    Content-Length precheck refuses an oversized request before the body
+  //    is buffered at all; the post-read count catches a lying small header.
+  const maxBytes = opts.maxBytes ?? AI_ROUTE_DEFAULT_MAX_BODY_BYTES
+  const declared = Number(req.headers.get('content-length') ?? '')
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { ok: false, response: aiBodyTooLarge(maxBytes) }
+  }
   let body: unknown
   try {
     const raw = await req.text()
+    if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
+      return { ok: false, response: aiBodyTooLarge(maxBytes) }
+    }
     body = raw.trim() ? JSON.parse(raw) : {}
   } catch {
     return { ok: false, response: NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }) }
