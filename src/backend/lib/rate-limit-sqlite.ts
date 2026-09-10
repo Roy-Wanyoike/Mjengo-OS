@@ -180,7 +180,14 @@ CREATE TABLE IF NOT EXISTS rl_bucket (
   refill_per_ms REAL    NOT NULL
 );
 CREATE TABLE IF NOT EXISTS rl_login_tracker (
-  kind            TEXT    NOT NULL CHECK (kind IN ('email', 'pair')),
+  -- 'ussd' = the phone-keyed USSD PIN lockout (issue #106) — same seam, same
+  -- lifecycle, third key space. ADDITIVE SCHEMA NOTE: CREATE TABLE IF NOT
+  -- EXISTS never alters an existing file, so a ratelimit.db created before
+  -- this kind keeps the legacy ('email','pair') CHECK — its USSD lockout
+  -- writes fail the constraint, the store degrades to fail-open with its ONE
+  -- warning, and deleting the disposable file while stopped (the store's
+  -- documented reset) recreates it with the new CHECK.
+  kind            TEXT    NOT NULL CHECK (kind IN ('email', 'pair', 'ussd')),
   track_key       TEXT    NOT NULL,
   failures        INTEGER NOT NULL,
   last_failure_at INTEGER NOT NULL,
@@ -355,13 +362,14 @@ export class SqliteRateLimitStore implements RateLimitStore {
 type TrackerRow = { failures: number; last_failure_at: number; locked_until: number }
 
 /**
- * Login lockout trackers persisted in one SQLite file — the same two key
- * spaces as the in-memory maps ('email' kind: the account key,
- * 'pair' kind: the `email|ip` key), the same 5-strikes/window/lockout
- * lifecycle (the engine lives in rate-limit.ts and is shared by both
- * stores, so the semantics cannot drift). Read-modify-write cycles run
- * inside transact() (BEGIN IMMEDIATE) so two processes recording the same
- * account's 4th+5th failure cannot lose the count.
+ * Login lockout trackers persisted in one SQLite file — the three key
+ * spaces of the in-memory maps ('email' kind: the account key, 'pair' kind:
+ * the `email|ip` key, 'ussd' kind: the phone-keyed USSD PIN lockout), the
+ * same 5-strikes/window/lockout lifecycle (the engines live in rate-limit.ts
+ * and are shared by both stores, so the semantics cannot drift).
+ * Read-modify-write cycles run inside transact() (BEGIN IMMEDIATE) so two
+ * processes recording the same account's 4th+5th failure cannot lose the
+ * count.
  */
 export class SqliteLoginTrackerStore implements LoginTrackerStore {
   private readonly db: SqliteDatabase

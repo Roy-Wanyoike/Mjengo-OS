@@ -577,6 +577,90 @@ describe('ai_voice gates POST /api/ai/voice-log', () => {
   })
 })
 
+// ------------------------------------------------------ ai route body caps
+
+describe('the /api/ai/* raw-body caps (issue #105 / BE-5 — per-route maxBytes)', () => {
+  /** Fresh rate-limit bucket per test: a unique principal (email) per case. */
+  function capSession(n: number) {
+    h.session = {
+      user: { id: `u-caps-${n}`, email: `caps-${n}@test.dev`, name: 'caps', role: 'contractor', projectId: null },
+    }
+  }
+
+  const MB = 1024 * 1024
+  const KB = 1024
+
+  it('voice-log: a 13.1 MB body → 400 body-too-large naming 13 MB (ASR never called)', async () => {
+    capSession(1)
+    const res = await voiceLogPost(jsonReq('http://localhost/api/ai/voice-log', 'POST', {
+      audioBase64: 'a'.repeat(Math.floor(13.1 * MB)),
+    }), undefined)
+    expect(res.status).toBe(400)
+    expect((await bodyOf(res)).error).toBe('Request body too large — this endpoint accepts at most 13 MB')
+    expect(ai.asrCreate).not.toHaveBeenCalled()
+  })
+
+  it('voice-log: a 12.9 MB body PASSES the 13 MB transport cap — then the route-level 12 MB audio domain cap answers', async () => {
+    capSession(2)
+    const res = await voiceLogPost(jsonReq('http://localhost/api/ai/voice-log', 'POST', {
+      audioBase64: 'a'.repeat(Math.floor(12.9 * MB)),
+    }), undefined)
+    expect(res.status).toBe(400)
+    // NOT the transport error — the domain error: the 13 MB cap passed and
+    // the route-owned 12 MB audioBase64 check still holds (defense in depth).
+    expect((await bodyOf(res)).error).toMatch(/Audio too large/)
+    expect(ai.asrCreate).not.toHaveBeenCalled()
+  })
+
+  it('voice-log: a normal (1 MB) voice note flows through — 200, ASR called', async () => {
+    capSession(3)
+    const res = await voiceLogPost(jsonReq('http://localhost/api/ai/voice-log', 'POST', {
+      audioBase64: 'a'.repeat(1 * MB),
+    }), undefined)
+    expect(res.status).toBe(200)
+    expect(ai.asrCreate).toHaveBeenCalledTimes(1)
+    expect((await bodyOf(res)).ok).toBe(true)
+  })
+
+  it('analyze-photo: a 6.1 MB dataUrl body → 400 body-too-large naming 6 MB (vision never called)', async () => {
+    capSession(4)
+    const res = await analyzePhotoPost(jsonReq('http://localhost/api/ai/analyze-photo', 'POST', {
+      dataUrl: `data:image/jpeg;base64,${'a'.repeat(Math.floor(6.1 * MB))}`,
+    }), undefined)
+    expect(res.status).toBe(400)
+    expect((await bodyOf(res)).error).toBe('Request body too large — this endpoint accepts at most 6 MB')
+    expect(ai.visionMessage).not.toHaveBeenCalled()
+  })
+
+  it('analyze-photo: a 5.9 MB dataUrl body passes the 6 MB cap — 200, vision called', async () => {
+    capSession(5)
+    const res = await analyzePhotoPost(jsonReq('http://localhost/api/ai/analyze-photo', 'POST', {
+      dataUrl: `data:image/jpeg;base64,${'a'.repeat(Math.floor(5.9 * MB))}`,
+    }), undefined)
+    expect(res.status).toBe(200)
+    expect(ai.visionMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('parse-text: a text-route body over 128 KB → 400 body-too-large naming 128 KB', async () => {
+    capSession(6)
+    const res = await parseTextPost(jsonReq('http://localhost/api/ai/parse-text', 'POST', {
+      text: 'a'.repeat(129 * KB),
+    }), undefined)
+    expect(res.status).toBe(400)
+    expect((await bodyOf(res)).error).toBe('Request body too large — this endpoint accepts at most 128 KB')
+    expect(ai.parseDeliveryTranscript).not.toHaveBeenCalled()
+  })
+
+  it('parse-text: a normal typed note flows through — 200', async () => {
+    capSession(7)
+    const res = await parseTextPost(jsonReq('http://localhost/api/ai/parse-text', 'POST', {
+      text: 'bags 20 za cement',
+    }), undefined)
+    expect(res.status).toBe(200)
+    expect((await bodyOf(res)).ok).toBe(true)
+  })
+})
+
 // ---------------------------------------------------------------- wallet (actions)
 
 describe('wallet gates the WALLET_ACTIONS family on POST /api/actions', () => {

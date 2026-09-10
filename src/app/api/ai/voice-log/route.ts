@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { buildProjectDigest, parseDeliveryTranscript, transcribeAudio } from '@/backend/lib/ai'
 import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
-import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
+import { AI_VOICE_LOG_MAX_BODY_BYTES, enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
 
@@ -15,6 +15,11 @@ export const maxDuration = 120
  * validated projectId + unknown-field rejection) — the transcript parser's
  * project digest can no longer be pointed at an arbitrary project by a
  * non-site-team account.
+ *
+ * BE-5 (issue #105): the gate caps the RAW body at 13 MB BEFORE buffering
+ * into the parser (declared Content-Length precheck + post-read count) —
+ * transport headroom over the route's own 12 MB audioBase64 domain cap below,
+ * which used to run only AFTER the whole body had been read into memory.
  *
  * 8-b (PII): the transcript is SCRUBBED the moment ASR produces it — Kenyan
  * phone numbers (07xx/01xx/+2547xx/2547xx forms, incl. spaced/hyphenated)
@@ -35,6 +40,9 @@ export const maxDuration = 120
 export const POST = async (req: NextRequest): Promise<NextResponse> => {
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:voice-log',
+    // BE-5 (issue #105): 13 MB transport cap — headroom over the 12 MB
+    // audioBase64 domain cap below (JSON envelope + base64 overhead).
+    maxBytes: AI_VOICE_LOG_MAX_BODY_BYTES,
     fields: [
       { name: 'audioBase64', type: 'string' },
       { name: 'projectId', type: 'string' },
