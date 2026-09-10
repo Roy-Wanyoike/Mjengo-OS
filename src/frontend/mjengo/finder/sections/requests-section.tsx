@@ -18,6 +18,7 @@ import { Textarea } from '@/frontend/ui/textarea'
 import { ClipboardList, Loader2, Plus, Truck } from 'lucide-react'
 import { toast } from 'sonner'
 import { useFinderLink } from './requests/finder-link'
+import { useT } from '@/frontend/i18n/provider'
 import { CreateRequestDialog } from './requests/create-request-dialog'
 import { CreateOrderDialog } from './requests/create-order-dialog'
 import { OrderCard } from './requests/order-card'
@@ -29,6 +30,7 @@ import type { RequestWithLines } from '@/backend/modules/supply/types'
 export function RequestsSection() {
   const { data, dispatch, viewMode, actionBusy, online, outbox, clientRole, shareToken } = useMjengo()
   const { data: session } = useSession()
+  const t = useT()
   const { requestPrefill, requestDialogOpen, requestDialogNonce, openRequestDialog, clearRequestDialog } = useFinderLink()
   const [orderTarget, setOrderTarget] = useState<RequestWithLines | null>(null)
   const [decideTarget, setDecideTarget] = useState<{ request: RequestWithLines; decision: 'approve' | 'reject' } | null>(null)
@@ -46,7 +48,7 @@ export function RequestsSection() {
   const rules = data?.supply.approvalRules ?? []
   const orders = data?.supply.orders ?? []
   const sessionRole = session?.user?.role ?? null
-  const offlineNote = `Saved on-device — queued (${outbox.length})`
+  const offlineNote = t('finder.req.offlineQueued', { count: outbox.length })
 
   // Create dialog state lives in the finder-link store (search hand-off);
   // the nonce key remounts the dialog body so every open starts fresh.
@@ -74,22 +76,26 @@ export function RequestsSection() {
     const ok = await dispatch('request.decide', {
       id: request.id, decision,
       note: decideNote.trim() || undefined,
-    }, `Request ${decision === 'approve' ? 'approved' : 'rejected'}: ${request.requestCode}`)
+    }, t('finder.req.decide.audit', { decision: t(decision === 'approve' ? 'finder.req.decide.approved' : 'finder.req.decide.rejected'), code: request.requestCode }))
     if (ok) {
       toast.success(online
         ? decision === 'approve'
-          ? `${request.requestCode} approved${decideNote.trim() ? ' — note recorded' : ''}`
-          : `${request.requestCode} rejected — the requester can re-draft a new request`
+          ? t('finder.req.toast.approved', { code: request.requestCode, note: decideNote.trim() ? t('finder.req.toast.noteRecorded') : '' })
+          : t('finder.req.toast.rejected', { code: request.requestCode })
         : offlineNote)
       setDecideTarget(null)
     } else {
       // Honest failure: the server rejected the decision (wrong role / status)
       const waiting = approvals
         .filter((a) => a.entityId === request.id && a.decision === 'pending')
-        .map((a) => roleLabel(a.approverRole))
-        .join(' and ')
+        .map((a) => roleLabel(t, a.approverRole))
+        .join(t('finder.req.and'))
       toast.error(
-        `Decision NOT recorded — the server rejected it. Only ${waiting || 'the pending approver role'} may decide ${request.requestCode}; you are signed in as ${roleLabel(sessionRole ?? 'contractor')}.`,
+        t('finder.req.toast.decideRejected', {
+          waiting: waiting || t('finder.req.toast.pendingApprover'),
+          code: request.requestCode,
+          role: roleLabel(t, sessionRole ?? 'contractor'),
+        }),
         { duration: 8000 },
       )
       setDecideTarget(null)
@@ -97,54 +103,53 @@ export function RequestsSection() {
   }
 
   return (
-    <section aria-label="Purchase requests, approvals, orders and delivery" className="space-y-6">
+    <section aria-label={t('finder.req.aria')} className="space-y-6">
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
           <div className="space-y-1.5">
             <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-              <ClipboardList className="h-5 w-5 text-amber-600" aria-hidden /> Purchase requests &amp; approvals
+              <ClipboardList className="h-5 w-5 text-amber-600" aria-hidden /> {t('finder.req.title')}
               <Badge variant="outline" className="text-[10px] font-medium text-stone-500">{requests.length}</Badge>
             </CardTitle>
             <CardDescription>
-              Request → approval rules → purchase order → delivery with ground-truth verification. Anyone authorized
-              can request — the system controls who approves.
+              {t('finder.req.desc')}
             </CardDescription>
             {(pendingForMe.length > 0 || ordersInTransit.length > 0 || discrepancies.length > 0) && (
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {pendingForMe.length > 0 && (
                   <Badge className="border-0 gap-1 bg-amber-100 text-amber-900 hover:bg-amber-100">
-                    {pendingForMe.length} decision{pendingForMe.length === 1 ? '' : 's'} waiting for you ({roleLabel(sessionRole ?? '')})
+                    {t(pendingForMe.length === 1 ? 'finder.req.waitingOne' : 'finder.req.waitingMany', { count: pendingForMe.length, role: roleLabel(t, sessionRole ?? '') })}
                   </Badge>
                 )}
                 {ordersInTransit.length > 0 && (
                   <Badge className="border-0 gap-1 bg-sky-100 text-sky-800 hover:bg-sky-100">
-                    <Truck className="h-3 w-3" aria-hidden /> {ordersInTransit.length} order{ordersInTransit.length === 1 ? '' : 's'} in transit
+                    <Truck className="h-3 w-3" aria-hidden /> {t(ordersInTransit.length === 1 ? 'finder.req.transitOne' : 'finder.req.transitMany', { count: ordersInTransit.length })}
                   </Badge>
                 )}
                 {discrepancies.length > 0 && (
                   <Badge className="border-0 gap-1 bg-orange-100 text-orange-800 hover:bg-orange-100">
-                    {discrepancies.length} deliver{discrepancies.length === 1 ? 'y' : 'ies'} flagged for review
+                    {t(discrepancies.length === 1 ? 'finder.req.flaggedOne' : 'finder.req.flaggedMany', { count: discrepancies.length })}
                   </Badge>
                 )}
               </div>
             )}
           </div>
           {isSiteTeam && (
-            <Button size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" onClick={() => openRequestDialog()} aria-label="Create a new purchase request">
-              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">New request</span>
+            <Button size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" onClick={() => openRequestDialog()} aria-label={t('finder.req.newAria')}>
+              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('finder.req.new')}</span>
             </Button>
           )}
         </CardHeader>
         <CardContent>
           {requests.length === 0 ? (
             <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
-              <p className="text-sm font-medium text-stone-700">No purchase requests yet</p>
+              <p className="text-sm font-medium text-stone-700">{t('finder.req.emptyTitle')}</p>
               <p className="pt-1 text-xs text-stone-500">
-                Start from the search above — &quot;Order&quot; on any supplier row prefills a request.
+                {t('finder.req.emptyDesc')}
               </p>
             </div>
           ) : (
-            <div className="space-y-6" role="list" aria-label="Purchase requests">
+            <div className="space-y-6" role="list" aria-label={t('finder.req.listAria')}>
               {requests.map((request) => (
                 <div key={request.id} role="listitem" className="space-y-4">
                   <RequestCard
@@ -169,22 +174,21 @@ export function RequestsSection() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <Truck className="h-5 w-5 text-amber-600" aria-hidden /> Purchase orders &amp; deliveries
+            <Truck className="h-5 w-5 text-amber-600" aria-hidden /> {t('finder.orders.title')}
             <Badge variant="outline" className="text-[10px] font-medium text-stone-500">{orders.length}</Badge>
           </CardTitle>
           <CardDescription>
-            Approved request + supplier → PO-2026-000NNN → send → confirm → dispatch → receive on the ground.
-            Short counts are flagged for review; invoices and payment live in the section below.
+            {t('finder.orders.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {orders.length === 0 ? (
             <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
-              <p className="text-sm font-medium text-stone-700">No purchase orders yet</p>
-              <p className="pt-1 text-xs text-stone-500">Approve a request, then “Create PO” on it.</p>
+              <p className="text-sm font-medium text-stone-700">{t('finder.orders.emptyTitle')}</p>
+              <p className="pt-1 text-xs text-stone-500">{t('finder.orders.emptyDesc')}</p>
             </div>
           ) : (
-            <div className="max-h-[40rem] space-y-4 overflow-y-auto pr-2 -mr-2" role="region" aria-label="Purchase orders, scrollable">
+            <div className="max-h-[40rem] space-y-4 overflow-y-auto pr-2 -mr-2" role="region" aria-label={t('finder.orders.scrollAria')}>
               {orders.map((order) => (
                 <OrderCard key={order.id} order={order} canManage={isSiteTeam} />
               ))}
@@ -213,24 +217,24 @@ export function RequestsSection() {
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>
-              {decideTarget?.decision === 'approve' ? 'Approve' : 'Reject'} {decideTarget?.request.requestCode}
+              {t(decideTarget?.decision === 'approve' ? 'finder.req.decideDialog.approve' : 'finder.req.decideDialog.reject', { code: decideTarget?.request.requestCode ?? '' })}
             </DialogTitle>
             <DialogDescription>
               {decideTarget?.decision === 'approve'
-                ? 'Approval lets purchase orders be created against this request — no money moves yet.'
-                : 'A rejection is final for this request; the requester can draft a fresh one.'}
+                ? t('finder.req.decideDialog.approveDesc')
+                : t('finder.req.decideDialog.rejectDesc')}
             </DialogDescription>
           </DialogHeader>
-          <Textarea rows={3} value={decideNote} onChange={(e) => setDecideNote(e.target.value)} placeholder="Optional note — lands in the decision trail" aria-label="Decision note" />
+          <Textarea rows={3} value={decideNote} onChange={(e) => setDecideNote(e.target.value)} placeholder={t('finder.req.decideDialog.notePh')} aria-label={t('finder.req.decideDialog.noteAria')} />
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDecideTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setDecideTarget(null)}>{t('finder.req.decideDialog.cancel')}</Button>
             <Button
               className={`gap-1.5 text-white ${decideTarget?.decision === 'approve' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'}`}
               disabled={busy}
               onClick={() => void confirmDecide()}
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
-              {decideTarget?.decision === 'approve' ? 'Approve request' : 'Reject request'}
+              {t(decideTarget?.decision === 'approve' ? 'finder.req.decideDialog.approveBtn' : 'finder.req.decideDialog.rejectBtn')}
             </Button>
           </DialogFooter>
         </DialogContent>
