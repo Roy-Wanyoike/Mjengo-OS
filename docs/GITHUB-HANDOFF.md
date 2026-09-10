@@ -9,6 +9,11 @@
 
 ## Current state (verified 2026-09-09)
 
+> **Superseded 2026-09-10:** everything through PR #112 has landed on
+> `main` (the #86–#89 review wave below was merged, followed by the audit
+> fix waves). Live truth = [RELEASE-NOTES v0.2.5](./RELEASE-NOTES.md) + the
+> issue tracker — not this section.
+
 - **Waves 2–6 are published.** The full audited stack (82 commits) landed on
   `origin/main` via **PR #85** (merged 2026-09-09, merge commit `2e62149`);
   the audit evidence is in the PR body. `main` is branch-protected —

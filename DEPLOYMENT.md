@@ -51,6 +51,7 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `USSD_WEBHOOK_SECRET` | hardening: optional | When set, `/api/ussd` requires a valid HMAC signature derived from this shared secret on every request (authenticated gateway webhooks); unset = the documented demo posture. |
 | `WHATSAPP_WEBHOOK_SECRET` | hardening: optional | Same posture for the WhatsApp field line: when set, `POST /api/whatsapp` (contract documented at `GET /api/whatsapp`) must carry `X-Signature: <hex HMAC-SHA256 of the raw body>` — shared-secret auth for the relay (Meta Cloud API bridge or aggregator) that would POST `{ from, text, timestamp }`. Unset = open demo posture (requests are still rate-limited 20/min/phone + 40/min/IP; every reply is footered "MjengoOS sim" — no WhatsApp provider is wired). |
 | `JOBS_RUN_TOKEN` | scheduler: optional | Shared secret (`openssl rand -hex 32`) that lets an external scheduler authenticate `POST /api/jobs/run` with `Authorization: Bearer <token>` (no browser session needed — compose `jobs-tick` sidecar, systemd timer, any cron). Same value must reach the app and the scheduler. **Unset = the bearer path is fully disabled** (fail closed — the endpoint then answers only to contractor/admin sessions, exactly as before). See §7.3. |
+| `JOBS_HANDLER_TIMEOUT_MS` | jobs: optional | Per-handler timeout for ONE background-job invocation during a `POST /api/jobs/run` drain — default `30000` (30 s: generous for the TTS/AI handlers, far below the route's own duration budget, so one hung handler fails its own `JobRecord` row instead of stalling the whole drain). Read at drain time, not import time — a change applies to the next drain without a restart. Invalid, zero or unset values fall back to the default (never 0 — a zero cap would fail every handler instantly). A handler that exceeds the cap is marked `failed` **terminally** (no retry — it already hung a full window and would re-hang; re-enqueue after investigating). |
 | `NOTIFY_SMS_WEBHOOK_URL` / `_TOKEN` | notifications: optional | The SMS webhook relay: when the URL is set, notify calls that pass `opts.sms` additionally POST JSON `{ to, text, metadata }` to it (the optional token rides as a bearer header). Credentials stay in YOUR gateway — nothing SMS-related lives in this app. Rows honestly record `sent`/`failed` + delivery detail. |
 | `AT_API_KEY` + `AT_USERNAME` (+ `AT_SENDER_ID`, `AT_ENV`) | notifications: alternative to the webhook | Direct **Africa's Talking** provider: with both values set (a partial pair is ignored, fail-closed) and no webhook URL configured, notify calls AT's REST v1 messaging endpoint directly and records the real `messageId` as `providerRef`. The API key can send and bill SMS on your AT account — keep the env file uncommitted and narrowly readable. `AT_ENV=sandbox` targets AT's sandbox host for wiring tests without billing. **Webhook wins if both are configured; with neither, nothing external is called** (rows stay `logged`). |
 | `DARAJA_RECONCILE_AFTER_MIN` / `_INTERVAL_MIN` / `_MAX_AGE_MIN` | Daraja sweep: optional | Tuning for the `wallet.reconcile` job (pending STK-intent reconciliation, §7.3): probe intents once they are `AFTER` minutes old (default 2), re-probe every `INTERVAL` minutes (default 5, matching the scheduler tick), stop probing past `MAX_AGE` minutes (default 60 — the intent stays PENDING, never an invented failure/credit). Invalid values warn and fall back to defaults; all-unset = defaults, and with no Daraja env no intents exist so the sweep does nothing. |
@@ -213,6 +214,7 @@ check the Overview tab renders KPIs and `/api/health` shows `db: "up"`.
 | Workflow | Job | Steps |
 |---|---|---|
 | `ci.yml` | `quality` | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run lint` → `bunx tsc --noEmit` |
+| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 1,700 tests / 69 files at the time of the 2026-09-10 audit-fix wave; no database or secrets required) |
 | `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
 | `docker.yml` | `docker-build` | `docker build -t mjengoos-ci .` on a GitHub runner — **real verification of the Dockerfile** (the dev sandbox has no docker CLI). No registry push. |
 | `docker.yml` | `website-build` | `docker build -t mjengoos-website-ci ./mjengoos-website` — same posture, real verification of the marketing-site image. No registry push. |
@@ -290,6 +292,39 @@ marketing site at `http://localhost:3000/website` — one origin, the site's
 "Sign in" lands on the app's login screen. To publish the site's own origin
 as well, add a compose override file with `ports: ["3001:3001"]`.
 
+#### Retrieving contact-form leads (issue #110 / audit WD-8)
+
+The website's contact and demo-request forms (`POST /api/contact`, proxied
+at `/website/api/contact` in integrated mode) persist every submission to a
+JSON file on disk and contact **no third party** — no email, webhook or
+notification is ever sent, so reading that file is the only retrieval path
+(an operator who forgets it loses leads silently). Where it lives and how
+to read it:
+
+- **Local dev / standalone site** — `mjengoos-website/data/submissions.json`
+  (relative to the site process's working directory; gitignored runtime
+  PII). Pretty-print it with
+  `python3 -m json.tool mjengoos-website/data/submissions.json`.
+- **docker compose** — the file lives inside the `website` service container
+  on the `website-data` volume (`/app/data/submissions.json`):
+
+  ```bash
+  docker compose exec website cat /app/data/submissions.json
+  # keep a copy outside the volume:
+  docker compose exec website cat /app/data/submissions.json > leads.json
+  ```
+
+- **Retention cap — read it regularly:** the store keeps only the **500 most
+  recent** submissions; every write past 500 drops the oldest entry, and
+  there is no rotation or archive file, so dropped leads are gone for good.
+  Retrieve on a cadence, especially during onboarding bursts.
+
+Each entry is the validated form payload —
+`{ id, ts, source, name, email, phone?, organization?, role?, country?,
+projectType?, message? }` — plaintext PII on disk; handle it accordingly
+(the file is gitignored, and the site's `.dockerignore` keeps `data/` out
+of images).
+
 ### 6.4 Seeding a containerized database (honest note)
 
 The seed scripts are bun-run TypeScript files and the production runner image
@@ -312,10 +347,12 @@ out):
 - **deps** — `node:20-slim` + the bun binary from `oven/bun:1`:
   `bun install --frozen-lockfile` against the site's own `package.json` /
   `bun.lock`.
-- **builder** — `next build` under Node with the two `NEXT_PUBLIC_*` vars
+- **builder** — `next build` under Node with the three `NEXT_PUBLIC_*` vars
   supplied as **build ARGs** (Next.js inlines them at build time — switching
   serving modes is a rebuild, not a re-run; defaults = integrated mode,
-  `NEXT_PUBLIC_BASE_PATH=/website` + `NEXT_PUBLIC_APP_URL=/`).
+  `NEXT_PUBLIC_BASE_PATH=/website` + `NEXT_PUBLIC_APP_URL=/` + an empty
+  `NEXT_PUBLIC_SITE_URL`, whose SEO/sitemap origin then falls back to the
+  dev default — set it for any indexed deployment, §6.6).
 - **runner** — `node:20-slim`, non-root `node` user, **standalone output**
   (`output: "standalone"` in `mjengoos-website/next.config.ts`, mirroring the
   root app): ships `.next/standalone` + `.next/static` + `public/` only —
@@ -339,7 +376,8 @@ For a standalone-domain image instead (§6.6):
 ```bash
 docker build -t mjengoos-website ./mjengoos-website \
   --build-arg NEXT_PUBLIC_BASE_PATH= \
-  --build-arg NEXT_PUBLIC_APP_URL=https://app.yourdomain.example
+  --build-arg NEXT_PUBLIC_APP_URL=https://app.yourdomain.example \
+  --build-arg NEXT_PUBLIC_SITE_URL=https://yourdomain.example
 docker run -d --name mjengoos-website -p 3001:3001 mjengoos-website
 curl http://localhost:3001/            # 200, site served at /
 ```

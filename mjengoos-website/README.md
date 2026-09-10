@@ -142,7 +142,11 @@ deployments are unaffected.
 
 The website is a **frontend-only** consumer of public information. The only
 backend surface is its own `/api/contact` route (submissions stored in
-`data/submissions.json` — gitignored runtime data). "Sign in" links point to
+`data/submissions.json` — gitignored runtime data, capped at the 500 most
+recent entries, no third party contacted). Retrieving leads: read that file
+in dev; under the repo's compose stack it lives on the `website-data`
+volume — `docker compose exec website cat /app/data/submissions.json`
+(full guide in the root `DEPLOYMENT.md` §6.3). "Sign in" links point to
 the app via `NEXT_PUBLIC_APP_URL`. No database, no auth, no SDK usage.
 
 ---
