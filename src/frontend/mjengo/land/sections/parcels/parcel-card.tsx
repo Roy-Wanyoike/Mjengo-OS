@@ -5,6 +5,7 @@
 import { Card, CardContent } from '@/frontend/ui/card'
 import { FileText, MapPin, ScanSearch, Users } from 'lucide-react'
 import { dateShort } from '@/frontend/lib/format'
+import { useT } from '@/frontend/i18n/provider'
 import type { ParcelDetail } from '@/backend/modules/land/types'
 import { ParcelStatusBadge } from './badges'
 
@@ -17,12 +18,13 @@ export function ParcelCard({
   selected: boolean
   onSelect: (id: string) => void
 }) {
+  const t = useT()
   return (
     <button
       type="button"
       onClick={() => onSelect(parcel.id)}
       aria-pressed={selected}
-      aria-label={`Open parcel ${parcel.plotNumber}, ${parcel.county}`}
+      aria-label={t('land.parcel.openAria', { plot: parcel.plotNumber, county: parcel.county })}
       className={`min-w-0 w-full text-left rounded-xl border shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-900 focus-visible:ring-offset-2 ${
         selected ? 'border-stone-900 ring-1 ring-stone-900 bg-stone-50' : 'border-stone-200 bg-white hover:border-stone-400'
       }`}
@@ -41,22 +43,22 @@ export function ParcelCard({
             </span>
           </p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
-            <span className="truncate">{parcel.approxArea ?? 'Area not recorded'}</span>
+            <span className="truncate">{parcel.approxArea ?? t('land.parcel.areaMissing')}</span>
             {parcel.tenureType && <span className="truncate capitalize">{parcel.tenureType}</span>}
-            <span className="ml-auto shrink-0">recorded {dateShort(parcel.createdAt)}</span>
+            <span className="ml-auto shrink-0">{t('land.parcel.recorded', { date: dateShort(parcel.createdAt) })}</span>
           </div>
           <div className="flex items-center gap-4 text-xs text-stone-600 pt-1 border-t border-stone-100">
             <span className="flex items-center gap-1">
               <FileText className="h-3.5 w-3.5 text-stone-400" aria-hidden />
-              {parcel.documents.length} doc{parcel.documents.length === 1 ? '' : 's'}
+              {t(parcel.documents.length === 1 ? 'land.parcel.docOne' : 'land.parcel.docMany', { count: parcel.documents.length })}
             </span>
             <span className="flex items-center gap-1">
               <ScanSearch className="h-3.5 w-3.5 text-stone-400" aria-hidden />
-              {parcel.searches.length} search{parcel.searches.length === 1 ? '' : 'es'}
+              {t(parcel.searches.length === 1 ? 'land.parcel.searchOne' : 'land.parcel.searchMany', { count: parcel.searches.length })}
             </span>
             <span className="flex items-center gap-1">
               <Users className="h-3.5 w-3.5 text-stone-400" aria-hidden />
-              {parcel.assignments.length} pro{parcel.assignments.length === 1 ? '' : 's'}
+              {t(parcel.assignments.length === 1 ? 'land.parcel.proOne' : 'land.parcel.proMany', { count: parcel.assignments.length })}
             </span>
           </div>
         </CardContent>

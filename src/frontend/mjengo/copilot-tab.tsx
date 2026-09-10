@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES } from '@/frontend/lib/format'
+import { useT } from '@/frontend/i18n/provider'
 
 interface PhotoAnalysisResult {
   analysis: {
@@ -63,6 +64,7 @@ interface ScanResult {
 
 export function CopilotTab() {
   const { data, dispatch, online, viewMode } = useMjengo()
+  const t = useT()
   const [tab, setTab] = useState<'photo' | 'voice' | 'scan'>('photo')
 
   if (!data) return null
@@ -76,10 +78,9 @@ export function CopilotTab() {
             <Lock className="w-7 h-7 text-stone-400" />
           </div>
           <div className="max-w-md">
-            <h2 className="text-lg font-semibold text-stone-900">AI tools are for the site team</h2>
+            <h2 className="text-lg font-semibold text-stone-900">{t('copilot.clientTitle')}</h2>
             <p className="mt-1.5 text-sm text-stone-500 leading-relaxed">
-              Photo verification, Swahili voice logging and integrity scans are run by the crew on site.
-              Your client view shows the results — photo evidence, alerts and the 6 PM recap.
+              {t('copilot.clientBody')}
             </p>
           </div>
         </CardContent>
@@ -92,25 +93,24 @@ export function CopilotTab() {
       <Card className="border-amber-200 bg-gradient-to-br from-amber-50 to-stone-50 shadow-sm">
         <CardHeader>
           <CardTitle className="text-lg text-stone-900 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-amber-600" aria-hidden /> AI Copilot — the connective tissue
+            <Sparkles className="w-5 h-5 text-amber-600" aria-hidden /> {t('copilot.title')}
           </CardTitle>
           <CardDescription>
-            The AI never replaces the human on site — it turns photos, Swahili voice notes and messy ledgers into
-            structured ground truth. AI features require connectivity; field logging works offline.
+            {t('copilot.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex gap-2 flex-wrap">
           <Button variant={tab === 'photo' ? 'default' : 'outline'} size="sm" className="gap-1.5" onClick={() => setTab('photo')}>
-            <Camera className="w-4 h-4" aria-hidden /> Photo progress
+            <Camera className="w-4 h-4" aria-hidden /> {t('copilot.tab.photo')}
           </Button>
           <Button variant={tab === 'voice' ? 'default' : 'outline'} size="sm" className="gap-1.5" onClick={() => setTab('voice')}>
-            <Mic className="w-4 h-4" aria-hidden /> Voice-to-invoice
+            <Mic className="w-4 h-4" aria-hidden /> {t('copilot.tab.voice')}
           </Button>
           <Button variant={tab === 'scan' ? 'default' : 'outline'} size="sm" className="gap-1.5" onClick={() => setTab('scan')}>
-            <ScanSearch className="w-4 h-4" aria-hidden /> Anomaly scan
+            <ScanSearch className="w-4 h-4" aria-hidden /> {t('copilot.tab.scan')}
           </Button>
           {!online && (
-            <Badge className="gap-1 bg-amber-100 text-amber-800 border-0 ml-auto"><Lock className="w-3 h-3" aria-hidden /> offline — AI paused</Badge>
+            <Badge className="gap-1 bg-amber-100 text-amber-800 border-0 ml-auto"><Lock className="w-3 h-3" aria-hidden /> {t('copilot.offlineBadge')}</Badge>
           )}
         </CardContent>
       </Card>
@@ -121,9 +121,9 @@ export function CopilotTab() {
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
-          { icon: Camera, title: 'Physical ground truth', text: 'Every estimate is anchored to a real site photo with timestamp & provenance — no photo, no AI opinion.' },
-          { icon: Mic, title: 'Swahili/Sheng first', text: 'Voice notes in Kiswahili, Sheng or English are parsed into ledger entries — fundis do not type.' },
-          { icon: ScanSearch, title: 'Trust engine', text: 'Deliveries vs consumption vs progress are reconciled continuously to catch loss, theft and ghost workers.' },
+          { icon: Camera, title: t('copilot.card.groundTruth.title'), text: t('copilot.card.groundTruth.text') },
+          { icon: Mic, title: t('copilot.card.swahiliFirst.title'), text: t('copilot.card.swahiliFirst.text') },
+          { icon: ScanSearch, title: t('copilot.card.trustEngine.title'), text: t('copilot.card.trustEngine.text') },
         ].map(({ icon: Icon, title, text }) => (
           <Card key={title} className="border-stone-200 shadow-sm bg-white">
             <CardContent className="p-4 flex gap-3">
@@ -168,6 +168,7 @@ function PhotoPanel({ online }: { online: boolean }) {
   const { data, dispatch, load } = useMjengo()
   const dataMode = useMjengo((s) => s.dataMode)
   const { data: session } = useSession()
+  const t = useT()
   const [preview, setPreview] = useState<string | null>(null)
   const [previewIsData, setPreviewIsData] = useState(false)
   const [phaseId, setPhaseId] = useState<string>('')
@@ -192,7 +193,7 @@ function PhotoPanel({ online }: { online: boolean }) {
     setResult(null)
     const match = data?.photos.find((p) => p.url === url)
     setPhaseId(match?.phaseId ?? '')
-    if (caption) toast.info(`Selected: ${caption}`)
+    if (caption) toast.info(t('copilot.toast.picked', { caption }))
   }
 
   function onFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -204,9 +205,9 @@ function PhotoPanel({ online }: { online: boolean }) {
   }
 
   async function analyze() {
-    if (!preview) { toast.error('Upload or pick a site photo first'); return }
-    if (!online) { toast.error('AI analysis needs connectivity — toggle Online in the header'); return }
-    if (!aiProgressOn) { toast.error('AI progress is disabled by feature flag (ai_progress)'); return }
+    if (!preview) { toast.error(t('copilot.toast.needPhoto')); return }
+    if (!online) { toast.error(t('copilot.toast.needOnline')); return }
+    if (!aiProgressOn) { toast.error(t('copilot.toast.flagOff')); return }
     setBusy(true); setResult(null)
     try {
       let url: string | undefined
@@ -218,9 +219,9 @@ function PhotoPanel({ online }: { online: boolean }) {
         if (saver) {
           try {
             toSend = await downscaleDataUrl(preview)
-            toast.info('Data Saver — photo compressed before upload (max 1024px JPEG)')
+            toast.info(t('copilot.toast.saverCompressed'))
           } catch {
-            toast.info('Data Saver — could not compress this image, uploading as-is')
+            toast.info(t('copilot.toast.saverFailed'))
           }
         }
         // Upload first (POST /api/upload) so the photo persists at a real URL —
@@ -233,7 +234,7 @@ function PhotoPanel({ online }: { online: boolean }) {
         })
         const upJson = await up.json().catch(() => null)
         if (!up.ok || !upJson?.url) {
-          toast.error(upJson?.error ?? 'Photo upload failed — analysis aborted (nothing was recorded)')
+          toast.error(upJson?.error ?? t('copilot.toast.uploadFailed'))
           return
         }
         url = upJson.url as string
@@ -252,16 +253,16 @@ function PhotoPanel({ online }: { online: boolean }) {
       if (json.ok) {
         setResult(json as PhotoAnalysisResult)
         if (json.appliedPhotoId) {
-          toast.success(`Progress updated — ${json.phaseName}: ${json.analysis.progressPct}% (photo evidence attached)`)
+          toast.success(t('copilot.toast.appliedOk', { phase: json.phaseName, pct: json.analysis.progressPct }))
           await load()
         } else {
-          toast.success('Analysis complete — review below, then Apply to ledger')
+          toast.success(t('copilot.toast.analysisOk'))
         }
       } else {
-        toast.error(json.error ?? 'Analysis failed')
+        toast.error(json.error ?? t('copilot.toast.analysisFailed'))
       }
     } catch {
-      toast.error('Network error during analysis')
+      toast.error(t('copilot.toast.network'))
     } finally {
       setBusy(false)
     }
@@ -278,11 +279,11 @@ function PhotoPanel({ online }: { online: boolean }) {
       analysis: result.analysis,
     }, 'Apply AI photo analysis')
     if (ok) {
-      toast.success('Applied to ledger — phase progress updated with photo evidence')
+      toast.success(t('copilot.toast.applyOk'))
       setResult(null)
     } else {
       // Dispatch failures are surfaced, never silent (spec §84 no dead UI).
-      toast.error('Apply to ledger failed — the analysis was NOT recorded. Try again.')
+      toast.error(t('copilot.toast.applyFailed'))
     }
   }
 
@@ -290,8 +291,8 @@ function PhotoPanel({ online }: { online: boolean }) {
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg text-stone-900">1 · Capture the physical ground truth</CardTitle>
-          <CardDescription>Upload a fresh site photo, or re-analyze one from the evidence log</CardDescription>
+          <CardTitle className="text-lg text-stone-900">{t('copilot.photo.captureTitle')}</CardTitle>
+          <CardDescription>{t('copilot.photo.captureDesc')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div
@@ -300,25 +301,25 @@ function PhotoPanel({ online }: { online: boolean }) {
             onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) { const dt = new DataTransfer(); dt.items.add(f); if (fileRef.current) { fileRef.current.files = dt.files; onFile({ target: { files: dt.files } } as never) } } }}
           >
             {preview ? (
-              <img src={preview} alt="Site photo preview" className="max-h-64 rounded-lg border border-stone-200 object-cover" />
+              <img src={preview} alt={t('copilot.photo.previewAlt')} className="max-h-64 rounded-lg border border-stone-200 object-cover" />
             ) : (
               <div className="py-8 flex flex-col items-center gap-2 text-stone-400">
                 <Camera className="w-10 h-10" aria-hidden />
-                <p className="text-sm">Drop a site photo here, or</p>
+                <p className="text-sm">{t('copilot.photo.dropHere')}</p>
               </div>
             )}
-            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" capture="environment" className="sr-only" onChange={onFile} aria-label="Upload site photo" />
+            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" capture="environment" className="sr-only" onChange={onFile} aria-label={t('copilot.photo.uploadAria')} />
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileRef.current?.click()}>
-              <Upload className="w-4 h-4" aria-hidden /> {preview ? 'Change photo' : 'Upload photo'}
+              <Upload className="w-4 h-4" aria-hidden /> {preview ? t('copilot.photo.changePhoto') : t('copilot.photo.uploadPhoto')}
             </Button>
-            {saver && <p className="text-[11px] text-stone-400">Data Saver on — photos are compressed to ≤1024px JPEG before upload</p>}
+            {saver && <p className="text-[11px] text-stone-400">{t('copilot.photo.saverNote')}</p>}
           </div>
 
           <div>
-            <p className="text-xs font-medium text-stone-500 mb-2">Or pick from the evidence log</p>
+            <p className="text-xs font-medium text-stone-500 mb-2">{t('copilot.photo.pickLabel')}</p>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {data.photos.slice(0, 5).map((p) => (
-                <button key={p.id} onClick={() => pickSeeded(p.url, p.caption)} className={`shrink-0 w-20 aspect-[4/3] rounded-lg overflow-hidden border-2 ${preview === p.url ? 'border-amber-500' : 'border-stone-200'} focus:outline-none focus:ring-2 focus:ring-amber-500`} aria-label={`Pick ${p.caption ?? 'photo'}`}>
+                <button key={p.id} onClick={() => pickSeeded(p.url, p.caption)} className={`shrink-0 w-20 aspect-[4/3] rounded-lg overflow-hidden border-2 ${preview === p.url ? 'border-amber-500' : 'border-stone-200'} focus:outline-none focus:ring-2 focus:ring-amber-500`} aria-label={t('copilot.photo.pickAria', { caption: p.caption ?? t('overview.photos.sitePhoto') })}>
                   <img src={p.url} alt="" className="w-full h-full object-cover" />
                 </button>
               ))}
@@ -327,11 +328,11 @@ function PhotoPanel({ online }: { online: boolean }) {
 
           <div className="flex items-center justify-between gap-4 rounded-lg border border-stone-200 p-3">
             <div className="min-w-0">
-              <Label htmlFor="phase-pick" className="text-sm font-medium text-stone-700">Phase context</Label>
-              <p className="text-xs text-stone-400">Helps the vision model anchor the estimate</p>
+              <Label htmlFor="phase-pick" className="text-sm font-medium text-stone-700">{t('copilot.photo.phaseContext')}</Label>
+              <p className="text-xs text-stone-400">{t('copilot.photo.phaseHint')}</p>
             </div>
             <Select value={phaseId} onValueChange={setPhaseId}>
-              <SelectTrigger id="phase-pick" size="sm" className="w-44 bg-white shrink-0"><SelectValue placeholder="Auto-detect" /></SelectTrigger>
+              <SelectTrigger id="phase-pick" size="sm" className="w-44 bg-white shrink-0"><SelectValue placeholder={t('copilot.photo.autoDetect')} /></SelectTrigger>
               <SelectContent>
                 {data.phases.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
               </SelectContent>
@@ -340,8 +341,8 @@ function PhotoPanel({ online }: { online: boolean }) {
 
           <div className="flex items-center justify-between rounded-lg border border-stone-200 p-3">
             <div>
-              <Label htmlFor="apply-ledger" className="text-sm font-medium text-stone-700">Apply to ledger automatically</Label>
-              <p className="text-xs text-stone-400">Updates phase progress + attaches photo as evidence</p>
+              <Label htmlFor="apply-ledger" className="text-sm font-medium text-stone-700">{t('copilot.photo.applyLabel')}</Label>
+              <p className="text-xs text-stone-400">{t('copilot.photo.applyHint')}</p>
             </div>
             <Switch id="apply-ledger" checked={applyToLedger} onCheckedChange={setApplyToLedger} className="data-[state=checked]:bg-amber-600" />
           </div>
@@ -351,14 +352,14 @@ function PhotoPanel({ online }: { online: boolean }) {
             size="lg"
             onClick={() => void analyze()}
             disabled={busy || !preview || !aiProgressOn}
-            title={!aiProgressOn ? 'Disabled by feature flag (ai_progress)' : undefined}
+            title={!aiProgressOn ? t('copilot.flagOff') : undefined}
           >
             {busy ? <Loader2 className="w-5 h-5 animate-spin" aria-hidden /> : <ScanSearch className="w-5 h-5" aria-hidden />}
-            {busy ? 'Vision model analyzing…' : 'Analyze with vision AI'}
+            {busy ? t('copilot.photo.analyzing') : t('copilot.photo.analyze')}
           </Button>
           {!aiProgressOn && (
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="status">
-              Disabled by feature flag (ai_progress) — an admin can re-enable it from the Settings icon in the header.
+              {t('copilot.photo.flagOffNote')}
             </p>
           )}
           {busy && <Progress value={70} className="h-1.5 bg-stone-200 [&>[data-slot=progress-indicator]]:bg-amber-500" />}
@@ -367,8 +368,8 @@ function PhotoPanel({ online }: { online: boolean }) {
 
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg text-stone-900">2 · AI reads the site</CardTitle>
-          <CardDescription>Progress %, safety (PPE), visible materials & workmanship</CardDescription>
+          <CardTitle className="text-lg text-stone-900">{t('copilot.photo.readsTitle')}</CardTitle>
+          <CardDescription>{t('copilot.photo.readsDesc')}</CardDescription>
         </CardHeader>
         <CardContent>
           {result ? (
@@ -376,21 +377,20 @@ function PhotoPanel({ online }: { online: boolean }) {
               <PhotoAnalysisBody analysis={result.analysis} />
               {result.recordedProgress !== null && (
                 <div className="flex items-center justify-between rounded-lg bg-stone-50 border border-stone-200 px-3 py-2 text-sm">
-                  <span className="text-stone-600">Recorded progress: <strong>{result.recordedProgress}%</strong></span>
+                  <span className="text-stone-600">{t('copilot.photo.recordedProgress')} <strong>{result.recordedProgress}%</strong></span>
                   {!result.appliedPhotoId ? (
                     <Button size="sm" className="gap-1 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => void applyNow()}>
-                      <CheckCircle2 className="w-4 h-4" aria-hidden /> Apply to ledger
+                      <CheckCircle2 className="w-4 h-4" aria-hidden /> {t('copilot.photo.applyButton')}
                     </Button>
                   ) : (
-                    <Badge className="bg-emerald-100 text-emerald-800 border-0 gap-1"><CheckCircle2 className="w-3.5 h-3.5" aria-hidden /> applied</Badge>
+                    <Badge className="bg-emerald-100 text-emerald-800 border-0 gap-1"><CheckCircle2 className="w-3.5 h-3.5" aria-hidden /> {t('copilot.photo.appliedBadge')}</Badge>
                   )}
                 </div>
               )}
             </div>
           ) : (
             <div className="text-sm text-stone-400 border border-dashed border-stone-200 rounded-lg p-8 text-center">
-              The vision model&apos;s report appears here — phase match, completion %, PPE compliance,
-              material counts and quality flags, all traceable to the photo.
+              {t('copilot.photo.emptyReport')}
             </div>
           )}
         </CardContent>
@@ -404,6 +404,7 @@ function PhotoPanel({ online }: { online: boolean }) {
 function VoicePanel({ online }: { online: boolean }) {
   const { data, dispatch, load } = useMjengo()
   const { data: session } = useSession()
+  const t = useT()
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -424,9 +425,11 @@ function VoicePanel({ online }: { online: boolean }) {
   // is a different route and deliberately NOT gated by this flag.
   const isAdmin = session?.user?.role === 'admin'
   const aiVoiceOn = isAdmin || data.intel.flags?.ai_voice !== false
+  const langLabel = (lang: string) =>
+    lang === 'sw' ? t('copilot.voice.langSw') : lang === 'mix' ? t('copilot.voice.langMixed') : t('copilot.voice.langEn')
 
   function startRecording() {
-    if (!navigator.mediaDevices?.getUserMedia) { toast.error('Microphone not available in this browser'); return }
+    if (!navigator.mediaDevices?.getUserMedia) { toast.error(t('copilot.voice.toast.noMic')); return }
     navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
       const mr = new MediaRecorder(stream)
       mediaRef.current = mr
@@ -436,7 +439,7 @@ function VoicePanel({ online }: { online: boolean }) {
       mr.start()
       setRecording(true); setElapsed(0); setParsed(null); setConfirmed(false)
       timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000)
-    }).catch(() => toast.error('Microphone permission denied'))
+    }).catch(() => toast.error(t('copilot.voice.toast.micDenied')))
   }
 
   function stopRecording() {
@@ -454,13 +457,13 @@ function VoicePanel({ online }: { online: boolean }) {
   }
 
   async function processBlob(blob: Blob) {
-    if (blob.size < 1000) { toast.error('Recording too short'); return }
+    if (blob.size < 1000) { toast.error(t('copilot.voice.toast.tooShort')); return }
     await runVoice(await blobToBase64(blob))
   }
 
   async function runVoice(base64: string) {
-    if (!online) { toast.error('Voice AI needs connectivity — toggle Online first'); return }
-    if (!aiVoiceOn) { toast.error('AI voice logging is disabled by feature flag (ai_voice)'); return }
+    if (!online) { toast.error(t('copilot.voice.toast.needOnline')); return }
+    if (!aiVoiceOn) { toast.error(t('copilot.voice.toast.flagOff')); return }
     setBusy(true); setParsed(null); setConfirmed(false)
     try {
       const res = await fetch('/api/ai/voice-log', {
@@ -468,30 +471,30 @@ function VoicePanel({ online }: { online: boolean }) {
         body: JSON.stringify({ audioBase64: base64, projectId: data?.project.id }),
       })
       const json = await res.json()
-      if (json.ok) { setParsed(json as ParsedVoice); toast.success(`Transcribed (${json.language === 'sw' ? 'Kiswahili' : json.language === 'mix' ? 'mixed' : 'English'}) — review items below`) }
-      else toast.error(json.error ?? 'Voice processing failed')
-    } catch { toast.error('Network error') } finally { setBusy(false) }
+      if (json.ok) { setParsed(json as ParsedVoice); toast.success(t('copilot.voice.toast.transcribed', { lang: langLabel(json.language) })) }
+      else toast.error(json.error ?? t('copilot.voice.toast.voiceFailed'))
+    } catch { toast.error(t('copilot.voice.toast.network')) } finally { setBusy(false) }
   }
 
   async function playSample(file: string) {
-    if (!online) { toast.error('Voice AI needs connectivity'); return }
+    if (!online) { toast.error(t('copilot.voice.toast.needOnlineShort')); return }
     setBusy(true); setParsed(null); setConfirmed(false)
     try {
       const blob = await fetch(file).then((r) => r.blob())
       await runVoice(await blobToBase64(blob))
-    } catch { toast.error('Could not load sample'); setBusy(false) }
+    } catch { toast.error(t('copilot.voice.toast.sampleFailed')); setBusy(false) }
   }
 
   async function parseText() {
-    if (!textMode.trim()) { toast.error('Type or paste a note first'); return }
-    if (!online) { toast.error('Parsing needs connectivity'); return }
+    if (!textMode.trim()) { toast.error(t('copilot.voice.toast.typeFirst')); return }
+    if (!online) { toast.error(t('copilot.voice.toast.parseOnline')); return }
     setBusy(true); setParsed(null); setConfirmed(false)
     try {
       const res = await fetch('/api/ai/parse-text', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: textMode.trim(), projectId: data?.project.id }) })
       const json = await res.json()
-      if (json.ok) { setParsed(json as ParsedVoice); toast.success('Parsed — review the items below') }
-      else toast.error(json.error ?? 'Parse failed')
-    } catch { toast.error('Network error') } finally { setBusy(false) }
+      if (json.ok) { setParsed(json as ParsedVoice); toast.success(t('copilot.voice.toast.parsed')) }
+      else toast.error(json.error ?? t('copilot.voice.toast.parseFailed'))
+    } catch { toast.error(t('copilot.voice.toast.network')) } finally { setBusy(false) }
   }
 
   async function confirmLog() {
@@ -509,64 +512,65 @@ function VoicePanel({ online }: { online: boolean }) {
       }, `Voice-logged ${item.quantity} ${item.unit} ${item.materialName}`)
     }
     if (ok) {
-      toast.success(`${parsed.items.length} item(s) logged to inventory + M-Pesa ledger`)
+      toast.success(t('copilot.voice.toast.logged', { count: parsed.items.length }))
       setConfirmed(true)
       await load()
-    } else toast.error('Some items failed to log')
+    } else toast.error(t('copilot.voice.toast.someFailed'))
   }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg text-stone-900">1 · Send a voice note</CardTitle>
-          <CardDescription>Kiswahili, Sheng or English — like WhatsApping your supplier log</CardDescription>
+          <CardTitle className="text-lg text-stone-900">{t('copilot.voice.sendTitle')}</CardTitle>
+          <CardDescription>{t('copilot.voice.sendDesc')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="flex flex-col items-center gap-3 rounded-xl border border-stone-200 bg-stone-50/60 p-6">
             <button
               onClick={recording ? stopRecording : startRecording}
               disabled={busy || !aiVoiceOn}
-              title={!aiVoiceOn ? 'Disabled by feature flag (ai_voice)' : undefined}
+              title={!aiVoiceOn ? t('copilot.voice.flagOff') : undefined}
               className={`w-20 h-20 rounded-full flex items-center justify-center transition-all focus:outline-none focus:ring-4 focus:ring-amber-300 ${recording ? 'bg-red-600 animate-pulse' : 'bg-amber-600 hover:bg-amber-700'}`}
-              aria-label={recording ? 'Stop recording' : 'Start recording'}
+              aria-label={recording ? t('copilot.voice.stopAria') : t('copilot.voice.startAria')}
             >
               {recording ? <Square className="w-8 h-8 text-white" aria-hidden /> : <Mic className="w-8 h-8 text-white" aria-hidden />}
             </button>
             <p className="text-sm text-stone-600 font-medium tabular-nums">
-              {recording ? `Recording… ${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')} — tap to stop` : busy ? 'Transcribing & parsing…' : 'Tap to record a delivery note'}
+              {recording
+                ? t('copilot.voice.recording', { time: `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}` })
+                : busy ? t('copilot.voice.transcribing') : t('copilot.voice.tapRecord')}
             </p>
             {!aiVoiceOn && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="status">
-                Voice logging is disabled by feature flag (ai_voice) — an admin can re-enable it from the
-                Settings icon in the header. Typed parsing below still works.
+                {t('copilot.voice.flagOffNote')}
               </p>
             )}
           </div>
 
           <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium text-stone-500">No mic? Try a sample voice note</p>
+            <p className="text-xs font-medium text-stone-500">{t('copilot.voice.samplesLabel')}</p>
             <div className="flex gap-2 flex-wrap">
-              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy || !aiVoiceOn} title={!aiVoiceOn ? 'Disabled by feature flag (ai_voice)' : undefined} onClick={() => void playSample('/audio/voice-cement-delivery.wav')}>
+              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy || !aiVoiceOn} title={!aiVoiceOn ? t('copilot.voice.flagOff') : undefined} onClick={() => void playSample('/audio/voice-cement-delivery.wav')}>
                 <Play className="w-3.5 h-3.5" aria-hidden /> “20 bags cement + 5 wire — Karioke”
               </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy || !aiVoiceOn} title={!aiVoiceOn ? 'Disabled by feature flag (ai_voice)' : undefined} onClick={() => void playSample('/audio/voice-sand-ballast.wav')}>
+              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy || !aiVoiceOn} title={!aiVoiceOn ? t('copilot.voice.flagOff') : undefined} onClick={() => void playSample('/audio/voice-sand-ballast.wav')}>
                 <Play className="w-3.5 h-3.5" aria-hidden /> “12t sand + 5t ballast — Mwangaza”
               </Button>
             </div>
-            <input ref={audioFileRef} type="file" accept="audio/*" className="sr-only" aria-label="Upload audio file"
+            <input ref={audioFileRef} type="file" accept="audio/*" className="sr-only" aria-label={t('copilot.voice.uploadAudioAria')}
               onChange={(e) => { const f = e.target.files?.[0]; if (f) void processBlob(f) }} />
-            <Button variant="ghost" size="sm" className="gap-1.5 self-start text-stone-500" disabled={busy || !aiVoiceOn} title={!aiVoiceOn ? 'Disabled by feature flag (ai_voice)' : undefined} onClick={() => audioFileRef.current?.click()}>
-              <FileAudio className="w-4 h-4" aria-hidden /> Upload an audio file instead
+            <Button variant="ghost" size="sm" className="gap-1.5 self-start text-stone-500" disabled={busy || !aiVoiceOn} title={!aiVoiceOn ? t('copilot.voice.flagOff') : undefined} onClick={() => audioFileRef.current?.click()}>
+              <FileAudio className="w-4 h-4" aria-hidden /> {t('copilot.voice.uploadAudio')}
             </Button>
           </div>
 
           <div className="space-y-2">
-            <p className="text-xs font-medium text-stone-500">Or type it (WhatsApp forward style)</p>
+            <p className="text-xs font-medium text-stone-500">{t('copilot.voice.typeLabel')}</p>
             <Textarea value={textMode} onChange={(e) => setTextMode(e.target.value)} rows={3}
-              placeholder="e.g. Nimepokea bags 50 za cement na mawe 2000 kutoka Ndarugu Quarry" />
+              placeholder={t('copilot.voice.typePh')} />
             <Button variant="outline" size="sm" className="gap-1.5" disabled={busy || !textMode.trim()} onClick={() => void parseText()}>
-              <Sparkles className="w-4 h-4" aria-hidden /> Parse text
+              <Sparkles className="w-4 h-4" aria-hidden /> {t('copilot.voice.parseText')}
             </Button>
           </div>
         </CardContent>
@@ -574,28 +578,28 @@ function VoicePanel({ online }: { online: boolean }) {
 
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg text-stone-900">2 · Structured invoice preview</CardTitle>
-          <CardDescription>Review, then commit to the shared ledger</CardDescription>
+          <CardTitle className="text-lg text-stone-900">{t('copilot.voice.previewTitle')}</CardTitle>
+          <CardDescription>{t('copilot.voice.previewDesc')}</CardDescription>
         </CardHeader>
         <CardContent>
           {!parsed ? (
             <div className="text-sm text-stone-400 border border-dashed border-stone-200 rounded-lg p-8 text-center">
-              Transcript + itemized deliveries (with catalog price matching) appear here.
+              {t('copilot.voice.emptyPreview')}
             </div>
           ) : (
             <div className="space-y-4">
               <div className="rounded-lg bg-stone-900 text-stone-100 p-3 text-sm font-mono">
-                <p className="text-[10px] text-stone-400 uppercase tracking-wide mb-1">Transcript ({parsed.language === 'sw' ? 'Kiswahili' : parsed.language === 'mix' ? 'mixed' : 'English'} · {Math.round(parsed.confidence * 100)}% confidence)</p>
+                <p className="text-[10px] text-stone-400 uppercase tracking-wide mb-1">{t('copilot.voice.transcriptLabel', { lang: langLabel(parsed.language), conf: Math.round(parsed.confidence * 100) })}</p>
                 “{parsed.transcript}”
               </div>
               {parsed.items.length > 0 ? (
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead>Item</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead className="text-right">Est. cost</TableHead>
-                      <TableHead>Match</TableHead>
+                      <TableHead>{t('copilot.voice.table.item')}</TableHead>
+                      <TableHead className="text-right">{t('copilot.voice.table.qty')}</TableHead>
+                      <TableHead className="text-right">{t('copilot.voice.table.cost')}</TableHead>
+                      <TableHead>{t('copilot.voice.table.match')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -605,7 +609,7 @@ function VoicePanel({ online }: { online: boolean }) {
                         <TableCell className="text-right tabular-nums">{item.quantity} {item.unit}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatKES(item.totalKES)}</TableCell>
                         <TableCell>
-                          {item.matched ? <Badge className="bg-emerald-100 text-emerald-800 border-0 text-[10px] hover:bg-emerald-100">catalog</Badge> : <Badge className="bg-amber-100 text-amber-800 border-0 text-[10px] hover:bg-amber-100">manual</Badge>}
+                          {item.matched ? <Badge className="bg-emerald-100 text-emerald-800 border-0 text-[10px] hover:bg-emerald-100">{t('copilot.voice.matchCatalog')}</Badge> : <Badge className="bg-amber-100 text-amber-800 border-0 text-[10px] hover:bg-amber-100">{t('copilot.voice.matchManual')}</Badge>}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -613,19 +617,19 @@ function VoicePanel({ online }: { online: boolean }) {
                 </Table>
               ) : (
                 <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
-                  No deliveries found in this note. {parsed.notes && <span className="italic">“{parsed.notes}”</span>}
+                  {t('copilot.voice.noDeliveries')} {parsed.notes && <span className="italic">“{parsed.notes}”</span>}
                 </p>
               )}
               <div className="flex items-center justify-between">
                 <div className="text-sm">
-                  {parsed.supplier && <p className="text-stone-500">Supplier: <strong className="text-stone-800">{parsed.supplier}</strong></p>}
-                  {parsed.items.length > 0 && <p className="text-stone-500">Total: <strong className="text-stone-900">{formatKES(parsed.totalKES)}</strong></p>}
+                  {parsed.supplier && <p className="text-stone-500">{t('copilot.voice.supplierLabel')} <strong className="text-stone-800">{parsed.supplier}</strong></p>}
+                  {parsed.items.length > 0 && <p className="text-stone-500">{t('copilot.voice.totalLabel')} <strong className="text-stone-900">{formatKES(parsed.totalKES)}</strong></p>}
                 </div>
                 {confirmed ? (
-                  <Badge className="bg-emerald-100 text-emerald-800 border-0 gap-1"><CheckCircle2 className="w-3.5 h-3.5" aria-hidden /> logged</Badge>
+                  <Badge className="bg-emerald-100 text-emerald-800 border-0 gap-1"><CheckCircle2 className="w-3.5 h-3.5" aria-hidden /> {t('copilot.voice.loggedBadge')}</Badge>
                 ) : (
                   <Button className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white" disabled={!parsed.items.length} onClick={() => void confirmLog()}>
-                    <CheckCircle2 className="w-4 h-4" aria-hidden /> Confirm &amp; log
+                    <CheckCircle2 className="w-4 h-4" aria-hidden /> {t('copilot.voice.confirmLog')}
                   </Button>
                 )}
               </div>
@@ -641,13 +645,14 @@ function VoicePanel({ online }: { online: boolean }) {
 
 function ScanPanel({ online }: { online: boolean }) {
   const { data, load } = useMjengo()
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<ScanResult | null>(null)
 
   if (!data) return null
 
   async function runScan() {
-    if (!online) { toast.error('Anomaly AI needs connectivity'); return }
+    if (!online) { toast.error(t('copilot.scan.toast.needOnline')); return }
     setBusy(true); setResult(null)
     try {
       const res = await fetch('/api/ai/anomaly-scan', {
@@ -658,10 +663,10 @@ function ScanPanel({ online }: { online: boolean }) {
       const json = await res.json()
       if (json.ok) {
         setResult({ summary: json.summary, alerts: json.alerts ?? [] })
-        toast.success(`Integrity scan complete — ${json.alerts?.length ?? 0} finding(s) added to the alert feed`)
+        toast.success(t('copilot.scan.toast.ok', { count: json.alerts?.length ?? 0 }))
         await load()
-      } else toast.error(json.error ?? 'Scan failed')
-    } catch { toast.error('Network error') } finally { setBusy(false) }
+      } else toast.error(json.error ?? t('copilot.scan.toast.failed'))
+    } catch { toast.error(t('copilot.scan.toast.network')) } finally { setBusy(false) }
   }
 
   const openIssues = data.alerts.filter((a) => !a.acknowledged)
@@ -670,54 +675,56 @@ function ScanPanel({ online }: { online: boolean }) {
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg text-stone-900">Ledger integrity scan</CardTitle>
+          <CardTitle className="text-lg text-stone-900">{t('copilot.scan.title')}</CardTitle>
           <CardDescription>
-            Cross-checks {data.deliveries.length} deliveries vs {data.consumptions.length} consumption logs vs
-            {' '}{data.summary.progressPct}% progress and wage records — the ghost-buster.
+            {t('copilot.scan.desc', {
+              deliveries: data.deliveries.length,
+              consumptions: data.consumptions.length,
+              progress: data.summary.progressPct,
+            })}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-lg bg-stone-50 border border-stone-200 p-3">
               <p className="text-lg font-bold text-stone-900 tabular-nums">{data.materials.reduce((s, m) => s + m.deliveredQty, 0).toLocaleString()}</p>
-              <p className="text-[10px] text-stone-500 uppercase tracking-wide">units delivered</p>
+              <p className="text-[10px] text-stone-500 uppercase tracking-wide">{t('copilot.scan.unitsDelivered')}</p>
             </div>
             <div className="rounded-lg bg-stone-50 border border-stone-200 p-3">
               <p className="text-lg font-bold text-stone-900 tabular-nums">{data.materials.reduce((s, m) => s + m.consumedQty, 0).toLocaleString()}</p>
-              <p className="text-[10px] text-stone-500 uppercase tracking-wide">units consumed</p>
+              <p className="text-[10px] text-stone-500 uppercase tracking-wide">{t('copilot.scan.unitsConsumed')}</p>
             </div>
             <div className="rounded-lg bg-stone-50 border border-stone-200 p-3">
               <p className="text-lg font-bold text-stone-900 tabular-nums">{formatKES(data.materials.reduce((s, m) => s + m.stockValue, 0), true)}</p>
-              <p className="text-[10px] text-stone-500 uppercase tracking-wide">stock at risk</p>
+              <p className="text-[10px] text-stone-500 uppercase tracking-wide">{t('copilot.scan.stockAtRisk')}</p>
             </div>
           </div>
           <Button className="w-full gap-2 bg-amber-600 hover:bg-amber-700 text-white" size="lg" onClick={() => void runScan()} disabled={busy}>
             {busy ? <Loader2 className="w-5 h-5 animate-spin" aria-hidden /> : <ScanSearch className="w-5 h-5" aria-hidden />}
-            {busy ? 'Auditing the shared ledger…' : 'Run integrity scan'}
+            {busy ? t('copilot.scan.running') : t('copilot.scan.run')}
           </Button>
           <p className="text-xs text-stone-400 leading-relaxed">
-            Typical catches: delivered vs used cement variance, spend leading progress, wage payouts without
-            matching attendance, supplier pricing above catalog.
+            {t('copilot.scan.note')}
           </p>
         </CardContent>
       </Card>
 
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg text-stone-900">Findings</CardTitle>
-          <CardDescription>{openIssues.length} open issue(s) in the trust ledger</CardDescription>
+          <CardTitle className="text-lg text-stone-900">{t('copilot.scan.findingsTitle')}</CardTitle>
+          <CardDescription>{t('copilot.scan.findingsDesc', { count: openIssues.length })}</CardDescription>
         </CardHeader>
         <CardContent>
           {result && (
             <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              <p className="font-semibold flex items-center gap-1.5 mb-1"><Sparkles className="w-4 h-4" aria-hidden /> Verdict</p>
+              <p className="font-semibold flex items-center gap-1.5 mb-1"><Sparkles className="w-4 h-4" aria-hidden /> {t('copilot.scan.verdict')}</p>
               {result.summary}
             </div>
           )}
           <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
             {openIssues.length === 0 && !result && (
               <p className="text-sm text-stone-400 border border-dashed border-stone-200 rounded-lg p-6 text-center">
-                No open findings. Run a scan to reconcile the ledger.
+                {t('copilot.scan.empty')}
               </p>
             )}
             {openIssues.map((a) => (

@@ -18,10 +18,12 @@ import { Landmark } from 'lucide-react'
 import { Card, CardContent } from '@/frontend/ui/card'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import { flagOnFor } from '@/frontend/mjengo/nav/tab-meta'
+import { useT } from '@/frontend/i18n/provider'
 import { ParcelsSection } from '@/frontend/mjengo/land/sections/parcels-section'
 import { ProfessionalsSection } from '@/frontend/mjengo/land/sections/professionals-section'
 
 function LandVerificationDisabledNotice() {
+  const t = useT()
   return (
     <Card className="border-amber-200 bg-amber-50 shadow-sm">
       <CardContent className="py-10 flex flex-col items-center justify-center text-center gap-3">
@@ -29,11 +31,9 @@ function LandVerificationDisabledNotice() {
           <Landmark className="w-6 h-6 text-amber-600" />
         </div>
         <div className="max-w-md">
-          <h2 className="text-base font-semibold text-stone-900">Land verification is off</h2>
+          <h2 className="text-base font-semibold text-stone-900">{t('land.flagOff.title')}</h2>
           <p className="mt-1 text-sm text-stone-500 leading-relaxed" role="status">
-            Disabled by feature flag (land_verification) — parcel records and the title-search ladder are closed
-            for non-admin sessions. An admin can re-enable it from the Settings icon in the header. The
-            professionals directory below is unaffected.
+            {t('land.flagOff.body')}
           </p>
         </div>
       </CardContent>

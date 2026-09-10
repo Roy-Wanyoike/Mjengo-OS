@@ -851,9 +851,13 @@ export function Header({
   // server routes enforce via requireFlagOn; flags ride on the payload's
   // intel slice (undefined while booting → unfiltered, the ai_progress
   // pattern). Share-link visitors have no session → non-admins → filtered.
+  // FE-4 (issue #108): the strip follows the client set in ANY client view —
+  // including the owner's "Preview as client" mode (no shareToken/clientRole
+  // there, so the old isShareClient test kept the owner strip in preview).
+  const clientStrip = viewMode === 'client'
   const tabs = metaForAll(
     tabsVisibleForFlags(
-      isShareClient ? tabsForRole('client') : roleTabs,
+      clientStrip ? tabsForRole('client') : roleTabs,
       data?.intel?.flags,
       sessionRole,
     ),

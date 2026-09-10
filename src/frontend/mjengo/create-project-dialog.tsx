@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES } from '@/frontend/lib/format'
+import { useT } from '@/frontend/i18n/provider'
 
 export type CreateProjectPayload = {
   name: string
@@ -33,16 +34,19 @@ export interface CreateProjectDialogProps {
   submitting: boolean
 }
 
+// i18n (issue #107): label/desc carry DICT KEYS rendered via t(). Template
+// names (Bungalow, Maisonette, Duplex) are Kenyan construction jargon and
+// stay identical in both dicts.
 const TEMPLATES: Array<{
   value: CreateProjectPayload['template']
   label: string
   desc: string
   icon: React.ComponentType<{ className?: string }>
 }> = [
-  { value: 'bungalow', label: 'Bungalow', desc: '3BR single-storey · 5 phases', icon: Home },
-  { value: 'maisonette', label: 'Maisonette', desc: '2-storey · 6 phases incl. structural frame', icon: Building },
-  { value: 'duplex', label: 'Duplex', desc: 'Semi-detached · 5 phases', icon: Building2 },
-  { value: 'blank', label: 'Blank', desc: 'Start with one empty phase', icon: FilePlus },
+  { value: 'bungalow', label: 'dialog.createProject.template.bungalow', desc: 'dialog.createProject.template.bungalowDesc', icon: Home },
+  { value: 'maisonette', label: 'dialog.createProject.template.maisonette', desc: 'dialog.createProject.template.maisonetteDesc', icon: Building },
+  { value: 'duplex', label: 'dialog.createProject.template.duplex', desc: 'dialog.createProject.template.duplexDesc', icon: Building2 },
+  { value: 'blank', label: 'dialog.createProject.template.blank', desc: 'dialog.createProject.template.blankDesc', icon: FilePlus },
 ]
 
 const dateInputClass =
@@ -53,6 +57,7 @@ function isoDate(d: Date): string {
 }
 
 export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }: CreateProjectDialogProps) {
+  const t = useT()
   const [step, setStep] = useState<1 | 2>(1)
   const [name, setName] = useState('')
   const [client, setClient] = useState('')
@@ -89,9 +94,9 @@ export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }
 
   function validateStep1(): boolean {
     const e: typeof errors = {}
-    if (!name.trim()) e.name = 'Project name is required'
-    if (!budget || Number.isNaN(budgetNum) || budgetNum <= 0) e.budget = 'Budget must be greater than 0'
-    if (startDate && targetDate && targetDate <= startDate) e.dates = 'Target date must be after start date'
+    if (!name.trim()) e.name = t('dialog.createProject.error.name')
+    if (!budget || Number.isNaN(budgetNum) || budgetNum <= 0) e.budget = t('dialog.createProject.error.budget')
+    if (startDate && targetDate && targetDate <= startDate) e.dates = t('dialog.createProject.error.dates')
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -112,10 +117,10 @@ export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }
       template,
     })
     if (ok) {
-      toast.success('Project created — karibu kazi!')
+      toast.success(t('dialog.createProject.toastOk'))
       onOpenChange(false)
     } else {
-      toast.error('Could not create project — check the details and try again')
+      toast.error(t('dialog.createProject.toastFailed'))
     }
   }
 
@@ -125,10 +130,10 @@ export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }
         <DialogHeader>
           <DialogTitle className="text-stone-900 flex items-center gap-2">
             <Wand2 className="w-5 h-5 text-amber-600" aria-hidden />
-            New project · Step {step} of 2
+            {t('dialog.createProject.title', { step })}
           </DialogTitle>
           <DialogDescription>
-            {step === 1 ? 'Site and client basics — you can adjust everything later.' : 'Pick a phase template to scaffold the build plan.'}
+            {step === 1 ? t('dialog.createProject.desc1') : t('dialog.createProject.desc2')}
           </DialogDescription>
         </DialogHeader>
 
@@ -141,37 +146,39 @@ export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }
             className="grid gap-4 py-1"
           >
             <div className="space-y-2">
-              <Label htmlFor="pj-name">Project name *</Label>
+              <Label htmlFor="pj-name">{t('dialog.createProject.name')}</Label>
               <Input
                 id="pj-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Nyumba Yangu Bungalow"
+                placeholder={t('dialog.createProject.namePh')}
                 aria-invalid={Boolean(errors.name)}
+                aria-describedby={errors.name ? 'pj-name-error' : undefined}
               />
-              {errors.name && <p className="text-xs text-red-600">{errors.name}</p>}
+              {/* FE-3 (issue #108): announced error — aria-describedby above. */}
+              {errors.name && <p id="pj-name-error" role="alert" className="text-xs text-red-600">{errors.name}</p>}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="pj-client">Client</Label>
-                <Input id="pj-client" value={client} onChange={(e) => setClient(e.target.value)} placeholder="e.g. Wanjiku Family" />
+                <Label htmlFor="pj-client">{t('dialog.createProject.client')}</Label>
+                <Input id="pj-client" value={client} onChange={(e) => setClient(e.target.value)} placeholder={t('dialog.createProject.clientPh')} />
               </div>
               <div className="space-y-2">
-                <Label>Client type</Label>
+                <Label>{t('dialog.createProject.clientType')}</Label>
                 <Select value={clientType} onValueChange={(v) => setClientType(v as typeof clientType)}>
-                  <SelectTrigger aria-label="Client type">
+                  <SelectTrigger aria-label={t('dialog.createProject.clientTypeAria')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="diaspora">
-                      <span className="flex items-center gap-2"><Globe className="w-4 h-4 text-amber-600" aria-hidden /> Diaspora</span>
+                      <span className="flex items-center gap-2"><Globe className="w-4 h-4 text-amber-600" aria-hidden /> {t('dialog.createProject.clientType.diaspora')}</span>
                     </SelectItem>
                     <SelectItem value="local">
-                      <span className="flex items-center gap-2"><User className="w-4 h-4 text-stone-500" aria-hidden /> Local</span>
+                      <span className="flex items-center gap-2"><User className="w-4 h-4 text-stone-500" aria-hidden /> {t('dialog.createProject.clientType.local')}</span>
                     </SelectItem>
                     <SelectItem value="company">
-                      <span className="flex items-center gap-2"><Briefcase className="w-4 h-4 text-stone-500" aria-hidden /> Company</span>
+                      <span className="flex items-center gap-2"><Briefcase className="w-4 h-4 text-stone-500" aria-hidden /> {t('dialog.createProject.clientType.company')}</span>
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -179,15 +186,15 @@ export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="pj-location">Location</Label>
+              <Label htmlFor="pj-location">{t('dialog.createProject.location')}</Label>
               <div className="relative">
                 <MapPin className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden />
-                <Input id="pj-location" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Kitengela, Kajiado" className="pl-9" />
+                <Input id="pj-location" value={location} onChange={(e) => setLocation(e.target.value)} placeholder={t('dialog.createProject.locationPh')} className="pl-9" />
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="pj-budget">Budget (KSh) *</Label>
+              <Label htmlFor="pj-budget">{t('dialog.createProject.budget')}</Label>
               <Input
                 id="pj-budget"
                 type="number"
@@ -195,28 +202,48 @@ export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }
                 inputMode="numeric"
                 value={budget}
                 onChange={(e) => setBudget(e.target.value)}
-                placeholder="e.g. 4500000"
+                placeholder={t('dialog.createProject.budgetPh')}
                 aria-invalid={Boolean(errors.budget)}
+                aria-describedby={errors.budget ? 'pj-budget-error' : undefined}
               />
               <div className="flex items-center justify-between text-xs">
                 <span className={budget && !Number.isNaN(budgetNum) && budgetNum > 0 ? 'text-stone-600 font-medium' : 'text-stone-400'}>
-                  {budget && !Number.isNaN(budgetNum) && budgetNum > 0 ? formatKES(budgetNum) : 'Live preview of total budget'}
+                  {budget && !Number.isNaN(budgetNum) && budgetNum > 0 ? formatKES(budgetNum) : t('dialog.createProject.budgetPreview')}
                 </span>
-                {errors.budget && <span className="text-red-600">{errors.budget}</span>}
+                {/* FE-3 (issue #108): announced error — aria-describedby above. */}
+                {errors.budget && <span id="pj-budget-error" role="alert" className="text-red-600">{errors.budget}</span>}
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="pj-start">Start date</Label>
-                <input id="pj-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={dateInputClass} />
+                <Label htmlFor="pj-start">{t('dialog.createProject.start')}</Label>
+                <input
+                  id="pj-start"
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className={dateInputClass}
+                  aria-invalid={Boolean(errors.dates)}
+                  aria-describedby={errors.dates ? 'pj-dates-error' : undefined}
+                />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="pj-target">Target date</Label>
-                <input id="pj-target" type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className={dateInputClass} />
+                <Label htmlFor="pj-target">{t('dialog.createProject.target')}</Label>
+                <input
+                  id="pj-target"
+                  type="date"
+                  value={targetDate}
+                  onChange={(e) => setTargetDate(e.target.value)}
+                  className={dateInputClass}
+                  aria-invalid={Boolean(errors.dates)}
+                  aria-describedby={errors.dates ? 'pj-dates-error' : undefined}
+                />
               </div>
             </div>
-            {errors.dates && <p className="text-xs text-red-600">{errors.dates}</p>}
+            {/* FE-3 (issue #108): announced error — aria-describedby on both
+                date inputs above. */}
+            {errors.dates && <p id="pj-dates-error" role="alert" className="text-xs text-red-600">{errors.dates}</p>}
           </motion.div>
         ) : (
           <motion.div
@@ -243,15 +270,15 @@ export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }
                     <Icon className="w-4.5 h-4.5" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold text-stone-800">{label}</span>
-                    <span className="block text-xs text-stone-500 mt-0.5">{desc}</span>
+                    <span className="block text-sm font-semibold text-stone-800">{t(label)}</span>
+                    <span className="block text-xs text-stone-500 mt-0.5">{t(desc)}</span>
                   </span>
-                  <RadioGroupItem value={value} className="mt-0.5" aria-label={label} />
+                  <RadioGroupItem value={value} className="mt-0.5" aria-label={t(label)} />
                 </label>
               ))}
             </RadioGroup>
             <p className="text-xs text-stone-400 mt-3">
-              Templates create the standard Kenyan phase plan with budgets — rename or add phases any time in Site Plan.
+              {t('dialog.createProject.templateNote')}
             </p>
           </motion.div>
         )}
@@ -259,17 +286,17 @@ export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }
         <DialogFooter className="gap-2 sm:gap-0">
           {step === 2 ? (
             <Button variant="outline" onClick={() => setStep(1)} disabled={submitting} className="gap-1.5">
-              <ArrowLeft className="w-4 h-4" aria-hidden /> Back
+              <ArrowLeft className="w-4 h-4" aria-hidden /> {t('dialog.createProject.back')}
             </Button>
           ) : (
-            <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
+            <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>{t('dialog.createProject.cancel')}</Button>
           )}
           {step === 1 ? (
             <Button
               onClick={() => validateStep1() && setStep(2)}
               className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white"
             >
-              Continue <ArrowRight className="w-4 h-4" aria-hidden />
+              {t('dialog.createProject.continue')} <ArrowRight className="w-4 h-4" aria-hidden />
             </Button>
           ) : (
             <Button
@@ -278,7 +305,7 @@ export function CreateProjectDialog({ open, onOpenChange, onCreate, submitting }
               className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white min-w-32"
             >
               {submitting ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <HardHat className="w-4 h-4" aria-hidden />}
-              {submitting ? 'Creating…' : 'Create project'}
+              {submitting ? t('dialog.createProject.creating') : t('dialog.createProject.create')}
             </Button>
           )}
         </DialogFooter>

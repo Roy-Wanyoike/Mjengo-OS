@@ -94,16 +94,24 @@ export function MjengoApp() {
   const isShareClient = viewMode === 'client' && Boolean(shareToken)
   // Client surface = share-link client (no login) OR a logged-in client-role user
   const isClientSurface = viewMode === 'client' && (Boolean(shareToken) || clientRole)
+  // FE-4 (issue #108): the tab STRIP follows the client set whenever the app
+  // is in client view — a real share client, a logged-in client, AND the
+  // owner's read-only "Preview as client" mode. Preview has neither
+  // shareToken nor clientRole, so the old `isClientSurface` test kept the
+  // OWNER strip (incl. AI Copilot/Audit) alive in preview; the strip now
+  // renders exactly tabsForRole('client') (permissions.ts — all tabs except
+  // copilot/audit/supplier).
+  const clientStrip = viewMode === 'client'
   const surfaceTabs: readonly TabKey[] = useMemo(
     () => tabsVisibleForFlags(
-      isClientSurface ? tabsForRole('client') : roleTabs,
+      clientStrip ? tabsForRole('client') : roleTabs,
       data?.intel?.flags,
       sessionRole,
     ),
     // Stable identity across renders (the mjengo:tab listener effect keys on
     // this array) — recompute only when the role tab set, the flags or the
     // session role actually change.
-    [isClientSurface, roleTabs, data?.intel?.flags, sessionRole],
+    [clientStrip, roleTabs, data?.intel?.flags, sessionRole],
   )
 
   // Boot: while signed OUT, a ?share=<token> link (or a previously used token)
@@ -250,8 +258,8 @@ export function MjengoApp() {
   async function handleRegenerateShareLink() {
     if (!data?.project) return
     const ok = await dispatch('share.regenerate', { id: data.project.id }, 'Regenerate client share link')
-    if (ok) toast.success('New link generated — the old one no longer works')
-    else toast.error('Could not regenerate the link')
+    if (ok) toast.success(t('app.share.regenerated'))
+    else toast.error(t('app.share.regenerateFailed'))
   }
 
   function handlePreviewingChange(previewing: boolean) {
@@ -292,7 +300,7 @@ export function MjengoApp() {
                 void load()
               }}
             >
-              <HardHat className="w-4 h-4" aria-hidden /> Open MjengoOS
+              <HardHat className="w-4 h-4" aria-hidden /> {t('app.deadLink.open')}
             </Button>
           </CardContent>
         </Card>
@@ -363,9 +371,9 @@ export function MjengoApp() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-stone-100 flex-col gap-4 p-6 text-center">
         <HardHat className="w-12 h-12 text-amber-600" />
-        <p className="text-stone-600">Could not reach the MjengoOS server.</p>
+        <p className="text-stone-600">{t('app.serverUnreachable')}</p>
         <Button onClick={() => void load()} variant="outline">
-          <RefreshCw className="w-4 h-4 mr-2" /> Retry
+          <RefreshCw className="w-4 h-4 mr-2" /> {t('app.retry')}
         </Button>
       </div>
     )
@@ -373,12 +381,14 @@ export function MjengoApp() {
 
   const projectShareToken = data.project.shareToken
   const shareUrl = projectShareToken ? `${origin || ''}/?share=${projectShareToken}` : null
-  // Stale/disallowed tab keys snap to the surface landing tab: clients never
-  // see the AI Copilot tab; role changes land on the role's landing tab
-  // (W1-PERM — unknown roles fail closed to Overview).
+  // Stale/disallowed tab keys snap to the surface landing tab: clients (and
+  // the owner's client PREVIEW, FE-4 issue #108) never keep a site-team tab
+  // such as AI Copilot — they snap to Overview exactly like a real client
+  // boot; role changes land on the role's landing tab (W1-PERM — unknown
+  // roles fail closed to Overview).
   const activeTab: TabKey = surfaceTabs.includes(tab)
     ? tab
-    : isClientSurface ? 'overview' : landingForRole(sessionRole)
+    : viewMode === 'client' ? 'overview' : landingForRole(sessionRole)
 
   // Honest fail-closed notice for roles the platform does not know (spec §56:
   // never silently pretend the role is fine).
@@ -419,7 +429,7 @@ export function MjengoApp() {
 
       {viewMode === 'client' && (
         isClientSurface ? (
-          <DiasporaBanner label="Client view — live site data · read-only" />
+          <DiasporaBanner label={t('banner.client')} />
         ) : (
           <DiasporaBanner onExit={() => setViewMode('owner')} />
         )
@@ -475,8 +485,11 @@ export function MjengoApp() {
       </main>
 
       {/* Mobile owner navigation — fixed bottom bar, hidden on md+ where the
-          header's desktop tab strip takes over (W1-PERM, Doc B §53/§54). */}
-      {!isClientSurface && <MobileBottomNav tab={activeTab} onTabChange={setTab} />}
+          header's desktop tab strip takes over (W1-PERM, Doc B §53/§54).
+          FE-4 (issue #108): hidden in client view too — a real client has NO
+          bottom nav (the header strip is their only strip), so the preview
+          mirrors exactly what the client sees on mobile. */}
+      {viewMode !== 'client' && <MobileBottomNav tab={activeTab} onTabChange={setTab} />}
 
       <footer
         className={`mt-auto bg-stone-950 text-stone-400 ${
@@ -490,7 +503,7 @@ export function MjengoApp() {
             <div className="flex items-center gap-2">
               <HardHat className="w-4 h-4 text-amber-500" aria-hidden />
               <span className="font-semibold text-stone-200">MjengoOS</span>
-              <span className="hidden sm:inline">· Live client view · Your build, verified daily</span>
+              <span className="hidden sm:inline">{t('footer.client.tagline')}</span>
             </div>
             {/* Share-link visitors may be site team; logged-in client-role
                 users belong here. FE-4 (issue #80): stone-300 on stone-950
@@ -501,9 +514,9 @@ export function MjengoApp() {
                 type="button"
                 onClick={exitShareView}
                 className="text-[11px] text-stone-300 hover:text-stone-100 underline underline-offset-2 min-h-11 px-2 transition-colors"
-                aria-label="Site team member? Open the full MjengoOS app"
+                aria-label={t('footer.client.siteTeamAria')}
               >
-                Site team? Open the full app
+                {t('footer.client.siteTeam')}
               </button>
             )}
           </div>
@@ -512,12 +525,12 @@ export function MjengoApp() {
             <div className="flex items-center gap-2">
               <HardHat className="w-4 h-4 text-amber-500" aria-hidden />
               <span className="font-semibold text-stone-200">MjengoOS</span>
-              <span className="hidden sm:inline">· Offline-first Construction Site OS · Anchoring AI to physical ground truth</span>
+              <span className="hidden sm:inline">{t('footer.owner.tagline')}</span>
             </div>
             <div className="flex items-center gap-3 text-stone-500">
-              <span>AI Copilot: Vision + Swahili ASR + LLM</span>
-              <span className="hidden sm:inline">Payments: simulated rails, real workflow</span>
-              <span>Nairobi, Kenya</span>
+              <span>{t('footer.owner.copilot')}</span>
+              <span className="hidden sm:inline">{t('footer.owner.payments')}</span>
+              <span>{t('footer.owner.location')}</span>
             </div>
           </div>
         )}
