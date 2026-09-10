@@ -117,24 +117,29 @@ export function SiteMapCard() {
         >
           <img src="/photos/site-aerial.png" alt="Aerial site plan" className="pointer-events-none absolute inset-0 h-full w-full object-cover" draggable={false} />
 
-          {zones.map((z) => (
-            <button
-              key={z.id}
-              type="button"
-              onClick={(e) => {
-                // While placing a new zone the whole plan is the drop target — let the
-                // click bubble to the plan container instead of opening this zone.
-                if (placing) return
-                e.stopPropagation()
-                setOpenZoneId(z.id)
-              }}
-              className="absolute rounded-lg border-2 border-amber-500/70 bg-amber-500/10 transition hover:bg-amber-500/25 focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
-              style={{ left: `${z.x}%`, top: `${z.y}%`, width: `${z.w}%`, height: `${z.h}%` }}
-              aria-label={`Open zone ${z.name} — ${photos.filter((p) => p.zoneId === z.id).length} photos`}
-            >
-              <span className="absolute inset-x-1 top-1 truncate text-left text-xs font-medium text-stone-900 drop-shadow-sm">{z.name}</span>
-            </button>
-          ))}
+          {zones.map((z) => {
+            // FE-2 (issue #108): pluralize the count — same ternary as the
+            // zone dialog below (1 photo / N photos).
+            const zonePhotoCount = photos.filter((p) => p.zoneId === z.id).length
+            return (
+              <button
+                key={z.id}
+                type="button"
+                onClick={(e) => {
+                  // While placing a new zone the whole plan is the drop target — let the
+                  // click bubble to the plan container instead of opening this zone.
+                  if (placing) return
+                  e.stopPropagation()
+                  setOpenZoneId(z.id)
+                }}
+                className="absolute rounded-lg border-2 border-amber-500/70 bg-amber-500/10 transition hover:bg-amber-500/25 focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
+                style={{ left: `${z.x}%`, top: `${z.y}%`, width: `${z.w}%`, height: `${z.h}%` }}
+                aria-label={`Open zone ${z.name} — ${zonePhotoCount} ${zonePhotoCount === 1 ? 'photo' : 'photos'}`}
+              >
+                <span className="absolute inset-x-1 top-1 truncate text-left text-xs font-medium text-stone-900 drop-shadow-sm">{z.name}</span>
+              </button>
+            )
+          })}
 
           {zones.length === 0 && !placing && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-stone-950/30 p-4 text-center">
