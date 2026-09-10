@@ -20,8 +20,13 @@
 //    never money; a pack failure never fails the release.
 
 import { db } from '@/backend/lib/db'
-import { postEscrowTopup, releaseMilestoneAtomic } from '@/backend/modules/wallet/service'
-import { currentActor, requireDeciderRole } from '@/backend/modules/wallet/session'
+import {
+  MONEY_FINANCE_ROLES,
+  postEscrowTopup,
+  releaseMilestoneAtomic,
+  requireMoneyActor,
+} from '@/backend/modules/wallet/service'
+import { requireDeciderRole } from '@/backend/modules/wallet/session'
 import { createDrawPackForRelease } from '@/backend/modules/drawpack/service'
 
 export const MONEY_ACTIONS = [
@@ -83,16 +88,26 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
         typeof payload?.reference === 'string' && payload.reference.trim()
           ? payload.reference.trim()
           : autoReference(method)
-      // Actor from the session (falls back honestly when sessionless);
-      // ledger posting + wallet projection + ledgerAccountId all commit in ONE
+      // BE-2 (issue #103): escrow top-ups move client money into the project
+      // ledger — a finance/admin action, gated at this service seam so BOTH
+      // /api/actions and /api/sync (and any future caller) inherit it. The
+      // sessionless path keeps the documented client fallback (share-link /
+      // internal flows); the session actor (never the payload) is what posts.
+      // Ledger posting + wallet projection + ledgerAccountId all commit in ONE
       // db.$transaction via postEscrowTopup (F2 — the A-1 top-up mystery is gone:
       // top-ups now post CASH→ESCROW ledger rows).
-      const actor = await currentActor()
-      const by = actor.name?.trim() || 'Client'
+      const actor = await requireMoneyActor({
+        allowed: MONEY_FINANCE_ROLES,
+        action: 'top up escrow',
+        payloadBy: payload?.by,
+        fallbackName: 'Client',
+        fallbackRole: 'client',
+      })
+      const by = actor.name
       const { ledgerRef, balance } = await postEscrowTopup(projectId, amount, by, {
         reference,
         method,
-        role: actor.role ?? 'client',
+        role: actor.role,
       })
       return { balance, reference, ledgerRef }
     }
