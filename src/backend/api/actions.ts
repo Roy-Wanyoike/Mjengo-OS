@@ -25,6 +25,10 @@ import { actionFlagGate } from '@/backend/lib/action-flag-gate'
 // Idempotency (spec §57): an optional `Idempotency-Key` header is persisted in
 // IdempotencyRecord (key, scope = action type, responseBody) — a repeated key
 // REPLAYS the stored response instead of re-applying the money movement.
+// BE-6 (issue #104): the replay honors the session pins — a client session
+// replays only its own project's key (403 otherwise, before any payload is
+// built); supplier sessions get the result-only replay; owner roles are
+// unchanged.
 //
 // Rate limit (W1-SEC, Doc A §52): 60 actions/min per principal (session email,
 // else IP). Generous for real dispatch bursts; stops scripted abuse of the
@@ -110,6 +114,17 @@ export const POST = publicRoute(
         if (isSupplier) {
           // Supplier replay: the stored result only — no buyer payload keys.
           return NextResponse.json({ ok: true, result: replayed, replayed: true, scope: existing.scope })
+        }
+        // BE-6 (issue #104): a client session replays only its OWN project's
+        // key. The tenant pin the fresh-dispatch branch enforces below (body
+        // projectId ignored, session.user.projectId stands) was bypassable
+        // here — replaying a foreign key returned that project's full payload
+        // plus the original actor's result, before the client-pin branch ever
+        // ran. Same pin, same refusal copy as the notifications/v1 family; a
+        // no-project client and a null-project record both fail closed too
+        // (an owner's global action is not a client's key by construction).
+        if (session?.user.role === 'client' && existing.projectId !== session.user.projectId) {
+          return NextResponse.json({ ok: false, error: 'Not permitted for this project' }, { status: 403 })
         }
         const data = await getProjectPayload(existing.projectId ?? null)
         const projects = await getProjectsList()

@@ -72,8 +72,15 @@ vi.mock('@/backend/lib/db', () => {
     deliveries: [] as Row[],
     catalogCreated: [] as Row[],
     idemRows: [] as Row[],
-    /** Call counters — the "zero reads/writes" pins. */
-    calls: { purchaseOrderFindFirst: 0, quoteFindFirst: 0, catalogFindUnique: 0 },
+    /** The where-clause the last notification.findMany rode (BE-3 pins). */
+    lastNotifWhere: undefined as Row | undefined,
+    /** Call counters — the "zero reads/writes" pins. searchScans counts the
+     *  /api/search fan-out (all ten source tables); notificationFindMany /
+     *  jobRecordFindMany count the BE-3 GET routes' reads. */
+    calls: {
+      purchaseOrderFindFirst: 0, quoteFindFirst: 0, catalogFindUnique: 0,
+      searchScans: 0, notificationFindMany: 0, jobRecordFindMany: 0,
+    },
     reset() {
       state.audits = []
       state.deliveries = []
@@ -82,7 +89,11 @@ vi.mock('@/backend/lib/db', () => {
         // A previously-recorded supplier replay (drives the replay-shape pin).
         { key: 'sup-replay-1', scope: 'order.dispatch', projectId: 'p-1', responseBody: '{"id":"po-1","status":"delivering","orderCode":"PO-2026-000013"}' },
       ]
-      state.calls = { purchaseOrderFindFirst: 0, quoteFindFirst: 0, catalogFindUnique: 0 }
+      state.lastNotifWhere = undefined
+      state.calls = {
+        purchaseOrderFindFirst: 0, quoteFindFirst: 0, catalogFindUnique: 0,
+        searchScans: 0, notificationFindMany: 0, jobRecordFindMany: 0,
+      }
       seed()
     },
   }
@@ -105,6 +116,8 @@ vi.mock('@/backend/lib/db', () => {
   let orders: Row[]
   let catalog: Row[]
   let invoices: Row[]
+  let notifRows: Row[]
+  let jobRows: Row[]
 
   function seed() {
     quotes = [
@@ -163,6 +176,19 @@ vi.mock('@/backend/lib/db', () => {
         supplier: SUP2, order: null, project: { id: 'p-1', name: 'Riverside Villas' }, lines: [],
       },
     ]
+    // BE-3 (issue #104) pins: notification rows across both projects + one
+    // GLOBAL row (projectId null) that must never leak into a supplier's
+    // served-union read.
+    notifRows = [
+      { id: 'n-1', projectId: 'p-1', kind: 'milestone', title: 'Milestone approved', body: 'Foundation signed off', read: true, readAt: d('2026-03-02T10:00:00Z'), createdAt: d('2026-03-01T09:00:00Z') },
+      { id: 'n-2', projectId: 'p-2', kind: 'share', title: 'Share link opened', body: 'Baba Otieno opened the link', read: false, readAt: null, createdAt: d('2026-03-02T09:00:00Z') },
+      { id: 'n-g', projectId: null, kind: 'system', title: 'Weekly digest scheduled', body: 'System-wide notice', read: false, readAt: null, createdAt: d('2026-03-03T09:00:00Z') },
+    ]
+    jobRows = [
+      { id: 'jr-1', type: 'digest.trust', status: 'done', projectId: 'p-1', payload: {}, result: { ok: true }, attempts: 1, lastError: null, runAt: d('2026-03-02T09:00:00Z'), startedAt: d('2026-03-02T09:00:01Z'), finishedAt: d('2026-03-02T09:00:02Z'), createdAt: d('2026-03-02T09:00:00Z'), maxAttempts: 3, lastAttemptAt: d('2026-03-02T09:00:02Z') },
+      { id: 'jr-2', type: 'digest.trust', status: 'done', projectId: 'p-2', payload: {}, result: { ok: true }, attempts: 1, lastError: null, runAt: d('2026-03-03T09:00:00Z'), startedAt: d('2026-03-03T09:00:01Z'), finishedAt: d('2026-03-03T09:00:02Z'), createdAt: d('2026-03-03T09:00:00Z'), maxAttempts: 3, lastAttemptAt: d('2026-03-03T09:00:02Z') },
+      { id: 'jr-g', type: 'anomaly.scan', status: 'done', projectId: null, payload: {}, result: { ok: true }, attempts: 1, lastError: null, runAt: d('2026-03-04T09:00:00Z'), startedAt: d('2026-03-04T09:00:01Z'), finishedAt: d('2026-03-04T09:00:02Z'), createdAt: d('2026-03-04T09:00:00Z'), maxAttempts: 3, lastAttemptAt: d('2026-03-04T09:00:02Z') },
+    ]
   }
   state.reset()
 
@@ -193,6 +219,27 @@ vi.mock('@/backend/lib/db', () => {
   const byCreatedAtDesc = (rows: Row[]) =>
     [...rows].sort((a, b) => new Date(String(b.createdAt)).getTime() - new Date(String(a.createdAt)).getTime())
 
+  /** The GET /api/notifications where-clause: projectId (id or { in }), kind,
+   *  read and createdAt { lt } — exactly the shapes the route sends. */
+  function notifMatches(row: Row, where: Row): boolean {
+    for (const [key, cond] of Object.entries(where)) {
+      if (cond !== null && typeof cond === 'object' && !Array.isArray(cond)) {
+        const c = cond as Row
+        if ('in' in c) {
+          if (!(c.in as unknown[]).includes(row[key])) return false
+          continue
+        }
+        if ('lt' in c) {
+          if (!(new Date(String(row.createdAt)).getTime() < new Date((c.lt as Date).getTime()).getTime())) return false
+          continue
+        }
+        return false
+      }
+      if (row[key] !== cond) return false
+    }
+    return true
+  }
+
   const withOrder = (rows: Row[], orderBy?: Row): Row[] => {
     if (!orderBy) return rows
     const desc = Object.values(orderBy)[0] === 'desc'
@@ -218,6 +265,7 @@ vi.mock('@/backend/lib/db', () => {
       },
       async findFirst() { return { ...P1 } },
       async findMany({ where, select }: { where?: Row; select?: Row }) {
+        state.calls.searchScans++ // /api/search source table #1
         const rows = [P1, P2].filter((p) => matches(p as Row, where ?? {}))
         if (select) {
           return rows.map((p) => {
@@ -238,12 +286,20 @@ vi.mock('@/backend/lib/db', () => {
         }
         return { ...row }
       },
+      async findMany() {
+        state.calls.searchScans++ // /api/search source table #4
+        return []
+      },
     },
     catalogItem: {
       async findUnique({ where }: { where: Row }) {
         state.calls.catalogFindUnique++
         const row = catalog.find((c) => c.id === where.id)
         return row ? { ...row } : null
+      },
+      async findMany() {
+        state.calls.searchScans++ // /api/search source table #5
+        return []
       },
       async update({ where, data }: { where: Row; data: Row }) {
         const row = catalog.find((c) => c.id === where.id) as Row
@@ -289,6 +345,7 @@ vi.mock('@/backend/lib/db', () => {
         return row ? structuredClone(row) : null
       },
       async findMany({ where, orderBy }: { where?: Row; orderBy?: Row }) {
+        state.calls.searchScans++ // /api/search source table #7
         return withOrder(orders.filter((o) => matches(o, where ?? {})), orderBy).map((o) => structuredClone(o))
       },
       async update({ where, data }: { where: Row; data: Row }) {
@@ -320,6 +377,7 @@ vi.mock('@/backend/lib/db', () => {
         return row ? structuredClone(row) : null
       },
       async findMany({ where, orderBy }: { where?: Row; orderBy?: Row }) {
+        state.calls.searchScans++ // /api/search source table #9
         return withOrder(invoices.filter((i) => matches(i, where ?? {})), orderBy).map((i) => structuredClone(i))
       },
     },
@@ -335,7 +393,41 @@ vi.mock('@/backend/lib/db', () => {
     domainEvent: { async findMany() { return [] } },
     sitePhoto: { async findMany() { return [] } },
     milestone: { async findMany() { return [] } },
-    notification: { async findMany() { return [] }, async create() { return {} } },
+    // ---- /api/search-only source tables (empty rows; the counter is the pin) ----
+    landParcel: {
+      async findMany() { state.calls.searchScans++; return [] }, // source table #2
+    },
+    worker: {
+      async findMany() { state.calls.searchScans++; return [] }, // source table #3
+    },
+    materialRequest: {
+      async findMany() { state.calls.searchScans++; return [] }, // source table #6
+    },
+    transaction: {
+      async findMany() { state.calls.searchScans++; return [] }, // source table #8
+    },
+    // ---- BE-3 (issue #104): the GET /api/notifications + /api/jobs/run reads ----
+    notification: {
+      async findMany({ where, orderBy, take }: { where?: Row; orderBy?: Row; take?: number }) {
+        state.calls.searchScans++ // /api/search source table #10
+        state.calls.notificationFindMany++
+        state.lastNotifWhere = where
+        const rows = withOrder(notifRows.filter((n) => notifMatches(n, where ?? {})), orderBy)
+        return rows.slice(0, take ?? rows.length).map((n) => ({ ...n }))
+      },
+      async create() { return {} },
+    },
+    user: {
+      // GET /api/notifications reads the session user's prefs — always unset here.
+      async findUnique() { return { notificationPrefs: null } },
+    },
+    jobRecord: {
+      async findMany({ where, orderBy, take }: { where?: Row; orderBy?: Row; take?: number }) {
+        state.calls.jobRecordFindMany++
+        const rows = withOrder(jobRows.filter((j) => matches(j, where ?? {})), orderBy)
+        return rows.slice(0, Math.min(take ?? rows.length, 50)).map((j) => ({ ...j }))
+      },
+    },
     idempotencyRecord: {
       async findUnique({ where }: { where: { key: string } }) {
         return state.idemRows.find((r) => r.key === where.key) ?? null
@@ -436,6 +528,9 @@ import { POST as actionsPost } from '@/app/api/actions/route'
 import { POST as syncPost } from '@/app/api/sync/route'
 import { GET as projectGet } from '@/app/api/project/route'
 import { GET as projectsGet } from '@/app/api/projects/route'
+import { GET as searchGet } from '@/app/api/search/route'
+import { GET as notificationsGet } from '@/backend/api/notifications'
+import { GET as jobsRunGet } from '@/backend/api/jobs'
 import { GET as supplierGet } from '@/app/api/supplier/route'
 import { GET as v1ProjectsGet } from '@/app/api/v1/projects/route'
 import { GET as v1ProjectDetailGet } from '@/app/api/v1/projects/[id]/route'
@@ -457,7 +552,15 @@ function stateType() {
     deliveries: Array<Record<string, unknown>>
     catalogCreated: Array<Record<string, unknown>>
     idemRows: Array<Record<string, unknown>>
-    calls: { purchaseOrderFindFirst: number; quoteFindFirst: number; catalogFindUnique: number }
+    lastNotifWhere: Record<string, unknown> | undefined
+    calls: {
+      purchaseOrderFindFirst: number
+      quoteFindFirst: number
+      catalogFindUnique: number
+      searchScans: number
+      notificationFindMany: number
+      jobRecordFindMany: number
+    }
     reset: () => void
   }
 }
@@ -930,6 +1033,112 @@ describe('the buyer payload surfaces are closed to supplier sessions', () => {
     const body = await bodyOf(res)
     expect(body.projects).toHaveLength(1)
     expect((body.projects as Array<{ id: string }>)[0].id).toBe('p-1')
+  })
+})
+
+// --------------------------- BE-3 (issue #104): the three GET read holes closed
+
+describe('GET /api/search — a supplier is not a portfolio reader (BE-3)', () => {
+  it('supplier session → the honest W5-3 403, ZERO source tables touched', async () => {
+    sessionFor('supplier', { supplierId: 'sup-1' })
+    const res = await searchGet(getReq('http://localhost/api/search?q=westlands'), undefined)
+    expect(res.status).toBe(403)
+    expect(await bodyOf(res)).toEqual({ error: 'Not permitted for role "supplier"' })
+    // The fan-out never started — not one of the ten source tables was read.
+    expect(state.calls.searchScans).toBe(0)
+  })
+
+  it('MIRROR: the same search by a contractor scans the source tables (the 403 is supplier-specific)', async () => {
+    sessionFor('contractor')
+    const res = await searchGet(getReq('http://localhost/api/search?q=westlands'), undefined)
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    expect(body.ok).toBe(true)
+    expect(body.scopedTo).toBeNull()
+    expect(state.calls.searchScans).toBeGreaterThanOrEqual(10)
+  })
+})
+
+describe('GET /api/notifications — the BE-12 supplier scope, on the GET half (BE-3)', () => {
+  it('supplier role with NO linked supplierId → 403 fail closed, ZERO notification rows read', async () => {
+    sessionFor('supplier', { supplierId: null })
+    const res = await notificationsGet(getReq('http://localhost/api/notifications'), undefined)
+    expect(res.status).toBe(403)
+    expect(await bodyOf(res)).toEqual({ error: 'Supplier account has no supplier linked' })
+    expect(state.calls.notificationFindMany).toBe(0)
+  })
+
+  it('supplier + an explicit project they DO NOT serve → 403, the POST copy, ZERO rows read', async () => {
+    sessionFor('supplier', { supplierId: 'sup-2' }) // serves p-1 only (po-2)
+    const res = await notificationsGet(getReq('http://localhost/api/notifications?projectId=p-2'), undefined)
+    expect(res.status).toBe(403)
+    expect(await bodyOf(res)).toEqual({ error: 'Not permitted for this project' })
+    expect(state.calls.notificationFindMany).toBe(0)
+  })
+
+  it('supplier + an explicit project they SERVE → that project\'s rows only (POST parity)', async () => {
+    sessionFor('supplier', { supplierId: 'sup-1' }) // po-3 lives in p-2
+    const res = await notificationsGet(getReq('http://localhost/api/notifications?projectId=p-2'), undefined)
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    expect(body.ok).toBe(true)
+    expect((body.notifications as Array<{ id: string }>).map((n) => n.id)).toEqual(['n-2'])
+    expect(state.lastNotifWhere).toMatchObject({ projectId: 'p-2' })
+  })
+
+  it('supplier + NO project named → their SERVED projects\' union, never the default first project', async () => {
+    sessionFor('supplier', { supplierId: 'sup-1' }) // serves p-1 (po-1) AND p-2 (po-3)
+    const res = await notificationsGet(getReq('http://localhost/api/notifications'), undefined)
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    // n-1 (p-1) + n-2 (p-2), newest first; the GLOBAL row (n-g, projectId
+    // null) never leaks into the union.
+    expect((body.notifications as Array<{ id: string }>).map((n) => n.id)).toEqual(['n-2', 'n-1'])
+    expect(state.lastNotifWhere).toEqual({ projectId: { in: ['p-1', 'p-2'] } })
+  })
+
+  it('the union is per-session — the second supplier sees only the project THEY serve', async () => {
+    sessionFor('supplier', { supplierId: 'sup-2' }) // serves p-1 only (po-2)
+    const res = await notificationsGet(getReq('http://localhost/api/notifications'), undefined)
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    expect((body.notifications as Array<{ id: string }>).map((n) => n.id)).toEqual(['n-1'])
+    expect(state.lastNotifWhere).toEqual({ projectId: { in: ['p-1'] } })
+  })
+
+  it('unknown project → the same 404 everyone gets (resolve first, pin second — POST parity)', async () => {
+    sessionFor('supplier', { supplierId: 'sup-1' })
+    const res = await notificationsGet(getReq('http://localhost/api/notifications?projectId=p-missing'), undefined)
+    expect(res.status).toBe(404)
+    expect(await bodyOf(res)).toEqual({ error: 'Project not found' })
+    expect(state.calls.notificationFindMany).toBe(0)
+  })
+
+  it('MIRROR: a contractor with no project named still gets the default first project (unchanged)', async () => {
+    sessionFor('contractor')
+    const res = await notificationsGet(getReq('http://localhost/api/notifications'), undefined)
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    expect((body.notifications as Array<{ id: string }>).map((n) => n.id)).toEqual(['n-1'])
+    expect(state.lastNotifWhere).toMatchObject({ projectId: 'p-1' })
+  })
+})
+
+describe('GET /api/jobs/run — a supplier has no jobs surface (BE-3)', () => {
+  it('supplier session → the honest role 403, ZERO job rows read', async () => {
+    sessionFor('supplier', { supplierId: 'sup-1' })
+    const res = await jobsRunGet(getReq('http://localhost/api/jobs/run'), undefined)
+    expect(res.status).toBe(403)
+    expect(await bodyOf(res)).toEqual({ error: 'Not permitted for role "supplier"' })
+    expect(state.calls.jobRecordFindMany).toBe(0)
+  })
+
+  it('MIRROR: the same read by a contractor lists the recent jobs (the 403 is supplier-specific)', async () => {
+    sessionFor('contractor')
+    const res = await jobsRunGet(getReq('http://localhost/api/jobs/run'), undefined)
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    expect((body.jobs as Array<{ id: string }>).map((j) => j.id).sort()).toEqual(['jr-1', 'jr-2', 'jr-g'])
   })
 })
 

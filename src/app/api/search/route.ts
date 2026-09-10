@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
+import { forbidden } from '@/backend/lib/guard'
 import { route } from '@/backend/lib/route-kit'
 
 // Global search (spec §80) — SQLite LIKE (ASCII case-insensitive by default)
@@ -18,6 +19,13 @@ import { route } from '@/backend/lib/route-kit'
 // limiter; each request scans ≤300 rows × ~10 tables, and signed-in users
 // could poll it unbounded. No behavior change otherwise: same guard (any
 // signed-in role), same 500 'Search failed' catch.
+//
+// BE-3 (issue #104): supplier sessions get the honest W5-3 403 below — the
+// same refusal /api/project gives — BEFORE any query runs. Search fans out
+// across EVERY project's workers, transactions, invoices and notification
+// bodies, and the client pin never applied to suppliers, so they fell into
+// the global branch (a cross-project read). Their read surface is
+// GET /api/supplier, where the WHERE clause itself is the scoping.
 
 export const dynamic = 'force-dynamic'
 
@@ -206,6 +214,11 @@ export const GET = route(
   },
   async (req: NextRequest, session) => {
     try {
+      // W5-3 / BE-3 (issue #104): a supplier session is not a portfolio
+      // reader — the honest 403 /api/project gives, returned before ANY of
+      // the ten source tables is touched (zero global rows fetched).
+      if (session.user.role === 'supplier') return forbidden(session.user.role)
+
       const raw = new URL(req.url).searchParams.get('q') ?? ''
       if (raw.length > MAX_QUERY) {
         return NextResponse.json({ ok: true, q: raw.slice(0, MAX_QUERY), groups: [], note: `Query capped at ${MAX_QUERY} characters` })
@@ -216,7 +229,8 @@ export const GET = route(
       }
 
       // Client-role sessions are pinned to their own project; every other role
-      // searches across all projects.
+      // searches across all projects. (Suppliers never reach here — the 403
+      // above is the W5-3 read boundary; see the BE-3 note in the header.)
       const role = session.user.role
       const pinned = role === 'client' ? (session.user.projectId ?? 'none') : null
       const groups = await searchAll(q, pinned)
