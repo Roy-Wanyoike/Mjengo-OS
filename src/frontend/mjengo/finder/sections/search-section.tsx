@@ -28,6 +28,7 @@ import { Loader2, MapPin, PackageSearch, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { compareSuppliers } from '@/backend/modules/supply/compare'
 import type { CompareRow, CompareSite } from '@/backend/modules/supply/types'
+import { useT } from '@/frontend/i18n/provider'
 import { useFinderLink } from './requests/finder-link'
 import { SearchResultsTable } from './search/results-table'
 import { SupplierDirectory } from './search/supplier-directory'
@@ -36,6 +37,7 @@ import { MapView } from '@/frontend/mjengo/map-view'
 
 export function SearchSection() {
   const { data, dispatch, viewMode, actionBusy, online, outbox } = useMjengo()
+  const t = useT()
   const { material, qty, radius, day, setMaterial, setQty, setRadius, setDay, openRequestDialog } = useFinderLink()
   const busy = actionBusy !== null
   const isSiteTeam = viewMode === 'owner'
@@ -77,19 +79,19 @@ export function SearchSection() {
       return {
         lat: withCoords.lat as number,
         lng: withCoords.lng as number,
-        label: `Site — ${withCoords.plotNumber}${withCoords.town ? `, ${withCoords.town}` : ''}`,
+        label: t('finder.search.siteLabel', { plot: withCoords.plotNumber, town: withCoords.town ? `, ${withCoords.town}` : '' }),
       }
     }
-    return { lat: -1.2921, lng: 36.8219, label: 'Nairobi (default — no parcel coords yet)' }
-  }, [data?.land.parcels])
+    return { lat: -1.2921, lng: 36.8219, label: t('finder.search.siteDefault') }
+  }, [data?.land.parcels, t])
 
   if (!data) return null
 
   async function runSearch() {
     const query = material.trim()
     const n = Number(qty)
-    if (!query) { toast.error('Type a material to find — e.g. cement, ballast, roofing sheet'); return }
-    if (!Number.isFinite(n) || n <= 0) { toast.error('Quantity must be a number greater than zero'); return }
+    if (!query) { toast.error(t('finder.search.toast.needMaterial')); return }
+    if (!Number.isFinite(n) || n <= 0) { toast.error(t('finder.search.toast.needQty')); return }
 
     // Local compute first (instant, offline-safe) — same pure function as the server
     const result = compareSuppliers(
@@ -107,50 +109,48 @@ export function SearchSection() {
         materialName: query, qty: n,
         radiusKm: radius && radius !== 'any' ? Number(radius) : undefined,
         deliveryDay: day,
-      }, `Finder search: ${query} × ${n}`)
+      }, t('finder.search.auditLabel', { query, qty: n }))
       setSearching(false)
       if (!ok) {
         // The table above is still shown (local compute) — the audit entry just failed
-        toast.info('Comparison shown from local data — the audit entry could not be recorded')
+        toast.info(t('finder.search.toast.auditFailed'))
       } else if (!online) {
-        toast.info(`Comparison shown from local data — search queued (${outbox.length})`)
+        toast.info(t('finder.search.toast.queued', { count: outbox.length }))
       }
     }
 
     if (!result.rows.length) {
-      toast.info('No suppliers match this material near the site — widen the radius or try a shorter name')
+      toast.info(t('finder.search.toast.noMatch'))
     }
   }
 
   function addToOrder(row: CompareRow) {
     openRequestDialog([{ materialName: row.itemName, unit: row.unit, qty: row.qty }])
-    toast.info(`${row.itemName} added to a new purchase request — finish the lines in the dialog`)
+    toast.info(t('finder.search.toast.addedToRequest', { name: row.itemName }))
   }
 
   return (
-    <section aria-label="Find materials near this site" className="space-y-6">
+    <section aria-label={t('finder.search.aria')} className="space-y-6">
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <PackageSearch className="h-5 w-5 text-amber-600" aria-hidden /> Find Materials Near This Site
+            <PackageSearch className="h-5 w-5 text-amber-600" aria-hidden /> {t('finder.search.title')}
           </CardTitle>
           <CardDescription>
-            Total landed cost per supplier — product + delivery + transport — ranked on price, distance, stock,
-            delivery speed and reliability. <span className="font-medium text-stone-700">Best overall</span> is not
-            always the cheapest unit price.
+            {t('finder.search.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* search inputs (mobile-first stack, sm: grid) */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="space-y-1.5 sm:col-span-2 lg:col-span-1">
-              <Label htmlFor="finder-material">Material</Label>
+              <Label htmlFor="finder-material">{t('finder.search.material')}</Label>
               <Input
                 id="finder-material"
                 list="finder-catalog-names"
                 value={material}
                 onChange={(e) => setMaterial(e.target.value)}
-                placeholder="e.g. Cement 50kg"
+                placeholder={t('finder.search.materialPh')}
                 autoComplete="off"
               />
               <datalist id="finder-catalog-names">
@@ -160,7 +160,7 @@ export function SearchSection() {
               </datalist>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="finder-qty">Quantity</Label>
+              <Label htmlFor="finder-qty">{t('finder.search.qty')}</Label>
               <Input
                 id="finder-qty"
                 type="number"
@@ -171,23 +171,23 @@ export function SearchSection() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="finder-radius">Radius</Label>
+              <Label htmlFor="finder-radius">{t('finder.search.radius')}</Label>
               <Select value={radius} onValueChange={setRadius}>
-                <SelectTrigger id="finder-radius" aria-label="Search radius"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="finder-radius" aria-label={t('finder.search.radiusAria')}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {RADIUS_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                    <SelectItem key={o.value} value={o.value}>{t(o.label)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="finder-day">Delivery day</Label>
+              <Label htmlFor="finder-day">{t('finder.search.day')}</Label>
               <Select value={day} onValueChange={setDay}>
-                <SelectTrigger id="finder-day" aria-label="Delivery day"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="finder-day" aria-label={t('finder.search.dayAria')}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {DELIVERY_DAY_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                    <SelectItem key={o.value} value={o.value}>{t(o.label)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -199,10 +199,10 @@ export function SearchSection() {
               className="min-h-11 gap-2 bg-amber-600 text-white hover:bg-amber-700"
               disabled={busy || searching}
               onClick={() => void runSearch()}
-              aria-label="Find suppliers near this site"
+              aria-label={t('finder.search.findAria')}
             >
               {searching ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Search className="h-4 w-4" aria-hidden />}
-              Find suppliers
+              {t('finder.search.find')}
             </Button>
             <Badge variant="outline" className="gap-1 font-normal text-stone-500">
               <MapPin className="h-3 w-3" aria-hidden /> {site.label}
@@ -214,17 +214,16 @@ export function SearchSection() {
             <div className="space-y-3">
               <p className="text-xs text-stone-500" aria-live="polite">
                 {rows.length
-                  ? `${rows.length} supplier${rows.length === 1 ? '' : 's'} · ranked by weighted score (price 0.45 · distance 0.15 · stock 0.15 · speed 0.10 · reliability 0.15)`
-                  : 'No matches — widen the search'}
-                {rows.length > 0 && ` · cheapest unit ${formatKes(Math.min(...rows.map((r) => r.unitPrice)))}`}
+                  ? t(rows.length === 1 ? 'finder.search.resultsOne' : 'finder.search.resultsMany', { count: rows.length })
+                  : t('finder.search.noMatches')}
+                {rows.length > 0 && ` · ${t('finder.search.cheapestUnit', { price: formatKes(Math.min(...rows.map((r) => r.unitPrice))) })}`}
               </p>
               <SearchResultsTable rows={rows} siteLabel={site.label} busy={busy} onAddToOrder={addToOrder} priceHistory={priceHistory} />
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-stone-300 p-6 text-center">
               <p className="text-sm text-stone-600">
-                Type a material and quantity, then <span className="font-medium">Find suppliers</span> — results rank
-                every supplier by total landed cost at this site.
+                {t('finder.search.emptyBody')}
               </p>
               <div className="flex flex-wrap items-center justify-center gap-2 pt-3">
                 {['Cement 50kg (32.5N)', 'Steel bar Y12 (12m length)', 'Ballast (screened)', 'River sand'].map((name) => (

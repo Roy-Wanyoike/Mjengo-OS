@@ -24,7 +24,9 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { dateShort } from '@/frontend/lib/format'
-import { DOC_KIND_LABELS, type ParcelDetail } from '@/backend/modules/land/types'
+import { useT } from '@/frontend/i18n/provider'
+import { docKindLabel } from '@/frontend/mjengo/land/labels'
+import type { ParcelDetail } from '@/backend/modules/land/types'
 import type { TitleSearch } from '@prisma/client'
 import { MatchBadge, ParcelStatusBadge, SearchStatusBadge } from './badges'
 import { ParcelTimeline } from './timeline'
@@ -45,10 +47,11 @@ function docKindIcon(kind: string): LucideIcon {
 }
 
 function TranscriptionPreview({ text }: { text: string }) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
   const preview = text.length > 180 ? `${text.slice(0, 180)}…` : text
   return (
-    <div className="mt-1.5 rounded-md border border-stone-100 bg-stone-50 p-2 min-w-0" aria-label="Document transcription">
+    <div className="mt-1.5 rounded-md border border-stone-100 bg-stone-50 p-2 min-w-0" aria-label={t('land.doc.transcriptionAria')}>
       <p className="text-xs text-stone-600 leading-relaxed whitespace-pre-wrap break-words">{expanded ? text : preview}</p>
       {text.length > 180 && (
         <button
@@ -56,7 +59,7 @@ function TranscriptionPreview({ text }: { text: string }) {
           className="mt-1 text-[11px] font-medium text-stone-500 underline hover:text-stone-800"
           onClick={() => setExpanded(!expanded)}
         >
-          {expanded ? 'Show less' : 'Show full transcription'}
+          {expanded ? t('land.doc.showLess') : t('land.doc.showFull')}
         </button>
       )}
     </div>
@@ -73,6 +76,7 @@ export function ParcelDetail({
   onClose: () => void
 }) {
   const { dispatch, online, outbox } = useMjengo()
+  const t = useT()
   const [attachOpen, setAttachOpen] = useState(false)
   const [requestOpen, setRequestOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -93,31 +97,31 @@ export function ParcelDetail({
       toast.success(
         status === 'verified'
           ? online
-            ? 'Reviewed — documents + consistent search agree: parcel record is now VERIFIED'
-            : `Saved on-device — queued (${outbox.length + 1})`
+            ? t('land.search.toast.reviewedVerified')
+            : t('land.search.toast.queued', { count: outbox.length + 1 })
           : online
-            ? 'Search marked reviewed — a consistent result with documents on file would mark the parcel verified'
-            : `Saved on-device — queued (${outbox.length + 1})`,
+            ? t('land.search.toast.reviewed')
+            : t('land.search.toast.queued', { count: outbox.length + 1 }),
       )
     } else {
-      toast.error('Could not record the review')
+      toast.error(t('land.search.toast.reviewFailed'))
     }
   }
 
   const particulars: { label: string; value: string }[] = [
-    { label: 'County', value: parcel.county },
-    { label: 'Town / area', value: parcel.town ?? 'Not recorded' },
-    { label: 'Approx. area', value: parcel.approxArea ?? 'Not recorded' },
-    { label: 'Tenure', value: parcel.tenureType ?? 'Not recorded' },
+    { label: t('land.particulars.county'), value: parcel.county },
+    { label: t('land.particulars.town'), value: parcel.town ?? t('land.particulars.notRecorded') },
+    { label: t('land.particulars.area'), value: parcel.approxArea ?? t('land.particulars.notRecorded') },
+    { label: t('land.particulars.tenure'), value: parcel.tenureType ?? t('land.particulars.notRecorded') },
     {
-      label: 'Coordinates',
-      value: parcel.lat !== null && parcel.lng !== null ? `${parcel.lat.toFixed(4)}, ${parcel.lng.toFixed(4)}` : 'Not recorded',
+      label: t('land.particulars.coordinates'),
+      value: parcel.lat !== null && parcel.lng !== null ? `${parcel.lat.toFixed(4)}, ${parcel.lng.toFixed(4)}` : t('land.particulars.notRecorded'),
     },
-    { label: 'Recorded', value: dateShort(parcel.createdAt) },
+    { label: t('land.particulars.recorded'), value: dateShort(parcel.createdAt) },
   ]
 
   return (
-    <div className="space-y-4" aria-label={`Parcel record for ${parcel.plotNumber}`}>
+    <div className="space-y-4" aria-label={t('land.detail.aria', { plot: parcel.plotNumber })}>
       {/* identity + actions */}
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-2">
@@ -138,7 +142,7 @@ export function ParcelDetail({
               variant="ghost"
               className="h-8 w-8 text-stone-400 hover:text-stone-700"
               onClick={onClose}
-              aria-label="Close parcel detail"
+              aria-label={t('land.detail.closeAria')}
             >
               <X className="h-4 w-4" aria-hidden />
             </Button>
@@ -157,7 +161,7 @@ export function ParcelDetail({
           {canEdit && (
             <div className="flex flex-wrap gap-2 pt-1 border-t border-stone-100">
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setAttachOpen(true)}>
-                <FilePlus2 className="h-4 w-4" aria-hidden /> Attach document
+                <FilePlus2 className="h-4 w-4" aria-hidden /> {t('land.detail.attachDocument')}
               </Button>
               <Button
                 size="sm"
@@ -165,15 +169,15 @@ export function ParcelDetail({
                 className="gap-1.5"
                 onClick={() => setRequestOpen(true)}
                 disabled={Boolean(openSearch)}
-                title={openSearch ? 'A registry search is already requested — receive its result first' : undefined}
+                title={openSearch ? t('land.detail.searchAlreadyRequested') : undefined}
               >
-                <ScanSearch className="h-4 w-4" aria-hidden /> Request registry search
+                <ScanSearch className="h-4 w-4" aria-hidden /> {t('land.detail.requestSearch')}
               </Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setEditOpen(true)}>
-                <Pencil className="h-4 w-4" aria-hidden /> Edit particulars
+                <Pencil className="h-4 w-4" aria-hidden /> {t('land.detail.editParticulars')}
               </Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setStatusOpen(true)}>
-                <SlidersHorizontal className="h-4 w-4" aria-hidden /> Set record status
+                <SlidersHorizontal className="h-4 w-4" aria-hidden /> {t('land.detail.setStatus')}
               </Button>
             </div>
           )}
@@ -183,10 +187,9 @@ export function ParcelDetail({
       {/* documents */}
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base text-stone-900">Documents</CardTitle>
+          <CardTitle className="text-base text-stone-900">{t('land.docs.title')}</CardTitle>
           <CardDescription>
-            Metadata + transcriptions attached to the parcel — the title-deed text powers the consistency check
-            {parcel.documents.length ? ` (${parcel.documents.length} on file)` : ''}
+            {t('land.docs.desc', { count: parcel.documents.length ? t('land.docs.onFile', { count: parcel.documents.length }) : '' })}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -202,9 +205,9 @@ export function ParcelDetail({
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-stone-800 truncate" title={doc.fileName}>{doc.fileName}</p>
                       <p className="text-xs text-stone-500">
-                        {DOC_KIND_LABELS[doc.kind as keyof typeof DOC_KIND_LABELS] ?? 'Document'}
-                        {' · '}attached {dateShort(doc.createdAt)}
-                        {doc.issuedOn ? ` · issued ${dateShort(doc.issuedOn)}` : ''}
+                        {docKindLabel(t, doc.kind)}
+                        {' · '}{t('land.docs.attached', { date: dateShort(doc.createdAt) })}
+                        {doc.issuedOn ? ` · ${t('land.docs.issued', { date: dateShort(doc.issuedOn) })}` : ''}
                       </p>
                       {doc.extractedText && <TranscriptionPreview text={doc.extractedText} />}
                     </div>
@@ -214,7 +217,7 @@ export function ParcelDetail({
             </ul>
           ) : (
             <p className="text-sm text-stone-400 py-2">
-              No documents attached yet — attach the title deed (with its transcription) to power the consistency check.
+              {t('land.docs.empty')}
             </p>
           )}
         </CardContent>
@@ -223,10 +226,9 @@ export function ParcelDetail({
       {/* registry searches */}
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base text-stone-900">Registry searches</CardTitle>
+          <CardTitle className="text-base text-stone-900">{t('land.search.title')}</CardTitle>
           <CardDescription>
-            Requests are recorded, not confirmed — no live registry link. Results are typed by people and checked
-            against the deed transcription.
+            {t('land.search.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -242,16 +244,16 @@ export function ParcelDetail({
                     </div>
                   </div>
                   <p className="text-xs text-stone-500">
-                    Requested {dateShort(search.requestedAt)}
-                    {search.receivedAt ? ` · received ${dateShort(search.receivedAt)}` : ''}
-                    {search.reviewedAt ? ` · reviewed ${dateShort(search.reviewedAt)}` : ''}
+                    {t('land.search.requested', { date: dateShort(search.requestedAt) })}
+                    {search.receivedAt ? ` · ${t('land.search.received', { date: dateShort(search.receivedAt) })}` : ''}
+                    {search.reviewedAt ? ` · ${t('land.search.reviewedAt', { date: dateShort(search.reviewedAt) })}` : ''}
                   </p>
                   {search.resultSummary && (
                     <p className="text-sm text-stone-700 leading-relaxed min-w-0 break-words">{search.resultSummary}</p>
                   )}
                   {canEdit && search.status === 'requested' && (
                     <Button size="sm" className="gap-1.5 bg-stone-900 text-white hover:bg-stone-800" onClick={() => setReceiveFor(search)}>
-                      <FileCheck2 className="h-4 w-4" aria-hidden /> Receive result
+                      <FileCheck2 className="h-4 w-4" aria-hidden /> {t('land.search.receiveResult')}
                     </Button>
                   )}
                   {canEdit && search.status === 'received' && (
@@ -262,10 +264,10 @@ export function ParcelDetail({
                         className="gap-1.5"
                         disabled={reviewBusy === search.id}
                         onClick={() => void markReviewed(search)}
-                        title="Record a human review — a CONSISTENT result with ≥1 document on file marks the parcel verified"
+                        title={t('land.search.markReviewedTitle')}
                       >
                         <FileCheck2 className="h-4 w-4" aria-hidden />
-                        {reviewBusy === search.id ? 'Reviewing…' : 'Mark reviewed'}
+                        {reviewBusy === search.id ? t('land.search.reviewing') : t('land.search.markReviewed')}
                       </Button>
                       <Button
                         size="sm"
@@ -273,20 +275,20 @@ export function ParcelDetail({
                         className="gap-1.5 text-rose-700 border-rose-200 hover:bg-rose-50 hover:text-rose-800"
                         onClick={() => setFlagFor(search)}
                       >
-                        <ScanSearch className="h-4 w-4" aria-hidden /> Flag for follow-up
+                        <ScanSearch className="h-4 w-4" aria-hidden /> {t('land.search.flagFollowUp')}
                       </Button>
                     </div>
                   )}
                   {search.status === 'reviewed' && (
                     <Badge className="border-0 bg-stone-100 text-stone-600 hover:bg-stone-100">
-                      Reviewed by a human · decision on the timeline
+                      {t('land.search.reviewedByHuman')}
                     </Badge>
                   )}
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="text-sm text-stone-400 py-2">No registry search requested yet.</p>
+            <p className="text-sm text-stone-400 py-2">{t('land.search.empty')}</p>
           )}
         </CardContent>
       </Card>
@@ -294,8 +296,8 @@ export function ParcelDetail({
       {/* timeline */}
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base text-stone-900">Parcel record timeline</CardTitle>
-          <CardDescription>Every document, search and professional assignment, oldest first</CardDescription>
+          <CardTitle className="text-base text-stone-900">{t('land.timeline.title')}</CardTitle>
+          <CardDescription>{t('land.timeline.desc')}</CardDescription>
         </CardHeader>
         <CardContent>
           <ParcelTimeline parcel={parcel} />

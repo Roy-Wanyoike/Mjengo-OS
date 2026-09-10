@@ -6,7 +6,10 @@
 import { BadgeCheck, FileCheck2, FileText, Landmark, MapPin, ScanSearch, UserCheck } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { dateShort } from '@/frontend/lib/format'
-import { ASSIGNMENT_ROLE_LABELS, DOC_KIND_LABELS, type ParcelDetail } from '@/backend/modules/land/types'
+import { useT } from '@/frontend/i18n/provider'
+import type { TranslateFn } from '@/frontend/i18n/types'
+import { assignRoleLabel, docKindLabel } from '@/frontend/mjengo/land/labels'
+import type { ParcelDetail } from '@/backend/modules/land/types'
 
 type Tone = 'neutral' | 'good' | 'bad'
 
@@ -33,13 +36,13 @@ function docIcon(kind: string): LucideIcon {
   return FileCheck2
 }
 
-export function buildParcelTimeline(parcel: ParcelDetail): TimelineEvent[] {
+export function buildParcelTimeline(parcel: ParcelDetail, t: TranslateFn): TimelineEvent[] {
   const events: TimelineEvent[] = [
     {
       id: `parcel-${parcel.id}`,
       date: parcel.createdAt,
       icon: Landmark,
-      title: 'Parcel recorded',
+      title: t('land.timeline.parcelRecorded'),
       detail: `${parcel.plotNumber} · ${parcel.county}`,
       tone: 'neutral',
     },
@@ -50,7 +53,7 @@ export function buildParcelTimeline(parcel: ParcelDetail): TimelineEvent[] {
       id: doc.id,
       date: doc.createdAt,
       icon: docIcon(doc.kind),
-      title: `${DOC_KIND_LABELS[doc.kind as keyof typeof DOC_KIND_LABELS] ?? 'Document'} attached`,
+      title: t('land.timeline.docAttached', { kind: docKindLabel(t, doc.kind) }),
       detail: doc.fileName,
       tone: 'neutral',
     })
@@ -61,7 +64,7 @@ export function buildParcelTimeline(parcel: ParcelDetail): TimelineEvent[] {
       id: `req-${s.id}`,
       date: s.requestedAt,
       icon: ScanSearch,
-      title: 'Registry search requested',
+      title: t('land.timeline.searchRequested'),
       detail: s.searchRef,
       tone: 'neutral',
     })
@@ -70,13 +73,13 @@ export function buildParcelTimeline(parcel: ParcelDetail): TimelineEvent[] {
         id: `rec-${s.id}`,
         date: s.receivedAt,
         icon: FileCheck2,
-        title: 'Registry result received',
+        title: t('land.timeline.resultReceived'),
         detail:
           s.transcriptionMatch === 'mismatch'
-            ? 'Transcription mismatch — review required'
+            ? t('land.timeline.detail.mismatch')
             : s.transcriptionMatch === 'consistent'
-              ? 'Transcription consistent with the deed'
-              : 'No deed transcription to compare against',
+              ? t('land.timeline.detail.consistent')
+              : t('land.timeline.detail.noDeed'),
         tone: s.transcriptionMatch === 'mismatch' ? 'bad' : s.transcriptionMatch === 'consistent' ? 'good' : 'neutral',
       })
     }
@@ -85,7 +88,7 @@ export function buildParcelTimeline(parcel: ParcelDetail): TimelineEvent[] {
         id: `rev-${s.id}`,
         date: s.reviewedAt,
         icon: BadgeCheck,
-        title: 'Result reviewed by a human',
+        title: t('land.timeline.reviewed'),
         detail: s.searchRef,
         tone: 'neutral',
       })
@@ -97,7 +100,7 @@ export function buildParcelTimeline(parcel: ParcelDetail): TimelineEvent[] {
       id: a.id,
       date: a.createdAt,
       icon: UserCheck,
-      title: `${ASSIGNMENT_ROLE_LABELS[a.role] ?? 'Professional'} assigned`,
+      title: t('land.timeline.assigned', { role: assignRoleLabel(t, a.role) }),
       detail: `${a.professionalName}${a.status !== 'active' ? ` · ${a.status}` : ''}`,
       tone: 'neutral',
     })
@@ -107,9 +110,10 @@ export function buildParcelTimeline(parcel: ParcelDetail): TimelineEvent[] {
 }
 
 export function ParcelTimeline({ parcel }: { parcel: ParcelDetail }) {
-  const events = buildParcelTimeline(parcel)
+  const t = useT()
+  const events = buildParcelTimeline(parcel, t)
   return (
-    <ol className="space-y-0" aria-label={`Parcel record timeline for ${parcel.plotNumber}`}>
+    <ol className="space-y-0" aria-label={t('land.timeline.aria', { plot: parcel.plotNumber })}>
       {events.map((e, i) => (
         <li key={e.id} className="flex gap-3 min-w-0">
           <div className="flex flex-col items-center" aria-hidden>

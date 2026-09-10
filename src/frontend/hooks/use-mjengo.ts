@@ -596,7 +596,7 @@ export const useMjengo = create<MjengoState>()(
             // A dead token in the URL deserves the invalid-link screen; a stale
             // persisted token (owner reseeded/regenerated) silently falls back to owner mode.
             if (fromUrl) {
-              set({ shareError: 'This share link is invalid or has been revoked', loading: false, shareToken: null })
+              set({ shareError: t('share.error.invalid'), loading: false, shareToken: null })
             } else {
               set({ shareToken: null, viewMode: 'owner' })
               await get().load()
@@ -606,7 +606,7 @@ export const useMjengo = create<MjengoState>()(
           const json = await res.json()
           if (!json?.ok || !json.data) {
             if (fromUrl) {
-              set({ shareError: 'This share link is invalid or has been revoked', loading: false, shareToken: null })
+              set({ shareError: t('share.error.invalid'), loading: false, shareToken: null })
             } else {
               set({ shareToken: null, viewMode: 'owner' })
               await get().load()
@@ -627,7 +627,7 @@ export const useMjengo = create<MjengoState>()(
         } catch {
           // Network failure on a persisted token → still allow owner mode fallback
           if (fromUrl) {
-            set({ shareError: 'Could not reach MjengoOS — check your connection', loading: false })
+            set({ shareError: t('share.error.network'), loading: false })
           } else {
             set({ shareToken: null, viewMode: 'owner', loading: false })
             await get().load()

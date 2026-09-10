@@ -4,10 +4,12 @@
 // inline SVG sparkline and the risk score ring. Kept dependency-free on
 // purpose — no chart library, just tiny deterministic SVG.
 
+import { useT } from '@/frontend/i18n/provider'
 import type { FindingSeverity } from '@/backend/modules/intel/types'
 
 /** Severity chip — info=stone, warning=amber, critical=red (house palette). */
 export function SeverityChip({ severity }: { severity: FindingSeverity }) {
+  const t = useT()
   const cls =
     severity === 'critical'
       ? 'bg-red-100 text-red-700 border-red-200'
@@ -16,15 +18,16 @@ export function SeverityChip({ severity }: { severity: FindingSeverity }) {
         : 'bg-stone-100 text-stone-600 border-stone-200'
   return (
     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cls}`}>
-      {severity}
+      {t(`intel.severity.${severity}`)}
     </span>
   )
 }
 
 /** 30-day price delta chip — up=amber, down=green, flat/unknown=stone. */
 export function DeltaChip({ deltaPct }: { deltaPct: number | null }) {
+  const t = useT()
   if (deltaPct === null) {
-    return <span className="inline-flex items-center rounded-full bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium text-stone-500">new</span>
+    return <span className="inline-flex items-center rounded-full bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium text-stone-500">{t('intel.delta.new')}</span>
   }
   const up = deltaPct > 0
   const flat = deltaPct === 0
@@ -47,8 +50,9 @@ export function DeltaChip({ deltaPct }: { deltaPct: number | null }) {
  * Up-trending series stroke amber, down-trending green — matching DeltaChip.
  */
 export function Sparkline({ points, width = 76, height = 22 }: { points: number[]; width?: number; height?: number }) {
+  const t = useT()
   if (points.length < 2) {
-    return <span className="text-[10px] text-stone-400" aria-label="Not enough points yet">—</span>
+    return <span className="text-[10px] text-stone-400" aria-label={t('intel.spark.notEnough')}>—</span>
   }
   const min = Math.min(...points)
   const max = Math.max(...points)
@@ -64,7 +68,7 @@ export function Sparkline({ points, width = 76, height = 22 }: { points: number[
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       role="img"
-      aria-label={up ? 'Price trending up over the recorded points' : 'Price trending down over the recorded points'}
+      aria-label={t(up ? 'intel.spark.up' : 'intel.spark.down')}
       className="shrink-0"
     >
       <polyline
@@ -81,13 +85,14 @@ export function Sparkline({ points, width = 76, height = 22 }: { points: number[
 
 /** Big risk score ring (deterministic 0–100, higher = calmer). */
 export function ScoreRing({ score }: { score: number }) {
+  const t = useT()
   const r = 46
   const circumference = 2 * Math.PI * r
   const pct = Math.max(0, Math.min(100, score))
   const color = score >= 75 ? '#059669' : score >= 50 ? '#d97706' : '#dc2626'
-  const label = score >= 75 ? 'Steady' : score >= 50 ? 'Watch' : 'Attention'
+  const label = t(score >= 75 ? 'intel.ring.steady' : score >= 50 ? 'intel.ring.watch' : 'intel.ring.attention')
   return (
-    <div className="relative w-28 h-28 shrink-0" role="img" aria-label={`Risk score ${score} of 100 — ${label}`}>
+    <div className="relative w-28 h-28 shrink-0" role="img" aria-label={t('intel.ring.aria', { score, label })}>
       <svg viewBox="0 0 110 110" className="w-full h-full -rotate-90">
         <circle cx="55" cy="55" r={r} fill="none" stroke="#e7e5e4" strokeWidth="10" />
         <circle

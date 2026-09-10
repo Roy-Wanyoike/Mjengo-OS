@@ -13,15 +13,19 @@ import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import { dateShort } from '@/frontend/lib/format'
-import { ASSIGNMENT_ROLE_LABELS, type ParcelDetail } from '@/backend/modules/land/types'
+import { useT } from '@/frontend/i18n/provider'
+import type { TranslateFn } from '@/frontend/i18n/types'
+import { assignRoleLabel } from '@/frontend/mjengo/land/labels'
+import type { ParcelDetail } from '@/backend/modules/land/types'
 
 type LadderState = 'done' | 'warn' | 'bad' | 'empty'
 
-const LADDER_BADGE: Record<LadderState, { cls: string; title: string }> = {
-  done: { cls: 'border-0 bg-emerald-100 text-emerald-800 hover:bg-emerald-100', title: 'On file' },
-  warn: { cls: 'border-0 bg-amber-100 text-amber-900 hover:bg-amber-100', title: 'Pending' },
-  bad: { cls: 'border-0 bg-rose-100 text-rose-800 hover:bg-rose-100', title: 'Review required' },
-  empty: { cls: 'border-0 bg-stone-100 text-stone-600 hover:bg-stone-100', title: 'None' },
+// i18n (issue #107): badge title carries a DICT KEY rendered via t().
+const LADDER_BADGE: Record<LadderState, { cls: string; titleKey: string }> = {
+  done: { cls: 'border-0 bg-emerald-100 text-emerald-800 hover:bg-emerald-100', titleKey: 'land.passport.state.onFile' },
+  warn: { cls: 'border-0 bg-amber-100 text-amber-900 hover:bg-amber-100', titleKey: 'land.passport.state.pending' },
+  bad: { cls: 'border-0 bg-rose-100 text-rose-800 hover:bg-rose-100', titleKey: 'land.passport.state.reviewRequired' },
+  empty: { cls: 'border-0 bg-stone-100 text-stone-600 hover:bg-stone-100', titleKey: 'land.passport.state.none' },
 }
 
 interface LadderRow {
@@ -32,56 +36,57 @@ interface LadderRow {
   stateLabel: string
 }
 
-function buildLadder(parcel: ParcelDetail): LadderRow[] {
+function buildLadder(parcel: ParcelDetail, t: TranslateFn): LadderRow[] {
   const deed = parcel.documents.find((d) => d.kind === 'title_deed')
   const latest = parcel.searches[0] // repository orders newest first
   const activeAssignments = parcel.assignments.filter((a) => a.status === 'active')
 
   const searchRow: LadderRow = !latest
-    ? { icon: ScanSearch, field: 'Registry search', note: 'No search requested on record yet', state: 'empty', stateLabel: 'Not requested' }
+    ? { icon: ScanSearch, field: t('land.passport.row.search'), note: t('land.passport.note.noSearch'), state: 'empty', stateLabel: t('land.passport.state.notRequested') }
     : latest.status === 'requested'
-      ? { icon: ScanSearch, field: 'Registry search', note: `${latest.searchRef} — awaiting the registry result`, state: 'warn', stateLabel: 'Requested' }
+      ? { icon: ScanSearch, field: t('land.passport.row.search'), note: t('land.passport.note.awaitingResult', { ref: latest.searchRef }), state: 'warn', stateLabel: t('land.passport.state.requested') }
       : latest.transcriptionMatch === 'mismatch'
-        ? { icon: ScanSearch, field: 'Registry search', note: `${latest.searchRef} — result differs from the deed transcription`, state: 'bad', stateLabel: 'Mismatch' }
-        : { icon: ScanSearch, field: 'Registry search', note: `${latest.searchRef} — result recorded${latest.transcriptionMatch === 'consistent' ? ' and consistent' : ''}`, state: 'done', stateLabel: 'Received' }
+        ? { icon: ScanSearch, field: t('land.passport.row.search'), note: t('land.passport.note.differs', { ref: latest.searchRef }), state: 'bad', stateLabel: t('land.passport.state.mismatch') }
+        : { icon: ScanSearch, field: t('land.passport.row.search'), note: t('land.passport.note.recorded', { ref: latest.searchRef, consistent: latest.transcriptionMatch === 'consistent' ? t('land.passport.note.andConsistent') : '' }), state: 'done', stateLabel: t('land.passport.state.received') }
 
   const reviewRow: LadderRow = !latest || latest.status !== 'reviewed'
-    ? { icon: UserCheck, field: 'Human review', note: latest?.status === 'received' ? 'Received result awaiting review' : 'Nothing to review yet', state: latest?.status === 'received' ? 'warn' : 'empty', stateLabel: latest?.status === 'received' ? 'Pending' : 'Not yet' }
-    : { icon: UserCheck, field: 'Human review', note: latest.reviewedAt ? `Reviewed ${dateShort(latest.reviewedAt)}` : 'Reviewed', state: 'done', stateLabel: 'Reviewed' }
+    ? { icon: UserCheck, field: t('land.passport.row.review'), note: latest?.status === 'received' ? t('land.passport.note.awaitingReview') : t('land.passport.note.nothingToReview'), state: latest?.status === 'received' ? 'warn' : 'empty', stateLabel: latest?.status === 'received' ? t('land.passport.state.pending') : t('land.passport.state.notYet') }
+    : { icon: UserCheck, field: t('land.passport.row.review'), note: latest.reviewedAt ? t('land.passport.note.reviewed', { date: dateShort(latest.reviewedAt) }) : t('land.passport.state.reviewed'), state: 'done', stateLabel: t('land.passport.state.reviewed') }
 
   return [
     deed
-      ? { icon: FileText, field: 'Title deed', note: `${deed.fileName}${deed.issuedOn ? ` · issued ${dateShort(deed.issuedOn)}` : ''}`, state: 'done', stateLabel: 'On file' }
-      : { icon: FileText, field: 'Title deed', note: 'No title-deed transcription attached yet', state: 'empty', stateLabel: 'None attached' },
+      ? { icon: FileText, field: t('land.passport.row.deed'), note: `${deed.fileName}${deed.issuedOn ? ` · ${t('land.passport.note.issued', { date: dateShort(deed.issuedOn) })}` : ''}`, state: 'done', stateLabel: t('land.passport.state.onFile') }
+      : { icon: FileText, field: t('land.passport.row.deed'), note: t('land.passport.note.noDeed'), state: 'empty', stateLabel: t('land.passport.state.noneAttached') },
     searchRow,
     reviewRow,
     {
       icon: FileText,
-      field: 'Documents on file',
+      field: t('land.passport.row.docs'),
       note: parcel.documents.length
-        ? `${parcel.documents.length} document${parcel.documents.length === 1 ? '' : 's'} attached to the parcel`
-        : 'No documents attached yet',
+        ? t(parcel.documents.length === 1 ? 'land.passport.note.docOne' : 'land.passport.note.docMany', { count: parcel.documents.length })
+        : t('land.passport.note.noDocs'),
       state: parcel.documents.length ? 'done' : 'empty',
       stateLabel: String(parcel.documents.length),
     },
     activeAssignments.length
       ? {
           icon: UserCheck,
-          field: 'Professionals assigned',
+          field: t('land.passport.row.pros'),
           note: activeAssignments
-            .map((a) => `${a.professionalName} (${ASSIGNMENT_ROLE_LABELS[a.role] ?? a.role})`)
+            .map((a) => `${a.professionalName} (${assignRoleLabel(t, a.role)})`)
             .join(' · '),
           state: 'done',
           stateLabel: String(activeAssignments.length),
         }
-      : { icon: UserCheck, field: 'Professionals assigned', note: 'No surveyor/advocate assignment recorded', state: 'empty', stateLabel: 'None' },
+      : { icon: UserCheck, field: t('land.passport.row.pros'), note: t('land.passport.note.noPros'), state: 'empty', stateLabel: t('land.passport.state.none') },
   ]
 }
 
 export function PropertyPassport({ parcel }: { parcel: ParcelDetail }) {
   const { data } = useMjengo()
+  const t = useT()
   const [printing, setPrinting] = useState(false)
-  const ladder = buildLadder(parcel)
+  const ladder = buildLadder(parcel, t)
   const projectName = data?.project?.name ?? 'Project'
   const generated = dateShort(new Date())
 
@@ -102,16 +107,16 @@ export function PropertyPassport({ parcel }: { parcel: ParcelDetail }) {
 
   function handlePrint() {
     setPrinting(true)
-    toast.info('Preparing the Property Passport for print — MjengoOS record, not a government document')
+    toast.info(t('land.passport.printToast'))
   }
 
   const particulars: [string, string][] = [
-    ['Plot', parcel.plotNumber],
-    ['Location', parcel.town ? `${parcel.town}, ${parcel.county}` : parcel.county],
-    ['Approx. area', parcel.approxArea ?? 'Not recorded'],
-    ['Tenure', parcel.tenureType ?? 'Not recorded'],
-    ['Coordinates', parcel.lat !== null && parcel.lng !== null ? `${parcel.lat.toFixed(4)}, ${parcel.lng.toFixed(4)}` : 'Not recorded'],
-    ['Recorded', dateShort(parcel.createdAt)],
+    [t('land.passport.particulars.plot'), parcel.plotNumber],
+    [t('land.passport.particulars.location'), parcel.town ? `${parcel.town}, ${parcel.county}` : parcel.county],
+    [t('land.passport.particulars.area'), parcel.approxArea ?? t('land.particulars.notRecorded')],
+    [t('land.passport.particulars.tenure'), parcel.tenureType ?? t('land.particulars.notRecorded')],
+    [t('land.passport.particulars.coordinates'), parcel.lat !== null && parcel.lng !== null ? `${parcel.lat.toFixed(4)}, ${parcel.lng.toFixed(4)}` : t('land.particulars.notRecorded')],
+    [t('land.passport.particulars.recorded'), dateShort(parcel.createdAt)],
   ]
 
   return (
@@ -119,7 +124,7 @@ export function PropertyPassport({ parcel }: { parcel: ParcelDetail }) {
       <Card className="border-stone-300 shadow-sm overflow-hidden">
         <div className="bg-stone-900 px-5 py-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300">Property passport</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300">{t('land.passport.title')}</p>
             <p className="text-lg font-semibold text-stone-50 truncate">{parcel.plotNumber}</p>
             <p className="text-xs text-stone-300">{parcel.town ? `${parcel.town}, ` : ''}{parcel.county} · {projectName}</p>
           </div>
@@ -143,7 +148,7 @@ export function PropertyPassport({ parcel }: { parcel: ParcelDetail }) {
                   <p className="text-sm font-medium text-stone-800 leading-5">{row.field}</p>
                   <p className="text-xs text-stone-500 truncate leading-5">{row.note}</p>
                 </div>
-                <Badge className={LADDER_BADGE[row.state].cls} title={LADDER_BADGE[row.state].title}>
+                <Badge className={LADDER_BADGE[row.state].cls} title={t(LADDER_BADGE[row.state].titleKey)}>
                   {row.stateLabel}
                 </Badge>
               </li>
@@ -151,11 +156,10 @@ export function PropertyPassport({ parcel }: { parcel: ParcelDetail }) {
           </ul>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-stone-100 px-5 py-4">
             <p className="text-xs text-stone-500 max-w-sm leading-relaxed">
-              MjengoOS record — <span className="font-medium text-stone-700">not a government document</span>. The lands
-              registry remains the authority on ownership; advocate review remains the legal step.
+              {t('land.passport.footer')}
             </p>
             <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={handlePrint}>
-              <Printer className="h-4 w-4" aria-hidden /> Print passport
+              <Printer className="h-4 w-4" aria-hidden /> {t('land.passport.print')}
             </Button>
           </div>
         </CardContent>
@@ -165,7 +169,7 @@ export function PropertyPassport({ parcel }: { parcel: ParcelDetail }) {
         <div
           id="mj-passport-print"
           role="dialog"
-          aria-label="Property Passport print preview"
+          aria-label={t('land.passport.printPreviewAria')}
           className="fixed inset-0 z-[60] overflow-y-auto bg-stone-900/70 p-4 print:static print:bg-white print:p-0"
         >
           {/* Print-only stylesheet — mounted ONLY while the print page exists, so a
@@ -182,7 +186,7 @@ export function PropertyPassport({ parcel }: { parcel: ParcelDetail }) {
           <div className="mx-auto max-w-[720px] bg-white rounded-xl shadow-2xl print:shadow-none print:rounded-none">
             <div className="flex items-center justify-between border-b border-stone-200 bg-stone-900 px-6 py-4 print:bg-white print:border-b print:border-stone-900">
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300 print:text-stone-600">MjengoOS · Property passport</p>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300 print:text-stone-600">{t('land.passport.printHeader')}</p>
                 <p className="text-xl font-bold text-stone-50 print:text-stone-900">{parcel.plotNumber}</p>
                 <p className="text-xs text-stone-300 print:text-stone-600">
                   {parcel.town ? `${parcel.town}, ` : ''}{parcel.county} · {projectName}
@@ -216,19 +220,19 @@ export function PropertyPassport({ parcel }: { parcel: ParcelDetail }) {
             </ul>
 
             <p className="px-6 py-4 text-[11px] leading-relaxed text-stone-600 border-t border-stone-100">
-              MjengoOS record — <strong>not a government document</strong>. Searches and documents are recorded, not
-              confirmed: official results are obtained by people and attached here. The lands registry remains the
-              authority on ownership; the advocate&apos;s review remains the legal step. Generated {generated} ·{' '}
-              {parcel.status === 'verified'
-                ? 'Record state: documents + reviewed registry search agree.'
-                : parcel.status === 'flagged'
-                  ? 'Record state: flagged for human review (anomaly, not accusation).'
-                  : 'Record state: verification in progress.'}
+              {t('land.passport.printFooter', {
+                generated,
+                status: parcel.status === 'verified'
+                  ? t('land.passport.stateNote.verified')
+                  : parcel.status === 'flagged'
+                    ? t('land.passport.stateNote.flagged')
+                    : t('land.passport.stateNote.searching'),
+              })}
             </p>
 
             <div className="flex justify-end px-6 pb-5 print:hidden">
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setPrinting(false)}>
-                <X className="h-4 w-4" aria-hidden /> Cancel print
+                <X className="h-4 w-4" aria-hidden /> {t('land.passport.cancelPrint')}
               </Button>
             </div>
           </div>

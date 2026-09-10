@@ -16,12 +16,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { TrendingUp, Plus, MapPin, Boxes } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES } from '@/frontend/lib/format'
+import { useT } from '@/frontend/i18n/provider'
 import { DeltaChip, Sparkline } from '@/frontend/mjengo/intel/bits'
 
-const SOURCE_LABELS: Record<string, string> = { seed: 'platform history', manual: 'manual entry', order: 'order-derived' }
+// i18n (issue #107): values carry DICT KEYS rendered via t().
+const SOURCE_KEYS: Record<string, string> = { seed: 'intel.prices.source.seed', manual: 'intel.prices.source.manual', order: 'intel.prices.source.order' }
 
 export function PricesSection() {
   const { data, dispatch, actionBusy, viewMode } = useMjengo()
+  const t = useT()
   const trends = data?.intel.priceTrends ?? []
   const isClient = viewMode === 'client'
 
@@ -51,36 +54,35 @@ export function PricesSection() {
     const materialName = material || materials[0]
     const regionName = region || regions[0]
     if (!materialName || !regionName) {
-      toast.error('Pick a material and a region first')
+      toast.error(t('intel.prices.toast.pickFirst'))
       return
     }
     if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
-      toast.error('Price must be a number greater than zero (KES)')
+      toast.error(t('intel.prices.toast.needPrice'))
       return
     }
-    const ok = await dispatch('price.record', { materialName, region: regionName, unitPrice }, `Record ${materialName} price — ${regionName}`)
+    const ok = await dispatch('price.record', { materialName, region: regionName, unitPrice }, t('intel.prices.toast.recordAudit', { name: materialName, region: regionName }))
     if (ok) {
       setPrice('')
-      toast.success(`Price recorded: ${materialName} in ${regionName} at ${formatKES(unitPrice)}`)
+      toast.success(t('intel.prices.toast.recorded', { name: materialName, region: regionName, price: formatKES(unitPrice) }))
     }
   }
 
   return (
-    <section aria-label="Price intelligence">
+    <section aria-label={t('intel.prices.aria')}>
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
-            <TrendingUp className="w-4 h-4 text-stone-500" aria-hidden /> Price intelligence
+            <TrendingUp className="w-4 h-4 text-stone-500" aria-hidden /> {t('intel.prices.title')}
           </CardTitle>
           <CardDescription>
-            Regional price bands and ~30-day trends per material. From platform transactions + manual entries — every
-            row is a recorded observation, not a forecast.
+            {t('intel.prices.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-0 space-y-5">
           {byMaterial.length === 0 ? (
             <p className="text-sm text-stone-500 py-6 text-center" role="status">
-              No price points recorded yet — record the first observation below.
+              {t('intel.prices.empty')}
             </p>
           ) : (
             byMaterial.map(([materialName, rows]) => (
@@ -88,7 +90,7 @@ export function PricesSection() {
                 <h3 className="flex items-center gap-1.5 text-sm font-semibold text-stone-800 mb-2">
                   <Boxes className="w-4 h-4 text-stone-400" aria-hidden /> {materialName}
                 </h3>
-                <ul className="rounded-lg border border-stone-200 divide-y divide-stone-100" aria-label={`${materialName} prices by region`}>
+                <ul className="rounded-lg border border-stone-200 divide-y divide-stone-100" aria-label={t('intel.prices.byRegionAria', { name: materialName })}>
                   {rows.map((row) => (
                     <li key={row.region} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-3.5 py-2.5 bg-white">
                       <span className="flex items-center gap-1.5 text-sm font-medium text-stone-700 min-w-24">
@@ -99,7 +101,7 @@ export function PricesSection() {
                       <Sparkline points={row.points.map((p) => p.price)} />
                       <span className="ml-auto text-[11px] text-stone-400">
                         {row.previous !== null && <>from {formatKES(row.previous)} · </>}
-                        {SOURCE_LABELS[row.source] ?? row.source} · {formatDistanceToNow(new Date(row.lastRecordedAt), { addSuffix: true })}
+                        {t(SOURCE_KEYS[row.source] ?? 'intel.prices.source.order')} · {formatDistanceToNow(new Date(row.lastRecordedAt), { addSuffix: true })}
                       </span>
                     </li>
                   ))}
@@ -110,14 +112,14 @@ export function PricesSection() {
 
           {/* Manual price observation */}
           <div className="rounded-lg border border-stone-200 bg-stone-50/60 p-4">
-            <p className="text-sm font-semibold text-stone-800 mb-1">Record a price</p>
+            <p className="text-sm font-semibold text-stone-800 mb-1">{t('intel.prices.record.title')}</p>
             <p className="text-xs text-stone-500 mb-3">
-              Add a manual observation for any tracked material+region. Big jumps (&gt;5% over ~30 days) raise a price alert.
+              {t('intel.prices.record.desc')}
             </p>
             {isClient ? (
-              <p className="text-xs text-stone-400">Read-only client view — the site team records prices.</p>
+              <p className="text-xs text-stone-400">{t('intel.prices.record.client')}</p>
             ) : materials.length === 0 || regions.length === 0 ? (
-              <p className="text-xs text-stone-400">No tracked materials yet — order-derived points will appear here.</p>
+              <p className="text-xs text-stone-400">{t('intel.prices.record.noMaterials')}</p>
             ) : (
               <form
                 className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto_auto] gap-2.5 items-end"
@@ -127,10 +129,10 @@ export function PricesSection() {
                 }}
               >
                 <div className="space-y-1">
-                  <Label htmlFor="price-material" className="text-xs text-stone-600">Material</Label>
+                  <Label htmlFor="price-material" className="text-xs text-stone-600">{t('intel.prices.record.material')}</Label>
                   <Select value={material || materials[0]} onValueChange={(v) => setMaterial(v)}>
-                    <SelectTrigger id="price-material" className="bg-white min-h-11" aria-label="Material">
-                      <SelectValue placeholder="Material" />
+                    <SelectTrigger id="price-material" className="bg-white min-h-11" aria-label={t('intel.prices.record.material')}>
+                      <SelectValue placeholder={t('intel.prices.record.material')} />
                     </SelectTrigger>
                     <SelectContent>
                       {materials.map((m) => (
@@ -140,10 +142,10 @@ export function PricesSection() {
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="price-region" className="text-xs text-stone-600">Region</Label>
+                  <Label htmlFor="price-region" className="text-xs text-stone-600">{t('intel.prices.record.region')}</Label>
                   <Select value={region || regions[0]} onValueChange={(v) => setRegion(v)}>
-                    <SelectTrigger id="price-region" className="bg-white min-h-11" aria-label="Region">
-                      <SelectValue placeholder="Region" />
+                    <SelectTrigger id="price-region" className="bg-white min-h-11" aria-label={t('intel.prices.record.region')}>
+                      <SelectValue placeholder={t('intel.prices.record.region')} />
                     </SelectTrigger>
                     <SelectContent>
                       {regions.map((r) => (
@@ -153,7 +155,7 @@ export function PricesSection() {
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="price-value" className="text-xs text-stone-600">Unit price (KSh)</Label>
+                  <Label htmlFor="price-value" className="text-xs text-stone-600">{t('intel.prices.record.unitPrice')}</Label>
                   <Input
                     id="price-value"
                     type="number"
@@ -168,7 +170,7 @@ export function PricesSection() {
                   />
                 </div>
                 <Button type="submit" size="sm" className="gap-1.5 min-h-11" disabled={actionBusy !== null}>
-                  <Plus className="w-4 h-4" aria-hidden /> Record
+                  <Plus className="w-4 h-4" aria-hidden /> {t('intel.prices.record.submit')}
                 </Button>
               </form>
             )}

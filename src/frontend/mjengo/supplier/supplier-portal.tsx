@@ -152,7 +152,7 @@ export function SupplierPortal() {
             <Button
               size="sm"
               variant="ghost"
-              className="h-9 min-h-9 text-xs text-stone-300 hover:text-stone-100 gap-1.5"
+              className="h-11 min-h-11 text-xs text-stone-300 hover:text-stone-100 gap-1.5"
               onClick={() => void load()}
               disabled={busy || loading}
               aria-label={t('supplier.load.retry')}
@@ -163,7 +163,7 @@ export function SupplierPortal() {
             <Button
               size="sm"
               variant="ghost"
-              className="h-9 min-h-9 text-xs text-stone-300 hover:text-stone-100 gap-1.5"
+              className="h-11 min-h-11 text-xs text-stone-300 hover:text-stone-100 gap-1.5"
               onClick={() => setView(view === 'portal' ? 'settings' : 'portal')}
               aria-label={t('supplier.tab.settings')}
             >
@@ -173,7 +173,7 @@ export function SupplierPortal() {
             <Button
               size="sm"
               variant="ghost"
-              className="h-9 min-h-9 text-xs text-stone-300 hover:text-stone-100 gap-1.5"
+              className="h-11 min-h-11 text-xs text-stone-300 hover:text-stone-100 gap-1.5"
               onClick={() => void signOut({ callbackUrl: '/' })}
               aria-label={t('supplier.signout')}
             >

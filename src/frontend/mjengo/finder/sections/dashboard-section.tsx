@@ -17,6 +17,7 @@ import {
   AlertTriangle, Boxes, ClipboardList, Hourglass, Landmark, LayoutDashboard, Lock, PackageSearch, ShoppingCart, Truck, Warehouse,
 } from 'lucide-react'
 import { boqRows, procurementTotals } from '@/backend/modules/supply/insights'
+import { useT } from '@/frontend/i18n/provider'
 import { useFinderLink } from './requests/finder-link'
 import { fmtQty, formatKes } from './requests/bits'
 import { PriceAlertChip } from './dashboard/price-alert-chip'
@@ -27,6 +28,7 @@ import { EmptyState } from '@/frontend/mjengo/uikit/empty-state'
 
 export function DashboardSection() {
   const { data, viewMode } = useMjengo()
+  const t = useT()
   const { setSearchPrefill } = useFinderLink()
   const isSiteTeam = viewMode === 'owner'
 
@@ -77,55 +79,54 @@ export function DashboardSection() {
 
   if (!data) return null
 
-  const moneyTiles: Array<{ label: string; value: number; icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; hint: string; tone: string }> = [
+  const moneyTiles: Array<{ labelKey: string; value: number; icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; hintKey: string; tone: string }> = [
     {
-      label: 'Required (est.)',
+      labelKey: 'finder.dash.tile.required',
       value: totals.required,
       icon: ClipboardList,
-      hint: 'Submitted + approved + converted requests, estimated from best quotes or catalog averages',
+      hintKey: 'finder.dash.tile.requiredHint',
       tone: 'text-stone-900',
     },
     {
-      label: 'Purchased',
+      labelKey: 'finder.dash.tile.purchased',
       value: totals.purchased,
       icon: ShoppingCart,
-      hint: 'Delivered + closed purchase orders — money already committed to suppliers',
+      hintKey: 'finder.dash.tile.purchasedHint',
       tone: 'text-emerald-700',
     },
     {
-      label: 'Committed (in flight)',
+      labelKey: 'finder.dash.tile.committed',
       value: totals.committed,
       icon: Truck,
-      hint: 'Sent + confirmed + in-transit orders — committed but not yet delivered',
+      hintKey: 'finder.dash.tile.committedHint',
       tone: 'text-amber-700',
     },
     {
-      label: 'Remaining',
+      labelKey: 'finder.dash.tile.remaining',
       value: totals.remaining,
       icon: Warehouse,
-      hint: 'Required − purchased — what still needs sourcing',
+      hintKey: 'finder.dash.tile.remainingHint',
       tone: 'text-stone-900',
     },
   ]
 
-  const statusTiles: Array<{ label: string; value: number; icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; hint: string; warn: boolean }> = [
-    { label: 'Pending requests', value: totals.pendingRequests, icon: Hourglass, hint: 'Submitted, awaiting approval decisions', warn: false },
-    { label: 'Pending approvals', value: totals.pendingApprovals, icon: Lock, hint: 'Approval rows still PENDING across the project', warn: false },
-    { label: 'Orders in transit', value: totals.ordersInTransit, icon: Truck, hint: 'Dispatched trucks awaiting ground-truth receipt', warn: false },
-    { label: 'Discrepancies', value: totals.discrepancies, icon: AlertTriangle, hint: 'Deliveries with short counts — flagged for review, never accusations', warn: true },
+  const statusTiles: Array<{ labelKey: string; value: number; icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; hintKey: string; warn: boolean }> = [
+    { labelKey: 'finder.dash.tile.pendingRequests', value: totals.pendingRequests, icon: Hourglass, hintKey: 'finder.dash.tile.pendingRequestsHint', warn: false },
+    { labelKey: 'finder.dash.tile.pendingApprovals', value: totals.pendingApprovals, icon: Lock, hintKey: 'finder.dash.tile.pendingApprovalsHint', warn: false },
+    { labelKey: 'finder.dash.tile.inTransit', value: totals.ordersInTransit, icon: Truck, hintKey: 'finder.dash.tile.inTransitHint', warn: false },
+    { labelKey: 'finder.dash.tile.discrepancies', value: totals.discrepancies, icon: AlertTriangle, hintKey: 'finder.dash.tile.discrepanciesHint', warn: true },
   ]
 
   return (
-    <section aria-label="Procurement dashboard" className="space-y-6">
+    <section aria-label={t('finder.dash.aria')} className="space-y-6">
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
           <CardTitle className="flex flex-wrap items-center gap-2 text-lg text-stone-900">
-            <LayoutDashboard className="h-5 w-5 text-amber-600" aria-hidden /> Procurement
+            <LayoutDashboard className="h-5 w-5 text-amber-600" aria-hidden /> {t('finder.dash.title')}
             <PriceAlertChip pricePoints={data.intel.pricePoints} />
           </CardTitle>
           <CardDescription>
-            Required vs purchased vs committed across every request and order on this project — the BOQ-lite view
-            (spec §18/§20). Estimates come from the same engine the approval rules use.
+            {t('finder.dash.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -134,14 +135,14 @@ export function DashboardSection() {
             {moneyTiles.map((tile) => {
               const Icon = tile.icon
               return (
-                <Card key={tile.label} className="border-stone-200 shadow-none">
+                <Card key={tile.labelKey} className="border-stone-200 shadow-none">
                   <CardHeader className="pb-2">
                     <CardDescription className="flex items-center gap-1.5 text-xs">
-                      <Icon className="h-3.5 w-3.5" aria-hidden /> {tile.label}
+                      <Icon className="h-3.5 w-3.5" aria-hidden /> {t(tile.labelKey)}
                     </CardDescription>
                     <CardTitle className={`text-2xl font-bold tabular-nums ${tile.tone}`}>{formatKes(tile.value)}</CardTitle>
                   </CardHeader>
-                  <CardContent><p className="text-xs leading-relaxed text-stone-500">{tile.hint}</p></CardContent>
+                  <CardContent><p className="text-xs leading-relaxed text-stone-500">{t(tile.hintKey)}</p></CardContent>
                 </Card>
               )
             })}
@@ -152,12 +153,12 @@ export function DashboardSection() {
             {statusTiles.map((tile) => {
               const Icon = tile.icon
               return (
-                <div key={tile.label} className={`rounded-lg border p-3 ${tile.warn && tile.value > 0 ? 'border-orange-200 bg-orange-50/70' : 'border-stone-200 bg-stone-50/60'}`}>
+                <div key={tile.labelKey} className={`rounded-lg border p-3 ${tile.warn && tile.value > 0 ? 'border-orange-200 bg-orange-50/70' : 'border-stone-200 bg-stone-50/60'}`}>
                   <p className={`flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide ${tile.warn && tile.value > 0 ? 'text-orange-800' : 'text-stone-500'}`}>
-                    <Icon className="h-3.5 w-3.5" aria-hidden /> {tile.label}
+                    <Icon className="h-3.5 w-3.5" aria-hidden /> {t(tile.labelKey)}
                   </p>
                   <p className={`pt-1 text-xl font-bold tabular-nums ${tile.warn && tile.value > 0 ? 'text-orange-900' : 'text-stone-900'}`}>{tile.value}</p>
-                  <p className="pt-0.5 text-[10px] leading-snug text-stone-500">{tile.hint}</p>
+                  <p className="pt-0.5 text-[10px] leading-snug text-stone-500">{t(tile.hintKey)}</p>
                 </div>
               )
             })}
@@ -171,9 +172,9 @@ export function DashboardSection() {
           <div className="space-y-2">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="text-sm font-semibold text-stone-800">
-                Materials — required vs purchased (BOQ-lite)
+                {t('finder.dash.boq.title')}
               </h3>
-              <p className="text-[11px] text-stone-500">Required counts requests in submitted/approved/converted; purchased counts verified delivery lines.</p>
+              <p className="text-[11px] text-stone-500">{t('finder.dash.boq.desc')}</p>
             </div>
             {/* BOQ-lite table (W3-F2: migrated to the shared DataTable —
                 desktop table + mobile stacked cards, empty state via uikit) */}
@@ -181,26 +182,26 @@ export function DashboardSection() {
               columns={[
                 {
                   key: 'materialKey',
-                  header: 'Material',
+                  header: t('finder.dash.boq.col.material'),
                   className: 'whitespace-normal',
                   render: (row) => (
                     <>
                       <span className="font-medium text-stone-800">{row.displayNames[0]}</span>
                       {row.displayNames.length > 1 && (
-                        <Badge variant="outline" className="ml-1.5 text-[10px] font-normal text-stone-400" title={`Grouped variants: ${row.displayNames.join(' · ')}`}>
-                          +{row.displayNames.length - 1} variant{row.displayNames.length > 2 ? 's' : ''}
+                        <Badge variant="outline" className="ml-1.5 text-[10px] font-normal text-stone-400" title={t('finder.dash.boq.variants', { list: row.displayNames.join(' · ') })}>
+                          {t(row.displayNames.length > 2 ? 'finder.dash.boq.variantsMany' : 'finder.dash.boq.variantsOne', { count: row.displayNames.length - 1 })}
                         </Badge>
                       )}
-                      <span className="block text-[10px] text-stone-400">per {row.unit}</span>
+                      <span className="block text-[10px] text-stone-400">{t('finder.dash.boq.perUnit', { unit: row.unit })}</span>
                     </>
                   ),
                 },
-                { key: 'required', header: 'Required', align: 'right', render: (row) => <span className="tabular-nums text-stone-700">{fmtQty(row.required)}</span> },
-                { key: 'purchased', header: 'Purchased', align: 'right', render: (row) => <span className="tabular-nums text-stone-700">{fmtQty(row.purchased)}</span> },
-                { key: 'remaining', header: 'Remaining', align: 'right', render: (row) => <span className="font-semibold tabular-nums text-stone-900">{fmtQty(row.remaining)}</span> },
+                { key: 'required', header: t('finder.dash.boq.col.required'), align: 'right', render: (row) => <span className="tabular-nums text-stone-700">{fmtQty(row.required)}</span> },
+                { key: 'purchased', header: t('finder.dash.boq.col.purchased'), align: 'right', render: (row) => <span className="tabular-nums text-stone-700">{fmtQty(row.purchased)}</span> },
+                { key: 'remaining', header: t('finder.dash.boq.col.remaining'), align: 'right', render: (row) => <span className="font-semibold tabular-nums text-stone-900">{fmtQty(row.remaining)}</span> },
                 {
                   key: 'displayNames',
-                  header: 'Sourcing',
+                  header: t('finder.dash.boq.col.sourcing'),
                   align: 'right',
                   render: (row) =>
                     row.remaining > 0 ? (
@@ -209,12 +210,12 @@ export function DashboardSection() {
                         variant="outline"
                         className="h-8 min-h-8 gap-1 px-2 text-xs"
                         onClick={() => setSearchPrefill({ materialName: row.displayNames[0], qty: row.remaining })}
-                        aria-label={`Find suppliers for the remaining ${fmtQty(row.remaining)} ${row.unit} of ${row.displayNames[0]}`}
+                        aria-label={t('finder.dash.boq.findAria', { qty: fmtQty(row.remaining), unit: row.unit, name: row.displayNames[0] })}
                       >
-                        <PackageSearch className="h-3.5 w-3.5" aria-hidden /> Find remaining
+                        <PackageSearch className="h-3.5 w-3.5" aria-hidden /> {t('finder.dash.boq.find')}
                       </Button>
                     ) : (
-                      <span className="text-[11px] text-emerald-700">fully sourced</span>
+                      <span className="text-[11px] text-emerald-700">{t('finder.dash.boq.sourced')}</span>
                     ),
                 },
               ]}
@@ -223,8 +224,8 @@ export function DashboardSection() {
               emptyState={
                 <EmptyState
                   icon={Boxes}
-                  title="No material requirements yet"
-                  description="Submit a purchase request and the plan-vs-purchase table builds here."
+                  title={t('finder.dash.boq.emptyTitle')}
+                  description={t('finder.dash.boq.emptyDesc')}
                 />
               }
             />
@@ -236,7 +237,7 @@ export function DashboardSection() {
 
       <p className="flex items-center gap-1.5 text-[11px] text-stone-400">
         <Landmark className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        Payment flows through the invoices section (below) and the Transaction ledger — requests and orders never move money directly.
+        {t('finder.dash.ledgerNote')}
       </p>
     </section>
   )

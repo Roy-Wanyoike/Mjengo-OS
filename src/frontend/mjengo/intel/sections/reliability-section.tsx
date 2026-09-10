@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/fro
 import { Button } from '@/frontend/ui/button'
 import { Badge } from '@/frontend/ui/badge'
 import { RefreshCw, Truck, MapPin, ClipboardCheck } from 'lucide-react'
+import { useT } from '@/frontend/i18n/provider'
 import type { ReliabilityComponent } from '@/backend/modules/intel/types'
 
 function scoreTone(score: number): string {
@@ -28,6 +29,7 @@ function barTone(value: number | null): string {
 }
 
 function ComponentBar({ c }: { c: ReliabilityComponent }) {
+  const t = useT()
   const shown = c.value ?? 50 // neutral stand-in while no data exists
   return (
     <div>
@@ -37,7 +39,7 @@ function ComponentBar({ c }: { c: ReliabilityComponent }) {
           <span className="text-stone-400 font-normal"> · {Math.round(c.weight * 100)}%</span>
         </span>
         <span className={`text-xs font-bold tabular-nums ${c.value === null ? 'text-stone-400' : scoreTone(c.value)}`}>
-          {c.value === null ? 'no data' : c.value}
+          {c.value === null ? t('intel.reliability.noData') : c.value}
         </span>
       </div>
       <div
@@ -46,7 +48,7 @@ function ComponentBar({ c }: { c: ReliabilityComponent }) {
         aria-valuenow={shown}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label={`${c.label}: ${c.value === null ? 'no data yet' : `${c.value} of 100`}`}
+        aria-label={t('intel.reliability.componentAria', { label: c.label, value: c.value === null ? t('intel.reliability.noDataYet') : t('intel.reliability.valueAria', { value: c.value }) })}
       >
         <div className={`h-full rounded-full transition-all ${barTone(c.value)}`} style={{ width: `${shown}%` }} />
       </div>
@@ -57,23 +59,23 @@ function ComponentBar({ c }: { c: ReliabilityComponent }) {
 
 export function ReliabilitySection() {
   const { data, dispatch, actionBusy, viewMode } = useMjengo()
+  const t = useT()
   const reliability = data?.intel.reliability ?? []
   const isClient = viewMode === 'client'
 
   if (!data) return null
 
   return (
-    <section aria-label="Supplier reliability">
+    <section aria-label={t('intel.reliability.aria')}>
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <CardTitle className="flex items-center gap-2 text-base">
-                <ClipboardCheck className="w-4 h-4 text-stone-500" aria-hidden /> Supplier reliability
+                <ClipboardCheck className="w-4 h-4 text-stone-500" aria-hidden /> {t('intel.reliability.title')}
               </CardTitle>
               <CardDescription>
-                0–100 from actual platform history — delivery accuracy, on-time, completion, disputes, response speed.
-                <strong className="font-semibold text-stone-600"> No anonymous ratings.</strong>
+                {t('intel.reliability.desc')}
               </CardDescription>
             </div>
             {!isClient && (
@@ -82,21 +84,21 @@ export function ReliabilitySection() {
                 variant="outline"
                 className="gap-1.5"
                 disabled={actionBusy !== null}
-                onClick={() => void dispatch('reliability.recompute', {}, 'Recompute supplier reliability')}
+                onClick={() => void dispatch('reliability.recompute', {}, t('intel.reliability.recomputeAudit'))}
               >
-                <RefreshCw className={`w-4 h-4 ${actionBusy === 'Recompute supplier reliability' ? 'animate-spin' : ''}`} aria-hidden />
-                Recompute
+                <RefreshCw className={`w-4 h-4 ${actionBusy === t('intel.reliability.recomputeAudit') ? 'animate-spin' : ''}`} aria-hidden />
+                {t('intel.reliability.recompute')}
               </Button>
             )}
           </div>
         </CardHeader>
         <CardContent className="pt-0">
           {reliability.length === 0 ? (
-            <p className="text-sm text-stone-500 py-6 text-center" role="status">No suppliers yet.</p>
+            <p className="text-sm text-stone-500 py-6 text-center" role="status">{t('intel.reliability.empty')}</p>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               {reliability.map((s) => (
-                <div key={s.supplierId} className="rounded-lg border border-stone-200 bg-white p-4" aria-label={`Reliability for ${s.businessName}`}>
+                <div key={s.supplierId} className="rounded-lg border border-stone-200 bg-white p-4" aria-label={t('intel.reliability.cardAria', { name: s.businessName })}>
                   <div className="flex items-start justify-between gap-3 mb-1">
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-stone-900 leading-snug">{s.businessName}</p>
@@ -105,24 +107,24 @@ export function ReliabilitySection() {
                       </p>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className={`text-2xl font-bold tabular-nums leading-none ${scoreTone(s.score)}`} aria-label={`Reliability score ${s.score} of 100`}>
+                      <p className={`text-2xl font-bold tabular-nums leading-none ${scoreTone(s.score)}`} aria-label={t('intel.reliability.scoreAria', { score: s.score })}>
                         {s.score}
                       </p>
                       <p className="text-[10px] text-stone-400 mt-0.5">
-                        was {s.storedScore}
+                        {t('intel.reliability.was')} {s.storedScore}
                       </p>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5 my-2.5">
                     <Badge variant="outline" className="text-[10px] font-medium text-stone-500 border-stone-200 gap-1">
-                      <Truck className="w-3 h-3" aria-hidden /> {s.ordersCount} order{s.ordersCount === 1 ? '' : 's'}
+                      <Truck className="w-3 h-3" aria-hidden /> {t(s.ordersCount === 1 ? 'intel.reliability.orderOne' : 'intel.reliability.orderMany', { count: s.ordersCount })}
                     </Badge>
                     <Badge variant="outline" className="text-[10px] font-medium text-stone-500 border-stone-200">
-                      {s.deliveriesCount} deliver{s.deliveriesCount === 1 ? 'y' : 'ies'}
+                      {t(s.deliveriesCount === 1 ? 'intel.reliability.deliveryOne' : 'intel.reliability.deliveryMany', { count: s.deliveriesCount })}
                     </Badge>
                     {s.discrepanciesCount > 0 && (
                       <Badge variant="outline" className="text-[10px] font-medium text-amber-700 border-amber-200 bg-amber-50">
-                        {s.discrepanciesCount} discrepanc{s.discrepanciesCount === 1 ? 'y' : 'ies'}
+                        {t(s.discrepanciesCount === 1 ? 'intel.reliability.discrepancyOne' : 'intel.reliability.discrepancyMany', { count: s.discrepanciesCount })}
                       </Badge>
                     )}
                   </div>
@@ -137,8 +139,7 @@ export function ReliabilitySection() {
             </div>
           )}
           <p className="mt-4 text-[11px] text-stone-400 leading-relaxed">
-            A component with no history yet counts as neutral (50) at its weight, so new suppliers trend toward the middle
-            instead of 0 or 100. Weights: accuracy 35 · on-time 20 · completion 20 · disputes 15 · response 10.
+            {t('intel.reliability.neutralNote')}
           </p>
         </CardContent>
       </Card>

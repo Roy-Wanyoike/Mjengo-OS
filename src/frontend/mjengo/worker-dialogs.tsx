@@ -10,6 +10,7 @@ import { Switch } from '@/frontend/ui/switch'
 import { HardHat, KeyRound, Loader2, Phone, User } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES } from '@/frontend/lib/format'
+import { useT } from '@/frontend/i18n/provider'
 
 export const WORKER_ROLES = [
   'Foreman',
@@ -20,6 +21,9 @@ export const WORKER_ROLES = [
   'Msimamizi (Supervisor)',
   'Mtumishi (Labourer)',
 ] as const
+
+// WORKER_ROLES are DATA (persisted role strings on worker rows) — they stay
+// as-is in every locale; only the surrounding chrome translates.
 
 export interface AddWorkerPayload {
   name: string
@@ -84,29 +88,31 @@ function WorkerFormFields({
   pinError: string | null
   hasPin?: boolean
 }) {
+  const t = useT()
   const rateNum = Number(form.dailyRate)
   return (
     <div className="grid gap-4 py-1">
       <div className="space-y-2">
-        <Label htmlFor="wk-name">Name *</Label>
+        <Label htmlFor="wk-name">{t('dialog.worker.name')}</Label>
         <div className="relative">
           <User className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden />
           <Input
             id="wk-name"
             value={form.name}
             onChange={(e) => setForm({ name: e.target.value })}
-            placeholder="e.g. Otieno Odhiambo"
+            placeholder={t('dialog.worker.namePh')}
             className="pl-9"
             aria-invalid={Boolean(nameError)}
+            aria-describedby={nameError ? 'wk-name-error' : undefined}
           />
         </div>
-        {nameError && <p className="text-xs text-red-600">{nameError}</p>}
+        {nameError && <p id="wk-name-error" role="alert" className="text-xs text-red-600">{nameError}</p>}
       </div>
 
       <div className="space-y-2">
-        <Label>Role</Label>
+        <Label>{t('dialog.worker.role')}</Label>
         <Select value={form.role} onValueChange={(role) => setForm({ role })}>
-          <SelectTrigger aria-label="Fundi role">
+          <SelectTrigger aria-label={t('dialog.worker.roleAria')}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -119,7 +125,7 @@ function WorkerFormFields({
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="wk-phone">Phone</Label>
+          <Label htmlFor="wk-phone">{t('dialog.worker.phone')}</Label>
           <div className="relative">
             <Phone className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden />
             <Input
@@ -133,7 +139,7 @@ function WorkerFormFields({
           </div>
         </div>
         <div className="space-y-2">
-          <Label htmlFor="wk-rate">Daily rate (KSh) *</Label>
+          <Label htmlFor="wk-rate">{t('dialog.worker.rate')}</Label>
           <Input
             id="wk-rate"
             type="number"
@@ -142,18 +148,19 @@ function WorkerFormFields({
             value={form.dailyRate}
             onChange={(e) => setForm({ dailyRate: e.target.value })}
             aria-invalid={Boolean(rateError)}
+            aria-describedby={rateError ? 'wk-rate-error' : undefined}
           />
         </div>
       </div>
       <div className="flex items-center justify-between text-xs -mt-2">
         <span className={form.dailyRate && !Number.isNaN(rateNum) && rateNum > 0 ? 'text-stone-600 font-medium' : 'text-stone-400'}>
-          {form.dailyRate && !Number.isNaN(rateNum) && rateNum > 0 ? `${formatKES(rateNum)} / day` : 'Live preview of daily wage'}
+          {form.dailyRate && !Number.isNaN(rateNum) && rateNum > 0 ? t('dialog.worker.ratePerDay', { amount: formatKES(rateNum) }) : t('dialog.worker.ratePreview')}
         </span>
-        {rateError && <span className="text-red-600">{rateError}</span>}
+        {rateError && <span id="wk-rate-error" role="alert" className="text-red-600">{rateError}</span>}
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="wk-pin">Kiosk PIN</Label>
+        <Label htmlFor="wk-pin">{t('dialog.worker.pin')}</Label>
         <div className="relative">
           <KeyRound className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden />
           <Input
@@ -162,31 +169,32 @@ function WorkerFormFields({
             maxLength={4}
             value={form.pin}
             onChange={(e) => setForm({ pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-            placeholder={hasPin ? '\u2022\u2022\u2022\u2022' : '4 digits'}
+            placeholder={hasPin ? '\u2022\u2022\u2022\u2022' : t('dialog.worker.pinPhNew')}
             className="pl-9 tracking-[0.4em] font-mono"
             autoComplete="off"
             aria-invalid={Boolean(pinError)}
-            aria-describedby="wk-pin-help"
+            aria-describedby={`wk-pin-help${pinError ? ' wk-pin-error' : ''}`}
           />
         </div>
         <p id="wk-pin-help" className="text-xs text-stone-500">
-          {hasPin ? 'Kiosk PIN on the shared site device — leave blank to clear.' : 'Kiosk PIN — used on the shared site device.'}
+          {hasPin ? t('dialog.worker.pinHelpSet') : t('dialog.worker.pinHelp')}
         </p>
-        {pinError && <p className="text-xs text-red-600">{pinError}</p>}
+        {pinError && <p id="wk-pin-error" role="alert" className="text-xs text-red-600">{pinError}</p>}
       </div>
     </div>
   )
 }
 
-function validate(form: FormState): { name: string | null; rate: string | null; pin: string | null } {
+function validate(form: FormState, t: (key: string) => string): { name: string | null; rate: string | null; pin: string | null } {
   return {
-    name: form.name.trim() ? null : 'Name is required',
-    rate: form.dailyRate && !Number.isNaN(Number(form.dailyRate)) && Number(form.dailyRate) > 0 ? null : 'Daily rate must be greater than 0',
-    pin: form.pin === '' || /^\d{4}$/.test(form.pin) ? null : 'PIN must be exactly 4 digits (or blank)',
+    name: form.name.trim() ? null : t('dialog.worker.error.name'),
+    rate: form.dailyRate && !Number.isNaN(Number(form.dailyRate)) && Number(form.dailyRate) > 0 ? null : t('dialog.worker.error.rate'),
+    pin: form.pin === '' || /^\d{4}$/.test(form.pin) ? null : t('dialog.worker.error.pin'),
   }
 }
 
 export function AddWorkerDialog({ open, onOpenChange, onSubmit, submitting }: AddWorkerDialogProps) {
+  const t = useT()
   const [form, setFormState] = useState<FormState>(emptyForm)
   const [errors, setErrors] = useState<{ name: string | null; rate: string | null; pin: string | null }>({ name: null, rate: null, pin: null })
 
@@ -203,7 +211,7 @@ export function AddWorkerDialog({ open, onOpenChange, onSubmit, submitting }: Ad
   const setForm = (patch: Partial<FormState>) => setFormState((f) => ({ ...f, ...patch }))
 
   async function handleSubmit() {
-    const e = validate(form)
+    const e = validate(form, t)
     setErrors(e)
     if (e.name || e.rate || e.pin) return
     const ok = await onSubmit({
@@ -214,10 +222,10 @@ export function AddWorkerDialog({ open, onOpenChange, onSubmit, submitting }: Ad
       pin: form.pin,
     })
     if (ok) {
-      toast.success(`${form.name.trim().split(' ')[0]} added to the crew — karibu kazi!`)
+      toast.success(t('dialog.worker.toast.addOk', { name: form.name.trim().split(' ')[0] }))
       onOpenChange(false)
     } else {
-      toast.error('Could not add fundi — try again')
+      toast.error(t('dialog.worker.toast.addFailed'))
     }
   }
 
@@ -225,17 +233,17 @@ export function AddWorkerDialog({ open, onOpenChange, onSubmit, submitting }: Ad
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-stone-900">Add fundi</DialogTitle>
-          <DialogDescription>Add a worker to the site crew — they appear in attendance and M-Pesa wages.</DialogDescription>
+          <DialogTitle className="text-stone-900">{t('dialog.worker.addTitle')}</DialogTitle>
+          <DialogDescription>{t('dialog.worker.addDesc')}</DialogDescription>
         </DialogHeader>
 
         <WorkerFormFields form={form} setForm={setForm} nameError={errors.name} rateError={errors.rate} pinError={errors.pin} />
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>{t('dialog.worker.cancel')}</Button>
           <Button onClick={() => void handleSubmit()} disabled={submitting} className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white min-w-32">
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <HardHat className="w-4 h-4" aria-hidden />}
-            {submitting ? 'Adding…' : 'Add fundi'}
+            {submitting ? t('dialog.worker.adding') : t('dialog.worker.add')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -244,6 +252,7 @@ export function AddWorkerDialog({ open, onOpenChange, onSubmit, submitting }: Ad
 }
 
 export function EditWorkerDialog({ open, onOpenChange, onSubmit, submitting, worker }: EditWorkerDialogProps) {
+  const t = useT()
   const [form, setFormState] = useState<FormState>(emptyForm)
   const [errors, setErrors] = useState<{ name: string | null; rate: string | null; pin: string | null }>({ name: null, rate: null, pin: null })
 
@@ -269,7 +278,7 @@ export function EditWorkerDialog({ open, onOpenChange, onSubmit, submitting, wor
 
   async function handleSubmit() {
     if (!worker) return
-    const e = validate(form)
+    const e = validate(form, t)
     setErrors(e)
     if (e.name || e.rate || e.pin) return
     const ok = await onSubmit({
@@ -281,10 +290,10 @@ export function EditWorkerDialog({ open, onOpenChange, onSubmit, submitting, wor
       active: form.active,
     })
     if (ok) {
-      toast.success('Fundi updated')
+      toast.success(t('dialog.worker.toast.editOk'))
       onOpenChange(false)
     } else {
-      toast.error('Could not update fundi — try again')
+      toast.error(t('dialog.worker.toast.editFailed'))
     }
   }
 
@@ -292,8 +301,8 @@ export function EditWorkerDialog({ open, onOpenChange, onSubmit, submitting, wor
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-stone-900">Edit fundi</DialogTitle>
-          <DialogDescription>Update crew details — maps to the worker.update action.</DialogDescription>
+          <DialogTitle className="text-stone-900">{t('dialog.worker.editTitle')}</DialogTitle>
+          <DialogDescription>{t('dialog.worker.editDesc')}</DialogDescription>
         </DialogHeader>
 
         {worker && (
@@ -302,14 +311,14 @@ export function EditWorkerDialog({ open, onOpenChange, onSubmit, submitting, wor
 
             <div className="flex items-center justify-between gap-4 rounded-xl border border-stone-200 bg-stone-50 p-3.5">
               <div className="min-w-0">
-                <Label htmlFor="wk-active" className="text-sm font-medium text-stone-800">Active on site</Label>
-                <p className="text-xs text-stone-500 mt-0.5">Inactive fundis drop off today&rsquo;s expected crew.</p>
+                <Label htmlFor="wk-active" className="text-sm font-medium text-stone-800">{t('dialog.worker.active')}</Label>
+                <p className="text-xs text-stone-500 mt-0.5">{t('dialog.worker.activeHint')}</p>
               </div>
               <Switch
                 id="wk-active"
                 checked={form.active}
                 onCheckedChange={(active) => setForm({ active })}
-                aria-label="Active on site"
+                aria-label={t('dialog.worker.activeAria')}
                 className="data-[state=checked]:bg-amber-500"
               />
             </div>
@@ -317,10 +326,10 @@ export function EditWorkerDialog({ open, onOpenChange, onSubmit, submitting, wor
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>{t('dialog.worker.cancel')}</Button>
           <Button onClick={() => void handleSubmit()} disabled={submitting} className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white min-w-32">
             {submitting && <Loader2 className="w-4 h-4 animate-spin" aria-hidden />}
-            {submitting ? 'Saving…' : 'Save changes'}
+            {submitting ? t('dialog.worker.saving') : t('dialog.worker.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

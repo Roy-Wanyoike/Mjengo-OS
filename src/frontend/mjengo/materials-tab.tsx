@@ -19,10 +19,11 @@ import { downloadCSV, materialsLedgerCSV, projectFilePrefix } from '@/frontend/m
 import type { InventoryItemRow, StockMovementType } from '@/backend/modules/inventory/types'
 
 function SourceBadge({ source }: { source: string }) {
-  if (source === 'voice') return <Badge className="gap-1 bg-violet-100 text-violet-800 border-0 hover:bg-violet-100"><Mic className="w-3 h-3" aria-hidden /> voice</Badge>
-  if (source === 'photo') return <Badge className="gap-1 bg-sky-100 text-sky-800 border-0 hover:bg-sky-100"><Camera className="w-3 h-3" aria-hidden /> photo</Badge>
+  const t = useT()
+  if (source === 'voice') return <Badge className="gap-1 bg-violet-100 text-violet-800 border-0 hover:bg-violet-100"><Mic className="w-3 h-3" aria-hidden /> {t('mat.source.voice')}</Badge>
+  if (source === 'photo') return <Badge className="gap-1 bg-sky-100 text-sky-800 border-0 hover:bg-sky-100"><Camera className="w-3 h-3" aria-hidden /> {t('mat.source.photo')}</Badge>
   if (source === 'mpesa') return <Badge className="gap-1 bg-emerald-100 text-emerald-800 border-0 hover:bg-emerald-100"><Phone className="w-3 h-3" aria-hidden /> M-Pesa</Badge>
-  return <Badge className="gap-1 bg-stone-100 text-stone-600 border-0 hover:bg-stone-100"><Hand className="w-3 h-3" aria-hidden /> manual</Badge>
+  return <Badge className="gap-1 bg-stone-100 text-stone-600 border-0 hover:bg-stone-100"><Hand className="w-3 h-3" aria-hidden /> {t('mat.source.manual')}</Badge>
 }
 
 export function MaterialsTab() {
@@ -108,36 +109,36 @@ export function MaterialsTab() {
 
   return (
     <div className="space-y-6">
-      <section className="grid grid-cols-1 sm:grid-cols-3 gap-4" aria-label="Material KPIs">
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-4" aria-label={t('mat.kpiAria')}>
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><Truck className="w-3.5 h-3.5" aria-hidden /> Material spend to date</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><Truck className="w-3.5 h-3.5" aria-hidden /> {t('mat.spendToDate')}</CardDescription>
             <CardTitle className="text-2xl font-bold text-stone-900 tabular-nums">{formatKES(data.summary.materialSpend)}</CardTitle>
           </CardHeader>
-          <CardContent><p className="text-xs text-stone-500">{data.deliveries.length} deliveries logged across {data.materials.length} material types</p></CardContent>
+          <CardContent><p className="text-xs text-stone-500">{t('mat.deliveriesLogged', { deliveries: data.deliveries.length, materials: data.materials.length })}</p></CardContent>
         </Card>
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><Boxes className="w-3.5 h-3.5" aria-hidden /> Stock value on site</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><Boxes className="w-3.5 h-3.5" aria-hidden /> {t('mat.stockValueOnSite')}</CardDescription>
             <CardTitle className="text-2xl font-bold text-stone-900 tabular-nums">{formatKES(stockValue)}</CardTitle>
           </CardHeader>
-          <CardContent><p className="text-xs text-stone-500">Delivered minus consumed · theft/variance monitored by AI</p></CardContent>
+          <CardContent><p className="text-xs text-stone-500">{t('mat.stockValueHint')}</p></CardContent>
         </Card>
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><PackageMinus className="w-3.5 h-3.5" aria-hidden /> Quick actions</CardDescription>
-            <CardTitle className="text-base font-semibold text-stone-900 pt-1">{isClient ? 'Ledger tools' : 'Log field activity'}</CardTitle>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><PackageMinus className="w-3.5 h-3.5" aria-hidden /> {t('mat.quickActions')}</CardDescription>
+            <CardTitle className="text-base font-semibold text-stone-900 pt-1">{isClient ? t('mat.ledgerTools') : t('mat.logFieldActivity')}</CardTitle>
           </CardHeader>
           <CardContent className="flex gap-2 pt-1">
             {isClient ? (
-              <p className="text-xs text-stone-400 py-2">Read-only client preview — logging is done by the site team.</p>
+              <p className="text-xs text-stone-400 py-2">{t('mat.clientReadonly')}</p>
             ) : (
               <>
                 <Button size="sm" className="gap-1.5 flex-1 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => { setDMaterial(data.materials[0]?.id ?? ''); setDeliveryOpen(true) }}>
-                  <Truck className="w-4 h-4" aria-hidden /> Delivery
+                  <Truck className="w-4 h-4" aria-hidden /> {t('mat.delivery')}
                 </Button>
                 <Button size="sm" variant="outline" className="gap-1.5 flex-1" onClick={() => { setCMaterial(data.materials[0]?.id ?? ''); setConsumptionOpen(true) }}>
-                  <PackageMinus className="w-4 h-4" aria-hidden /> Used
+                  <PackageMinus className="w-4 h-4" aria-hidden /> {t('mat.used')}
                 </Button>
               </>
             )}
@@ -153,17 +154,17 @@ export function MaterialsTab() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
           <div>
-            <CardTitle className="text-lg text-stone-900">Inventory ledger</CardTitle>
-            <CardDescription>The shared, unbiased record of every bag, tonne &amp; stone</CardDescription>
+            <CardTitle className="text-lg text-stone-900">{t('mat.inventoryLedger')}</CardTitle>
+            <CardDescription>{t('mat.inventoryDesc')}</CardDescription>
           </div>
           <div className="flex gap-2 shrink-0">
             {!isClient && (
-              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setMaterialOpen(true)} aria-label="Add a material to the catalog">
-                <Plus className="w-4 h-4" aria-hidden /> <span className="hidden sm:inline">Add material</span>
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setMaterialOpen(true)} aria-label={t('mat.addMaterialAria')}>
+                <Plus className="w-4 h-4" aria-hidden /> <span className="hidden sm:inline">{t('mat.addMaterial')}</span>
               </Button>
             )}
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={exportLedger} aria-label="Export materials ledger as CSV">
-              <Download className="w-4 h-4" aria-hidden /> <span className="hidden sm:inline">Export ledger</span>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={exportLedger} aria-label={t('mat.exportLedgerAria')}>
+              <Download className="w-4 h-4" aria-hidden /> <span className="hidden sm:inline">{t('mat.exportLedger')}</span>
             </Button>
           </div>
         </CardHeader>
@@ -171,12 +172,12 @@ export function MaterialsTab() {
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>Material</TableHead>
-                <TableHead className="text-right">Delivered</TableHead>
-                <TableHead className="text-right">Consumed</TableHead>
-                <TableHead className="text-right">On site</TableHead>
-                <TableHead className="text-right">Stock value</TableHead>
-                <TableHead className="text-right">Spend</TableHead>
+                <TableHead>{t('mat.col.material')}</TableHead>
+                <TableHead className="text-right">{t('mat.col.delivered')}</TableHead>
+                <TableHead className="text-right">{t('mat.col.consumed')}</TableHead>
+                <TableHead className="text-right">{t('mat.col.onSite')}</TableHead>
+                <TableHead className="text-right">{t('mat.col.stockValue')}</TableHead>
+                <TableHead className="text-right">{t('mat.col.spend')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -187,7 +188,7 @@ export function MaterialsTab() {
                     <TableCell className="font-medium text-stone-800">
                       {m.name}
                       <span className="text-xs text-stone-400 ml-1">/ {m.unit}</span>
-                      {lowStock && <Badge className="ml-2 bg-amber-100 text-amber-800 border-0 text-[10px] hover:bg-amber-100">running low</Badge>}
+                      {lowStock && <Badge className="ml-2 bg-amber-100 text-amber-800 border-0 text-[10px] hover:bg-amber-100">{t('mat.runningLow')}</Badge>}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{m.deliveredQty.toLocaleString()}</TableCell>
                     <TableCell className="text-right tabular-nums text-stone-500">{m.consumedQty.toLocaleString()}</TableCell>
@@ -205,11 +206,11 @@ export function MaterialsTab() {
       {/* Delivery log */}
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg text-stone-900">Delivery log</CardTitle>
-          <CardDescription>Voice notes &amp; photos become ledger entries — provenance on every line</CardDescription>
+          <CardTitle className="text-lg text-stone-900">{t('mat.deliveryLog')}</CardTitle>
+          <CardDescription>{t('mat.deliveryLogDesc')}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="max-h-96 overflow-y-auto pr-2 -mr-2 space-y-2" role="region" aria-label="Delivery log, scrollable">
+          <div className="max-h-96 overflow-y-auto pr-2 -mr-2 space-y-2" role="region" aria-label={t('mat.deliveryLogAria')}>
             {data.deliveries.map((d) => {
               const m = data.materials.find((x) => x.id === d.materialId)
               return (
@@ -225,7 +226,7 @@ export function MaterialsTab() {
                       <SourceBadge source={d.source} />
                     </div>
                     <p className="text-xs text-stone-500 truncate">
-                      {d.supplier} · {dateShort(d.date)}
+                      {d.supplier === 'Unknown supplier' ? t('mat.unknownSupplier') : d.supplier} · {dateShort(d.date)}
                       {d.rawTranscript && <TooltipProvider><Tooltip><TooltipTrigger asChild><span className="italic text-stone-400 cursor-help"> “{d.rawTranscript.slice(0, 42)}{d.rawTranscript.length > 42 ? '…' : ''}”</span></TooltipTrigger><TooltipContent className="max-w-72 text-xs"><p className="italic">“{d.rawTranscript}”</p></TooltipContent></Tooltip></TooltipProvider>}
                     </p>
                   </div>
@@ -240,8 +241,8 @@ export function MaterialsTab() {
       {/* Consumption recent */}
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg text-stone-900 flex items-center gap-2"><PackageSearch className="w-5 h-5 text-amber-600" aria-hidden /> Recent consumption</CardTitle>
-          <CardDescription>What went where — feeds the AI anomaly reconciler</CardDescription>
+          <CardTitle className="text-lg text-stone-900 flex items-center gap-2"><PackageSearch className="w-5 h-5 text-amber-600" aria-hidden /> {t('mat.recentConsumption')}</CardTitle>
+          <CardDescription>{t('mat.recentConsumptionDesc')}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="max-h-72 overflow-y-auto pr-2 -mr-2 space-y-1.5">
@@ -263,13 +264,13 @@ export function MaterialsTab() {
       <Dialog open={deliveryOpen} onOpenChange={setDeliveryOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Log material delivery</DialogTitle>
-            <DialogDescription>Creates the ledger entry + auto-matched M-Pesa transaction. Works offline.</DialogDescription>
+            <DialogTitle className="text-stone-900">{t('mat.dialog.delivery.title')}</DialogTitle>
+            <DialogDescription>{t('mat.dialog.delivery.desc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2 col-span-2">
-                <Label>Material</Label>
+                <Label>{t('mat.label.material')}</Label>
                 <Select value={dMaterial} onValueChange={(v) => { setDMaterial(v); const m = mat(v); if (m) setDCost(String(m.unitPrice)) }}>
                   <SelectTrigger><SelectValue placeholder={t('mat.ph.chooseMaterial')} /></SelectTrigger>
                   <SelectContent>
@@ -278,22 +279,22 @@ export function MaterialsTab() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="qty">Quantity</Label>
+                <Label htmlFor="qty">{t('mat.label.quantity')}</Label>
                 <Input id="qty" type="number" min="1" value={dQty} onChange={(e) => setDQty(e.target.value)} placeholder={t('mat.ph.qty')} />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="cost">Unit cost (KSh)</Label>
+                <Label htmlFor="cost">{t('mat.label.unitCost')}</Label>
                 <Input id="cost" type="number" min="1" value={dCost} onChange={(e) => setDCost(e.target.value)} />
               </div>
               <div className="space-y-2 col-span-2">
-                <Label htmlFor="supplier">Supplier</Label>
+                <Label htmlFor="supplier">{t('mat.label.supplier')}</Label>
                 <Input id="supplier" value={dSupplier} onChange={(e) => setDSupplier(e.target.value)} placeholder={t('mat.ph.supplier')} />
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeliveryOpen(false)}>Cancel</Button>
-            <Button onClick={() => void logDelivery()} className="bg-amber-600 hover:bg-amber-700 text-white gap-1"><Plus className="w-4 h-4" aria-hidden /> Log delivery</Button>
+            <Button variant="outline" onClick={() => setDeliveryOpen(false)}>{t('mat.cancel')}</Button>
+            <Button onClick={() => void logDelivery()} className="bg-amber-600 hover:bg-amber-700 text-white gap-1"><Plus className="w-4 h-4" aria-hidden /> {t('mat.logDelivery')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -302,26 +303,26 @@ export function MaterialsTab() {
       <Dialog open={consumptionOpen} onOpenChange={setConsumptionOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Log material used on site</DialogTitle>
-            <DialogDescription>Record what the fundis actually consumed — the ground truth for anomaly detection.</DialogDescription>
+            <DialogTitle className="text-stone-900">{t('mat.dialog.usage.title')}</DialogTitle>
+            <DialogDescription>{t('mat.dialog.usage.desc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2 col-span-2">
-                <Label>Material</Label>
+                <Label>{t('mat.label.material')}</Label>
                 <Select value={cMaterial} onValueChange={setCMaterial}>
                   <SelectTrigger><SelectValue placeholder={t('mat.ph.chooseMaterial')} /></SelectTrigger>
                   <SelectContent>
-                    {data.materials.map((m) => <SelectItem key={m.id} value={m.id}>{m.name} (on site: {m.onSiteQty})</SelectItem>)}
+                    {data.materials.map((m) => <SelectItem key={m.id} value={m.id}>{m.name} ({t('mat.onSiteQty', { qty: m.onSiteQty })})</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="cqty">Quantity used</Label>
+                <Label htmlFor="cqty">{t('mat.label.quantityUsed')}</Label>
                 <Input id="cqty" type="number" min="0.5" step="0.5" value={cQty} onChange={(e) => setCQty(e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label>Phase</Label>
+                <Label>{t('mat.label.phase')}</Label>
                 <Select value={cPhase} onValueChange={setCPhase}>
                   <SelectTrigger><SelectValue placeholder={t('mat.ph.optional')} /></SelectTrigger>
                   <SelectContent>
@@ -330,14 +331,14 @@ export function MaterialsTab() {
                 </Select>
               </div>
               <div className="space-y-2 col-span-2">
-                <Label htmlFor="note">Note</Label>
+                <Label htmlFor="note">{t('mat.label.note')}</Label>
                 <Input id="note" value={cNote} onChange={(e) => setCNote(e.target.value)} placeholder={t('mat.ph.note')} />
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConsumptionOpen(false)}>Cancel</Button>
-            <Button onClick={() => void logConsumption()} className="bg-amber-600 hover:bg-amber-700 text-white gap-1"><PackageMinus className="w-4 h-4" aria-hidden /> Log usage</Button>
+            <Button variant="outline" onClick={() => setConsumptionOpen(false)}>{t('mat.cancel')}</Button>
+            <Button onClick={() => void logConsumption()} className="bg-amber-600 hover:bg-amber-700 text-white gap-1"><PackageMinus className="w-4 h-4" aria-hidden /> {t('mat.logUsage')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -345,29 +346,29 @@ export function MaterialsTab() {
       <Dialog open={materialOpen} onOpenChange={setMaterialOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Add material to catalog</DialogTitle>
-            <DialogDescription>Global catalog shared across projects — matched by AI when parsing voice notes.</DialogDescription>
+            <DialogTitle className="text-stone-900">{t('mat.dialog.material.title')}</DialogTitle>
+            <DialogDescription>{t('mat.dialog.material.desc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="mname">Material name</Label>
+              <Label htmlFor="mname">{t('mat.label.materialName')}</Label>
               <Input id="mname" value={mName} onChange={(e) => setMName(e.target.value)} placeholder={t('mat.ph.materialName')} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label htmlFor="munit">Unit</Label>
+                <Label htmlFor="munit">{t('mat.label.unit')}</Label>
                 <Input id="munit" value={mUnit} onChange={(e) => setMUnit(e.target.value)} placeholder={t('mat.ph.unit')} />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="mprice">Unit price (KSh)</Label>
+                <Label htmlFor="mprice">{t('mat.label.unitPrice')}</Label>
                 <Input id="mprice" type="number" min="0" value={mPrice} onChange={(e) => setMPrice(e.target.value)} placeholder={t('mat.ph.price')} />
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setMaterialOpen(false)} disabled={materialBusy}>Cancel</Button>
+            <Button variant="outline" onClick={() => setMaterialOpen(false)} disabled={materialBusy}>{t('mat.cancel')}</Button>
             <Button onClick={() => void addMaterial()} disabled={materialBusy} className="bg-amber-600 hover:bg-amber-700 text-white gap-1">
-              <Plus className="w-4 h-4" aria-hidden /> Add material
+              <Plus className="w-4 h-4" aria-hidden /> {t('mat.addMaterial')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -378,15 +379,29 @@ export function MaterialsTab() {
 
 // ---------------- Site Store (spec §35) ----------------
 
-const MOVEMENT_TYPES: Array<{ value: string; label: string }> = [
-  { value: 'opening', label: 'Opening stock' },
-  { value: 'received', label: 'Received' },
-  { value: 'consumed', label: 'Consumed' },
-  { value: 'transfer', label: 'Transfer' },
-  { value: 'return', label: 'Return to supplier' },
-  { value: 'damage', label: 'Damage/loss' },
-  { value: 'adjust', label: 'Adjustment (count)' },
+// Form values map to INVENTORY_ACTIONS; labels render through the dict
+// (mat.movement.*) — the value strings are state keys and never change.
+const MOVEMENT_TYPES: Array<{ value: string; key: string }> = [
+  { value: 'opening', key: 'mat.movement.opening' },
+  { value: 'received', key: 'mat.movement.received' },
+  { value: 'consumed', key: 'mat.movement.consumed' },
+  { value: 'transfer', key: 'mat.movement.transfer' },
+  { value: 'return', key: 'mat.movement.return' },
+  { value: 'damage', key: 'mat.movement.damage' },
+  { value: 'adjust', key: 'mat.movement.adjust' },
 ]
+
+// StockMovementType (the stored enum) → dict key for the badge label.
+const MOVEMENT_LABELS: Record<string, string> = {
+  opening: 'mat.mtype.opening',
+  received: 'mat.mtype.received',
+  consumed: 'mat.mtype.consumed',
+  transferred_in: 'mat.mtype.transferred_in',
+  transferred_out: 'mat.mtype.transferred_out',
+  returned: 'mat.mtype.returned',
+  damaged: 'mat.mtype.damaged',
+  adjusted: 'mat.mtype.adjusted',
+}
 
 const MOVEMENT_BADGES: Record<string, string> = {
   opening: 'bg-stone-100 text-stone-600',
@@ -400,9 +415,11 @@ const MOVEMENT_BADGES: Record<string, string> = {
 }
 
 function MovementBadge({ type }: { type: StockMovementType | string }) {
+  const t = useT()
+  const key = MOVEMENT_LABELS[type]
   return (
     <Badge className={`border-0 text-[10px] hover:opacity-90 ${MOVEMENT_BADGES[type] ?? 'bg-stone-100 text-stone-600'}`}>
-      {type.replace('_', ' ')}
+      {key ? t(key) : type.replace('_', ' ')}
     </Badge>
   )
 }
@@ -468,8 +485,13 @@ function SiteStoreCard() {
     if (!isNewLine && !selectedItem) { toast.error(t('mat.error.pickLine')); return }
     if (mType === 'transfer' && !mTo.trim()) { toast.error(t('mat.error.transferDest')); return }
 
+    const unit = isNewLine ? mUnit.trim() || 'unit' : selectedItem?.unit ?? ''
+    const matName = isNewLine ? mName.trim() : selectedItem?.materialName ?? ''
     let payload: Record<string, unknown> = { qty }
     let label = ''
+    // Toast label — presentation copy (translated); the dispatch `label`
+    // below is the EN audit-trail string and stays English on purpose.
+    let toastLabel = ''
     // Action names (INVENTORY_ACTIONS): 'opening' UI label → inventory.open
     let action: 'inventory.open' | 'inventory.receive' | 'inventory.consume' | 'inventory.transfer' | 'inventory.return' | 'inventory.damage' | 'inventory.adjust'
     switch (mType) {
@@ -477,55 +499,62 @@ function SiteStoreCard() {
         action = 'inventory.open'
         payload = { ...payload, materialName: mName.trim(), unit: mUnit.trim() || 'unit', location: mLocation.trim() || 'Site Store', unitCost: Number(mCost) > 0 ? Number(mCost) : undefined, note: mNote.trim() || undefined }
         label = `Opening stock: ${qty} ${mUnit.trim() || 'unit'} ${mName.trim()}`
+        toastLabel = t('mat.toastLbl.opening', { qty, unit, name: mName.trim() })
         break
       case 'received':
         action = 'inventory.receive'
         payload = { ...payload, materialName: mName.trim(), unit: mUnit.trim() || 'unit', location: mLocation.trim() || 'Site Store', unitCost: Number(mCost) > 0 ? Number(mCost) : undefined, reference: mRef.trim() || undefined, note: mNote.trim() || undefined }
         label = `Received ${qty} ${mUnit.trim() || 'unit'} ${mName.trim()}`
+        toastLabel = t('mat.toastLbl.received', { qty, unit, name: mName.trim() })
         break
       case 'consumed':
         action = 'inventory.consume'
         payload = { ...payload, inventoryItemId: selectedItem?.id, reference: mRef.trim() || undefined, note: mNote.trim() || undefined }
         label = `Consumed ${qty} ${selectedItem?.unit} ${selectedItem?.materialName}`
+        toastLabel = t('mat.toastLbl.consumed', { qty, unit, name: matName })
         break
       case 'transfer':
         action = 'inventory.transfer'
         payload = { ...payload, inventoryItemId: selectedItem?.id, toLocation: mTo.trim(), note: mNote.trim() || undefined }
         label = `Transferred ${qty} ${selectedItem?.unit} ${selectedItem?.materialName} → ${mTo.trim()}`
+        toastLabel = t('mat.toastLbl.transfer', { qty, unit, name: matName, to: mTo.trim() })
         break
       case 'return':
         action = 'inventory.return'
         payload = { ...payload, inventoryItemId: selectedItem?.id, note: mNote.trim() || undefined }
         label = `Returned ${qty} ${selectedItem?.unit} ${selectedItem?.materialName}`
+        toastLabel = t('mat.toastLbl.return', { qty, unit, name: matName })
         break
       case 'damage':
         action = 'inventory.damage'
         payload = { ...payload, inventoryItemId: selectedItem?.id, damageNote: mNote.trim() || 'damaged on site' }
         label = `Damaged ${qty} ${selectedItem?.unit} ${selectedItem?.materialName}`
+        toastLabel = t('mat.toastLbl.damage', { qty, unit, name: matName })
         break
       default: // adjust
         action = 'inventory.adjust'
         payload = { ...payload, inventoryItemId: selectedItem?.id, reason: mNote.trim() || 'count correction' }
         label = `Adjusted ${qty} ${selectedItem?.unit} ${selectedItem?.materialName}`
+        toastLabel = t('mat.toastLbl.adjust', { qty, unit, name: matName })
         break
     }
 
     const ok = await dispatch(action, payload, label)
     if (ok) {
-      toast.success(online ? t('mat.movementUpdated', { label }) : offlineNote)
+      toast.success(online ? t('mat.movementUpdated', { label: toastLabel }) : offlineNote)
       setMovementOpen(false)
     } else {
       toast.error(t('mat.movementFailed'))
     }
   }
 
-  const tiles: Array<{ label: string; value: string; icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; hint: string; warn?: boolean }> = [
-    { label: 'Stock lines', value: String(items.length), icon: Warehouse, hint: 'InventoryItem lines (material × location) with derived closing qty' },
-    { label: 'Low stock', value: String(lowCount), icon: AlertTriangle, hint: 'Closing ≤ 10% of everything that ever came in', warn: true },
-    { label: 'Incoming', value: String(incoming.length), icon: Truck, hint: 'Purchase orders currently in transit (delivering)', warn: incoming.length > 0 },
-    { label: 'Consumed', value: consumedTotal ? consumedTotal.toLocaleString() : '0', icon: PackageMinus, hint: 'Total consumed quantity across all lines' },
-    { label: 'Damaged', value: damagedTotal ? damagedTotal.toLocaleString() : '0', icon: Flame, hint: 'Damage/loss write-offs (rain, breakage, theft-observed)', warn: damagedTotal > 0 },
-    { label: 'Transfers', value: String(transfersTotal), icon: ArrowLeftRight, hint: 'Stock transfers between locations (e.g. Site Store → Slab store)' },
+  const tiles: Array<{ labelKey: string; hintKey: string; value: string; icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; warn?: boolean }> = [
+    { labelKey: 'mat.store.t.lines', hintKey: 'mat.store.t.linesHint', value: String(items.length), icon: Warehouse },
+    { labelKey: 'mat.store.t.low', hintKey: 'mat.store.t.lowHint', value: String(lowCount), icon: AlertTriangle, warn: true },
+    { labelKey: 'mat.store.t.incoming', hintKey: 'mat.store.t.incomingHint', value: String(incoming.length), icon: Truck, warn: incoming.length > 0 },
+    { labelKey: 'mat.store.t.consumed', hintKey: 'mat.store.t.consumedHint', value: consumedTotal ? consumedTotal.toLocaleString() : '0', icon: PackageMinus },
+    { labelKey: 'mat.store.t.damaged', hintKey: 'mat.store.t.damagedHint', value: damagedTotal ? damagedTotal.toLocaleString() : '0', icon: Flame, warn: damagedTotal > 0 },
+    { labelKey: 'mat.store.t.transfers', hintKey: 'mat.store.t.transfersHint', value: String(transfersTotal), icon: ArrowLeftRight },
   ]
 
   return (
@@ -533,16 +562,15 @@ function SiteStoreCard() {
       <CardHeader className="flex flex-row items-start justify-between space-y-0">
         <div className="space-y-1.5">
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <ClipboardList className="h-5 w-5 text-amber-600" aria-hidden /> Site Store
+            <ClipboardList className="h-5 w-5 text-amber-600" aria-hidden /> {t('mat.store.title')}
           </CardTitle>
           <CardDescription>
-            Storekeeper ledger (spec §33/§35): closing stock is derived from the append-only movement history — never
-            stored, never edited. Deliveries received through Finder post here automatically.
+            {t('mat.store.desc')}
           </CardDescription>
         </div>
         {!isClient && (
-          <Button size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={openMovementDialog} aria-label="Record a stock movement">
-            <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Record movement</span>
+          <Button size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={openMovementDialog} aria-label={t('mat.store.recordAria')}>
+            <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('mat.store.record')}</span>
           </Button>
         )}
       </CardHeader>
@@ -552,12 +580,12 @@ function SiteStoreCard() {
           {tiles.map((tile) => {
             const Icon = tile.icon
             return (
-              <div key={tile.label} className={`rounded-lg border p-3 ${tile.warn && Number(tile.value) > 0 ? 'border-orange-200 bg-orange-50/70' : 'border-stone-200 bg-stone-50/60'}`}>
+              <div key={tile.labelKey} className={`rounded-lg border p-3 ${tile.warn && Number(tile.value) > 0 ? 'border-orange-200 bg-orange-50/70' : 'border-stone-200 bg-stone-50/60'}`}>
                 <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-stone-500">
-                  <Icon className="h-3.5 w-3.5" aria-hidden /> {tile.label}
+                  <Icon className="h-3.5 w-3.5" aria-hidden /> {t(tile.labelKey)}
                 </p>
                 <p className="pt-1 text-xl font-bold tabular-nums text-stone-900">{tile.value}</p>
-                <p className="pt-0.5 text-[10px] leading-snug text-stone-500">{tile.hint}</p>
+                <p className="pt-0.5 text-[10px] leading-snug text-stone-500">{t(tile.hintKey)}</p>
               </div>
             )
           })}
@@ -566,21 +594,20 @@ function SiteStoreCard() {
         {/* stock table */}
         {items.length === 0 ? (
           <p className="rounded-lg border border-dashed border-stone-300 p-6 text-center text-xs text-stone-500">
-            No stock lines yet — receive a delivery through Finder (Requests → dispatch → receive) or record an opening
-            stock movement here. Nothing is invented.
+            {t('mat.store.empty')}
           </p>
         ) : (
           <div className="overflow-x-auto rounded-md border border-stone-200">
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead>Material</TableHead>
-                  <TableHead className="text-right">Closing qty</TableHead>
-                  <TableHead>Unit</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>Last movement ref</TableHead>
-                  <TableHead className="text-right">Updated</TableHead>
+                  <TableHead>{t('mat.store.col.material')}</TableHead>
+                  <TableHead className="text-right">{t('mat.store.col.closing')}</TableHead>
+                  <TableHead>{t('mat.store.col.unit')}</TableHead>
+                  <TableHead>{t('mat.store.col.location')}</TableHead>
+                  <TableHead>{t('mat.store.col.supplier')}</TableHead>
+                  <TableHead>{t('mat.store.col.lastRef')}</TableHead>
+                  <TableHead className="text-right">{t('mat.store.col.updated')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -591,7 +618,7 @@ function SiteStoreCard() {
                     <TableRow key={item.id} className={low ? 'bg-amber-50/50' : undefined}>
                       <TableCell className="font-medium text-stone-800">
                         {item.materialName}
-                        {low && <Badge className="ml-2 bg-amber-100 text-amber-800 border-0 text-[10px] hover:bg-amber-100">low stock</Badge>}
+                        {low && <Badge className="ml-2 bg-amber-100 text-amber-800 border-0 text-[10px] hover:bg-amber-100">{t('mat.store.lowStock')}</Badge>}
                       </TableCell>
                       <TableCell className={`text-right font-semibold tabular-nums ${low ? 'text-amber-700' : 'text-stone-800'}`}>{item.closingQty.toLocaleString()}</TableCell>
                       <TableCell className="text-stone-600">{item.unit}</TableCell>
@@ -618,10 +645,10 @@ function SiteStoreCard() {
 
         {/* recent movements */}
         <div>
-          <p className="pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-stone-400">Recent movements — last 12</p>
+          <p className="pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-stone-400">{t('mat.store.recent')}</p>
           {movements.length === 0 ? (
             <p className="rounded-lg border border-dashed border-stone-300 p-4 text-center text-xs text-stone-500">
-              No movements recorded yet.
+              {t('mat.store.noMovements')}
             </p>
           ) : (
             <div className="max-h-72 space-y-1.5 overflow-y-auto pr-2 -mr-2">
@@ -649,20 +676,19 @@ function SiteStoreCard() {
       <Dialog open={movementOpen} onOpenChange={setMovementOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Record stock movement</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('mat.store.dialog.title')}</DialogTitle>
             <DialogDescription>
-              Append to the Site Store ledger (spec §33). Closing stock is always the derived sum — corrections are new
-              movements, never edits.
+              {t('mat.store.dialog.desc')}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-1">
             <div className="space-y-2">
-              <Label>Movement type</Label>
+              <Label>{t('mat.store.label.type')}</Label>
               <Select value={mType} onValueChange={(v) => setMType(v)}>
-                <SelectTrigger aria-label="Movement type"><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label={t('mat.store.label.type')}><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {MOVEMENT_TYPES.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                  {MOVEMENT_TYPES.map((mt) => (
+                    <SelectItem key={mt.value} value={mt.value}>{t(mt.key)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -671,27 +697,27 @@ function SiteStoreCard() {
             {isNewLine ? (
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2 col-span-2">
-                  <Label htmlFor="ss-material">Material (creates or tops up the stock line)</Label>
+                  <Label htmlFor="ss-material">{t('mat.store.label.materialNew')}</Label>
                   <Input id="ss-material" value={mName} onChange={(e) => setMName(e.target.value)} placeholder={t('mat.ph.ssMaterial')} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="ss-unit">Unit</Label>
+                  <Label htmlFor="ss-unit">{t('mat.store.label.unit')}</Label>
                   <Input id="ss-unit" value={mUnit} onChange={(e) => setMUnit(e.target.value)} placeholder={t('mat.ph.ssUnit')} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="ss-loc">Location</Label>
-                  <Input id="ss-loc" value={mLocation} onChange={(e) => setMLocation(e.target.value)} placeholder="Site Store" />
+                  <Label htmlFor="ss-loc">{t('mat.store.label.location')}</Label>
+                  <Input id="ss-loc" value={mLocation} onChange={(e) => setMLocation(e.target.value)} placeholder={t('mat.ph.ssLocation')} />
                 </div>
               </div>
             ) : (
               <div className="space-y-2">
-                <Label>Stock line</Label>
+                <Label>{t('mat.store.label.stockLine')}</Label>
                 <Select value={mItem} onValueChange={setMItem}>
-                  <SelectTrigger aria-label="Stock line"><SelectValue placeholder={t('mat.ph.chooseStockLine')} /></SelectTrigger>
+                  <SelectTrigger aria-label={t('mat.store.label.stockLine')}><SelectValue placeholder={t('mat.ph.chooseStockLine')} /></SelectTrigger>
                   <SelectContent>
                     {items.map((i) => (
                       <SelectItem key={i.id} value={i.id}>
-                        {i.materialName} — {i.location} (closing {i.closingQty} {i.unit})
+                        {t('mat.store.lineOption', { name: i.materialName, location: i.location, qty: i.closingQty, unit: i.unit })}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -701,12 +727,12 @@ function SiteStoreCard() {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label htmlFor="ss-qty">Quantity {mType === 'adjust' ? '(± as recorded)' : ''}</Label>
+                <Label htmlFor="ss-qty">{mType === 'adjust' ? t('mat.store.label.qtyAdjust') : t('mat.store.label.qty')}</Label>
                 <Input id="ss-qty" type="number" min="0.5" step="0.5" value={mQty} onChange={(e) => setMQty(e.target.value)} />
               </div>
               {isNewLine && (
                 <div className="space-y-2">
-                  <Label htmlFor="ss-cost">Unit cost (KSh)</Label>
+                  <Label htmlFor="ss-cost">{t('mat.store.label.unitCost')}</Label>
                   <Input id="ss-cost" type="number" min="0" value={mCost} onChange={(e) => setMCost(e.target.value)} placeholder={t('mat.ph.optionalLower')} />
                 </div>
               )}
@@ -714,32 +740,32 @@ function SiteStoreCard() {
 
             {mType === 'transfer' && (
               <div className="space-y-2">
-                <Label htmlFor="ss-to">To location</Label>
+                <Label htmlFor="ss-to">{t('mat.store.label.toLocation')}</Label>
                 <Input id="ss-to" value={mTo} onChange={(e) => setMTo(e.target.value)} placeholder={t('mat.ph.toLocation')} />
               </div>
             )}
             {mType === 'consumed' && (
               <div className="space-y-2">
-                <Label htmlFor="ss-ref">Reference (e.g. phase or work order)</Label>
+                <Label htmlFor="ss-ref">{t('mat.store.label.reference')}</Label>
                 <Input id="ss-ref" value={mRef} onChange={(e) => setMRef(e.target.value)} placeholder={t('mat.ph.optionalLower')} />
               </div>
             )}
             <div className="space-y-2">
               <Label htmlFor="ss-note">
-                {mType === 'damage' ? 'Damage note' : mType === 'adjust' ? 'Reason' : 'Note'}
+                {mType === 'damage' ? t('mat.store.label.damageNote') : mType === 'adjust' ? t('mat.store.label.reason') : t('mat.label.note')}
               </Label>
               <Input id="ss-note" value={mNote} onChange={(e) => setMNote(e.target.value)} placeholder={mType === 'damage' ? t('mat.ph.damageNote') : t('mat.ph.optionalLower')} />
             </div>
             {selectedItem && !isNewLine && (
               <p className="text-[11px] text-stone-400">
-                {selectedItem.materialName} @ {selectedItem.location} — closing {selectedItem.closingQty} {selectedItem.unit}
+                {t('mat.store.selectedLine', { name: selectedItem.materialName, location: selectedItem.location, qty: selectedItem.closingQty, unit: selectedItem.unit })}
               </p>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setMovementOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setMovementOpen(false)}>{t('mat.cancel')}</Button>
             <Button onClick={() => void recordMovement()} disabled={busy} className="bg-amber-600 hover:bg-amber-700 text-white gap-1">
-              <Plus className="w-4 h-4" aria-hidden /> Record movement
+              <Plus className="w-4 h-4" aria-hidden /> {t('mat.store.record')}
             </Button>
           </DialogFooter>
         </DialogContent>

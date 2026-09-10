@@ -10,31 +10,22 @@ import { Button } from '@/frontend/ui/button'
 import { Card, CardContent } from '@/frontend/ui/card'
 import { Landmark, Plus, ScanSearch, X } from 'lucide-react'
 import { EmptyState } from '@/frontend/mjengo/uikit/empty-state'
+import { useT } from '@/frontend/i18n/provider'
 import { ParcelCard } from './parcels/parcel-card'
 import { ParcelDetail } from './parcels/parcel-detail'
 import { NewParcelDialog } from './parcels/dialogs'
 
-const NOT_DOING: { title: string; text: string }[] = [
-  {
-    title: 'Not a land registry.',
-    text: 'The lands registry is the authority on ownership. MjengoOS organizes its outputs — it does not replace them.',
-  },
-  {
-    title: 'Searches are recorded, not confirmed.',
-    text: 'Official results are obtained by people and attached here. There is no live registry link, and we will not pretend otherwise.',
-  },
-  {
-    title: 'A mismatch is a flag, never a verdict.',
-    text: 'The consistency check is deterministic string comparison between the deed transcription and the recorded registry result. Humans decide what a difference means.',
-  },
-  {
-    title: 'The advocate\u2019s review remains the legal step.',
-    text: 'Their opinion becomes part of the record; it never originates from the platform. Legal advice stays licensed, human and accountable.',
-  },
+// i18n (issue #107): keys rendered via t() — values stay verbatim.
+const NOT_DOING_KEYS: { titleKey: string; textKey: string }[] = [
+  { titleKey: 'land.notDoing.1.title', textKey: 'land.notDoing.1.text' },
+  { titleKey: 'land.notDoing.2.title', textKey: 'land.notDoing.2.text' },
+  { titleKey: 'land.notDoing.3.title', textKey: 'land.notDoing.3.text' },
+  { titleKey: 'land.notDoing.4.title', textKey: 'land.notDoing.4.text' },
 ]
 
 export function ParcelsSection() {
   const { data, viewMode } = useMjengo()
+  const t = useT()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
 
@@ -46,24 +37,26 @@ export function ParcelsSection() {
   const flagged = parcels.filter((p) => p.status === 'flagged').length
 
   return (
-    <section aria-label="Land parcels" className="space-y-4">
+    <section aria-label={t('land.parcels.aria')} className="space-y-4">
       {/* section header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-lg font-bold text-stone-900 flex items-center gap-2">
             <Landmark className="h-5 w-5 text-stone-500" aria-hidden />
-            Parcels &amp; title record
+            {t('land.parcels.title')}
           </h2>
           <p className="text-sm text-stone-500 mt-0.5">
-            {parcels.length} parcel{parcels.length === 1 ? '' : 's'} on record
-            {searching > 0 && ` · ${searching} searching`}
-            {flagged > 0 && ` · ${flagged} flagged`}
-            {' '}— honest record states, never government certification
+            {t('land.parcels.desc', {
+              count: parcels.length,
+              parcels: parcels.length === 1 ? t('land.parcels.countOne') : t('land.parcels.countMany'),
+              searching: searching > 0 ? t('land.parcels.searching', { count: searching }) : '',
+              flagged: flagged > 0 ? t('land.parcels.flagged', { count: flagged }) : '',
+            })}
           </p>
         </div>
         {!isClient && (
           <Button size="sm" className="gap-1.5 bg-stone-900 text-white hover:bg-stone-800" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" aria-hidden /> Record parcel
+            <Plus className="h-4 w-4" aria-hidden /> {t('land.parcels.record')}
           </Button>
         )}
       </div>
@@ -85,11 +78,11 @@ export function ParcelsSection() {
           <CardContent className="p-6">
             <EmptyState
               icon={ScanSearch}
-              title="No parcels recorded yet"
-              description="Record the plot first — it starts in the honest SEARCHING state, then attach the title deed and request the registry search."
+              title={t('land.parcels.emptyTitle')}
+              description={t('land.parcels.emptyDesc')}
               action={!isClient && (
                 <Button size="sm" className="gap-1.5 bg-stone-900 text-white hover:bg-stone-800" onClick={() => setCreateOpen(true)}>
-                  <Plus className="h-4 w-4" aria-hidden /> Record parcel
+                  <Plus className="h-4 w-4" aria-hidden /> {t('land.parcels.record')}
                 </Button>
               )}
             />
@@ -101,28 +94,27 @@ export function ParcelsSection() {
       {selected && <ParcelDetail parcel={selected} canEdit={!isClient} onClose={() => setSelectedId(null)} />}
 
       {/* honesty block */}
-      <Card className="border-stone-300 shadow-sm bg-stone-50" aria-label="What MjengoOS does NOT do">
+      <Card className="border-stone-300 shadow-sm bg-stone-50" aria-label={t('land.notDoing.aria')}>
         <CardContent className="p-5 sm:p-6">
           <div className="flex items-center gap-2.5 mb-4">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700" aria-hidden>
               <X className="h-4 w-4" />
             </span>
             <div>
-              <h3 className="text-sm font-bold text-stone-900">What MjengoOS does NOT do</h3>
-              <p className="text-xs text-stone-500">A land-truth workflow you can trust starts with what it cannot promise</p>
+              <h3 className="text-sm font-bold text-stone-900">{t('land.notDoing.title')}</h3>
+              <p className="text-xs text-stone-500">{t('land.notDoing.subtitle')}</p>
             </div>
           </div>
           <ul className="grid gap-3 sm:grid-cols-2">
-            {NOT_DOING.map((item) => (
-              <li key={item.title} className="rounded-lg border border-stone-200 bg-white p-3.5 min-w-0">
-                <h4 className="text-sm font-semibold text-stone-800">{item.title}</h4>
-                <p className="mt-1 text-xs text-stone-500 leading-relaxed">{item.text}</p>
+            {NOT_DOING_KEYS.map((item) => (
+              <li key={item.titleKey} className="rounded-lg border border-stone-200 bg-white p-3.5 min-w-0">
+                <h4 className="text-sm font-semibold text-stone-800">{t(item.titleKey)}</h4>
+                <p className="mt-1 text-xs text-stone-500 leading-relaxed">{t(item.textKey)}</p>
               </li>
             ))}
           </ul>
           <p className="mt-4 text-xs text-stone-500 leading-relaxed max-w-3xl">
-            The registry remains authoritative. MjengoOS keeps the registry outputs, survey plans and legal opinions
-            organized, attached to the parcel, and impossible to lose — that is the whole claim, and it is enough.
+            {t('land.notDoing.footer')}
           </p>
         </CardContent>
       </Card>
