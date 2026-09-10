@@ -28,8 +28,15 @@ import { markRead } from '@/backend/modules/notify/service'
 //   ?kind=<kind>   exact kind filter
 //   ?unread=true   only unread rows
 // Client-role sessions are pinned to their own project (param ignored).
-// The response also carries the session user's notification `prefs` (Doc A
-// §42 user control) — parsed from User.notificationPrefs, or {} when unset.
+// BE-3 (issue #104): supplier sessions get the SAME scoping the POST half
+// has enforced since BE-12 — the projects they SERVE (their purchase
+// orders' projects). An explicit ?projectId answers 404 unknown / 403
+// 'Not permitted for this project' when not served (byte-identical to
+// POST); with NO project named the rows are their served projects' union —
+// NEVER the portfolio default (first project) this route used to hand any
+// signed-in role. The response also carries the session user's notification
+// `prefs` (Doc A §42 user control) — parsed from User.notificationPrefs, or
+// {} when unset.
 //
 // PUT { prefs } (Doc A §42) → per-kind in-app preferences for the SESSION
 // user: { kind: { inApp: boolean } }, max 20 kinds, unknown kinds rejected
@@ -170,13 +177,53 @@ export const GET = route(
     const sp = req.nextUrl.searchParams
 
     // Project scoping — same rules as POST: client sessions are pinned to
-    // their own project; everyone else may pass ?projectId= (default: first).
+    // their own project; suppliers are scoped to the projects they SERVE
+    // (BE-3/issue #104 — the GET half of POST's BE-12 branch); everyone else
+    // may pass ?projectId= (default: first).
     let projectId: string | null = sp.get('projectId')?.trim() || null
+    /** Supplier-union filter: set (possibly []) when a supplier names no
+     *  ?projectId — their served projects' rows, never the default first
+     *  project. Null everywhere else (the branches above/below own the
+     *  filter). */
+    let servedProjectIds: string[] | null = null
     if (session.user.role === 'client') {
       if (!session.user.projectId) {
         return NextResponse.json({ error: 'Client account has no project assigned' }, { status: 403 })
       }
       projectId = session.user.projectId
+    } else if (session.user.role === 'supplier') {
+      // BE-3 (issue #104) — the BE-12 supplier scope POST enforces, mirrored
+      // on the GET half: a supplier reads exactly the projects they SERVE
+      // (their purchase orders' projects, the row-pin idiom of
+      // modules/supply/supplier-scope.ts). An explicit ?projectId follows
+      // POST's contract exactly — 404 for an unknown id, 403 'Not permitted
+      // for this project' when not served (indistinguishable from a miss);
+      // with NO project named the rows are their served projects' union,
+      // never the portfolio default (first project) this GET used to resolve
+      // for any non-client role. An unlinked supplier fails closed (the
+      // actions.ts/sync.ts W5-3 posture) BEFORE any notification row is read.
+      const supplierId = session.user.supplierId
+      if (!supplierId) {
+        return NextResponse.json({ error: 'Supplier account has no supplier linked' }, { status: 403 })
+      }
+      if (projectId) {
+        const exists = await db.project.findUnique({ where: { id: projectId }, select: { id: true } })
+        if (!exists) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
+        const served = await db.purchaseOrder.findFirst({
+          where: { supplierId, projectId },
+          select: { id: true },
+        })
+        if (!served) {
+          return NextResponse.json({ error: 'Not permitted for this project' }, { status: 403 })
+        }
+      } else {
+        const servedOrders = await db.purchaseOrder.findMany({
+          where: { supplierId },
+          select: { projectId: true },
+          distinct: ['projectId'],
+        })
+        servedProjectIds = servedOrders.map((o) => o.projectId).filter((id): id is string => Boolean(id))
+      }
     } else if (projectId) {
       const exists = await db.project.findUnique({ where: { id: projectId }, select: { id: true } })
       if (!exists) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
@@ -209,7 +256,14 @@ export const GET = route(
 
     const notifications = await db.notification.findMany({
       where: {
-        ...(projectId ? { projectId } : {}),
+        // Supplier union: projectId IN their served projects (an empty list
+        // matches nothing — the honest empty page for a supplier who serves
+        // no project yet). Every other branch resolved a single projectId.
+        ...(projectId
+          ? { projectId }
+          : servedProjectIds
+            ? { projectId: { in: servedProjectIds } }
+            : {}),
         ...(before ? { createdAt: { lt: before } } : {}),
         ...(kind ? { kind } : {}),
         ...(unread ? { read: false } : {}),

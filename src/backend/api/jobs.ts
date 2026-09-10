@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
+import { forbidden } from '@/backend/lib/guard'
 import { route, safeError } from '@/backend/lib/route-kit'
 import { enqueue, isJobType, loadRecentJobs, runDueJobs } from '@/backend/modules/jobs/service'
 
@@ -13,6 +14,10 @@ import { enqueue, isJobType, loadRecentJobs, runDueJobs } from '@/backend/module
 //
 // GET (any signed-in role): the recent JobRecord list for the project —
 // client-role sessions are pinned to their own project (tenant isolation).
+// BE-3 (issue #104): supplier sessions get the honest W5-3 403 instead —
+// job rows are buyer-side operational records (the site team's queue), not
+// supplier rows, so there is no jobs surface for them to read. Previously a
+// supplier fell into the site-team branch below and read global job rows.
 //
 // HONEST copy: nothing schedules this route automatically today — the Intel
 // "Background jobs" card triggers it on demand; in production a cron would
@@ -60,6 +65,10 @@ export const POST = route(
 export const GET = route(
   { scope: 'api/jobs/run GET', onError: safeError(500, 'Could not list jobs') },
   async (req, session) => {
+    // W5-3 / BE-3 (issue #104): a supplier has no jobs surface — the honest
+    // role 403 (the same refusal /api/project gives), BEFORE any job row is
+    // loaded.
+    if (session.user.role === 'supplier') return forbidden(session.user.role)
     const wanted = req.nextUrl.searchParams.get('projectId')?.trim() || null
     if (session.user.role === 'client') {
       // Client-role sessions see exactly their own project's jobs — never
