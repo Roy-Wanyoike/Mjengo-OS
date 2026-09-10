@@ -539,6 +539,7 @@ full test suite in the worktree before pushing.
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
 | [docs/SUPABASE-DATABASE-DESIGN.md](./docs/SUPABASE-DATABASE-DESIGN.md) | Target-state Supabase/PostgreSQL design (68-table DDL, RLS policy matrix, storage, migration + rollback plan; ADR 0002) |
+| [docs/adr/0003-repo-topology.md](./docs/adr/0003-repo-topology.md) | ADR 0003 — one repo, directory + service boundaries (not branches, not polyrepo) with revisit triggers for splitting a surface out |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Build/run/test/deploy operations guide |
 | [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) | Plain-language release notes — v0.1 → v0.2.4, wave by wave |
 | [docs/backlog.md](./docs/backlog.md) | PM release plan (waves 3–6) with paste-ready issue texts |
