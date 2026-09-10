@@ -183,3 +183,67 @@ describe('audit 2-b regression holds (untouched by this wave on purpose)', () =>
     expect(src).toContain("window.addEventListener('online', onOnline)")
   })
 })
+
+// ---------------------------------------------------------------------------
+// #108 XS polish bundle (audit FE-2..FE-6): source pins for the plural fix,
+// the announced dialog errors, the client-preview strip and the supplier
+// 44px targets. Same static-pin convention as the blocks above.
+// ---------------------------------------------------------------------------
+
+describe('FE-2 (issue #108): site-plan zone aria-labels pluralize the photo count', () => {
+  it('the zone button aria-label uses the 1 photo / N photos ternary', () => {
+    const src = readSrc('src/frontend/mjengo/site-map-card.tsx')
+    expect(src).toContain("zonePhotoCount === 1 ? 'photo' : 'photos'")
+    expect(src).not.toContain('} photos`') // the old always-plural label
+  })
+})
+
+describe('FE-3 (issue #108): dialog validation errors are announced', () => {
+  it('expense dialog links the amount error via aria-describedby + role=alert', () => {
+    const src = readSrc('src/frontend/mjengo/expense-dialog.tsx')
+    expect(src).toContain("aria-describedby={amountError ? 'exp-amount-error' : undefined}")
+    expect(src).toContain('id="exp-amount-error" role="alert"')
+  })
+
+  it('create-project dialog links name/budget/dates errors via aria-describedby + role=alert', () => {
+    const src = readSrc('src/frontend/mjengo/create-project-dialog.tsx')
+    for (const id of ['pj-name-error', 'pj-budget-error', 'pj-dates-error']) {
+      expect(src).toContain(`aria-describedby={`)
+      expect(src).toContain(`id="${id}" role="alert"`)
+    }
+  })
+
+  it('worker dialogs link the name error via aria-describedby + role=alert', () => {
+    const src = readSrc('src/frontend/mjengo/worker-dialogs.tsx')
+    expect(src).toContain("aria-describedby={nameError ? 'wk-name-error' : undefined}")
+    expect(src).toContain('id="wk-name-error" role="alert"')
+  })
+})
+
+describe('FE-4 (issue #108): client PREVIEW renders the client tab strip', () => {
+  it('app.tsx keys the strip on viewMode === \'client\', not on shareToken/clientRole', () => {
+    const src = readSrc('src/frontend/mjengo/app.tsx')
+    expect(src).toContain("const clientStrip = viewMode === 'client'")
+    // The owner's AI Copilot / Audit tabs must never survive into a preview.
+    expect(src).not.toContain('isClientSurface ? tabsForRole')
+  })
+
+  it('header.tsx does the same for the desktop strip', () => {
+    const src = readSrc('src/frontend/mjengo/header.tsx')
+    expect(src).toContain("const clientStrip = viewMode === 'client'")
+    expect(src).not.toContain('isShareClient ? tabsForRole')
+  })
+
+  it('the owner bottom nav is hidden in ANY client view (mirrors a real share client)', () => {
+    const src = readSrc('src/frontend/mjengo/app.tsx')
+    expect(src).toContain(`{viewMode !== 'client' && <MobileBottomNav`)
+  })
+})
+
+describe('FE-5 (issue #108): supplier portal header buttons meet the 44px target', () => {
+  it('the three header buttons are h-11 min-h-11 (was h-9 min-h-9)', () => {
+    const src = readSrc('src/frontend/mjengo/supplier/supplier-portal.tsx')
+    expect(src).not.toContain('h-9 min-h-9')
+    expect((src.match(/h-11 min-h-11/g) ?? []).length).toBeGreaterThanOrEqual(3)
+  })
+})

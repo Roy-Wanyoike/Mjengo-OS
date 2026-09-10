@@ -13,6 +13,7 @@ import { Badge } from '@/frontend/ui/badge'
 import { Button } from '@/frontend/ui/button'
 import { ChevronDown, ChevronRight, MapPin, Plus, Scale, Trophy, Tag, AlertTriangle } from 'lucide-react'
 import type { CompareRow } from '@/backend/modules/supply/types'
+import { useT } from '@/frontend/i18n/provider'
 import { EmptyState } from '@/frontend/mjengo/uikit/empty-state'
 import { EtaBadge, RatingBadge, ScoreBar, StockBadge, fmtKm, fmtQty, formatKes, PriceHistoryBadge, type PricePointLite } from './bits'
 
@@ -26,14 +27,15 @@ interface ResultsTableProps {
 }
 
 export function SearchResultsTable({ rows, siteLabel, busy, onAddToOrder, priceHistory }: ResultsTableProps) {
+  const t = useT()
   const [expanded, setExpanded] = useState<string | null>(null)
 
   if (!rows.length) {
     return (
       <EmptyState
         icon={MapPin}
-        title="No suppliers match near this site"
-        description="Try the material's short name (e.g. “cement”, “ballast”), widen the radius, or relax the delivery day."
+        title={t('finder.results.emptyTitle')}
+        description={t('finder.results.emptyDesc')}
       />
     )
   }
@@ -50,12 +52,16 @@ export function SearchResultsTable({ rows, siteLabel, busy, onAddToOrder, priceH
           {sameRow ? (
             <>
               <Trophy className="mr-1 inline h-3.5 w-3.5 text-amber-600" aria-hidden />
-              <span className="font-medium text-stone-700">{best.businessName}</span> is both the best overall AND the cheapest unit price — rare alignment.
+              {t('finder.results.sameRow', { name: best.businessName })}
             </>
           ) : (
             <>
               <Scale className="mr-1 inline h-3.5 w-3.5 text-amber-600" aria-hidden />
-              Best overall <span className="font-medium text-stone-700">{best.businessName}</span> is NOT the cheapest unit price ({cheapest?.businessName} at {cheapest ? formatKes(cheapest.unitPrice) : '—'}) — total landed cost, distance, stock and reliability all count.
+              {t('finder.results.notCheapest', {
+                best: best.businessName,
+                other: cheapest?.businessName ?? '—',
+                price: cheapest ? formatKes(cheapest.unitPrice) : '—',
+              })}
             </>
           )}
         </p>
@@ -65,21 +71,21 @@ export function SearchResultsTable({ rows, siteLabel, busy, onAddToOrder, priceH
 
       <div className="overflow-x-auto rounded-md border border-stone-200">
         <table className="w-full min-w-[760px] text-sm">
-          <caption className="sr-only">Supplier comparison ranked by weighted score — site: {siteLabel}</caption>
+          <caption className="sr-only">{t('finder.results.caption', { site: siteLabel })}</caption>
           <thead>
             <tr className="border-b border-stone-200 bg-stone-50 text-left text-[11px] uppercase tracking-wide text-stone-400">
-              <th scope="col" className="px-3 py-2 font-medium">Supplier</th>
-              <th scope="col" className="px-2 py-2 font-medium">Distance</th>
-              <th scope="col" className="px-2 py-2 text-right font-medium">Unit price</th>
-              <th scope="col" className="px-2 py-2 font-medium">Stock</th>
-              <th scope="col" className="px-2 py-2 font-medium">Delivery</th>
-              <th scope="col" className="px-2 py-2 font-medium">Rating</th>
-              <th scope="col" className="px-2 py-2 text-right font-medium">Landed total</th>
+              <th scope="col" className="px-3 py-2 font-medium">{t('finder.results.col.supplier')}</th>
+              <th scope="col" className="px-2 py-2 font-medium">{t('finder.results.col.distance')}</th>
+              <th scope="col" className="px-2 py-2 text-right font-medium">{t('finder.results.col.unitPrice')}</th>
+              <th scope="col" className="px-2 py-2 font-medium">{t('finder.results.col.stock')}</th>
+              <th scope="col" className="px-2 py-2 font-medium">{t('finder.results.col.delivery')}</th>
+              <th scope="col" className="px-2 py-2 font-medium">{t('finder.results.col.rating')}</th>
+              <th scope="col" className="px-2 py-2 text-right font-medium">{t('finder.results.col.landed')}</th>
               {/* relative anchors the sr-only span inside the th — otherwise its
                   position:absolute containing block escapes the overflow-x-auto
                   wrapper and blows the page past a 390px viewport (17-orchestrator
                   Badge-quirk pattern) */}
-              <th scope="col" className="relative px-3 py-2 text-right font-medium"><span className="sr-only">Actions</span></th>
+              <th scope="col" className="relative px-3 py-2 text-right font-medium"><span className="sr-only">{t('finder.results.col.actions')}</span></th>
             </tr>
           </thead>
           <tbody>
@@ -116,6 +122,7 @@ function FragmentRow({
   onToggle: () => void
   onAddToOrder: () => void
 }) {
+  const t = useT()
   const best = row.flags.bestOverall
   return (
     <>
@@ -127,12 +134,12 @@ function FragmentRow({
             <span className="font-medium text-stone-800">{row.businessName}</span>
             {best && (
               <Badge className="border-0 gap-1 bg-amber-600 text-white hover:bg-amber-600">
-                <Trophy className="h-3 w-3" aria-hidden /> Best overall
+                <Trophy className="h-3 w-3" aria-hidden /> {t('finder.results.bestOverall')}
               </Badge>
             )}
             {row.flags.cheapestUnit && (
               <Badge variant="outline" className="gap-1 text-[10px] font-medium text-emerald-800">
-                <Tag className="h-3 w-3" aria-hidden /> Cheapest unit
+                <Tag className="h-3 w-3" aria-hidden /> {t('finder.results.cheapestUnit')}
               </Badge>
             )}
             <span className="block text-[11px] text-stone-400">
@@ -158,14 +165,14 @@ function FragmentRow({
         <td className="whitespace-nowrap px-2 py-3 tabular-nums text-stone-700">{fmtKm(row.distanceKm)}</td>
         <td className="whitespace-nowrap px-2 py-3 text-right tabular-nums text-stone-800">
           {formatKes(row.unitPrice)}
-          <span className="block text-[10px] text-stone-400">per {row.unit}</span>
+          <span className="block text-[10px] text-stone-400">{t('finder.results.perUnit', { unit: row.unit })}</span>
         </td>
         <td className="px-2 py-3"><StockBadge state={row.stockState} stockQty={row.stockQty} qty={row.qty} /></td>
         <td className="px-2 py-3"><EtaBadge tier={row.etaTier} /></td>
         <td className="px-2 py-3"><RatingBadge score={row.reliabilityScore} /></td>
         <td className="whitespace-nowrap px-2 py-3 text-right font-semibold tabular-nums text-stone-900">
           {formatKes(row.totalLanded)}
-          {best && <span className="block text-[10px] font-medium text-amber-700">rank 1 · {Math.round(row.scores.total * 100)}/100</span>}
+          {best && <span className="block text-[10px] font-medium text-amber-700">{t('finder.results.rank', { rank: 1, score: Math.round(row.scores.total * 100) })}</span>}
         </td>
         <td className="whitespace-nowrap px-3 py-3 text-right">
           <div className="flex justify-end gap-1.5">
@@ -175,19 +182,19 @@ function FragmentRow({
               className="h-8 min-h-8 gap-1 px-2 text-xs"
               onClick={onToggle}
               aria-expanded={isExpanded}
-              aria-label={`Compare landed-cost breakdown for ${row.businessName}`}
+              aria-label={t('finder.results.compareAria', { name: row.businessName })}
             >
               {isExpanded ? <ChevronDown className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
-              Compare
+              {t('finder.results.compare')}
             </Button>
             <Button
               size="sm"
               className="h-8 min-h-8 gap-1 bg-amber-600 px-2 text-xs text-white hover:bg-amber-700"
               disabled={busy}
               onClick={onAddToOrder}
-              aria-label={`Add ${fmtQty(row.qty)} ${row.unit} of ${row.itemName} from ${row.businessName} to a project order`}
+              aria-label={t('finder.results.orderAria', { qty: fmtQty(row.qty), unit: row.unit, name: row.itemName, supplier: row.businessName })}
             >
-              <Plus className="h-3.5 w-3.5" aria-hidden /> Order
+              <Plus className="h-3.5 w-3.5" aria-hidden /> {t('finder.results.order')}
             </Button>
           </div>
         </td>
@@ -197,21 +204,21 @@ function FragmentRow({
           <td colSpan={8} className="px-3 py-4">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="space-y-1.5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-stone-400">Landed-cost breakdown — {fmtQty(row.qty)} {row.unit}</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-stone-400">{t('finder.results.breakdown.title', { qty: fmtQty(row.qty), unit: row.unit })}</p>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm tabular-nums">
-                  <dt className="text-stone-500">Product cost</dt>
+                  <dt className="text-stone-500">{t('finder.results.breakdown.product')}</dt>
                   <dd className="text-right font-medium text-stone-800">{formatKes(row.productCost)}</dd>
-                  <dt className="text-stone-500">Delivery fee{row.deliveryFee === 0 ? ' (waived — order qualifies)' : ''}</dt>
+                  <dt className="text-stone-500">{t('finder.results.breakdown.delivery')}{row.deliveryFee === 0 ? t('finder.results.breakdown.waived') : ''}</dt>
                   <dd className="text-right font-medium text-stone-800">{formatKes(row.deliveryFee)}</dd>
-                  <dt className="text-stone-500">Transport surcharge{row.transportFee > 0 ? ` (~${formatKes(100)}/10 km)` : ''}</dt>
+                  <dt className="text-stone-500">{t('finder.results.breakdown.transport')}{row.transportFee > 0 ? t('finder.results.breakdown.transportHint', { rate: formatKes(100) }) : ''}</dt>
                   <dd className="text-right font-medium text-stone-800">{formatKes(row.transportFee)}</dd>
-                  <dt className="border-t border-stone-200 pt-1 text-stone-700">Total landed cost</dt>
+                  <dt className="border-t border-stone-200 pt-1 text-stone-700">{t('finder.results.breakdown.total')}</dt>
                   <dd className="border-t border-stone-200 pt-1 text-right text-base font-bold text-stone-900">{formatKes(row.totalLanded)}</dd>
                 </dl>
                 {!row.meetsMinOrder && (
                   <p className="flex items-center gap-1.5 pt-1 text-[11px] text-amber-800">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                    Below {formatKes(row.minimumOrder)} minimum order (needs {fmtQty(row.minOrderQty)} {row.unit} min) — the supplier may decline to quote.
+                    {t('finder.results.breakdown.minOrder', { amount: formatKes(row.minimumOrder), qty: fmtQty(row.minOrderQty), unit: row.unit })}
                   </p>
                 )}
               </div>
