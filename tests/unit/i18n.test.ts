@@ -363,3 +363,79 @@ describe('#107 wave: onboarding-critical strings + client-facing copy', () => {
     expect(translate(swDict, 'intel.risk.title')).toBe('Hatari ya mradi')
   })
 })
+
+// ---------------------------------------------------------------------------
+// #107 Kiswahili wave 5 (4-d-2): the four partially-covered tab bodies —
+// materials / fundis / money / evidence — so ALL 13 tabs render Kiswahili
+// under locale=SW. Same conventions as the wave-1..4 block above: every
+// literal t('…') key (plus quoted namespace strings in key-carrying object
+// literals like MOVEMENT_TYPES/tiles) must resolve in BOTH dicts, the
+// enum-key families (movement types, attendance statuses, verification
+// levels) are pinned by enumerating their values, and raw-literal toasts
+// are banned on the newly wired path.
+// ---------------------------------------------------------------------------
+
+describe('#107 wave 5: tab bodies — every literal t() key resolves in both dictionaries', () => {
+  const literalKeysIn = (src: string) => [
+    ...src.matchAll(/\bt\(\s*'([a-zA-Z0-9_.]+)'/g),
+    ...src.matchAll(/\bt\(\s*"([a-zA-Z0-9_.]+)"/g),
+  ].map((m) => m[1])
+
+  const namespaceStringsIn = (src: string) =>
+    [...src.matchAll(/'(mat|fundis|money|evidence)\.[a-zA-Z0-9_.]+'/g)].map((m) => m[0].slice(1, -1))
+
+  const WAVE5_SURFACES: Record<string, string[]> = {
+    materials: ['src/frontend/mjengo/materials-tab.tsx'],
+    // fundis / money / evidence are appended by the later wave-5 commits.
+  }
+
+  it('each wave-5 surface samples enough keys (guards against silent wiring regressions)', () => {
+    const minimums: Record<string, number> = { materials: 90 }
+    for (const [family, files] of Object.entries(WAVE5_SURFACES)) {
+      const keys = new Set(files.flatMap((f) => [...literalKeysIn(readSrc(f)), ...namespaceStringsIn(readSrc(f))]))
+      expect(keys.size, `${family} surface sampled too few keys (${keys.size})`).toBeGreaterThan(minimums[family])
+    }
+  })
+
+  it('every sampled key exists in both dictionaries', () => {
+    for (const [family, files] of Object.entries(WAVE5_SURFACES)) {
+      for (const key of new Set(files.flatMap((f) => [...literalKeysIn(readSrc(f)), ...namespaceStringsIn(readSrc(f))]))) {
+        expect(enKeys.has(key), `en.ts is missing "${key}" (used by the ${family} tab)`).toBe(true)
+        expect(swKeys.has(key), `sw.ts is missing "${key}" (used by the ${family} tab)`).toBe(true)
+      }
+    }
+  })
+})
+
+describe('#107 wave 5: materials enum label keys exist for every renderable value', () => {
+  // MOVEMENT_TYPES (form values) and MOVEMENT_LABELS (stored
+  // StockMovementType values) render through dict keys — pinned here so a
+  // new enum value cannot ship without its en+sw labels.
+  const FORM_MOVEMENTS = ['opening', 'received', 'consumed', 'transfer', 'return', 'damage', 'adjust']
+  const STORED_MOVEMENTS = [
+    'opening', 'received', 'consumed', 'transferred_in', 'transferred_out',
+    'returned', 'damaged', 'adjusted',
+  ]
+
+  const expectBoth = (key: string) => {
+    expect(enKeys.has(key), `en.ts is missing dynamic key "${key}"`).toBe(true)
+    expect(swKeys.has(key), `sw.ts is missing dynamic key "${key}"`).toBe(true)
+  }
+
+  it('movement form + stored-enum labels resolve in both dictionaries', () => {
+    FORM_MOVEMENTS.forEach((m) => expectBoth(`mat.movement.${m}`))
+    STORED_MOVEMENTS.forEach((m) => expectBoth(`mat.mtype.${m}`))
+    FORM_MOVEMENTS.forEach((m) => expectBoth(`mat.toastLbl.${m}`))
+  })
+
+  it('movement labels render Kiswahili under sw (spot values via the real translate())', () => {
+    expect(translate(swDict, 'mat.movement.return')).toBe('Kurudisha kwa msambazaji')
+    expect(translate(swDict, 'mat.mtype.transferred_out')).toBe('Imehamishwa nje')
+    expect(translate(swDict, 'mat.toastLbl.transfer', { qty: 10, unit: 'begi', name: 'Saruji', to: 'Slab store' }))
+      .toBe('Imehamishwa 10 begi Saruji → Slab store')
+    expect(translate(swDict, 'mat.unknownSupplier')).toBe('Msambazaji asiyejulikana')
+    // 'Site Store' is a stored proper noun — it stays untranslated in BOTH.
+    expect(translate(swDict, 'mat.store.title')).toBe('Site Store')
+    expect(translate(enDict, 'mat.store.title')).toBe('Site Store')
+  })
+})
