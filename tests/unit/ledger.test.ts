@@ -202,6 +202,17 @@ describe('postLedgerTransaction — balanced double entry', () => {
     expect([...state.txns.values()].filter((t) => t.idempotencyKey === 'topup-42')).toHaveLength(1)
     expect(state.entries.size).toBe(2) // still exactly two legs
   })
+
+  it('persists WHO posted onto the transaction row (BE-7: the wallet/wages seams thread the session actor)', async () => {
+    // The actor-attribution contract issue #103 relies on: every posting seam
+    // (wallet deposit/withdraw/transfer/reversal, journals, escrow top-ups,
+    // wages) passes a real postedBy/postedRole into this engine, and the row
+    // keeps it verbatim — the audit trail and the ledger name the same person.
+    await post({ postedBy: 'Fatuma Kep', postedRole: 'finance' })
+    const row = [...state.txns.values()][0]
+    expect(row.postedBy).toBe('Fatuma Kep')
+    expect(row.postedRole).toBe('finance')
+  })
 })
 
 describe('ensureAccountTx — chart of accounts resolution', () => {

@@ -33,7 +33,14 @@ const TEMPLATES: Record<string, Array<[string, number]>> = {
 }
 
 export const GET = route(
-  { scope: 'api/projects GET', onError: genericError(500, 'Failed to list projects') },
+  {
+    scope: 'api/projects GET',
+    // BE-8 (issue #105): 60/min per principal — the list route builds the full
+    // portfolio payload (per-table take caps now live in getProjectsList too);
+    // the same standard GET bucket posture as /api/project (project.get).
+    rateLimit: { bucket: 'projects.list', limit: 60, windowMs: 60_000 },
+    onError: genericError(500, 'Failed to list projects'),
+  },
   async (_req, session) => {
     const projects = await getProjectsList()
     // Client-role sessions see exactly their own project — never the portfolio.

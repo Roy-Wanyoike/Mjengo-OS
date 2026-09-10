@@ -37,6 +37,69 @@ export function nextPaymentRequestCode(): string {
   return `PR-${now.getFullYear()}-${String(prCounter).padStart(6, '0')}-${Date.now() % 1000}`
 }
 
+// ---------------- money-action session gates (issue #103 / audit BE-2 + BE-7) ----
+
+/**
+ * Roles that may operate the money-action family through the action dispatch
+ * seams (/api/actions + /api/sync → applyAction → these services). Mirrors
+ * guard.ts FINANCE_ROLES — the same allowlist the v1 wallet/journal routes
+ * already enforce — so the action surface and the v1 REST surface agree on
+ * WHO may move money. Admin is the documented superuser bypass (it can toggle
+ * flags and exercise closed surfaces everywhere else too).
+ *
+ * Kept as a local literal (NOT an import from guard.ts) so this service stays
+ * import-cycle-free and mock-friendly — the same discipline
+ * src/backend/lib/action-flag-gate.ts documents; guard.test.ts pins the
+ * canonical lists and tests/unit/wallet-role-gates.test.ts pins these gates.
+ */
+export const MONEY_FINANCE_ROLES: readonly string[] = ['finance', 'admin']
+
+/** PAYMENT_ROLES mirror: payment execution is client-initiated too (guard.ts). */
+export const MONEY_PAYMENT_ROLES: readonly string[] = ['finance', 'admin', 'client']
+
+/**
+ * Session-role gate for a money action (BE-2): resolves the signed-in actor
+ * (modules/wallet/session currentActor — the request cookie, NEVER the
+ * payload) and REFUSES with an honest single-line error when the role is not
+ * in `allowed`. The refusal is a thrown domain error on purpose: /api/actions
+ * renders it as the standard { ok:false, error } action refusal and /api/sync
+ * as the same PER-ITEM { ok:false, error } — batch semantics, the other
+ * outbox items still process — exactly like the flag-family gate messages
+ * (lib/action-flag-gate.ts). The gate lives in the service layer so both
+ * dispatch routes (and any future caller) inherit it.
+ *
+ * Sessionless callers (role null) pass with the fallback identity: they are
+ * either the share-link path — already restricted to CLIENT_ACTIONS at the
+ * route, so client semantics were gated upstream — or trusted server-side
+ * flows (the verified Daraja callback, jobs, scripts) that never carry a
+ * session cookie. The same doctrine requireDeciderRole and the invoices
+ * module's requireClientRole already document.
+ */
+export async function requireMoneyActor(
+  opts: {
+    allowed: readonly string[]
+    action: string
+    payloadBy?: unknown
+    fallbackName?: string
+    fallbackRole?: string
+  },
+): Promise<DeciderIdentity> {
+  const actor = await currentActor()
+  if (actor.role === null) {
+    const payloadName = typeof opts.payloadBy === 'string' && opts.payloadBy.trim() ? opts.payloadBy.trim() : ''
+    return {
+      name: payloadName || opts.fallbackName || 'Finance',
+      role: opts.fallbackRole || 'finance',
+    }
+  }
+  if (opts.allowed.includes(actor.role)) {
+    return { name: actor.name?.trim() || actor.role, role: actor.role }
+  }
+  throw new Error(
+    `Only ${opts.allowed.join(' or ')} may ${opts.action} — signed in as "${actor.role}"${actor.name ? ` (${actor.name})` : ''}.`,
+  )
+}
+
 /** Roles that may decide / pay payment requests in-app (client + finance are the real queue). */
 const PR_ROLES = ['client', 'finance', 'admin', 'contractor', 'supervisor'] as const
 
@@ -299,15 +362,27 @@ async function requirePrDecider(projectId: string, action: string, payloadBy?: u
 }
 
 export async function payPaymentRequest(projectId: string, p: any) {
+  // BE-2 (issue #103): payment execution is a PAYMENT_ROLES action — finance,
+  // admin, or the client paying their own approved request. Site-team roles
+  // (supervisor/qs/procurement/contractor) are refused here, at the service
+  // seam both /api/actions and /api/sync route through, mirroring the v1
+  // payments route's role allowlist. Sessionless share-link callers keep the
+  // client-payer semantics the route already gated upstream.
+  const payer = await requireMoneyActor({
+    allowed: MONEY_PAYMENT_ROLES,
+    action: 'execute payment requests',
+    payloadBy: p.paidBy,
+    fallbackRole: typeof p.paidByRole === 'string' && p.paidByRole.trim() ? p.paidByRole : 'finance',
+  })
+  const paidBy = payer.name
+  const paidByRole = payer.role
+
   const request = await db.paymentRequest.findFirst({ where: { id: String(p.id), projectId } })
   if (!request) throw new Error('Payment request not found')
   if (request.status === 'paid') throw new Error('Payment request already paid')
   if (request.status !== 'approved') throw new Error('Payment request must be approved before payment')
 
   const method = String(p.method ?? request.method) as PaymentMethod
-  const payer = await currentActor()
-  const paidBy = payer.name?.trim() || String(p.paidBy ?? 'Finance')
-  const paidByRole = payer.role ?? String(p.paidByRole ?? 'finance')
 
   // Provider seam (spec §40) — the simulated rail records an honest result;
   // a real provider (Daraja, bank API…) plugs in here without touching the ledger.
@@ -479,6 +554,14 @@ export async function walletWithBalance(projectId: string, idOrCode: any) {
 export async function depositWallet(projectId: string, p: any) {
   const amount = Number(p.amount)
   if (!(amount > 0)) throw new Error('Deposit amount must be positive')
+  // BE-2 (issue #103): wallet money movements are finance/admin actions —
+  // gated at the service seam BEFORE any wallet/ledger read, so a refused
+  // dispatch touches nothing.
+  const actor = await requireMoneyActor({
+    allowed: MONEY_FINANCE_ROLES,
+    action: 'deposit into wallets',
+    payloadBy: p.by,
+  })
   const wallet = await resolveWallet(projectId, p.walletId ?? p.code)
   const cashCode = cashAccountForMethod(String(p.source ?? 'mpesa'))
   const ledgerProjectId = wallet.ownerType === 'project' ? projectId : null
@@ -486,8 +569,10 @@ export async function depositWallet(projectId: string, p: any) {
     const ledgerTxn = await postLedgerTransactionInTx(tx, {
       projectId: ledgerProjectId,
       description: `Wallet ${wallet.code} deposit`,
-      postedBy: String(p.by ?? 'Finance'),
-      postedRole: 'finance',
+      // BE-7 (issue #103): the REAL session actor (payload `by` only on the
+      // sessionless/internal fallback path) — was hardcoded 'finance'.
+      postedBy: actor.name,
+      postedRole: actor.role,
       // Natural idempotency ONLY when the caller supplied a unique reference —
       // repeated same-amount deposits without a reference are distinct events.
       idempotencyKey:
@@ -524,24 +609,38 @@ export async function depositWallet(projectId: string, p: any) {
  * distinct movement send an Idempotency-Key header (the v1 routes dedupe
  * on it) or a distinguishing note.
  */
-function withdrawNaturalKey(wallet: { id: string; currency: string }, amount: number, p: any): string {
+function withdrawNaturalKey(
+  wallet: { id: string; currency: string },
+  amount: number,
+  p: any,
+  actorName: string,
+): string {
   return `wallet.withdraw:${JSON.stringify([
     wallet.id,
     amount,
     wallet.currency,
     String(p.destination ?? 'mpesa'),
     String(p.note ?? ''),
-    String(p.by ?? 'Finance'),
+    actorName,
   ])}`
 }
 
 export async function withdrawWallet(projectId: string, p: any) {
   const amount = Number(p.amount)
   if (!(amount > 0)) throw new Error('Withdrawal amount must be positive')
+  // BE-2 (issue #103): finance/admin only, BEFORE any wallet/ledger read.
+  const actor = await requireMoneyActor({
+    allowed: MONEY_FINANCE_ROLES,
+    action: 'withdraw from wallets',
+    payloadBy: p.by,
+  })
   const wallet = await resolveWallet(projectId, p.walletId)
   const cashCode = cashAccountForMethod(String(p.destination ?? 'mpesa'))
   const ledgerProjectId = wallet.ownerType === 'project' ? projectId : null
-  const idempotencyKey = p.idempotencyKey ?? withdrawNaturalKey(wallet, amount, p)
+  // BE-7: the natural key carries the REAL actor (payload `by` only on the
+  // sessionless fallback, which resolves to the same string as before) — two
+  // distinct finance users never collide into one replay.
+  const idempotencyKey = p.idempotencyKey ?? withdrawNaturalKey(wallet, amount, p, actor.name)
   const { ledgerRef, balance } = await db.$transaction(async (tx) => {
     // Balance re-checked INSIDE the transaction — no overdraft race.
     const account = await ensureAccountTx(tx, `WALLET:${wallet.code}`)
@@ -560,8 +659,9 @@ export async function withdrawWallet(projectId: string, p: any) {
     const ledgerTxn = await postLedgerTransactionInTx(tx, {
       projectId: ledgerProjectId,
       description: `Wallet ${wallet.code} withdrawal${p.note ? ` — ${p.note}` : ''}`,
-      postedBy: String(p.by ?? 'Finance'),
-      postedRole: 'finance',
+      // BE-7 (issue #103): the REAL session actor — was hardcoded 'finance'.
+      postedBy: actor.name,
+      postedRole: actor.role,
       idempotencyKey,
       lines: [
         { accountCode: `WALLET:${wallet.code}`, side: 'debit', amount },
@@ -579,6 +679,7 @@ function transferNaturalKey(
   to: { id: string },
   amount: number,
   p: any,
+  actorName: string,
 ): string {
   return `wallet.transfer:${JSON.stringify([
     from.id,
@@ -586,17 +687,23 @@ function transferNaturalKey(
     amount,
     from.currency,
     String(p.note ?? ''),
-    String(p.by ?? 'Finance'),
+    actorName,
   ])}`
 }
 
 export async function transferWallet(projectId: string, p: any) {
   const amount = Number(p.amount)
   if (!(amount > 0)) throw new Error('Transfer amount must be positive')
+  // BE-2 (issue #103): finance/admin only, BEFORE any wallet/ledger read.
+  const actor = await requireMoneyActor({
+    allowed: MONEY_FINANCE_ROLES,
+    action: 'transfer between wallets',
+    payloadBy: p.by,
+  })
   const from = await resolveWallet(projectId, p.fromWalletId)
   const to = await resolveWallet(projectId, p.toWalletId)
   const ledgerProjectId = from.ownerType === 'project' ? projectId : null
-  const idempotencyKey = p.idempotencyKey ?? transferNaturalKey(from, to, amount, p)
+  const idempotencyKey = p.idempotencyKey ?? transferNaturalKey(from, to, amount, p, actor.name)
   const { ledgerRef } = await db.$transaction(async (tx) => {
     const account = await ensureAccountTx(tx, `WALLET:${from.code}`)
     const entries = await tx.ledgerEntry.findMany({ where: { accountId: account.id } })
@@ -612,8 +719,9 @@ export async function transferWallet(projectId: string, p: any) {
     const ledgerTxn = await postLedgerTransactionInTx(tx, {
       projectId: ledgerProjectId,
       description: `Wallet transfer ${from.code} → ${to.code}`,
-      postedBy: String(p.by ?? 'Finance'),
-      postedRole: 'finance',
+      // BE-7 (issue #103): the REAL session actor — was hardcoded 'finance'.
+      postedBy: actor.name,
+      postedRole: actor.role,
       idempotencyKey,
       lines: [
         { accountCode: `WALLET:${from.code}`, side: 'debit', amount },
@@ -628,17 +736,24 @@ export async function transferWallet(projectId: string, p: any) {
 // ---- Reversals & manual journals (spec §39) ----
 
 export async function reverseTransaction(projectId: string, p: any) {
+  // BE-2 (issue #103): reversals rewrite money history — finance/admin only,
+  // gated BEFORE any transaction lookup.
+  const actor = await requireMoneyActor({
+    allowed: MONEY_FINANCE_ROLES,
+    action: 'reverse transactions',
+    payloadBy: p.by,
+  })
   const txn = await db.transaction.findFirst({ where: { id: String(p.id), projectId } })
   if (!txn) throw new Error('Transaction not found')
   if (!txn.ledgerTxnId) {
     // Legacy single-entry row (pre-ledger): post a compensating entry now.
-    const by = String(p.by ?? 'Finance')
+    const by = actor.name
     const { reversalLedger, compensating } = await db.$transaction(async (tx) => {
       const reversalLedger = await postLedgerTransactionInTx(tx, {
         projectId,
         description: `REVERSAL of legacy transaction ${txn.id.slice(-6)} — ${p.reason ?? 'correction'}`,
         postedBy: by,
-        postedRole: 'finance',
+        postedRole: actor.role,
         lines: [
           { accountCode: cashAccountForMethod(String(p.method ?? txn.method)), side: 'debit', amount: txn.amount },
           { accountCode: `EXPENSE:${projectId}`, side: 'credit', amount: txn.amount },
@@ -670,7 +785,8 @@ export async function reverseTransaction(projectId: string, p: any) {
 
   const ledgerTxn = await db.ledgerTransaction.findUnique({ where: { id: txn.ledgerTxnId } })
   if (!ledgerTxn) throw new Error('Backing ledger transaction not found')
-  const reversal = await reverseLedgerTransaction(ledgerTxn.id, String(p.reason ?? 'correction'), String(p.by ?? 'Finance'), 'finance')
+  // BE-7 (issue #103): the REAL session actor on the mirrored reversal too.
+  const reversal = await reverseLedgerTransaction(ledgerTxn.id, String(p.reason ?? 'correction'), actor.name, actor.role)
   const compensating =
     (await db.transaction.findFirst({ where: { ledgerTxnId: reversal.id } })) ??
     (await db.transaction.create({
@@ -693,6 +809,14 @@ export async function reverseTransaction(projectId: string, p: any) {
 }
 
 export async function postJournal(projectId: string, p: any) {
+  // BE-2 (issue #103): manual journals are the rawest money write — finance/
+  // admin only. (Sessionless/internal fallback keeps the legacy payload role.)
+  const actor = await requireMoneyActor({
+    allowed: MONEY_FINANCE_ROLES,
+    action: 'post manual journal entries',
+    payloadBy: p.by,
+    fallbackRole: typeof p.role === 'string' && p.role.trim() ? p.role : 'finance',
+  })
   const lines = (p.lines ?? []).map((l: any) => ({
     accountCode: String(l.accountCode),
     side: String(l.side) as 'debit' | 'credit',
@@ -702,8 +826,10 @@ export async function postJournal(projectId: string, p: any) {
   const txn = await postLedgerTransaction({
     projectId,
     description: String(p.description ?? 'Manual journal entry'),
-    postedBy: String(p.by ?? 'Finance'),
-    postedRole: String(p.role ?? 'finance'),
+    // BE-7 (issue #103): the REAL session actor — payload `by`/`role` only
+    // survive on the sessionless fallback path.
+    postedBy: actor.name,
+    postedRole: actor.role,
     idempotencyKey: p.idempotencyKey,
     lines,
   })

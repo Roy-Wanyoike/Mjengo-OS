@@ -14,7 +14,12 @@ import { INVENTORY_ACTIONS, applyInventoryAction } from '@/backend/actions/inven
 import { loadInventorySlice, loadBoqSlice } from '@/backend/modules/inventory/repository'
 import { loadFinanceSlice } from '@/backend/modules/wallet/repository'
 import { WALLET_ACTIONS, applyWalletAction } from '@/backend/actions/wallet'
-import { spendExternalInTx, reverseTransaction as reverseTransactionService } from '@/backend/modules/wallet/service'
+import {
+  MONEY_FINANCE_ROLES,
+  spendExternalInTx,
+  reverseTransaction as reverseTransactionService,
+  requireMoneyActor,
+} from '@/backend/modules/wallet/service'
 import { getProvider } from '@/backend/modules/wallet/providers'
 import { currentActor } from '@/backend/modules/wallet/session'
 import { INTEL_ACTIONS, applyIntelAction } from '@/backend/actions/intel'
@@ -145,15 +150,25 @@ export async function resolveProjectId(projectId?: string | null, payload?: any)
   return first.id
 }
 
-/** Lightweight roster of every project (for switchers / dashboards). */
+/** Lightweight roster of every project (for switchers / dashboards).
+ *
+ * BE-8 (issue #105): the per-table loads are take-capped so a swollen table
+ * can never turn this roster into an unbounded full scan — phases 500 /
+ * transactions 500 / workers 500 / alerts 200 / photos 500, each ~2 orders
+ * of magnitude above the demo portfolio (3 projects × dozens of rows), so no
+ * honest dashboard view is truncated. The project list itself stays
+ * uncapped: it IS the roster this function exists to return. The caps live
+ * here (not in the route) so every caller — /api/projects, /api/actions,
+ * /api/sync response refreshes — inherits the same bounded load.
+ */
 export async function getProjectsList(): Promise<ProjectListItem[]> {
   const [projects, phases, transactions, workers, alerts, photos] = await Promise.all([
     db.project.findMany({ orderBy: { createdAt: 'asc' } }),
-    db.phase.findMany({ include: { tasks: true } }),
-    db.transaction.findMany(),
-    db.worker.findMany(),
-    db.alert.findMany(),
-    db.sitePhoto.findMany(),
+    db.phase.findMany({ include: { tasks: true }, take: 500 }),
+    db.transaction.findMany({ take: 500 }),
+    db.worker.findMany({ take: 500 }),
+    db.alert.findMany({ take: 200 }),
+    db.sitePhoto.findMany({ take: 500 }),
   ])
   return projects.map((p) => {
     const pPhases = phases.filter((f) => f.projectId === p.id)
@@ -1453,6 +1468,21 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
       // exceptions block unless forced) + the ledger posting + the Transaction row
       // (costCode 'wages') run in ONE db.$transaction, and the payout goes through
       // the PaymentProvider seam (simulated rail, honestly labelled).
+      //
+      // BE-2 + BE-7 (issue #103): payroll execution is a finance/admin action
+      // (guard.ts FINANCE_ROLES — "payment execution, journals"), gated at this
+      // seam so /api/actions AND /api/sync inherit it; and the ledger posting
+      // carries the REAL session actor — it previously hardcoded
+      // 'Site Manager'/contractor, misattributing every finance payroll run.
+      // The sessionless fallback keeps the legacy identity so internal jobs,
+      // scripts and the offline flows behave exactly as before.
+      const actor = await requireMoneyActor({
+        allowed: MONEY_FINANCE_ROLES,
+        action: 'run payroll',
+        payloadBy: payload?.by,
+        fallbackName: 'Site Manager',
+        fallbackRole: 'contractor',
+      })
       const date = typeof payload?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payload.date) ? payload.date : todayStr()
       const force = Boolean(payload?.force)
       const gate = await payrollGate(projectId, date, payload, force)
@@ -1480,8 +1510,8 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
           amount: gate.total,
           method: 'mpesa',
           description: `Wages ${date} — ${gate.unpaid.length} fundi(s)${gate.exceptions.length > 0 ? ' (forced past exceptions)' : ''}`,
-          postedBy: 'Site Manager',
-          postedRole: 'contractor',
+          postedBy: actor.name,
+          postedRole: actor.role,
           idempotencyKey: `wages.pay:${projectId}:${date}:${gate.unpaid.map((u) => u.id).join(',')}`,
         })
         const txnRow =
