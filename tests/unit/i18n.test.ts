@@ -386,11 +386,12 @@ describe('#107 wave 5: tab bodies — every literal t() key resolves in both dic
 
   const WAVE5_SURFACES: Record<string, string[]> = {
     materials: ['src/frontend/mjengo/materials-tab.tsx'],
-    // fundis / money / evidence are appended by the later wave-5 commits.
+    fundis: ['src/frontend/mjengo/fundis-tab.tsx'],
+    // money / evidence are appended by the later wave-5 commits.
   }
 
   it('each wave-5 surface samples enough keys (guards against silent wiring regressions)', () => {
-    const minimums: Record<string, number> = { materials: 90 }
+    const minimums: Record<string, number> = { materials: 90, fundis: 80 }
     for (const [family, files] of Object.entries(WAVE5_SURFACES)) {
       const keys = new Set(files.flatMap((f) => [...literalKeysIn(readSrc(f)), ...namespaceStringsIn(readSrc(f))]))
       expect(keys.size, `${family} surface sampled too few keys (${keys.size})`).toBeGreaterThan(minimums[family])
@@ -404,6 +405,36 @@ describe('#107 wave 5: tab bodies — every literal t() key resolves in both dic
         expect(swKeys.has(key), `sw.ts is missing "${key}" (used by the ${family} tab)`).toBe(true)
       }
     }
+  })
+})
+
+describe('#107 wave 5: fundis enum label keys exist for every renderable value', () => {
+  // fundis-tab renders t(`fundis.status.${s}`) for the four attendance
+  // statuses (display copy; STATUS_LABELS stays EN for dispatch labels) and
+  // t(`fundis.verif.${v}`) for the three verification levels.
+  const STATUSES = ['present', 'half_day', 'absent', 'excused']
+  const VERIFICATIONS = ['verified', 'reported', 'exception']
+
+  const expectBoth = (key: string) => {
+    expect(enKeys.has(key), `en.ts is missing dynamic key "${key}"`).toBe(true)
+    expect(swKeys.has(key), `sw.ts is missing dynamic key "${key}"`).toBe(true)
+  }
+
+  it('attendance status + verification labels resolve in both dictionaries', () => {
+    STATUSES.forEach((s) => expectBoth(`fundis.status.${s}`))
+    VERIFICATIONS.forEach((v) => expectBoth(`fundis.verif.${v}`))
+  })
+
+  it('fundis labels render Kiswahili under sw (spot values via the real translate())', () => {
+    expect(translate(swDict, 'fundis.status.half_day')).toBe('Nusu siku')
+    expect(translate(swDict, 'fundis.verif.verified')).toBe('Imethibitishwa')
+    expect(translate(swDict, 'fundis.count.exception', { count: 3 })).toBe('3 Utata')
+    expect(translate(swDict, 'fundis.gate.desc', { count: 2, amount: 'KSh 5,000', review: 'KSh 3,000' }))
+      .toBe('rekodi 2 zinahitaji uthibitisho kabla ya mishahara — KSh 5,000 zimesimama (KSh 3,000 zinasubiri ukaguzi).')
+    // STATUS_LABELS keeps feeding dispatch labels in English (audit data).
+    const src = readSrc('src/frontend/mjengo/fundis-tab.tsx')
+    expect(src).toContain("half_day: 'Half day'")
+    expect(src).not.toContain('STATUS_LABELS[to] ??')
   })
 })
 

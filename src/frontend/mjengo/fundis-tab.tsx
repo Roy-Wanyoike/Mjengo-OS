@@ -39,6 +39,12 @@ const STATUS_LABELS: Record<string, string> = {
   present: 'Present', half_day: 'Half day', absent: 'Absent', excused: 'Excused',
 }
 
+/** Display label for an attendance status (t(`fundis.status.${s}`)); the
+ *  bare STATUS_LABELS above stays EN because it feeds dispatch labels. */
+function statusLabel(status: string | null | undefined, t: TranslateFn): string {
+  return status && STATUS_LABELS[status] ? t(`fundis.status.${status}`) : t('fundis.noRecord')
+}
+
 const EXCEPTION_REASONS: Array<{ value: string; label: string }> = [
   { value: 'phone_damaged', label: 'Phone damaged' },
   { value: 'battery_dead', label: 'Battery dead' },
@@ -54,7 +60,7 @@ function reasonLabel(v?: string | null, t?: TranslateFn): string {
   // With a translator (W7 · issue #79) the reason renders in the active
   // locale where it reaches users — toasts + the exception dialog; the bare
   // English label remains the fallback for badge/table call sites.
-  if (r && t) return t(`fundis.exc.${r.value}`)
+  if (t) return r ? t(`fundis.exc.${r.value}`) : (v || t('fundis.verif.exception'))
   return r?.label ?? (v || 'Exception')
 }
 
@@ -80,21 +86,23 @@ function last7Days(): string[] {
 
 /** Evidence-level badge: 🟢 verified · 🟡 reported · 🟠 exception · ⚪ none */
 function VerificationBadge({ verification, exceptionReason, compact = false }: { verification: string | null; exceptionReason?: string | null; compact?: boolean }) {
-  const t = compact ? 'text-[9px]' : 'text-[10px]'
+  const t = useT()
+  const cls = compact ? 'text-[9px]' : 'text-[10px]'
   if (verification === 'verified') {
-    return <Badge className={`bg-emerald-100 text-emerald-800 border-0 gap-1 ${t} hover:bg-emerald-100`} title="Worker self check-in — app, USSD or kiosk PIN evidence"><ShieldCheck className="w-3 h-3" aria-hidden />Verified</Badge>
+    return <Badge className={`bg-emerald-100 text-emerald-800 border-0 gap-1 ${cls} hover:bg-emerald-100`} title={t('fundis.verif.verifiedTitle')}><ShieldCheck className="w-3 h-3" aria-hidden />{t('fundis.verif.verified')}</Badge>
   }
   if (verification === 'reported') {
-    return <Badge className={`bg-amber-100 text-amber-800 border-0 gap-1 ${t} hover:bg-amber-100`} title="Manager-recorded — reported, not verified"><CircleAlert className="w-3 h-3" aria-hidden />Reported</Badge>
+    return <Badge className={`bg-amber-100 text-amber-800 border-0 gap-1 ${cls} hover:bg-amber-100`} title={t('fundis.verif.reportedTitle')}><CircleAlert className="w-3 h-3" aria-hidden />{t('fundis.verif.reported')}</Badge>
   }
   if (verification === 'exception') {
-    return <Badge className={`bg-orange-100 text-orange-800 border-0 gap-1 ${t} hover:bg-orange-100`} title={`Exception: ${reasonLabel(exceptionReason)}`}><AlertTriangle className="w-3 h-3" aria-hidden />Exception</Badge>
+    return <Badge className={`bg-orange-100 text-orange-800 border-0 gap-1 ${cls} hover:bg-orange-100`} title={t('fundis.verif.exceptionTitle', { reason: reasonLabel(exceptionReason, t) })}><AlertTriangle className="w-3 h-3" aria-hidden />{t('fundis.verif.exception')}</Badge>
   }
-  return <Badge className={`bg-stone-100 text-stone-500 border-0 gap-1 ${t} hover:bg-stone-100`} title="No verification evidence">—</Badge>
+  return <Badge className={`bg-stone-100 text-stone-500 border-0 gap-1 ${cls} hover:bg-stone-100`} title={t('fundis.verif.noneTitle')}>—</Badge>
 }
 
 /** Progress ring for the 0-100 attendance reliability score. */
 function ReliabilityRing({ score }: { score: number | null }) {
+  const t = useT()
   const C = 2 * Math.PI * 26
   const color = score === null ? 'stroke-stone-300'
     : score >= 80 ? 'stroke-emerald-500' : score >= 50 ? 'stroke-amber-500' : 'stroke-orange-500'
@@ -102,7 +110,7 @@ function ReliabilityRing({ score }: { score: number | null }) {
     <div
       className="relative w-16 h-16 shrink-0"
       role="img"
-      aria-label={score === null ? 'No attendance history yet' : `Attendance reliability ${score} of 100`}
+      aria-label={score === null ? t('fundis.ring.noHistory') : t('fundis.ring.aria', { score })}
     >
       <svg viewBox="0 0 64 64" className="w-16 h-16 -rotate-90" aria-hidden>
         <circle cx="32" cy="32" r="26" fill="none" strokeWidth="7" className="stroke-stone-200" />
@@ -124,6 +132,7 @@ function ReliabilityRing({ score }: { score: number | null }) {
  * Exported separately so the share view / overview can embed it.
  */
 export function LabourSummaryCard({ summary, workers }: { summary: ProjectSummary; workers: WorkerWithAttendance[] }) {
+  const t = useT()
   const v = summary.fundisVerified
   const r = summary.fundisReported
   const e = summary.fundisException
@@ -147,36 +156,36 @@ export function LabourSummaryCard({ summary, workers }: { summary: ProjectSummar
   const reliability = nonAbsent > 0 ? Math.round((verified / nonAbsent) * 100) : null
 
   return (
-    <Card className="border-stone-200 shadow-sm" aria-label="Labour summary">
+    <Card className="border-stone-200 shadow-sm" aria-label={t('fundis.summary.aria')}>
       <CardHeader className="pb-3">
         <CardTitle className="text-base text-stone-900 flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-700" aria-hidden /> Labour summary — workforce trust
+          <ShieldCheck className="w-4 h-4 text-emerald-700" aria-hidden /> {t('fundis.summary.title')}
         </CardTitle>
-        <CardDescription>Reported vs verified presence. Payroll only releases freely on verified records.</CardDescription>
+        <CardDescription>{t('fundis.summary.desc')}</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
-          <div className="flex flex-wrap items-center gap-2" aria-label="Today's evidence levels">
-            <Badge className="bg-emerald-100 text-emerald-800 border-0 gap-1 hover:bg-emerald-100"><ShieldCheck className="w-3 h-3" aria-hidden />{v} Verified</Badge>
-            <Badge className="bg-amber-100 text-amber-800 border-0 gap-1 hover:bg-amber-100"><CircleAlert className="w-3 h-3" aria-hidden />{r} Reported</Badge>
-            <Badge className="bg-orange-100 text-orange-800 border-0 gap-1 hover:bg-orange-100"><AlertTriangle className="w-3 h-3" aria-hidden />{e} Exception</Badge>
+          <div className="flex flex-wrap items-center gap-2" aria-label={t('fundis.summary.todayAria')}>
+            <Badge className="bg-emerald-100 text-emerald-800 border-0 gap-1 hover:bg-emerald-100"><ShieldCheck className="w-3 h-3" aria-hidden />{t('fundis.count.verified', { count: v })}</Badge>
+            <Badge className="bg-amber-100 text-amber-800 border-0 gap-1 hover:bg-amber-100"><CircleAlert className="w-3 h-3" aria-hidden />{t('fundis.count.reported', { count: r })}</Badge>
+            <Badge className="bg-orange-100 text-orange-800 border-0 gap-1 hover:bg-orange-100"><AlertTriangle className="w-3 h-3" aria-hidden />{t('fundis.count.exception', { count: e })}</Badge>
           </div>
 
           <div className="flex flex-wrap gap-x-8 gap-y-3">
             <div>
-              <p className="text-[11px] text-stone-500">Verification rate (today)</p>
+              <p className="text-[11px] text-stone-500">{t('fundis.summary.rateToday')}</p>
               <p className="text-lg font-bold text-stone-900 tabular-nums">{rate === null ? '—' : `${rate}%`}</p>
             </div>
             <div>
-              <p className="text-[11px] text-stone-500">Verified wages</p>
+              <p className="text-[11px] text-stone-500">{t('fundis.summary.verifiedWages')}</p>
               <p className="text-lg font-bold text-emerald-700 tabular-nums">{formatKES(summary.wagesVerified)}</p>
             </div>
             <div>
-              <p className="text-[11px] text-stone-500">Pending review</p>
+              <p className="text-[11px] text-stone-500">{t('fundis.summary.pendingReview')}</p>
               <p className="text-lg font-bold text-amber-600 tabular-nums">{formatKES(summary.wagesPendingReview)}</p>
             </div>
             <div>
-              <p className="text-[11px] text-stone-500">This week (wages)</p>
+              <p className="text-[11px] text-stone-500">{t('fundis.summary.weekWages')}</p>
               <p className="text-lg font-bold text-stone-900 tabular-nums">{formatKES(weekWages)}</p>
             </div>
           </div>
@@ -184,7 +193,7 @@ export function LabourSummaryCard({ summary, workers }: { summary: ProjectSummar
           <div className="flex items-center gap-3 ml-auto">
             <ReliabilityRing score={reliability} />
             <div>
-              <p className="text-[11px] text-stone-500">Verification rate (30d)</p>
+              <p className="text-[11px] text-stone-500">{t('fundis.summary.rate30')}</p>
               <p className="text-sm font-semibold text-stone-800 tabular-nums">
                 {reliability === null ? '—' : `${reliability}/100`}
               </p>
@@ -291,7 +300,7 @@ export function FundisTab() {
         ? await dispatch('attendance.override', { id: attId, to, reason, by: 'Site Manager' }, `${worker.name} → ${STATUS_LABELS[to]}`)
         : await dispatch('attendance.record', { records: JSON.stringify([{ workerId: worker.id, status: to }]), verification: 'reported', recordedBy: 'Site Manager' }, `Record ${worker.name} ${STATUS_LABELS[to]}`)
       if (ok) {
-        toast.success(t('fundis.overrideOk', { name: worker.name, status: STATUS_LABELS[to] }))
+        toast.success(t('fundis.overrideOk', { name: worker.name, status: t(`fundis.status.${to}`) }))
         setOverrideFor(null)
         setOverrideReason('')
       } else {
@@ -447,27 +456,27 @@ export function FundisTab() {
         <CardContent className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 py-5">
           <div className="flex items-center gap-6 flex-wrap">
             <div>
-              <p className="text-xs text-stone-400 flex items-center gap-1"><Users className="w-3.5 h-3.5" aria-hidden /> On site today</p>
+              <p className="text-xs text-stone-400 flex items-center gap-1"><Users className="w-3.5 h-3.5" aria-hidden /> {t('fundis.today.onSite')}</p>
               <p className="text-3xl font-bold tabular-nums">{data.summary.fundisToday}<span className="text-lg text-stone-400 font-medium">/{data.summary.fundisExpected}</span></p>
             </div>
             <div className="h-10 w-px bg-stone-700 hidden sm:block" aria-hidden />
             <div>
-              <p className="text-xs text-stone-400 flex items-center gap-1"><Wallet className="w-3.5 h-3.5" aria-hidden /> Wages today</p>
+              <p className="text-xs text-stone-400 flex items-center gap-1"><Wallet className="w-3.5 h-3.5" aria-hidden /> {t('fundis.today.wages')}</p>
               <p className="text-xl font-bold tabular-nums text-amber-400">{formatKES(data.summary.wagesToday)}</p>
             </div>
             <div className="h-10 w-px bg-stone-700 hidden sm:block" aria-hidden />
             <div>
-              <p className="text-xs text-stone-400">Unpaid to date</p>
+              <p className="text-xs text-stone-400">{t('fundis.today.unpaid')}</p>
               <p className="text-xl font-bold tabular-nums">{formatKES(data.summary.wagesUnpaid)}</p>
             </div>
           </div>
           {!isClient && (
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" className="gap-1.5 border-stone-600 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white" onClick={() => setMusterOpen(true)}>
-                <ClipboardList className="w-4 h-4" aria-hidden /> Daily muster
+                <ClipboardList className="w-4 h-4" aria-hidden /> {t('fundis.muster')}
               </Button>
               <Button size="sm" variant="outline" className="gap-1.5 border-stone-600 bg-stone-900 text-stone-200 hover:bg-stone-800 hover:text-white" onClick={() => setAddOpen(true)}>
-                <UserPlus className="w-4 h-4" aria-hidden /> Add fundi
+                <UserPlus className="w-4 h-4" aria-hidden /> {t('fundis.addFundi')}
               </Button>
               <Button
                 size="sm"
@@ -476,7 +485,7 @@ export function FundisTab() {
                 disabled={data.summary.wagesToday <= 0 || payrollBusy}
               >
                 {payrollBusy ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <BadgeCheck className="w-4 h-4" aria-hidden />}
-                Run payroll
+                {t('fundis.runPayroll')}
               </Button>
             </div>
           )}
@@ -484,12 +493,12 @@ export function FundisTab() {
       </Card>
 
       {/* Worker cards */}
-      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" aria-label="Crew">
+      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" aria-label={t('fundis.crewAria')}>
         {data.workers.map((w) => {
-          const t = w.todayStatus
-          const isUssd = t.method === 'ussd'
-          const present = t.status === 'present' || t.status === 'half_day'
-          const isException = t.verification === 'exception'
+          const ts = w.todayStatus
+          const isUssd = ts.method === 'ussd'
+          const present = ts.status === 'present' || ts.status === 'half_day'
+          const isException = ts.verification === 'exception'
           return (
             <Card key={w.id} className={`border shadow-sm ${present ? 'border-emerald-200' : 'border-stone-200'} ${isException ? 'ring-1 ring-orange-300' : ''}`}>
               <CardContent className="p-4 space-y-3">
@@ -502,15 +511,15 @@ export function FundisTab() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-semibold text-stone-900 text-sm">{w.name}</p>
-                      {present && <Badge className="bg-emerald-100 text-emerald-800 border-0 text-[10px] hover:bg-emerald-100">on site</Badge>}
-                      {t.status === 'absent' && <Badge className="bg-red-100 text-red-700 border-0 text-[10px] hover:bg-red-100">absent</Badge>}
-                      {t.status === 'excused' && <Badge className="bg-stone-200 text-stone-700 border-0 text-[10px] hover:bg-stone-200">excused</Badge>}
-                      {!w.active && <Badge className="bg-stone-100 text-stone-500 border-0 text-[10px] hover:bg-stone-100">inactive</Badge>}
+                      {present && <Badge className="bg-emerald-100 text-emerald-800 border-0 text-[10px] hover:bg-emerald-100">{t('fundis.badge.onSite')}</Badge>}
+                      {ts.status === 'absent' && <Badge className="bg-red-100 text-red-700 border-0 text-[10px] hover:bg-red-100">{t('fundis.status.absent')}</Badge>}
+                      {ts.status === 'excused' && <Badge className="bg-stone-200 text-stone-700 border-0 text-[10px] hover:bg-stone-200">{t('fundis.status.excused')}</Badge>}
+                      {!w.active && <Badge className="bg-stone-100 text-stone-500 border-0 text-[10px] hover:bg-stone-100">{t('fundis.badge.inactive')}</Badge>}
                     </div>
-                    <p className="text-xs text-stone-500">{w.role} · {formatKES(w.dailyRate)}/day</p>
+                    <p className="text-xs text-stone-500">{w.role} · {formatKES(w.dailyRate)}{t('fundis.perDay')}</p>
                     <p className="text-[11px] text-stone-400 flex items-center gap-1 mt-0.5">
-                      <Phone className="w-3 h-3" aria-hidden /> {w.phone || 'no phone'}
-                      {w.pin && <span className="ml-1 inline-flex items-center gap-0.5 text-stone-400" title="Has kiosk PIN"><ShieldCheck className="w-3 h-3" aria-hidden />PIN</span>}
+                      <Phone className="w-3 h-3" aria-hidden /> {w.phone || t('fundis.noPhone')}
+                      {w.pin && <span className="ml-1 inline-flex items-center gap-0.5 text-stone-400" title={t('fundis.hasPinTitle')}><ShieldCheck className="w-3 h-3" aria-hidden />PIN</span>}
                     </p>
                   </div>
                   {!isClient && (
@@ -519,7 +528,7 @@ export function FundisTab() {
                       variant="ghost"
                       className="h-11 w-11 -mr-1.5 shrink-0 text-stone-400 hover:text-stone-800 hover:bg-stone-100 sm:h-9 sm:w-9 sm:mr-0"
                       onClick={() => openEdit(w)}
-                      aria-label={`Edit ${w.name}`}
+                      aria-label={t('fundis.editAria', { name: w.name })}
                     >
                       <Pencil className="w-4 h-4" aria-hidden />
                     </Button>
@@ -527,52 +536,52 @@ export function FundisTab() {
                 </div>
 
                 <div className="flex items-center justify-between gap-2">
-                  <VerificationBadge verification={t.verification} exceptionReason={t.exceptionReason} />
-                  <span className="font-semibold text-stone-700 tabular-nums text-xs">{formatKES(t.wage)}{t.paid ? ' · paid' : ''}</span>
+                  <VerificationBadge verification={ts.verification} exceptionReason={ts.exceptionReason} />
+                  <span className="font-semibold text-stone-700 tabular-nums text-xs">{formatKES(ts.wage)}{ts.paid ? t('fundis.paidSuffix') : ''}</span>
                 </div>
 
                 <div className="rounded-lg bg-stone-50 border border-stone-100 px-3 py-2 text-xs flex items-center justify-between gap-2">
                   {present ? (
                     <span className="text-stone-600 flex items-center gap-1.5 flex-wrap">
                       <MapPin className="w-3.5 h-3.5 text-emerald-600" aria-hidden />
-                      In {timeEAT(t.checkIn)}
-                      {t.checkOut ? ` · Out ${timeEAT(t.checkOut)}` : ''}
+                      {t('fundis.inAt', { time: timeEAT(ts.checkIn) })}
+                      {ts.checkOut ? ` · ${t('fundis.outAt', { time: timeEAT(ts.checkOut) })}` : ''}
                       {isUssd && <Badge className="bg-violet-100 text-violet-800 border-0 text-[9px] hover:bg-violet-100"><Smartphone className="w-2.5 h-2.5" aria-hidden /> USSD</Badge>}
                     </span>
-                  ) : t.status === 'absent' ? (
-                    <span className="text-red-600">Marked absent</span>
-                  ) : t.status === 'excused' ? (
-                    <span className="text-stone-500">Excused (no wage)</span>
+                  ) : ts.status === 'absent' ? (
+                    <span className="text-red-600">{t('fundis.markedAbsent')}</span>
+                  ) : ts.status === 'excused' ? (
+                    <span className="text-stone-500">{t('fundis.excusedNoWage')}</span>
                   ) : (
-                    <span className="text-stone-400">Not checked in</span>
+                    <span className="text-stone-400">{t('fundis.notCheckedIn')}</span>
                   )}
-                  {isException && <span className="text-[10px] text-orange-700 truncate" title={t.exceptionReason ? reasonLabel(t.exceptionReason) : undefined}>{t.exceptionReason ? reasonLabel(t.exceptionReason) : 'needs review'}</span>}
+                  {isException && <span className="text-[10px] text-orange-700 truncate" title={ts.exceptionReason ? reasonLabel(ts.exceptionReason, t) : undefined}>{ts.exceptionReason ? reasonLabel(ts.exceptionReason, t) : t('fundis.needsReview')}</span>}
                 </div>
 
                 {!isClient && (
                   <div className="flex items-center gap-2">
-                    {!t.status || t.status === 'absent' || t.status === 'excused' ? (
+                    {!ts.status || ts.status === 'absent' || ts.status === 'excused' ? (
                       <Button size="sm" className="h-9 gap-1.5 flex-1 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => void checkIn(w.id, w.name)}>
-                        <LogIn className="w-3.5 h-3.5" aria-hidden /> Check in
+                        <LogIn className="w-3.5 h-3.5" aria-hidden /> {t('fundis.checkIn')}
                       </Button>
-                    ) : !t.checkOut ? (
+                    ) : !ts.checkOut ? (
                       <Button size="sm" variant="outline" className="h-9 gap-1.5 flex-1" onClick={() => void checkOut(w.id, w.name)}>
-                        <LogOut className="w-3.5 h-3.5" aria-hidden /> Check out
+                        <LogOut className="w-3.5 h-3.5" aria-hidden /> {t('fundis.checkOut')}
                       </Button>
                     ) : (
                       <Button size="sm" variant="outline" className="h-9 gap-1.5 flex-1" disabled>
-                        <BadgeCheck className="w-3.5 h-3.5" aria-hidden /> Day closed
+                        <BadgeCheck className="w-3.5 h-3.5" aria-hidden /> {t('fundis.dayClosed')}
                       </Button>
                     )}
-                    <Select value={t.status ?? undefined} onValueChange={(v) => requestStatusChange(w, v)}>
-                      <SelectTrigger size="sm" className="w-28 h-9 bg-white text-xs" aria-label={`Attendance status for ${w.name}`}>
-                        <SelectValue placeholder="Status" />
+                    <Select value={ts.status ?? undefined} onValueChange={(v) => requestStatusChange(w, v)}>
+                      <SelectTrigger size="sm" className="w-28 h-9 bg-white text-xs" aria-label={t('fundis.statusAria', { name: w.name })}>
+                        <SelectValue placeholder={t('fundis.statusPh')} />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="present">Present</SelectItem>
-                        <SelectItem value="half_day">Half day</SelectItem>
-                        <SelectItem value="absent">Absent</SelectItem>
-                        <SelectItem value="excused">Excused</SelectItem>
+                        <SelectItem value="present">{t('fundis.status.present')}</SelectItem>
+                        <SelectItem value="half_day">{t('fundis.status.half_day')}</SelectItem>
+                        <SelectItem value="absent">{t('fundis.status.absent')}</SelectItem>
+                        <SelectItem value="excused">{t('fundis.status.excused')}</SelectItem>
                       </SelectContent>
                     </Select>
                     <Button
@@ -580,14 +589,14 @@ export function FundisTab() {
                       variant="outline"
                       className={`h-9 w-9 shrink-0 ${isException ? 'border-orange-300 text-orange-700 hover:bg-orange-50' : 'text-stone-500 hover:bg-stone-100'}`}
                       onClick={() => { setExReason(''); setExNote(''); setExceptionFor(w) }}
-                      aria-label={`Log attendance exception for ${w.name}`}
-                      title="Log attendance exception (present, but no check-in evidence)"
+                      aria-label={t('fundis.exceptionAria', { name: w.name })}
+                      title={t('fundis.exceptionTitle')}
                     >
                       <AlertTriangle className="w-4 h-4" aria-hidden />
                     </Button>
                   </div>
                 )}
-                <p className="text-[11px] text-stone-400 text-right">This week: {formatKES(w.weekEarnings)}</p>
+                <p className="text-[11px] text-stone-400 text-right">{t('fundis.thisWeek', { amount: formatKES(w.weekEarnings) })}</p>
               </CardContent>
             </Card>
           )
@@ -598,18 +607,18 @@ export function FundisTab() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
           <div>
-            <CardTitle className="text-lg text-stone-900">Attendance — last 7 days</CardTitle>
-            <CardDescription>App check-ins + USSD (*384*88#) for feature phones</CardDescription>
+            <CardTitle className="text-lg text-stone-900">{t('fundis.attendanceTitle')}</CardTitle>
+            <CardDescription>{t('fundis.attendanceDesc')}</CardDescription>
           </div>
-          <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={exportAttendance} aria-label="Export attendance and wages as CSV">
-            <Download className="w-4 h-4" aria-hidden /> <span className="hidden sm:inline">Export CSV</span>
+          <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={exportAttendance} aria-label={t('fundis.exportAria')}>
+            <Download className="w-4 h-4" aria-hidden /> <span className="hidden sm:inline">{t('fundis.exportCsv')}</span>
           </Button>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>Fundi</TableHead>
+                <TableHead>{t('fundis.col.fundi')}</TableHead>
                 {days.map((d) => (
                   <TableHead key={d} className="text-center text-[10px]">{dateShort(d)}</TableHead>
                 ))}
@@ -632,7 +641,7 @@ export function FundisTab() {
                       <TableCell key={d} className="text-center p-1">
                         <span
                           className={`inline-flex w-7 h-7 items-center justify-center rounded-md text-[11px] font-bold ${cls}`}
-                          title={`${w.name} — ${dateShort(d)}: ${a?.status ?? 'no record'}${a?.verification ? ` (${a.verification})` : ''}`}
+                          title={t('fundis.cellTitle', { name: w.name, date: dateShort(d), status: a?.status ? t(`fundis.status.${a.status}`) : t('fundis.noRecord'), verification: a?.verification ? ` (${t(`fundis.verif.${a.verification}`)})` : '' })}
                         >
                           {label}
                         </span>
@@ -644,12 +653,12 @@ export function FundisTab() {
             </TableBody>
           </Table>
           <div className="flex flex-wrap gap-4 mt-3 text-[11px] text-stone-500">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-100 inline-block" aria-hidden /> Present</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-100 inline-block" aria-hidden /> Half day</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-100 inline-block" aria-hidden /> Absent</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-stone-200 inline-block" aria-hidden /> Excused</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-stone-100 inline-block" aria-hidden /> No record</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded ring-1 ring-orange-400 inline-block" aria-hidden /> Exception flagged</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-100 inline-block" aria-hidden /> {t('fundis.legend.present')}</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-100 inline-block" aria-hidden /> {t('fundis.legend.half')}</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-100 inline-block" aria-hidden /> {t('fundis.legend.absent')}</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-stone-200 inline-block" aria-hidden /> {t('fundis.legend.excused')}</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-stone-100 inline-block" aria-hidden /> {t('fundis.legend.none')}</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded ring-1 ring-orange-400 inline-block" aria-hidden /> {t('fundis.legend.exception')}</span>
           </div>
         </CardContent>
       </Card>
@@ -663,11 +672,10 @@ export function FundisTab() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="text-stone-900 flex items-center gap-2">
-              <ClipboardList className="w-4 h-4 text-amber-600" aria-hidden /> Daily muster — {dateShort(today)}
+              <ClipboardList className="w-4 h-4 text-amber-600" aria-hidden /> {t('fundis.muster.title', { date: dateShort(today) })}
             </DialogTitle>
             <DialogDescription>
-              Record today&rsquo;s crew in one pass. Manager-recorded = <strong>Reported</strong>, not Verified — verified
-              comes from the worker&rsquo;s own check-in (app, USSD or kiosk PIN).
+              {t('fundis.muster.desc1')}<strong>{t('fundis.verif.reported')}</strong>{t('fundis.muster.desc2')}
             </DialogDescription>
           </DialogHeader>
 
@@ -682,12 +690,12 @@ export function FundisTab() {
                 setMusterRows(rows)
               }}
             >
-              <ClipboardCheck className="w-4 h-4" aria-hidden /> All present (manager-reported)
+              <ClipboardCheck className="w-4 h-4" aria-hidden /> {t('fundis.muster.allPresent')}
             </Button>
-            <p className="text-[11px] text-stone-500">Changes to existing records are kept in the append-only override log.</p>
+            <p className="text-[11px] text-stone-500">{t('fundis.muster.overrideNote')}</p>
           </div>
 
-          <div className={`max-h-96 overflow-y-auto space-y-2 pr-1 ${SCROLLBAR}`} role="list" aria-label="Muster roll">
+          <div className={`max-h-96 overflow-y-auto space-y-2 pr-1 ${SCROLLBAR}`} role="list" aria-label={t('fundis.muster.rollAria')}>
             {activeWorkers.map((w) => (
               <div key={w.id} className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-xl border border-stone-200 bg-stone-50/60 px-3 py-2" role="listitem">
                 <div className="min-w-0 flex-1 flex items-center gap-2">
@@ -699,7 +707,7 @@ export function FundisTab() {
                     <div className="mt-0.5"><VerificationBadge compact verification={w.todayStatus.verification} exceptionReason={w.todayStatus.exceptionReason} /></div>
                   </div>
                 </div>
-                <div className="grid grid-cols-4 gap-1 rounded-lg bg-stone-100 p-1 w-full sm:w-64" role="radiogroup" aria-label={`Attendance status for ${w.name}`}>
+                <div className="grid grid-cols-4 gap-1 rounded-lg bg-stone-100 p-1 w-full sm:w-64" role="radiogroup" aria-label={t('fundis.statusAria', { name: w.name })}>
                   {musterStatuses.map((s) => (
                     <button
                       key={s}
@@ -711,7 +719,7 @@ export function FundisTab() {
                         musterRows[w.id] === s ? activeSeg[s] : 'text-stone-500 hover:bg-stone-200/70'
                       }`}
                     >
-                      {s === 'half_day' ? 'Half' : STATUS_LABELS[s]}
+                      {s === 'half_day' ? t('fundis.status.halfShort') : t(`fundis.status.${s}`)}
                     </button>
                   ))}
                 </div>
@@ -720,10 +728,10 @@ export function FundisTab() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setMusterOpen(false)} disabled={musterBusy}>Cancel</Button>
+            <Button variant="outline" onClick={() => setMusterOpen(false)} disabled={musterBusy}>{t('fundis.cancel')}</Button>
             <Button onClick={() => void saveMuster()} disabled={musterBusy} className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white min-w-28">
               {musterBusy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden />}
-              {musterBusy ? 'Saving…' : `Save muster (${activeWorkers.length})`}
+              {musterBusy ? t('fundis.saving') : t('fundis.saveMuster', { count: activeWorkers.length })}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -734,19 +742,19 @@ export function FundisTab() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="text-stone-900 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-orange-600" aria-hidden /> Attendance exception
+              <AlertTriangle className="w-4 h-4 text-orange-600" aria-hidden /> {t('fundis.exceptionDlg.title')}
             </DialogTitle>
             <DialogDescription>
-              {exceptionFor ? `${exceptionFor.name} is on site but could not check in (present, flagged for review — payroll holds until resolved).` : ''}
+              {exceptionFor ? t('fundis.exceptionDlg.desc', { name: exceptionFor.name }) : ''}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-1">
             <div className="space-y-2">
-              <Label>Reason *</Label>
+              <Label>{t('fundis.label.reason')}</Label>
               <Select value={exReason || undefined} onValueChange={setExReason}>
-                <SelectTrigger aria-label="Exception reason">
-                  <SelectValue placeholder="Select a reason…" />
+                <SelectTrigger aria-label={t('fundis.exceptionReasonAria')}>
+                  <SelectValue placeholder={t('fundis.selectReasonPh')} />
                 </SelectTrigger>
                 <SelectContent>
                   {EXCEPTION_REASONS.map((r) => (
@@ -756,22 +764,22 @@ export function FundisTab() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="ex-note">Note</Label>
+              <Label htmlFor="ex-note">{t('fundis.label.note')}</Label>
               <Textarea
                 id="ex-note"
                 value={exNote}
                 onChange={(e) => setExNote(e.target.value)}
-                placeholder="e.g. Foreman confirmed on site at 07:40, phone battery dead"
+                placeholder={t('fundis.exceptionNotePh')}
                 className="min-h-20 bg-white"
               />
             </div>
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setExceptionFor(null)} disabled={exBusy}>Cancel</Button>
+            <Button variant="outline" onClick={() => setExceptionFor(null)} disabled={exBusy}>{t('fundis.cancel')}</Button>
             <Button onClick={() => void saveException()} disabled={exBusy || !exReason} className="gap-1.5 bg-orange-600 hover:bg-orange-700 text-white min-w-28">
               {exBusy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden />}
-              {exBusy ? 'Saving…' : 'Log exception'}
+              {exBusy ? t('fundis.saving') : t('fundis.logException')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -781,34 +789,34 @@ export function FundisTab() {
       <Dialog open={!!overrideFor} onOpenChange={(o) => !o && setOverrideFor(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Change attendance</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('fundis.overrideDlg.title')}</DialogTitle>
             <DialogDescription>
               {overrideFor && (
                 <>
-                  <strong>{overrideFor.worker.name}</strong>: {' '}
-                  {STATUS_LABELS[overrideFor.worker.todayStatus.status ?? ''] ?? 'no record'} → <strong>{STATUS_LABELS[overrideFor.to]}</strong>.
-                  The change and your reason are kept in the append-only override log.
+                  <strong>{overrideFor.worker.name}</strong>:{' '}
+                  {statusLabel(overrideFor.worker.todayStatus.status, t)} → <strong>{t(`fundis.status.${overrideFor.to}`)}</strong>.{' '}
+                  {t('fundis.overrideDlg.tail')}
                 </>
               )}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-2 py-1">
-            <Label htmlFor="ov-reason">Reason *</Label>
+            <Label htmlFor="ov-reason">{t('fundis.label.reason')}</Label>
             <Input
               id="ov-reason"
               value={overrideReason}
               onChange={(e) => setOverrideReason(e.target.value)}
-              placeholder="e.g. Left early — family emergency"
+              placeholder={t('fundis.overrideReasonPh')}
               aria-invalid={!overrideReason.trim()}
             />
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOverrideFor(null)} disabled={overrideBusy}>Cancel</Button>
+            <Button variant="outline" onClick={() => setOverrideFor(null)} disabled={overrideBusy}>{t('fundis.cancel')}</Button>
             <Button onClick={() => void confirmOverride()} disabled={overrideBusy || !overrideReason.trim()} className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white min-w-28">
               {overrideBusy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden />}
-              {overrideBusy ? 'Saving…' : 'Save override'}
+              {overrideBusy ? t('fundis.saving') : t('fundis.saveOverride')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -819,31 +827,32 @@ export function FundisTab() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="text-stone-900 flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-orange-600" aria-hidden /> Payroll blocked — verification required
+              <ShieldAlert className="w-4 h-4 text-orange-600" aria-hidden /> {t('fundis.gate.title')}
             </DialogTitle>
             <DialogDescription>
               {gate && (
                 <>
-                  {gate.requiringReview?.length ?? 0} record{(gate.requiringReview?.length ?? 0) === 1 ? '' : 's'} require
-                  verification before payroll — <strong>{formatKES(gate.amount)}</strong> on hold
-                  ({formatKES(gate.reviewAmount ?? 0)} pending review).
+                  {t('fundis.gate.desc', {
+                    count: gate.requiringReview?.length ?? 0,
+                    amount: formatKES(gate.amount),
+                    review: formatKES(gate.reviewAmount ?? 0),
+                  })}
                 </>
               )}
             </DialogDescription>
           </DialogHeader>
 
-          <ul className={`max-h-48 overflow-y-auto space-y-1.5 pr-1 ${SCROLLBAR}`} aria-label="Records requiring review">
+          <ul className={`max-h-48 overflow-y-auto space-y-1.5 pr-1 ${SCROLLBAR}`} aria-label={t('fundis.gate.listAria')}>
             {gate?.requiringReview?.map((r) => (
               <li key={r.workerId} className="flex items-center justify-between gap-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm">
-                <span className="font-medium text-stone-800 truncate">{r.name ?? 'Worker'}</span>
-                <span className="text-xs text-orange-700 shrink-0">{reasonLabel(r.reason)}</span>
+                <span className="font-medium text-stone-800 truncate">{r.name ?? t('fundis.gate.worker')}</span>
+                <span className="text-xs text-orange-700 shrink-0">{reasonLabel(r.reason, t)}</span>
               </li>
             ))}
           </ul>
 
           <p className="text-[11px] text-stone-500">
-            Resolve each exception via the Daily Muster or the worker&rsquo;s status (with a reason), or force payroll to pay
-            anyway — the force is recorded in the audit ledger.
+            {t('fundis.gate.resolve')}
           </p>
 
           <DialogFooter className="flex-col sm:flex-row gap-2">
@@ -852,11 +861,11 @@ export function FundisTab() {
               className="gap-1.5 sm:mr-auto"
               onClick={() => { setGate(null); setMusterOpen(true) }}
             >
-              <ClipboardList className="w-4 h-4" aria-hidden /> Review in muster
+              <ClipboardList className="w-4 h-4" aria-hidden /> {t('fundis.gate.reviewInMuster')}
             </Button>
             <Button variant="destructive" onClick={() => setConfirmForce(true)} disabled={payrollBusy} className="gap-1.5">
               {payrollBusy ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <ShieldAlert className="w-4 h-4" aria-hidden />}
-              Force payroll
+              {t('fundis.gate.force')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -866,18 +875,21 @@ export function FundisTab() {
       <AlertDialog open={confirmForce} onOpenChange={setConfirmForce}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Force payroll past exceptions?</AlertDialogTitle>
+            <AlertDialogTitle>{t('fundis.gate.confirmTitle')}</AlertDialogTitle>
             <AlertDialogDescription>
-              {gate ? `${gate.requiringReview?.length ?? 0} record${(gate.requiringReview?.length ?? 0) === 1 ? '' : 's'} will be paid without verified check-in evidence (${formatKES(gate.reviewAmount ?? 0)} pending review). The force is flagged in the audit ledger.` : 'Unverified records will be paid and the force flagged in the audit ledger.'}
+              {gate ? t('fundis.gate.confirmDesc', {
+                count: gate.requiringReview?.length ?? 0,
+                amount: formatKES(gate.reviewAmount ?? 0),
+              }) : t('fundis.gate.confirmDescNoGate')}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="min-h-11">Cancel</AlertDialogCancel>
+            <AlertDialogCancel className="min-h-11">{t('fundis.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               className="min-h-11 bg-red-600 hover:bg-red-700"
               onClick={() => { setGate(null); void runPayroll(true) }}
             >
-              Force payroll
+              {t('fundis.gate.force')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
