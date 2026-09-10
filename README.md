@@ -388,7 +388,7 @@ Then sign in with a demo account above. Scripts: `bun run lint`,
 | Variable | Value | Why |
 |---|---|---|
 | `DATABASE_URL` | required | SQLite file URL (`file:../db/custom.db` local, `file:/app/db/custom.db` in Docker) |
-| `NEXTAUTH_SECRET` | **production: required, stable**; dev: optional | Signs/encrypts JWT session cookies. Rotating it signs everyone out. Dev without it runs on next-auth v4's internal fallback secret (sign-in **and** guarded APIs work — issue #94); production boot fails closed (< 32 chars). |
+| `NEXTAUTH_SECRET` | **production: required, stable**; dev: optional | Signs/encrypts JWT session cookies. Rotating it signs everyone out. Dev without it runs on next-auth v4's internal fallback secret (sign-in **and** guarded APIs work — issue #94, E2E-verified: [screenshot](./docs/screenshots/issue-94-e2e-verify.png)); production boot fails closed (< 32 chars). |
 | `AUTH_TRUST_HOST` | `1` behind a proxy | Makes next-auth v4's `detectOrigin` honor `x-forwarded-host`/`-proto` — without it, proxied sign-in silently pins to `http://localhost:3000` and breaks (PR #7). |
 | `NEXTAUTH_URL` | **unset** | The origin is derived per request, so redirects/cookies always target the host the user actually browses. Set only for one fixed public domain. |
 
@@ -473,15 +473,19 @@ Three workflows live in `.github/workflows/`, all triggered on every push to
   **and** the marketing site, an informational `bun audit` (non-blocking), and
   a real `next build` (standalone) with a throwaway SQLite URL + dummy secret
   — the production build must never require real env secrets.
-- **Tests** (`test.yml`) — the full vitest unit suite, **`bun run test`
-  (1,645 tests across 66 files)**, on every push/PR to `main`. No database or
-  secrets required — the tests are pure/unit-level by design.
+- **Tests** (`test.yml`) — the full vitest unit suite, **`bun run test`**
+  (1,700 tests across 69 files at the time of the 2026-09-10 audit-fix
+  wave; the audit-fix PRs then in flight add more), on every push/PR to
+  `main`. No database or secrets required — the tests are pure/unit-level
+  by design.
 - **Docker** (`docker.yml`) — `docker build` for both production images
   (webapp + marketing site) on a GitHub runner (the dev sandbox has no docker
   CLI — CI is the image verification).
 
 The suite grew 495 → 899 → 1,019 → 1,102 → 1,244 → 1,513 → 1,645 tests across waves
-1–6, re-run in full on every wave merge. **Honest state:** the workflow
+1–6, then 1,691 → 1,700 across the 2026-09 audit waves (69 files at the time
+of this docs fix — the parallel audit-fix PRs add more), re-run in full on
+every wave merge. **Honest state:** the workflow
 definitions are active and fire on every push/PR, but every run to date has
 failed to start its jobs — the GitHub account is locked by a billing issue
 ("The job was not started because your account is locked due to a billing
@@ -538,10 +542,11 @@ full test suite in the worktree before pushing.
 | `prisma/` | `schema.prisma` (68 models), `migrations/` (0_init + additive 1_mjengo_score … 8_trust_digest; 9_schema_reconcile closes the last drift — see DEPLOYMENT.md §4.1), `seed.ts` + `seed-extras/` |
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
+| [docs/PRODUCT-BLUEPRINT.md](./docs/PRODUCT-BLUEPRINT.md) | Product vision document (aspirational — the README wins on current status) |
 | [docs/SUPABASE-DATABASE-DESIGN.md](./docs/SUPABASE-DATABASE-DESIGN.md) | Target-state Supabase/PostgreSQL design (68-table DDL, RLS policy matrix, storage, migration + rollback plan; ADR 0002) |
 | [docs/adr/0003-repo-topology.md](./docs/adr/0003-repo-topology.md) | ADR 0003 — one repo, directory + service boundaries (not branches, not polyrepo) with revisit triggers for splitting a surface out |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Build/run/test/deploy operations guide |
-| [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) | Plain-language release notes — v0.1 → v0.2.4, wave by wave |
+| [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) | Plain-language release notes — v0.1 → v0.2.5, wave by wave |
 | [docs/backlog.md](./docs/backlog.md) | PM release plan (waves 3–6) with paste-ready issue texts |
 | [docs/wave6-plan.md](./docs/wave6-plan.md) | Wave-6 release plan (research → specs → paste-ready issue texts) + the market-gap research it rests on (`docs/research/`) |
 | [SECURITY.md](./SECURITY.md) | Vulnerability reporting policy |

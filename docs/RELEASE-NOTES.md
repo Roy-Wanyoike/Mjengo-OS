@@ -2,9 +2,10 @@
 
 What shipped, wave by wave, in words a non-engineer can follow — written for
 recruiters, investors and operators. Everything listed here **exists in this
-repository and is pinned by tests** (1,645 tests across 66 vitest files at
-the time of writing); nothing is roadmap dressed up as shipped. What is
-deliberately simulated is listed in [the honest small print](#the-honest-small-print).
+repository and is pinned by tests** (1,700 tests across 69 vitest files at
+the time of the 2026-09-10 audit-fix wave); nothing is roadmap dressed up
+as shipped. What is deliberately simulated is listed in
+[the honest small print](#the-honest-small-print).
 For the engineering detail behind each wave, see [ARCHITECTURE.md](../ARCHITECTURE.md)
 and the [README](../README.md).
 

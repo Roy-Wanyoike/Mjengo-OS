@@ -51,7 +51,9 @@ Run the same gates CI runs:
 ```bash
 bun run lint          # eslint — 0 errors, 0 warnings
 bunx tsc --noEmit     # strict typecheck, 0 errors
-bun run test          # vitest — the full unit suite (1,513 tests / 54 files)
+bun run test          # vitest — the full unit suite (1,700 tests /
+                      #   69 files at the time of the 2026-09-10 audit-fix
+                      #   wave; parallel audit-fix PRs add more)
 ```
 
 All three must pass locally. CI runs the same gates on every push/PR:
@@ -71,7 +73,8 @@ site:lint` and `bun run site:typecheck`.
   split it into stacked PRs.
 - **Tests land with the code, in the same branch** — new behavior is pinned
   by new tests before it merges (the suite grew 495 → 1,513 tests across
-  waves 1–6; every merge re-ran the full suite).
+  waves 1–6, then to 1,700 across the 2026-09 audit waves — counts as of
+  the 2026-09-10 audit-fix wave; every merge re-ran the full suite).
 - **Linked to an issue** — open or comment on one first, so the *why* is
   recorded before the *how*.
 - **Left open for review** — every change lands through a reviewed PR, never

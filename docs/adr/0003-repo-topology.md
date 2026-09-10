@@ -19,8 +19,8 @@ website's origin (`WEBSITE_ORIGIN`). What they share is the repo's cross-cutting
 contracts: the role/permission matrix (`src/shared/permissions.ts`), the
 Prisma schema + Supabase target design (`prisma/`, `supabase/`), i18n policy,
 pricing/copy truth, CI gates, deployment docs and the audit history
-(96 merged PRs, 1,691 tests). The team operating all of it is effectively
-one trusted circle.
+(96 merged PRs, 1,691 tests at time of writing). The team operating all of
+it is effectively one trusted circle.
 
 The "frontend" and "dashboard" in the question are the same deployable as the
 app — they share session auth, the zustand store, i18n dictionaries and the

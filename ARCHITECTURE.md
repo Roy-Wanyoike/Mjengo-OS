@@ -122,7 +122,7 @@ never degrades the text). Entry points: the `ai.drawReview` /
 /api/ai/authenticity-screen`, the weekly `digest.trust` job, and the share
 GET legs (`drawPack` + `trustDigest=latest[&audio=1]`). No action, score or
 ledger path reads any AI row — the non-influence property is grep-pinned in
-tests (`tests/unit/ai-*.test.ts`, 4 files).
+tests (`tests/unit/ai-*.test.ts`, 5 files).
 
 **Rules that are non-negotiable in this codebase:**
 
