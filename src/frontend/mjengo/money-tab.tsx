@@ -51,23 +51,25 @@ function previewReference(method: string): string {
 // ---------------- status badges ----------------
 
 function MilestoneStatusBadge({ status }: { status: string }) {
+  const t = useT()
   if (status === 'released')
-    return <Badge className="border-0 bg-emerald-100 text-emerald-800 gap-1 hover:bg-emerald-100"><Check className="h-3 w-3" aria-hidden /> Released</Badge>
+    return <Badge className="border-0 bg-emerald-100 text-emerald-800 gap-1 hover:bg-emerald-100"><Check className="h-3 w-3" aria-hidden /> {t('money.msStatus.released')}</Badge>
   if (status === 'rejected')
-    return <Badge className="border-0 bg-rose-100 text-rose-800 gap-1 hover:bg-rose-100"><X className="h-3 w-3" aria-hidden /> Rejected</Badge>
+    return <Badge className="border-0 bg-rose-100 text-rose-800 gap-1 hover:bg-rose-100"><X className="h-3 w-3" aria-hidden /> {t('money.msStatus.rejected')}</Badge>
   if (status === 'release_requested')
-    return <Badge className="border-0 bg-amber-100 text-amber-900 gap-1 hover:bg-amber-100"><Hourglass className="h-3 w-3" aria-hidden /> Awaiting client</Badge>
+    return <Badge className="border-0 bg-amber-100 text-amber-900 gap-1 hover:bg-amber-100"><Hourglass className="h-3 w-3" aria-hidden /> {t('money.msStatus.release_requested')}</Badge>
   if (status === 'evidence_submitted')
-    return <Badge className="border-0 bg-stone-800 text-stone-50 gap-1 hover:bg-stone-800"><Camera className="h-3 w-3" aria-hidden /> Evidence attached</Badge>
-  return <Badge className="border-0 bg-stone-100 text-stone-600 gap-1 hover:bg-stone-100"><Lock className="h-3 w-3" aria-hidden /> Locked</Badge>
+    return <Badge className="border-0 bg-stone-800 text-stone-50 gap-1 hover:bg-stone-800"><Camera className="h-3 w-3" aria-hidden /> {t('money.msStatus.evidence_submitted')}</Badge>
+  return <Badge className="border-0 bg-stone-100 text-stone-600 gap-1 hover:bg-stone-100"><Lock className="h-3 w-3" aria-hidden /> {t('money.msStatus.locked')}</Badge>
 }
 
 function VariationStatusBadge({ status }: { status: string }) {
+  const t = useT()
   if (status === 'approved')
-    return <Badge className="border-0 bg-emerald-100 text-emerald-800 gap-1 hover:bg-emerald-100"><Check className="h-3 w-3" aria-hidden /> Approved</Badge>
+    return <Badge className="border-0 bg-emerald-100 text-emerald-800 gap-1 hover:bg-emerald-100"><Check className="h-3 w-3" aria-hidden /> {t('money.varStatus.approved')}</Badge>
   if (status === 'rejected')
-    return <Badge className="border-0 bg-rose-100 text-rose-800 gap-1 hover:bg-rose-100"><X className="h-3 w-3" aria-hidden /> Rejected</Badge>
-  return <Badge className="border-0 bg-amber-100 text-amber-900 gap-1 hover:bg-amber-100"><Hourglass className="h-3 w-3" aria-hidden /> Awaiting client</Badge>
+    return <Badge className="border-0 bg-rose-100 text-rose-800 gap-1 hover:bg-rose-100"><X className="h-3 w-3" aria-hidden /> {t('money.varStatus.rejected')}</Badge>
+  return <Badge className="border-0 bg-amber-100 text-amber-900 gap-1 hover:bg-amber-100"><Hourglass className="h-3 w-3" aria-hidden /> {t('money.varStatus.awaiting')}</Badge>
 }
 
 // ---------------- milestone stepper ----------------
@@ -81,6 +83,7 @@ function StepperNode({ state, index }: { state: 'done' | 'current' | 'todo'; ind
 }
 
 function MilestoneStepper({ m }: { m: MilestoneRow }) {
+  const t = useT()
   const rejected = m.status === 'rejected'
   const doneCount =
     m.status === 'released' ? 4
@@ -88,16 +91,16 @@ function MilestoneStepper({ m }: { m: MilestoneRow }) {
     : m.status === 'evidence_submitted' ? 2
     : 1
   const steps = [
-    { label: 'Locked', note: 'Funds earmarked' },
-    { label: 'Evidence attached', note: m.status === 'locked' ? 'Attach site photos' : 'Proof of work' },
-    { label: 'Release requested', note: m.requestedAt ? dateShort(m.requestedAt) : null },
+    { label: t('money.step.locked'), note: t('money.step.lockedNote') },
+    { label: t('money.step.evidence'), note: m.status === 'locked' ? t('money.step.evidenceNoteAttach') : t('money.step.evidenceNote') },
+    { label: t('money.step.request'), note: m.requestedAt ? dateShort(m.requestedAt) : null },
   ]
   const finalStep = rejected
-    ? { label: 'Rejected', note: m.decidedAt ? `${dateShort(m.decidedAt)}${m.decidedBy ? ` · ${m.decidedBy}` : ''}` : null }
-    : { label: 'Released', note: m.releasedAt ? dateShort(m.releasedAt) : 'Client approves' }
+    ? { label: t('money.step.rejected'), note: m.decidedAt ? `${dateShort(m.decidedAt)}${m.decidedBy ? ` · ${m.decidedBy}` : ''}` : null }
+    : { label: t('money.step.released'), note: m.releasedAt ? dateShort(m.releasedAt) : t('money.step.clientApproves') }
 
   return (
-    <ol className="space-y-0 text-xs" aria-label={`Progress: ${m.name}`}>
+    <ol className="space-y-0 text-xs" aria-label={t('money.stepperAria', { name: m.name })}>
       {steps.map((s, i) => {
         const state = i < doneCount ? 'done' : i === doneCount ? 'current' : 'todo'
         return (
@@ -131,11 +134,12 @@ function MilestoneStepper({ m }: { m: MilestoneRow }) {
 // ---------------- evidence thumbnails ----------------
 
 function EvidenceThumb({ photo }: { photo: PhotoRow | undefined }) {
+  const t = useT()
   if (!photo) {
     return (
-      <span className="flex h-12 w-12 items-center justify-center rounded-md border border-stone-200 bg-stone-50" title="Photo no longer on file">
+      <span className="flex h-12 w-12 items-center justify-center rounded-md border border-stone-200 bg-stone-50" title={t('money.thumb.goneTitle')}>
         <ImageOff className="h-4 w-4 text-stone-400" aria-hidden />
-        <span className="sr-only">Evidence photo no longer on file</span>
+        <span className="sr-only">{t('money.thumb.goneSr')}</span>
       </span>
     )
   }
@@ -145,10 +149,10 @@ function EvidenceThumb({ photo }: { photo: PhotoRow | undefined }) {
       target="_blank"
       rel="noopener noreferrer"
       className="block h-12 w-12 overflow-hidden rounded-md border border-stone-200 transition hover:border-amber-500"
-      title={photo.caption ?? 'Evidence photo — opens in new tab'}
-      aria-label={`Evidence photo: ${photo.caption ?? 'site photo'} — opens in new tab`}
+      title={photo.caption ?? t('money.thumb.title')}
+      aria-label={t('money.thumb.aria', { caption: photo.caption ?? t('money.thumb.alt') })}
     >
-      <img src={photo.url} alt={photo.caption ?? 'Site evidence photo'} className="h-full w-full object-cover" loading="lazy" />
+      <img src={photo.url} alt={photo.caption ?? t('money.thumb.alt')} className="h-full w-full object-cover" loading="lazy" />
     </a>
   )
 }
@@ -156,33 +160,37 @@ function EvidenceThumb({ photo }: { photo: PhotoRow | undefined }) {
 // ---------------- payment request + ledger bits (F-MONEY) ----------------
 
 function PaymentRequestStatusBadge({ status }: { status: string }) {
+  const t = useT()
   if (status === 'paid')
-    return <Badge className="border-0 bg-emerald-100 text-emerald-800 gap-1 hover:bg-emerald-100"><CheckCheck className="h-3 w-3" aria-hidden /> Paid</Badge>
+    return <Badge className="border-0 bg-emerald-100 text-emerald-800 gap-1 hover:bg-emerald-100"><CheckCheck className="h-3 w-3" aria-hidden /> {t('money.prStatus.paid')}</Badge>
   if (status === 'approved')
-    return <Badge className="border-0 bg-sky-100 text-sky-800 gap-1 hover:bg-sky-100"><Banknote className="h-3 w-3" aria-hidden /> Approved — ready to pay</Badge>
+    return <Badge className="border-0 bg-sky-100 text-sky-800 gap-1 hover:bg-sky-100"><Banknote className="h-3 w-3" aria-hidden /> {t('money.prStatus.approved')}</Badge>
   if (status === 'rejected')
-    return <Badge className="border-0 bg-rose-100 text-rose-800 gap-1 hover:bg-rose-100"><X className="h-3 w-3" aria-hidden /> Rejected</Badge>
-  return <Badge className="border-0 bg-amber-100 text-amber-900 gap-1 hover:bg-amber-100"><Hourglass className="h-3 w-3" aria-hidden /> Awaiting decision</Badge>
+    return <Badge className="border-0 bg-rose-100 text-rose-800 gap-1 hover:bg-rose-100"><X className="h-3 w-3" aria-hidden /> {t('money.prStatus.rejected')}</Badge>
+  return <Badge className="border-0 bg-amber-100 text-amber-900 gap-1 hover:bg-amber-100"><Hourglass className="h-3 w-3" aria-hidden /> {t('money.prStatus.pending')}</Badge>
 }
 
-const PR_METHODS: Array<{ value: string; label: string }> = [
-  { value: 'mpesa', label: 'M-Pesa (simulated)' },
-  { value: 'bank', label: 'Bank transfer (simulated)' },
-  { value: 'cash', label: 'Cash (recorded)' },
-  { value: 'card', label: 'Card (simulated)' },
-  { value: 'wallet', label: 'Escrow wallet' },
+// Method labels render through the dict (money.prMethod.*); the value
+// strings are stored data and never change.
+const PR_METHODS: Array<{ value: string; key: string }> = [
+  { value: 'mpesa', key: 'money.prMethod.mpesa' },
+  { value: 'bank', key: 'money.prMethod.bank' },
+  { value: 'cash', key: 'money.prMethod.cash' },
+  { value: 'card', key: 'money.prMethod.card' },
+  { value: 'wallet', key: 'money.prMethod.wallet' },
 ]
 
 /** Escrow projection vs ledger-derived balance — the honesty chip (spec §39). */
 function EscrowConsistencyChip({ escrow }: { escrow: NonNullable<ProjectPayload['finance']['escrow']> }) {
+  const t = useT()
   if (escrow.consistent) {
     return (
       <div className="flex flex-wrap items-center gap-2">
         <Badge className="border-0 bg-emerald-100 text-emerald-800 gap-1 hover:bg-emerald-100">
-          <BookOpen className="h-3 w-3" aria-hidden /> Ledger consistent
+          <BookOpen className="h-3 w-3" aria-hidden /> {t('money.escrow.consistent')}
         </Badge>
         <span className="text-[11px] text-stone-400">
-          Derived {formatKES(escrow.derived)} = stored projection {formatKES(escrow.projected)} — every top-up and release posts ledger rows
+          {t('money.escrow.consistentNote', { derived: formatKES(escrow.derived), projected: formatKES(escrow.projected) })}
         </span>
       </div>
     )
@@ -190,10 +198,10 @@ function EscrowConsistencyChip({ escrow }: { escrow: NonNullable<ProjectPayload[
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Badge className="border-0 bg-amber-100 text-amber-900 gap-1 hover:bg-amber-100">
-        <ShieldCheck className="h-3 w-3" aria-hidden /> Drift {formatKES(Math.abs(escrow.drift))} — investigate
+        <ShieldCheck className="h-3 w-3" aria-hidden /> {t('money.escrow.drift', { amount: formatKES(Math.abs(escrow.drift)) })}
       </Badge>
       <span className="text-[11px] text-amber-700">
-        Ledger-derived {formatKES(escrow.derived)} ≠ projection {formatKES(escrow.projected)} — the ledger is the source of truth
+        {t('money.escrow.driftNote', { derived: formatKES(escrow.derived), projected: formatKES(escrow.projected) })}
       </span>
     </div>
   )
@@ -526,34 +534,34 @@ export function MoneyTab() {
       <style>{`@media print { body * { visibility: hidden !important; } #draw-pack-print-root, #draw-pack-print-root * { visibility: visible !important; } #draw-pack-print-root { position: fixed !important; inset: 0 !important; overflow: visible !important; background: white !important; } }`}</style>
 
       {/* KPI row */}
-      <section className="grid grid-cols-2 gap-4 lg:grid-cols-4" aria-label="MjengoPay KPIs">
+      <section className="grid grid-cols-2 gap-4 lg:grid-cols-4" aria-label={t('money.kpiAria')}>
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><Wallet className="h-3.5 w-3.5" aria-hidden /> In escrow</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><Wallet className="h-3.5 w-3.5" aria-hidden /> {t('money.kpi.escrow')}</CardDescription>
             <CardTitle className="text-2xl font-bold tabular-nums text-stone-900">{formatKES(balance)}</CardTitle>
           </CardHeader>
-          <CardContent><p className="text-xs text-stone-500">Held for {data.project.name}</p></CardContent>
+          <CardContent><p className="text-xs text-stone-500">{t('money.kpi.escrowHeld', { name: data.project.name })}</p></CardContent>
         </Card>
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><Lock className="h-3.5 w-3.5" aria-hidden /> Locked in milestones</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><Lock className="h-3.5 w-3.5" aria-hidden /> {t('money.kpi.locked')}</CardDescription>
             <CardTitle className="text-2xl font-bold tabular-nums text-stone-900">{formatKES(lockedAmount)}</CardTitle>
           </CardHeader>
-          <CardContent><p className="text-xs text-stone-500">{data.milestones.filter((m) => LOCKED_STATUSES.includes(m.status)).length} milestone(s) not yet released</p></CardContent>
+          <CardContent><p className="text-xs text-stone-500">{t('money.kpi.lockedNote', { count: data.milestones.filter((m) => LOCKED_STATUSES.includes(m.status)).length })}</p></CardContent>
         </Card>
         <Card className="border-stone-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><Banknote className="h-3.5 w-3.5" aria-hidden /> Released to date</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><Banknote className="h-3.5 w-3.5" aria-hidden /> {t('money.kpi.released')}</CardDescription>
             <CardTitle className="text-2xl font-bold tabular-nums text-stone-900">{formatKES(releasedAmount)}</CardTitle>
           </CardHeader>
-          <CardContent><p className="text-xs text-stone-500">Client-approved, against photo proof</p></CardContent>
+          <CardContent><p className="text-xs text-stone-500">{t('money.kpi.releasedNote')}</p></CardContent>
         </Card>
         <Card className={`shadow-sm ${pendingCount > 0 ? 'border-amber-300' : 'border-stone-200'}`}>
           <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5 text-xs"><Hourglass className="h-3.5 w-3.5" aria-hidden /> Pending client decision</CardDescription>
+            <CardDescription className="flex items-center gap-1.5 text-xs"><Hourglass className="h-3.5 w-3.5" aria-hidden /> {t('money.kpi.pending')}</CardDescription>
             <CardTitle className="text-2xl font-bold tabular-nums text-stone-900">{pendingCount}</CardTitle>
           </CardHeader>
-          <CardContent><p className="text-xs text-stone-500">Release request(s) awaiting {clientName}</p></CardContent>
+          <CardContent><p className="text-xs text-stone-500">{t('money.kpi.pendingNote', { name: clientName })}</p></CardContent>
         </Card>
       </section>
 
@@ -562,11 +570,11 @@ export function MoneyTab() {
         <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-stone-400">
-              <Wallet className="h-3.5 w-3.5" aria-hidden /> MjengoPay escrow wallet
+              <Wallet className="h-3.5 w-3.5" aria-hidden /> {t('money.wallet.title')}
             </p>
             <p className="pt-1 text-4xl font-bold tabular-nums text-stone-50">{formatKES(balance)}</p>
             <p className="pt-1.5 text-xs text-stone-400">
-              Milestone-based escrow — money moves only on client-approved, photo-proven work
+              {t('money.wallet.note')}
             </p>
           </div>
           {!isClient && (
@@ -574,9 +582,9 @@ export function MoneyTab() {
               onClick={() => setTopupOpen(true)}
               disabled={busy}
               className="min-h-11 gap-1.5 bg-amber-500 text-base font-semibold text-stone-950 hover:bg-amber-400"
-              aria-label="Top up the escrow wallet"
+              aria-label={t('money.wallet.topupAria')}
             >
-              <Plus className="h-4 w-4" aria-hidden /> Top up
+              <Plus className="h-4 w-4" aria-hidden /> {t('money.wallet.topup')}
             </Button>
           )}
         </CardContent>
@@ -586,14 +594,14 @@ export function MoneyTab() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
           <div>
-            <CardTitle className="text-lg text-stone-900">Milestones — money tied to proof of work</CardTitle>
+            <CardTitle className="text-lg text-stone-900">{t('money.milestones.title')}</CardTitle>
             <CardDescription>
-              Locked → evidence → client-approved release. Money never moves without photo proof.
+              {t('money.milestones.desc')}
             </CardDescription>
           </div>
           {!isClient && (
-            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" onClick={() => setMsOpen(true)} aria-label="Create a new milestone">
-              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">New milestone</span>
+            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" onClick={() => setMsOpen(true)} aria-label={t('money.milestones.newAria')}>
+              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('money.milestones.new')}</span>
             </Button>
           )}
         </CardHeader>
@@ -601,16 +609,16 @@ export function MoneyTab() {
           {data.milestones.length === 0 ? (
             <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
               <Lock className="mx-auto h-8 w-8 text-stone-300" aria-hidden />
-              <p className="pt-3 text-sm font-medium text-stone-700">No milestones yet</p>
-              <p className="pt-1 text-xs text-stone-500">Create the first milestone — tie money to proof of work.</p>
+              <p className="pt-3 text-sm font-medium text-stone-700">{t('money.milestones.empty')}</p>
+              <p className="pt-1 text-xs text-stone-500">{t('money.milestones.emptyDesc')}</p>
               {!isClient && (
                 <Button size="sm" className="mt-4 min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" onClick={() => setMsOpen(true)}>
-                  <Plus className="h-4 w-4" aria-hidden /> Create milestone
+                  <Plus className="h-4 w-4" aria-hidden /> {t('money.milestones.create')}
                 </Button>
               )}
             </div>
           ) : (
-            <div className="max-h-96 space-y-4 overflow-y-auto pr-2 -mr-2" role="region" aria-label="Milestones, scrollable">
+            <div className="max-h-96 space-y-4 overflow-y-auto pr-2 -mr-2" role="region" aria-label={t('money.milestones.regionAria')}>
               {data.milestones.map((m) => {
                 const evidence = parseEvidenceIds(m.evidencePhotoIds)
                 const phName = phaseName(m.phaseId)
@@ -631,7 +639,7 @@ export function MoneyTab() {
                             <p className="text-sm font-semibold text-stone-900">{m.name}</p>
                             <div className="flex flex-wrap items-center gap-2 pt-1">
                               {phName && <Badge variant="outline" className="text-[10px]">{phName}</Badge>}
-                              <span className="text-xs text-stone-400">created {dateShort(m.createdAt)}</span>
+                              <span className="text-xs text-stone-400">{t('money.milestones.created', { date: dateShort(m.createdAt) })}</span>
                             </div>
                           </div>
                           <div className="flex shrink-0 flex-col items-end gap-1.5">
@@ -643,7 +651,7 @@ export function MoneyTab() {
                         {/* decision history */}
                         {m.decidedBy && (
                           <p className={`rounded-md px-2.5 py-1.5 text-xs ${m.status === 'rejected' ? 'bg-rose-50 text-rose-700' : 'bg-stone-50 text-stone-500'}`}>
-                            {m.status === 'rejected' ? 'Rejected' : 'Decided'} by <span className="font-medium">{m.decidedBy}</span>
+                            {m.status === 'rejected' ? t('money.rejectedBy', { name: m.decidedBy }) : t('money.decidedBy', { name: m.decidedBy })}
                             {m.decidedAt ? ` · ${dateShort(m.decidedAt)}` : ''}
                             {m.decisionNote ? ` — “${m.decisionNote}”` : ''}
                           </p>
@@ -691,9 +699,9 @@ export function MoneyTab() {
 
                         {/* evidence photos */}
                         <div>
-                          <p className="text-[11px] font-medium uppercase tracking-wide text-stone-400">Evidence ({evidence.length})</p>
+                          <p className="text-[11px] font-medium uppercase tracking-wide text-stone-400">{t('money.milestones.evidence', { count: evidence.length })}</p>
                           {evidence.length === 0 ? (
-                            <p className="pt-1 text-xs text-stone-400">No proof-of-work photos yet — release is blocked until evidence is attached.</p>
+                            <p className="pt-1 text-xs text-stone-400">{t('money.milestones.noEvidence')}</p>
                           ) : (
                             <div className="flex flex-wrap gap-1.5 pt-1.5">
                               {evidence.map((pid) => <EvidenceThumb key={pid} photo={photoById(pid)} />)}
@@ -708,9 +716,9 @@ export function MoneyTab() {
                               <Button
                                 size="sm" variant="outline" className="min-h-11 gap-1.5"
                                 onClick={() => { setEvidenceTarget(m); setSelectedPhotos(new Set(evidence)) }}
-                                aria-label={`Attach evidence photos to ${m.name}`}
+                                aria-label={t('money.milestones.attachAria', { name: m.name })}
                               >
-                                <Camera className="h-4 w-4" aria-hidden /> {evidence.length ? 'Attach more evidence' : 'Attach evidence'}
+                                <Camera className="h-4 w-4" aria-hidden /> {evidence.length ? t('money.milestones.attachMore') : t('money.milestones.attach')}
                               </Button>
                             )}
                             {canRequest && (
@@ -718,11 +726,11 @@ export function MoneyTab() {
                                 size="sm"
                                 className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700"
                                 disabled={busy || evidence.length === 0}
-                                title={evidence.length === 0 ? 'Attach proof-of-work photos first' : undefined}
+                                title={evidence.length === 0 ? t('money.milestones.attachFirstTitle') : undefined}
                                 onClick={() => setReleaseTarget(m)}
-                                aria-label={`Request release of ${formatKES(m.amount)} for ${m.name}`}
+                                aria-label={t('money.milestones.requestAria', { amount: formatKES(m.amount), name: m.name })}
                               >
-                                <Send className="h-4 w-4" aria-hidden /> Request release
+                                <Send className="h-4 w-4" aria-hidden /> {t('money.milestones.request')}
                               </Button>
                             )}
                           </div>
@@ -735,13 +743,13 @@ export function MoneyTab() {
                           <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
                             <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
                               <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
-                              {clientName} approves or rejects this release — money moves only on approval
+                              {t('money.milestones.clientDecides', { name: clientName })}
                             </p>
                             <p className="text-xs text-stone-600">
-                              Escrow: <span className="font-semibold tabular-nums">{formatKES(balance)}</span>
-                              {' '}· Release: <span className="font-semibold tabular-nums">{formatKES(m.amount)}</span>
+                              {t('money.milestones.escrowLabel')}: <span className="font-semibold tabular-nums">{formatKES(balance)}</span>
+                              {' '}· {t('money.milestones.releaseLabel')}: <span className="font-semibold tabular-nums">{formatKES(m.amount)}</span>
                               {insufficient && (
-                                <Badge className="ml-2 border-0 bg-rose-100 text-rose-800 hover:bg-rose-100">Insufficient escrow — top up first</Badge>
+                                <Badge className="ml-2 border-0 bg-rose-100 text-rose-800 hover:bg-rose-100">{t('money.milestones.insufficient')}</Badge>
                               )}
                             </p>
                             <div className="flex flex-wrap gap-2">
@@ -749,17 +757,17 @@ export function MoneyTab() {
                                 size="sm" className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
                                 disabled={busy || insufficient}
                                 onClick={() => setApproveConfirm({ kind: 'milestone', id: m.id, title: m.name, amount: m.amount })}
-                                aria-label={`Approve release of ${formatKES(m.amount)} for ${m.name}`}
+                                aria-label={t('money.milestones.approveAria', { amount: formatKES(m.amount), name: m.name })}
                               >
-                                <Check className="h-4 w-4" aria-hidden /> Approve release
+                                <Check className="h-4 w-4" aria-hidden /> {t('money.milestones.approve')}
                               </Button>
                               <Button
                                 size="sm" variant="outline" className="min-h-11 gap-1.5 border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
                                 disabled={busy}
                                 onClick={() => { setRejectTarget({ kind: 'milestone', id: m.id, title: m.name }); setRejectNote('') }}
-                                aria-label={`Reject the release request for ${m.name}, with a note`}
+                                aria-label={t('money.milestones.rejectAria', { name: m.name })}
                               >
-                                <X className="h-4 w-4" aria-hidden /> Reject with note
+                                <X className="h-4 w-4" aria-hidden /> {t('money.rejectWithNote')}
                               </Button>
                             </div>
                           </div>
@@ -767,7 +775,7 @@ export function MoneyTab() {
                         {awaiting && !isClient && (
                           <p className="rounded-md bg-stone-50 px-2.5 py-1.5 text-xs text-stone-500">
                             <Hourglass className="mr-1 inline h-3.5 w-3.5 text-amber-600" aria-hidden />
-                            Awaiting {clientName}'s decision — they approve from their MjengoOS login or share link (the server rejects site-team decisions).
+                            {t('money.awaitingOwner', { name: clientName })}
                           </p>
                         )}
                       </div>
@@ -784,12 +792,12 @@ export function MoneyTab() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
           <div>
-            <CardTitle className="flex items-center gap-2 text-lg text-stone-900"><TrendingUp className="h-5 w-5 text-amber-600" aria-hidden /> Variation orders</CardTitle>
-            <CardDescription>Plan changes that move the budget — only after the client approves.</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-lg text-stone-900"><TrendingUp className="h-5 w-5 text-amber-600" aria-hidden /> {t('money.variations.title')}</CardTitle>
+            <CardDescription>{t('money.variations.desc')}</CardDescription>
           </div>
           {!isClient && (
-            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" onClick={() => setVOpen(true)} aria-label="Submit a new variation order">
-              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">New variation</span>
+            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" onClick={() => setVOpen(true)} aria-label={t('money.variations.newAria')}>
+              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('money.variations.new')}</span>
             </Button>
           )}
         </CardHeader>
@@ -797,11 +805,11 @@ export function MoneyTab() {
           {data.variations.length === 0 ? (
             <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
               <TrendingUp className="mx-auto h-8 w-8 text-stone-300" aria-hidden />
-              <p className="pt-3 text-sm font-medium text-stone-700">No variations</p>
-              <p className="pt-1 text-xs text-stone-500">The plan is holding. Submit a variation when site reality demands a change.</p>
+              <p className="pt-3 text-sm font-medium text-stone-700">{t('money.variations.empty')}</p>
+              <p className="pt-1 text-xs text-stone-500">{t('money.variations.emptyDesc')}</p>
             </div>
           ) : (
-            <div className="max-h-96 space-y-3 overflow-y-auto pr-2 -mr-2" role="region" aria-label="Variation orders, scrollable">
+            <div className="max-h-96 space-y-3 overflow-y-auto pr-2 -mr-2" role="region" aria-label={t('money.variations.regionAria')}>
               {data.variations.map((v) => {
                 const positive = v.budgetImpact >= 0
                 const phName = phaseName(v.phaseId)
@@ -813,7 +821,7 @@ export function MoneyTab() {
                         <div className="flex flex-wrap items-center gap-2 pt-1">
                           {phName && <Badge variant="outline" className="text-[10px]">{phName}</Badge>}
                           <span className="text-xs text-stone-400">
-                            {v.submittedBy ? `by ${v.submittedBy} · ` : ''}{dateShort(v.createdAt)}
+                            {v.submittedBy ? `${t('money.byLine', { name: v.submittedBy })} · ` : ''}{dateShort(v.createdAt)}
                           </span>
                         </div>
                       </div>
@@ -827,7 +835,7 @@ export function MoneyTab() {
                     <p className="pt-2 text-xs leading-relaxed text-stone-600">{v.description}</p>
                     {v.decidedBy && (
                       <p className={`mt-2 rounded-md px-2.5 py-1.5 text-xs ${v.status === 'rejected' ? 'bg-rose-50 text-rose-700' : 'bg-stone-50 text-stone-500'}`}>
-                        {v.status === 'rejected' ? 'Rejected' : 'Approved'} by <span className="font-medium">{v.decidedBy}</span>
+                        {v.status === 'rejected' ? t('money.rejectedBy', { name: v.decidedBy }) : t('money.approvedBy', { name: v.decidedBy })}
                         {v.decidedAt ? ` · ${dateShort(v.decidedAt)}` : ''}
                         {v.decisionNote ? ` — “${v.decisionNote}”` : ''}
                       </p>
@@ -836,24 +844,24 @@ export function MoneyTab() {
                       <div className="mt-3 space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
                         <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
                           <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
-                          {clientName} decides — budget moves only after approval
+                          {t('money.variations.clientDecides', { name: clientName })}
                         </p>
                         <div className="flex flex-wrap gap-2">
                           <Button
                             size="sm" className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
                             disabled={busy}
                             onClick={() => setApproveConfirm({ kind: 'variation', id: v.id, title: v.title, amount: v.budgetImpact })}
-                            aria-label={`Approve variation ${v.title}`}
+                            aria-label={t('money.variations.approveAria', { title: v.title })}
                           >
-                            <Check className="h-4 w-4" aria-hidden /> Approve
+                            <Check className="h-4 w-4" aria-hidden /> {t('money.approve')}
                           </Button>
                           <Button
                             size="sm" variant="outline" className="min-h-11 gap-1.5 border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
                             disabled={busy}
                             onClick={() => { setRejectTarget({ kind: 'variation', id: v.id, title: v.title }); setRejectNote('') }}
-                            aria-label={`Reject variation ${v.title}, with a note`}
+                            aria-label={t('money.variations.rejectAria', { title: v.title })}
                           >
-                            <X className="h-4 w-4" aria-hidden /> Reject with note
+                            <X className="h-4 w-4" aria-hidden /> {t('money.rejectWithNote')}
                           </Button>
                         </div>
                       </div>
@@ -861,7 +869,7 @@ export function MoneyTab() {
                     {v.status === 'submitted' && !isClient && (
                       <p className="mt-3 rounded-md bg-stone-50 px-2.5 py-1.5 text-xs text-stone-500">
                         <Hourglass className="mr-1 inline h-3.5 w-3.5 text-amber-600" aria-hidden />
-                        Awaiting {clientName}'s decision — they approve from their MjengoOS login or share link (the server rejects site-team decisions).
+                        {t('money.awaitingOwner', { name: clientName })}
                       </p>
                     )}
                   </div>
@@ -877,19 +885,23 @@ export function MoneyTab() {
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
           <div>
             <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-              <Banknote className="h-5 w-5 text-amber-600" aria-hidden /> Payment requests
+              <Banknote className="h-5 w-5 text-amber-600" aria-hidden /> {t('money.pr.title')}
               {finance.paymentRequests.length > 0 && (
                 <Badge className="border-0 bg-stone-100 text-stone-600">{finance.paymentRequests.length}</Badge>
               )}
             </CardTitle>
             <CardDescription>
-              Site team requests → client/finance decision → payment recorded on the double-entry ledger.
-              Budget {formatKES(finance.budget)} · committed {formatKES(finance.committed)} · spent {formatKES(finance.spent)} · remaining {formatKES(finance.remaining)}.
+              {t('money.pr.desc', {
+                budget: formatKES(finance.budget),
+                committed: formatKES(finance.committed),
+                spent: formatKES(finance.spent),
+                remaining: formatKES(finance.remaining),
+              })}
             </CardDescription>
           </div>
           {!isClient && (
-            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" onClick={() => setPrOpen(true)} aria-label="Create a new payment request">
-              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">New request</span>
+            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" onClick={() => setPrOpen(true)} aria-label={t('money.pr.newAria')}>
+              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('money.pr.new')}</span>
             </Button>
           )}
         </CardHeader>
@@ -897,13 +909,13 @@ export function MoneyTab() {
           {finance.paymentRequests.length === 0 ? (
             <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
               <Banknote className="mx-auto h-8 w-8 text-stone-300" aria-hidden />
-              <p className="pt-3 text-sm font-medium text-stone-700">No payment requests yet</p>
+              <p className="pt-3 text-sm font-medium text-stone-700">{t('money.pr.empty')}</p>
               <p className="pt-1 text-xs text-stone-500">
-                Request a payout with a description, payee and rail — every approved payment posts a balanced ledger entry.
+                {t('money.pr.emptyDesc')}
               </p>
             </div>
           ) : (
-            <div className="max-h-96 space-y-3 overflow-y-auto pr-2 -mr-2" role="region" aria-label="Payment requests, scrollable">
+            <div className="max-h-96 space-y-3 overflow-y-auto pr-2 -mr-2" role="region" aria-label={t('money.pr.regionAria')}>
               {finance.paymentRequests.map((pr) => {
                 const relatedLabel =
                   pr.relatedEntityType === 'milestone'
@@ -911,6 +923,8 @@ export function MoneyTab() {
                     : pr.relatedEntityType === 'invoice'
                       ? data.invoices.invoices.find((i) => i.id === pr.relatedEntityId)?.invoiceCode ?? null
                       : null
+                const methodKey = PR_METHODS.find((m) => m.value === pr.method)?.key
+                const methodLabel = methodKey ? t(methodKey) : pr.method
                 return (
                   <div key={pr.id} className={`rounded-lg border bg-white p-4 ${pr.status === 'pending' ? 'border-amber-300' : 'border-stone-200'}`}>
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -920,10 +934,10 @@ export function MoneyTab() {
                           <span className="truncate">{pr.description}</span>
                         </p>
                         <div className="flex flex-wrap items-center gap-2 pt-1">
-                          <span className="text-xs text-stone-500">to <span className="font-medium text-stone-700">{pr.payee}</span></span>
-                          <Badge variant="outline" className="text-[10px]">{PR_METHODS.find((m) => m.value === pr.method)?.label ?? pr.method}</Badge>
+                          <span className="text-xs text-stone-500">{t('money.pr.to', { payee: pr.payee })}</span>
+                          <Badge variant="outline" className="text-[10px]">{methodLabel}</Badge>
                           {relatedLabel && <Badge variant="outline" className="text-[10px]">↔ {relatedLabel}</Badge>}
-                          <span className="text-xs text-stone-400">by {pr.requestedByName} · {dateShort(pr.createdAt)}</span>
+                          <span className="text-xs text-stone-400">{t('money.byLine', { name: pr.requestedByName })} · {dateShort(pr.createdAt)}</span>
                         </div>
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1.5">
@@ -935,7 +949,7 @@ export function MoneyTab() {
                     {/* decision history */}
                     {pr.decidedBy && (
                       <p className={`mt-2 rounded-md px-2.5 py-1.5 text-xs ${pr.status === 'rejected' ? 'bg-rose-50 text-rose-700' : 'bg-stone-50 text-stone-500'}`}>
-                        {pr.status === 'rejected' ? 'Rejected' : 'Approved'} by <span className="font-medium">{pr.decidedBy}</span>
+                        {pr.status === 'rejected' ? t('money.rejectedBy', { name: pr.decidedBy }) : t('money.approvedBy', { name: pr.decidedBy })}
                         {pr.decidedAt ? ` · ${dateShort(pr.decidedAt)}` : ''}
                         {pr.decisionNote ? ` — “${pr.decisionNote}”` : ''}
                       </p>
@@ -945,8 +959,8 @@ export function MoneyTab() {
                     {(pr.status === 'paid' || pr.ledgerRef) && (
                       <p className="mt-2 flex flex-wrap items-center gap-1.5 rounded-md bg-stone-50 px-2.5 py-1.5 text-xs text-stone-500">
                         <BookOpen className="h-3.5 w-3.5 text-stone-400" aria-hidden />
-                        Ledger <span className="font-mono font-medium text-stone-700">{pr.ledgerRef ?? '—'}</span>
-                        {pr.paidAt ? ` · paid ${dateShort(pr.paidAt)}` : ''}
+                        {t('money.pr.ledger')} <span className="font-mono font-medium text-stone-700">{pr.ledgerRef ?? '—'}</span>
+                        {pr.paidAt ? ` · ${t('money.pr.paidOn', { date: dateShort(pr.paidAt) })}` : ''}
                       </p>
                     )}
 
@@ -956,10 +970,10 @@ export function MoneyTab() {
                         <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
                           <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
                           {isClient && clientRole
-                            ? `Your decision — ${clientName} approves or rejects this payment`
+                            ? t('money.pr.yourDecision', { name: clientName })
                             : isFinanceSession
-                              ? 'Finance decision queue'
-                              : `Acting as client (they'd approve this in their queue)`}
+                              ? t('money.pr.financeQueue')
+                              : t('money.pr.actingAsClient')}
                         </p>
                         {canDecideRequests ? (
                           <div className="flex flex-wrap gap-2">
@@ -967,22 +981,22 @@ export function MoneyTab() {
                               size="sm" className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
                               disabled={busy}
                               onClick={() => setPrApprove(pr)}
-                              aria-label={`Approve payment request ${pr.requestCode}`}
+                              aria-label={t('money.pr.approveAria', { code: pr.requestCode })}
                             >
-                              <Check className="h-4 w-4" aria-hidden /> Approve
+                              <Check className="h-4 w-4" aria-hidden /> {t('money.approve')}
                             </Button>
                             <Button
                               size="sm" variant="outline" className="min-h-11 gap-1.5 border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
                               disabled={busy}
                               onClick={() => { setPrReject(pr); setPrNote('') }}
-                              aria-label={`Reject payment request ${pr.requestCode}, with a note`}
+                              aria-label={t('money.pr.rejectAria', { code: pr.requestCode })}
                             >
-                              <X className="h-4 w-4" aria-hidden /> Reject with note
+                              <X className="h-4 w-4" aria-hidden /> {t('money.rejectWithNote')}
                             </Button>
                           </div>
                         ) : (
                           <p className="text-xs text-stone-500">
-                            {clientName} decides from their MjengoOS login — share-link visitors are read-only for payment requests.
+                            {t('money.pr.clientDecides', { name: clientName })}
                           </p>
                         )}
                       </div>
@@ -995,15 +1009,15 @@ export function MoneyTab() {
                           size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700"
                           disabled={busy || (pr.method === 'wallet' && balance < pr.amount)}
                           onClick={() => void payRequest(pr)}
-                          aria-label={`Pay ${formatKES(pr.amount)} for ${pr.requestCode}`}
+                          aria-label={t('money.pr.payAria', { amount: formatKES(pr.amount), code: pr.requestCode })}
                         >
-                          <Banknote className="h-4 w-4" aria-hidden /> Pay {formatKES(pr.amount)}
+                          <Banknote className="h-4 w-4" aria-hidden /> {t('money.pr.pay', { amount: formatKES(pr.amount) })}
                         </Button>
                         {pr.method === 'wallet' && balance < pr.amount && (
-                          <Badge className="border-0 bg-rose-100 text-rose-800 hover:bg-rose-100">Insufficient escrow — top up first</Badge>
+                          <Badge className="border-0 bg-rose-100 text-rose-800 hover:bg-rose-100">{t('money.milestones.insufficient')}</Badge>
                         )}
                         <span className="text-[11px] text-stone-400">
-                          Simulated rails — posts a balanced double-entry ledger entry (provider seam, spec §40)
+                          {t('money.pr.simulatedNote')}
                         </span>
                       </div>
                     )}
@@ -1019,17 +1033,17 @@ export function MoneyTab() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <BookOpen className="h-5 w-5 text-stone-700" aria-hidden /> Double-entry ledger
-            <Badge variant="outline" className="text-[10px] font-mono">{finance.ledger.transactions.length} recent</Badge>
+            <BookOpen className="h-5 w-5 text-stone-700" aria-hidden /> {t('money.ledger.title')}
+            <Badge variant="outline" className="text-[10px] font-mono">{t('money.ledger.recent', { count: finance.ledger.transactions.length })}</Badge>
           </CardTitle>
           <CardDescription>
-            Immutable history — every entry is balanced (Σdebits = Σcredits); corrections are reversal entries, never edits.
+            {t('money.ledger.desc')}
           </CardDescription>
           <div className="pt-2">
             {finance.escrow ? (
               <EscrowConsistencyChip escrow={finance.escrow} />
             ) : (
-              <span className="text-[11px] text-stone-400">No escrow wallet on file yet.</span>
+              <span className="text-[11px] text-stone-400">{t('money.ledger.noEscrow')}</span>
             )}
           </div>
         </CardHeader>
@@ -1037,47 +1051,47 @@ export function MoneyTab() {
           {finance.ledger.transactions.length === 0 ? (
             <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
               <BookOpen className="mx-auto h-8 w-8 text-stone-300" aria-hidden />
-              <p className="pt-3 text-sm font-medium text-stone-700">No ledger transactions yet</p>
-              <p className="pt-1 text-xs text-stone-500">Top up the escrow wallet or release a milestone — money movements post here.</p>
+              <p className="pt-3 text-sm font-medium text-stone-700">{t('money.ledger.empty')}</p>
+              <p className="pt-1 text-xs text-stone-500">{t('money.ledger.emptyDesc')}</p>
             </div>
           ) : (
-            <div className="max-h-96 space-y-3 overflow-y-auto pr-2 -mr-2" role="region" aria-label="Ledger transactions, scrollable">
-              {finance.ledger.transactions.map((t) => {
-                const debits = t.entries.filter((e) => e.side === 'debit')
-                const credits = t.entries.filter((e) => e.side === 'credit')
+            <div className="max-h-96 space-y-3 overflow-y-auto pr-2 -mr-2" role="region" aria-label={t('money.ledger.regionAria')}>
+              {finance.ledger.transactions.map((txn) => {
+                const debits = txn.entries.filter((e) => e.side === 'debit')
+                const credits = txn.entries.filter((e) => e.side === 'credit')
                 const debitTotal = debits.reduce((s, e) => s + e.amount, 0)
                 const creditTotal = credits.reduce((s, e) => s + e.amount, 0)
                 const balanced = Math.abs(debitTotal - creditTotal) < 1
                 return (
-                  <div key={t.id} className="rounded-lg border border-stone-200 bg-white p-4">
+                  <div key={txn.id} className="rounded-lg border border-stone-200 bg-white p-4">
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-stone-900">
-                          <span className="font-mono text-xs text-stone-500">{t.ref}</span>
-                          <span className="truncate">{t.description}</span>
+                          <span className="font-mono text-xs text-stone-500">{txn.ref}</span>
+                          <span className="truncate">{txn.description}</span>
                         </p>
                         <p className="pt-0.5 text-xs text-stone-400">
-                          {dateShort(t.occurredAt)} · posted by {t.postedBy} ({t.postedRole})
+                          {dateShort(txn.occurredAt)} · {t('money.ledger.postedBy', { name: txn.postedBy, role: txn.postedRole })}
                         </p>
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
-                        {t.status === 'reversed' && (
-                          <Badge className="border-0 bg-stone-200 text-stone-700 hover:bg-stone-200">Reversed{t.reversalOfRef ? ` by ${t.reversalOfRef}` : ''}</Badge>
+                        {txn.status === 'reversed' && (
+                          <Badge className="border-0 bg-stone-200 text-stone-700 hover:bg-stone-200">{txn.reversalOfRef ? t('money.ledger.reversedBy', { ref: txn.reversalOfRef }) : t('money.ledger.reversed')}</Badge>
                         )}
                         <Badge className={`border-0 gap-1 ${balanced ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100' : 'bg-rose-100 text-rose-800 hover:bg-rose-100'}`}>
-                          <CheckCheck className="h-3 w-3" aria-hidden /> {balanced ? 'Balanced' : 'UNBALANCED'}
+                          <CheckCheck className="h-3 w-3" aria-hidden /> {balanced ? t('money.ledger.balanced') : t('money.ledger.unbalanced')}
                         </Badge>
                       </div>
                     </div>
                     <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
                       <div className="rounded-md bg-rose-50/60 px-2.5 py-1.5">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-700">Debits — {formatKES(debitTotal)}</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-700">{t('money.ledger.debits', { total: formatKES(debitTotal) })}</p>
                         {debits.map((e, i) => (
                           <p key={i} className="text-xs text-stone-600"><span className="font-mono text-[10px] text-stone-500">{e.accountCode}</span> {formatKES(e.amount)}</p>
                         ))}
                       </div>
                       <div className="rounded-md bg-emerald-50/60 px-2.5 py-1.5">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">Credits — {formatKES(creditTotal)}</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">{t('money.ledger.credits', { total: formatKES(creditTotal) })}</p>
                         {credits.map((e, i) => (
                           <p key={i} className="text-xs text-stone-600"><span className="font-mono text-[10px] text-stone-500">{e.accountCode}</span> {formatKES(e.amount)}</p>
                         ))}
@@ -1089,7 +1103,7 @@ export function MoneyTab() {
             </div>
           )}
           <p className="pt-3 text-[11px] text-stone-400">
-            Accounts: {finance.ledger.accounts.map((a) => `${a.code} (${formatKES(a.balance)})`).join(' · ') || 'none yet'}
+            {t('money.ledger.accounts', { list: finance.ledger.accounts.map((a) => `${a.code} (${formatKES(a.balance)})`).join(' · ') || t('money.ledger.noneYet') })}
           </p>
         </CardContent>
       </Card>
@@ -1098,27 +1112,26 @@ export function MoneyTab() {
       <Dialog open={topupOpen} onOpenChange={setTopupOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Top up escrow wallet</DialogTitle>
-            <DialogDescription>Funds are held in escrow and released only against client-approved milestones.</DialogDescription>
+            <DialogTitle className="text-stone-900">{t('money.topup.title')}</DialogTitle>
+            <DialogDescription>{t('money.topup.desc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="topup-amount">Amount (KSh)</Label>
-              <Input id="topup-amount" type="number" min="1" value={tAmount} onChange={(e) => setTAmount(e.target.value)} placeholder="e.g. 500,000" inputMode="numeric" />
+              <Label htmlFor="topup-amount">{t('money.topup.amount')}</Label>
+              <Input id="topup-amount" type="number" min="1" value={tAmount} onChange={(e) => setTAmount(e.target.value)} placeholder={t('money.topup.ph')} inputMode="numeric" />
               {Number(tAmount) > 0 && (
                 <p className="text-xs text-stone-500">
-                  Adding <span className="font-semibold text-stone-800">{formatKES(Number(tAmount))}</span> — new balance{' '}
-                  <span className="font-semibold text-stone-800">{formatKES(balance + Number(tAmount))}</span>
+                  {t('money.topup.preview', { amount: formatKES(Number(tAmount)), balance: formatKES(balance + Number(tAmount)) })}
                 </p>
               )}
             </div>
             <div className="space-y-2">
-              <Label>Method</Label>
-              <RadioGroup value={tMethod} onValueChange={setTMethod} className="grid grid-cols-3 gap-2" aria-label="Payment method">
+              <Label>{t('money.topup.method')}</Label>
+              <RadioGroup value={tMethod} onValueChange={setTMethod} className="grid grid-cols-3 gap-2" aria-label={t('money.topup.methodAria')}>
                 {[
-                  { value: 'mpesa', label: 'M-Pesa' },
-                  { value: 'bank', label: 'Bank' },
-                  { value: 'card', label: 'Card' },
+                  { value: 'mpesa', label: t('money.topup.mpesa') },
+                  { value: 'bank', label: t('money.topup.bank') },
+                  { value: 'card', label: t('money.topup.card') },
                 ].map((opt) => (
                   <label
                     key={opt.value}
@@ -1133,13 +1146,13 @@ export function MoneyTab() {
             </div>
             <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-[11px] leading-relaxed text-stone-500">
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
-              Simulated wallet — Daraja sandbox wiring pending. Reference (auto): <span className="font-mono font-medium text-stone-700">{refPreview}</span>
+              {t('money.topup.note', { ref: refPreview })}
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTopupOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setTopupOpen(false)}>{t('money.cancel')}</Button>
             <Button onClick={() => void topUp()} disabled={busy} className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700">
-              <Plus className="h-4 w-4" aria-hidden /> Top up
+              <Plus className="h-4 w-4" aria-hidden /> {t('money.wallet.topup')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1149,36 +1162,36 @@ export function MoneyTab() {
       <Dialog open={msOpen} onOpenChange={setMsOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">New milestone</DialogTitle>
-            <DialogDescription>Lock an amount against a phase of work — it releases only against photo proof + client approval.</DialogDescription>
+            <DialogTitle className="text-stone-900">{t('money.ms.title')}</DialogTitle>
+            <DialogDescription>{t('money.ms.desc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="ms-name">Milestone name</Label>
-              <Input id="ms-name" value={msName} onChange={(e) => setMsName(e.target.value)} placeholder="e.g. Roofing complete" />
+              <Label htmlFor="ms-name">{t('money.ms.name')}</Label>
+              <Input id="ms-name" value={msName} onChange={(e) => setMsName(e.target.value)} placeholder={t('money.ms.namePh')} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="ms-amount">Amount (KSh)</Label>
-              <Input id="ms-amount" type="number" min="1" value={msAmount} onChange={(e) => setMsAmount(e.target.value)} placeholder="e.g. 500,000" inputMode="numeric" />
+              <Label htmlFor="ms-amount">{t('money.topup.amount')}</Label>
+              <Input id="ms-amount" type="number" min="1" value={msAmount} onChange={(e) => setMsAmount(e.target.value)} placeholder={t('money.topup.ph')} inputMode="numeric" />
               {Number(msAmount) > 0 && (
-                <p className="text-xs text-stone-500">Will lock <span className="font-semibold text-stone-800">{formatKES(Number(msAmount))}</span> in the milestone flow</p>
+                <p className="text-xs text-stone-500">{t('money.ms.lockPreview', { amount: formatKES(Number(msAmount)) })}</p>
               )}
             </div>
             <div className="space-y-2">
-              <Label>Phase (optional)</Label>
+              <Label>{t('money.ms.phase')}</Label>
               <Select value={msPhase} onValueChange={setMsPhase}>
-                <SelectTrigger aria-label="Phase"><SelectValue placeholder="Optional" /></SelectTrigger>
+                <SelectTrigger aria-label={t('money.ms.phaseAria')}><SelectValue placeholder={t('mat.ph.optional')} /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">No specific phase</SelectItem>
+                  <SelectItem value="none">{t('money.ms.noPhase')}</SelectItem>
                   {data.phases.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setMsOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setMsOpen(false)}>{t('money.cancel')}</Button>
             <Button onClick={() => void createMilestone()} disabled={busy} className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700">
-              <Plus className="h-4 w-4" aria-hidden /> Create milestone
+              <Plus className="h-4 w-4" aria-hidden /> {t('money.milestones.create')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1188,16 +1201,16 @@ export function MoneyTab() {
       <Dialog open={evidenceTarget !== null} onOpenChange={(open) => { if (!open) setEvidenceTarget(null) }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Attach proof-of-work photos</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('money.ev.title')}</DialogTitle>
             <DialogDescription>
-              {evidenceTarget ? `Evidence for “${evidenceTarget.name}” — release is blocked until at least one photo is on file.` : ''}
+              {evidenceTarget ? t('money.ev.desc', { name: evidenceTarget.name }) : ''}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             {data.photos.length === 0 ? (
-              <p className="rounded-md bg-stone-50 p-3 text-xs text-stone-500">No site photos yet — capture evidence in the Evidence tab first.</p>
+              <p className="rounded-md bg-stone-50 p-3 text-xs text-stone-500">{t('money.ev.noPhotos')}</p>
             ) : (
-              <div className="max-h-72 space-y-2 overflow-y-auto pr-2" role="region" aria-label="Site photos, scrollable">
+              <div className="max-h-72 space-y-2 overflow-y-auto pr-2" role="region" aria-label={t('money.ev.photosAria')}>
                 {data.photos.map((p) => {
                   const checked = selectedPhotos.has(p.id)
                   return (
@@ -1212,24 +1225,24 @@ export function MoneyTab() {
                           if (v) next.add(p.id); else next.delete(p.id)
                           setSelectedPhotos(next)
                         }}
-                        aria-label={`Select photo: ${p.caption ?? 'site photo'}`}
+                        aria-label={t('money.ev.selectAria', { caption: p.caption ?? t('money.ev.sitePhoto') })}
                       />
                       <img src={p.url} alt="" className="h-11 w-11 shrink-0 rounded-md border border-stone-200 object-cover" loading="lazy" />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm text-stone-800">{p.caption ?? 'Site photo'}</span>
-                        <span className="block text-[11px] text-stone-400">{p.phaseName ?? 'No phase'} · {dateShort(p.createdAt)}</span>
+                        <span className="block truncate text-sm text-stone-800">{p.caption ?? t('money.ev.sitePhoto')}</span>
+                        <span className="block text-[11px] text-stone-400">{p.phaseName ?? t('money.ev.noPhase')} · {dateShort(p.createdAt)}</span>
                       </span>
                     </label>
                   )
                 })}
               </div>
             )}
-            <p className="text-[11px] text-stone-400">{selectedPhotos.size} selected — already-attached photos stay attached.</p>
+            <p className="text-[11px] text-stone-400">{t('money.ev.selected', { count: selectedPhotos.size })}</p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEvidenceTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setEvidenceTarget(null)}>{t('money.cancel')}</Button>
             <Button onClick={() => void attachEvidence()} disabled={busy || selectedPhotos.size === 0} className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700">
-              <Camera className="h-4 w-4" aria-hidden /> Attach {selectedPhotos.size > 0 ? `(${selectedPhotos.size})` : ''}
+              <Camera className="h-4 w-4" aria-hidden /> {selectedPhotos.size > 0 ? t('money.ev.attachCount', { count: selectedPhotos.size }) : t('money.ev.attach')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1239,10 +1252,10 @@ export function MoneyTab() {
       <Dialog open={releaseTarget !== null} onOpenChange={(open) => { if (!open) setReleaseTarget(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Request release</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('money.rel.title')}</DialogTitle>
             <DialogDescription>
               {releaseTarget
-                ? `${releaseTarget.name} — ${formatKES(releaseTarget.amount)} will need approval from ${clientName}.`
+                ? t('money.rel.desc', { name: releaseTarget.name, amount: formatKES(releaseTarget.amount), client: clientName })
                 : ''}
             </DialogDescription>
           </DialogHeader>
@@ -1250,7 +1263,7 @@ export function MoneyTab() {
             <div className="grid gap-4 py-2">
               <div>
                 <p className="text-[11px] font-medium uppercase tracking-wide text-stone-400">
-                  Evidence attached ({parseEvidenceIds(releaseTarget.evidencePhotoIds).length})
+                  {t('money.rel.evidence', { count: parseEvidenceIds(releaseTarget.evidencePhotoIds).length })}
                 </p>
                 <div className="flex flex-wrap gap-1.5 pt-1.5">
                   {parseEvidenceIds(releaseTarget.evidencePhotoIds).map((pid) => (
@@ -1260,14 +1273,14 @@ export function MoneyTab() {
               </div>
               <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-xs leading-relaxed text-stone-500">
                 <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
-                Money never moves without photo proof. {clientName} reviews this evidence before approving.
+                {t('money.rel.note', { client: clientName })}
               </p>
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setReleaseTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setReleaseTarget(null)}>{t('money.cancel')}</Button>
             <Button onClick={() => void requestRelease()} disabled={busy} className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700">
-              <Send className="h-4 w-4" aria-hidden /> Request release
+              <Send className="h-4 w-4" aria-hidden /> {t('money.milestones.request')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1277,21 +1290,21 @@ export function MoneyTab() {
       <Dialog open={rejectTarget !== null} onOpenChange={(open) => { if (!open) setRejectTarget(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Reject with a note</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('money.rej.title')}</DialogTitle>
             <DialogDescription>
               {rejectTarget?.kind === 'milestone'
-                ? `Rejecting the release of “${rejectTarget?.title}” — the note is recorded in the decision history.`
-                : `Rejecting variation “${rejectTarget?.title}” — the budget stays untouched.`}
+                ? t('money.rej.msDesc', { title: rejectTarget?.title ?? '' })
+                : t('money.rej.varDesc', { title: rejectTarget?.title ?? '' })}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="reject-note">Note to the site team (optional)</Label>
-              <Textarea id="reject-note" rows={3} value={rejectNote} onChange={(e) => setRejectNote(e.target.value)} placeholder="e.g. Ring beam not yet cast — resubmit after casting" />
+              <Label htmlFor="reject-note">{t('money.rej.note')}</Label>
+              <Textarea id="reject-note" rows={3} value={rejectNote} onChange={(e) => setRejectNote(e.target.value)} placeholder={t('money.rej.notePh')} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRejectTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setRejectTarget(null)}>{t('money.cancel')}</Button>
             <Button
               onClick={() => {
                 if (!rejectTarget) return
@@ -1304,7 +1317,7 @@ export function MoneyTab() {
               className="min-h-11 gap-1.5 border-rose-300 bg-white text-rose-700 hover:bg-rose-50 hover:text-rose-800"
               variant="outline"
             >
-              <X className="h-4 w-4" aria-hidden /> Reject
+              <X className="h-4 w-4" aria-hidden /> {t('money.rej.reject')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1315,22 +1328,24 @@ export function MoneyTab() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="text-stone-900">
-              {approveConfirm?.kind === 'milestone' ? 'Approve release' : 'Approve variation'}
+              {approveConfirm?.kind === 'milestone' ? t('money.appr.msTitle') : t('money.appr.varTitle')}
             </DialogTitle>
             <DialogDescription>
               {approveConfirm?.kind === 'milestone'
-                ? `This releases ${formatKES(approveConfirm.amount)} from escrow to the contractor for “${approveConfirm.title}”.`
+                ? t('money.appr.msDesc', { amount: formatKES(approveConfirm.amount), title: approveConfirm.title })
                 : approveConfirm
-                  ? `The project budget will ${approveConfirm.amount >= 0 ? 'increase' : 'reduce'} by ${formatKES(Math.abs(approveConfirm.amount))} for “${approveConfirm.title}”.`
+                  ? (approveConfirm.amount >= 0
+                      ? t('money.appr.varIncrease', { amount: formatKES(Math.abs(approveConfirm.amount)), title: approveConfirm.title })
+                      : t('money.appr.varReduce', { amount: formatKES(Math.abs(approveConfirm.amount)), title: approveConfirm.title }))
                   : ''}
             </DialogDescription>
           </DialogHeader>
           <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-xs leading-relaxed text-stone-500">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
-            One deliberate click, not two accidental ones — the decision is recorded in the audit ledger and cannot be edited afterwards.
+            {t('money.appr.note')}
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setApproveConfirm(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setApproveConfirm(null)}>{t('money.cancel')}</Button>
             <Button
               onClick={() => {
                 if (!approveConfirm) return
@@ -1342,7 +1357,7 @@ export function MoneyTab() {
               disabled={busy}
               className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
             >
-              <Check className="h-4 w-4" aria-hidden /> Confirm approval
+              <Check className="h-4 w-4" aria-hidden /> {t('money.appr.confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1352,62 +1367,62 @@ export function MoneyTab() {
       <Dialog open={vOpen} onOpenChange={setVOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">New variation order</DialogTitle>
-            <DialogDescription>A plan change that moves the budget. The budget only moves after {clientName} approves.</DialogDescription>
+            <DialogTitle className="text-stone-900">{t('money.var.title')}</DialogTitle>
+            <DialogDescription>{t('money.var.desc', { client: clientName })}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="v-title">Title</Label>
-              <Input id="v-title" value={vTitle} onChange={(e) => setVTitle(e.target.value)} placeholder="e.g. Kitchen counter granite upgrade" />
+              <Label htmlFor="v-title">{t('money.var.titleLabel')}</Label>
+              <Input id="v-title" value={vTitle} onChange={(e) => setVTitle(e.target.value)} placeholder={t('money.var.titlePh')} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="v-desc">Description</Label>
-              <Textarea id="v-desc" rows={3} value={vDesc} onChange={(e) => setVDesc(e.target.value)} placeholder="What changed on site, and why" />
+              <Label htmlFor="v-desc">{t('money.var.descLabel')}</Label>
+              <Textarea id="v-desc" rows={3} value={vDesc} onChange={(e) => setVDesc(e.target.value)} placeholder={t('money.var.descPh')} />
             </div>
             <div className="space-y-2">
-              <Label>Budget impact</Label>
+              <Label>{t('money.var.impact')}</Label>
               <div className="grid grid-cols-2 gap-2">
                 <Button
                   type="button" variant="outline"
                   className={`min-h-11 gap-1.5 ${vSign === 1 ? 'border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-50' : 'text-stone-600'}`}
-                  onClick={() => setVSign(1)} aria-pressed={vSign === 1} aria-label="Extra cost — increases the budget"
+                  onClick={() => setVSign(1)} aria-pressed={vSign === 1} aria-label={t('money.var.extraAria')}
                 >
-                  <Plus className="h-4 w-4" aria-hidden /> Extra cost
+                  <Plus className="h-4 w-4" aria-hidden /> {t('money.var.extraCost')}
                 </Button>
                 <Button
                   type="button" variant="outline"
                   className={`min-h-11 gap-1.5 ${vSign === -1 ? 'border-rose-500 bg-rose-50 text-rose-700 hover:bg-rose-50' : 'text-stone-600'}`}
-                  onClick={() => setVSign(-1)} aria-pressed={vSign === -1} aria-label="Saving — reduces the budget"
+                  onClick={() => setVSign(-1)} aria-pressed={vSign === -1} aria-label={t('money.var.savingAria')}
                 >
-                  <Minus className="h-4 w-4" aria-hidden /> Saving
+                  <Minus className="h-4 w-4" aria-hidden /> {t('money.var.saving')}
                 </Button>
               </div>
               <Input
                 id="v-amount" type="number" min="1" value={vAmount}
-                onChange={(e) => setVAmount(e.target.value)} placeholder="e.g. 95,000" inputMode="numeric"
-                aria-label="Budget impact amount in KSh"
+                onChange={(e) => setVAmount(e.target.value)} placeholder={t('money.var.amountPh')} inputMode="numeric"
+                aria-label={t('money.var.amountAria')}
               />
               {Number(vAmount) > 0 && (
                 <p className={`text-xs font-medium ${vSign === 1 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                  {vSign === 1 ? '+' : '−'}{formatKES(Number(vAmount))} budget impact
+                  {t('money.var.impactPreview', { sign: vSign === 1 ? '+' : '−', amount: formatKES(Number(vAmount)) })}
                 </p>
               )}
             </div>
             <div className="space-y-2">
-              <Label>Phase (optional)</Label>
+              <Label>{t('money.ms.phase')}</Label>
               <Select value={vPhase} onValueChange={setVPhase}>
-                <SelectTrigger aria-label="Phase"><SelectValue placeholder="Optional" /></SelectTrigger>
+                <SelectTrigger aria-label={t('money.ms.phaseAria')}><SelectValue placeholder={t('mat.ph.optional')} /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">No specific phase</SelectItem>
+                  <SelectItem value="none">{t('money.ms.noPhase')}</SelectItem>
                   {data.phases.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setVOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setVOpen(false)}>{t('money.cancel')}</Button>
             <Button onClick={() => void submitVariation()} disabled={busy} className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700">
-              <Send className="h-4 w-4" aria-hidden /> Submit for approval
+              <Send className="h-4 w-4" aria-hidden /> {t('money.var.submit')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1417,59 +1432,59 @@ export function MoneyTab() {
       <Dialog open={prOpen} onOpenChange={setPrOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">New payment request</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('money.prDlg.title')}</DialogTitle>
             <DialogDescription>
-              Request a payout — the client (or finance) approves it, then the payment posts a balanced ledger entry. Simulated rails, real workflow.
+              {t('money.prDlg.desc')}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="pr-desc">What is it for?</Label>
-              <Input id="pr-desc" value={prDesc} onChange={(e) => setPrDesc(e.target.value)} placeholder="e.g. Steel delivery transport — Kiambu Road" />
+              <Label htmlFor="pr-desc">{t('money.prDlg.what')}</Label>
+              <Input id="pr-desc" value={prDesc} onChange={(e) => setPrDesc(e.target.value)} placeholder={t('money.prDlg.whatPh')} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label htmlFor="pr-amount">Amount (KSh)</Label>
-                <Input id="pr-amount" type="number" min="1" value={prAmount} onChange={(e) => setPrAmount(e.target.value)} placeholder="e.g. 45000" inputMode="numeric" />
+                <Label htmlFor="pr-amount">{t('money.topup.amount')}</Label>
+                <Input id="pr-amount" type="number" min="1" value={prAmount} onChange={(e) => setPrAmount(e.target.value)} placeholder={t('money.prDlg.amountPh')} inputMode="numeric" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="pr-payee">Payee</Label>
-                <Input id="pr-payee" value={prPayee} onChange={(e) => setPrPayee(e.target.value)} placeholder="e.g. Mwangi Transport" />
+                <Label htmlFor="pr-payee">{t('money.prDlg.payee')}</Label>
+                <Input id="pr-payee" value={prPayee} onChange={(e) => setPrPayee(e.target.value)} placeholder={t('money.prDlg.payeePh')} />
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Method</Label>
+              <Label>{t('money.topup.method')}</Label>
               <Select value={prMethod} onValueChange={setPrMethod}>
-                <SelectTrigger aria-label="Payment method"><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label={t('money.topup.methodAria')}><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {PR_METHODS.map((m) => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                  {PR_METHODS.map((m) => <SelectItem key={m.value} value={m.value}>{t(m.key)}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Link to (optional)</Label>
+              <Label>{t('money.prDlg.link')}</Label>
               <Select value={prLink} onValueChange={setPrLink}>
-                <SelectTrigger aria-label="Link to a milestone or invoice"><SelectValue placeholder="No link" /></SelectTrigger>
+                <SelectTrigger aria-label={t('money.prDlg.linkAria')}><SelectValue placeholder={t('money.prDlg.noLink')} /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">No link</SelectItem>
+                  <SelectItem value="none">{t('money.prDlg.noLink')}</SelectItem>
                   {data.milestones.map((m) => (
-                    <SelectItem key={`milestone:${m.id}`} value={`milestone:${m.id}`}>Milestone — {m.name}</SelectItem>
+                    <SelectItem key={`milestone:${m.id}`} value={`milestone:${m.id}`}>{t('money.prDlg.milestone', { name: m.name })}</SelectItem>
                   ))}
                   {data.invoices.invoices.map((i) => (
-                    <SelectItem key={`invoice:${i.id}`} value={`invoice:${i.id}`}>Invoice — {i.invoiceCode}</SelectItem>
+                    <SelectItem key={`invoice:${i.id}`} value={`invoice:${i.id}`}>{t('money.prDlg.invoice', { code: i.invoiceCode })}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-[11px] leading-relaxed text-stone-500">
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
-              Every approved payment posts a balanced double-entry ledger entry (EXPENSE debit, cash credit) — the payment provider seam is simulated and clearly labelled.
+              {t('money.prDlg.note')}
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPrOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setPrOpen(false)}>{t('money.cancel')}</Button>
             <Button onClick={() => void createPaymentRequest()} disabled={busy} className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700">
-              <Plus className="h-4 w-4" aria-hidden /> Submit request
+              <Plus className="h-4 w-4" aria-hidden /> {t('money.prDlg.submit')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1479,26 +1494,26 @@ export function MoneyTab() {
       <Dialog open={prReject !== null} onOpenChange={(open) => { if (!open) setPrReject(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Reject payment request</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('money.prRej.title')}</DialogTitle>
             <DialogDescription>
-              {prReject ? `Rejecting ${prReject.requestCode} — ${formatKES(prReject.amount)} to ${prReject.payee}. The note is recorded in the decision history.` : ''}
+              {prReject ? t('money.prRej.desc', { code: prReject.requestCode, amount: formatKES(prReject.amount), payee: prReject.payee }) : ''}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="pr-note">Note to the requester (optional)</Label>
-              <Textarea id="pr-note" rows={3} value={prNote} onChange={(e) => setPrNote(e.target.value)} placeholder="e.g. Transport was quoted at 35,000 — revise and re-submit" />
+              <Label htmlFor="pr-note">{t('money.prRej.note')}</Label>
+              <Textarea id="pr-note" rows={3} value={prNote} onChange={(e) => setPrNote(e.target.value)} placeholder={t('money.prRej.notePh')} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPrReject(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setPrReject(null)}>{t('money.cancel')}</Button>
             <Button
               onClick={() => { if (prReject) void decidePaymentRequest(prReject, 'reject', prNote) }}
               disabled={busy}
               className="min-h-11 gap-1.5 border-rose-300 bg-white text-rose-700 hover:bg-rose-50 hover:text-rose-800"
               variant="outline"
             >
-              <X className="h-4 w-4" aria-hidden /> Reject
+              <X className="h-4 w-4" aria-hidden /> {t('money.rej.reject')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1508,23 +1523,23 @@ export function MoneyTab() {
       <Dialog open={prApprove !== null} onOpenChange={(open) => { if (!open) setPrApprove(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Approve payment request</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('money.prAppr.title')}</DialogTitle>
             <DialogDescription>
-              {prApprove ? `This approves ${formatKES(prApprove.amount)} to ${prApprove.payee} for ${prApprove.requestCode}. Payment is recorded separately, after this approval.` : ''}
+              {prApprove ? t('money.prAppr.desc', { amount: formatKES(prApprove.amount), payee: prApprove.payee, code: prApprove.requestCode }) : ''}
             </DialogDescription>
           </DialogHeader>
           <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-xs leading-relaxed text-stone-500">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
-            One deliberate click, not two accidental ones — the decision is recorded in the audit ledger with your signed-in identity and cannot be edited afterwards.
+            {t('money.prAppr.note')}
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPrApprove(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setPrApprove(null)}>{t('money.cancel')}</Button>
             <Button
               onClick={() => { if (prApprove) void decidePaymentRequest(prApprove, 'approve') }}
               disabled={busy}
               className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
             >
-              <Check className="h-4 w-4" aria-hidden /> Confirm approval
+              <Check className="h-4 w-4" aria-hidden /> {t('money.appr.confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -20,26 +20,29 @@ import { formatKES } from '@/frontend/lib/format'
 import { useT } from '@/frontend/i18n/provider'
 
 // ---------------- Ledger kind metadata (mirrors lib/audit kindForAction values) ----------------
+// `label` carries the DICT KEY (ev.kind.*) — rendered through t() at the use
+// sites (the SelectItem row and the empty-state line). Unknown kinds fall
+// back to the raw kind string, which t() passes through unchanged.
 
 const KIND_META: Record<string, { label: string; Icon: LucideIcon; tint: string }> = {
-  delivery: { label: 'Deliveries', Icon: Truck, tint: 'bg-stone-100 text-stone-600' },
-  wage: { label: 'Wages', Icon: Banknote, tint: 'bg-stone-100 text-stone-600' },
-  attendance: { label: 'Attendance', Icon: UserCheck, tint: 'bg-stone-100 text-stone-600' },
-  milestone: { label: 'Milestones', Icon: Flag, tint: 'bg-amber-100 text-amber-700' },
-  variation: { label: 'Variations', Icon: FileDiff, tint: 'bg-stone-100 text-stone-600' },
-  escrow: { label: 'Escrow', Icon: Wallet, tint: 'bg-amber-100 text-amber-700' },
-  photo: { label: 'Photos', Icon: Camera, tint: 'bg-stone-100 text-stone-600' },
-  comment: { label: 'Comments', Icon: MessageSquare, tint: 'bg-stone-100 text-stone-600' },
-  project: { label: 'Project', Icon: HardHat, tint: 'bg-stone-100 text-stone-600' },
-  expense: { label: 'Expenses', Icon: Receipt, tint: 'bg-stone-100 text-stone-600' },
-  material: { label: 'Materials', Icon: Package, tint: 'bg-stone-100 text-stone-600' },
-  share: { label: 'Share links', Icon: Link, tint: 'bg-stone-100 text-stone-600' },
-  task: { label: 'Tasks', Icon: ListChecks, tint: 'bg-stone-100 text-stone-600' },
-  phase: { label: 'Phases', Icon: Layers, tint: 'bg-stone-100 text-stone-600' },
-  transaction: { label: 'Transactions', Icon: ArrowLeftRight, tint: 'bg-stone-100 text-stone-600' },
-  site_map: { label: 'Site map', Icon: Map, tint: 'bg-stone-100 text-stone-600' },
-  notification: { label: 'Notifications', Icon: Bell, tint: 'bg-stone-100 text-stone-600' },
-  alert: { label: 'Alerts', Icon: TriangleAlert, tint: 'bg-red-100 text-red-600' },
+  delivery: { label: 'ev.kind.delivery', Icon: Truck, tint: 'bg-stone-100 text-stone-600' },
+  wage: { label: 'ev.kind.wage', Icon: Banknote, tint: 'bg-stone-100 text-stone-600' },
+  attendance: { label: 'ev.kind.attendance', Icon: UserCheck, tint: 'bg-stone-100 text-stone-600' },
+  milestone: { label: 'ev.kind.milestone', Icon: Flag, tint: 'bg-amber-100 text-amber-700' },
+  variation: { label: 'ev.kind.variation', Icon: FileDiff, tint: 'bg-stone-100 text-stone-600' },
+  escrow: { label: 'ev.kind.escrow', Icon: Wallet, tint: 'bg-amber-100 text-amber-700' },
+  photo: { label: 'ev.kind.photo', Icon: Camera, tint: 'bg-stone-100 text-stone-600' },
+  comment: { label: 'ev.kind.comment', Icon: MessageSquare, tint: 'bg-stone-100 text-stone-600' },
+  project: { label: 'ev.kind.project', Icon: HardHat, tint: 'bg-stone-100 text-stone-600' },
+  expense: { label: 'ev.kind.expense', Icon: Receipt, tint: 'bg-stone-100 text-stone-600' },
+  material: { label: 'ev.kind.material', Icon: Package, tint: 'bg-stone-100 text-stone-600' },
+  share: { label: 'ev.kind.share', Icon: Link, tint: 'bg-stone-100 text-stone-600' },
+  task: { label: 'ev.kind.task', Icon: ListChecks, tint: 'bg-stone-100 text-stone-600' },
+  phase: { label: 'ev.kind.phase', Icon: Layers, tint: 'bg-stone-100 text-stone-600' },
+  transaction: { label: 'ev.kind.transaction', Icon: ArrowLeftRight, tint: 'bg-stone-100 text-stone-600' },
+  site_map: { label: 'ev.kind.site_map', Icon: Map, tint: 'bg-stone-100 text-stone-600' },
+  notification: { label: 'ev.kind.notification', Icon: Bell, tint: 'bg-stone-100 text-stone-600' },
+  alert: { label: 'ev.kind.alert', Icon: TriangleAlert, tint: 'bg-red-100 text-red-600' },
 }
 
 function kindMeta(kind: string) {
@@ -489,6 +492,7 @@ function AuthenticitySection({
 
 export function EvidenceTab() {
   const { data, dispatch, actionBusy, viewMode } = useMjengo()
+  const t = useT()
   const [kindFilter, setKindFilter] = useState<string>('all')
   const [pdfOpen, setPdfOpen] = useState(false)
   const [pdfBusy, setPdfBusy] = useState(false)
@@ -510,10 +514,10 @@ export function EvidenceTab() {
     try {
       const filename = await generatePdfReport(data)
       setPdfOpen(false)
-      toast.success(`${filename} downloaded`)
+      toast.success(t('ev.pdf.downloaded', { file: filename }))
     } catch (e) {
       console.error('pdf failed', e)
-      toast.error('Could not generate the PDF report')
+      toast.error(t('ev.pdf.failed'))
     } finally {
       setPdfBusy(false)
     }
@@ -527,22 +531,22 @@ export function EvidenceTab() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="space-y-1">
               <CardTitle className="flex items-center gap-2 text-stone-900">
-                <ScrollText className="w-5 h-5 text-amber-600" aria-hidden /> Bias-Free Ledger
+                <ScrollText className="w-5 h-5 text-amber-600" aria-hidden /> {t('ev.ledger.title')}
               </CardTitle>
               <CardDescription>
-                Chronological, append-only record of every action — who, what, when. Records can never be edited or erased.
+                {t('ev.ledger.desc')}
               </CardDescription>
             </div>
             <Select value={kindFilter} onValueChange={setKindFilter}>
-              <SelectTrigger size="sm" className="w-40 min-h-11" aria-label="Filter ledger by record kind">
-                <SelectValue placeholder="All kinds" />
+              <SelectTrigger size="sm" className="w-40 min-h-11" aria-label={t('ev.ledger.filterAria')}>
+                <SelectValue placeholder={t('ev.ledger.allKinds')} />
               </SelectTrigger>
               <SelectContent className="max-h-72">
-                <SelectItem value="all" className="min-h-11">All kinds</SelectItem>
+                <SelectItem value="all" className="min-h-11">{t('ev.ledger.allKinds')}</SelectItem>
                 {Object.entries(KIND_META).map(([kind, meta]) => (
                   <SelectItem key={kind} value={kind} className="min-h-11">
                     <span className="flex items-center gap-2">
-                      <meta.Icon className="w-3.5 h-3.5 text-stone-500" aria-hidden /> {meta.label}
+                      <meta.Icon className="w-3.5 h-3.5 text-stone-500" aria-hidden /> {t(meta.label)}
                     </span>
                   </SelectItem>
                 ))}
@@ -556,12 +560,12 @@ export function EvidenceTab() {
               <ScrollText className="w-8 h-8 text-stone-300" aria-hidden />
               <p className="text-sm text-stone-500">
                 {kindFilter === 'all'
-                  ? 'No ledger records yet — every action on this project will appear here.'
-                  : `No ${kindMeta(kindFilter).label.toLowerCase()} records in the ledger.`}
+                  ? t('ev.ledger.emptyAll')
+                  : t('ev.ledger.emptyKind', { kind: t(kindMeta(kindFilter).label).toLowerCase() })}
               </p>
             </div>
           ) : (
-            <ol className="relative max-h-[28rem] overflow-y-auto pr-2 space-y-0.5 list-none" aria-label="Audit trail timeline">
+            <ol className="relative max-h-[28rem] overflow-y-auto pr-2 space-y-0.5 list-none" aria-label={t('ev.ledger.timelineAria')}>
               {events.map((e, i) => {
                 const meta = kindMeta(e.kind)
                 return (
@@ -601,20 +605,20 @@ export function EvidenceTab() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-stone-900">
-            <TriangleAlert className="w-5 h-5 text-amber-600" aria-hidden /> Anomaly feed
+            <TriangleAlert className="w-5 h-5 text-amber-600" aria-hidden /> {t('ev.anom.title')}
           </CardTitle>
           <CardDescription>
-            Discrepancies flagged between what was paid, delivered, and seen on site. Acknowledge once reviewed with the crew.
+            {t('ev.anom.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {alerts.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-10 text-center" role="status">
               <ShieldCheck className="w-8 h-8 text-stone-300" aria-hidden />
-              <p className="text-sm text-stone-500">No anomalies — site activity matches the record</p>
+              <p className="text-sm text-stone-500">{t('ev.anom.empty')}</p>
             </div>
           ) : (
-            <ul className="max-h-96 overflow-y-auto pr-2 space-y-2 list-none" aria-label="Anomaly alerts">
+            <ul className="max-h-96 overflow-y-auto pr-2 space-y-2 list-none" aria-label={t('ev.anom.listAria')}>
               {alerts.map((a) => (
                 <li
                   key={a.id}
@@ -623,14 +627,14 @@ export function EvidenceTab() {
                   <span
                     className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${a.severity === 'critical' ? 'bg-red-600' : a.severity === 'warning' ? 'bg-amber-500' : 'bg-stone-400'}`}
                     role="img"
-                    aria-label={`${a.severity} severity`}
+                    aria-label={t('ev.anom.severityAria', { sev: a.severity })}
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className={`text-sm font-medium ${a.acknowledged ? 'text-stone-500' : 'text-stone-900'}`}>{a.title}</p>
                       {a.acknowledged && (
                         <Badge variant="outline" className="gap-1 border-stone-200 bg-stone-100 text-stone-500">
-                          <CheckCheck className="w-3 h-3" aria-hidden /> Ack&rsquo;d
+                          <CheckCheck className="w-3 h-3" aria-hidden /> {t('ev.anom.ackd')}
                         </Badge>
                       )}
                     </div>
@@ -645,10 +649,10 @@ export function EvidenceTab() {
                           variant="outline"
                           className="h-8 gap-1.5"
                           disabled={busy}
-                          aria-label={`Acknowledge alert: ${a.title}`}
+                          aria-label={t('ev.anom.ackAria', { title: a.title })}
                           onClick={() => void dispatch('alert.ack', { id: a.id }, 'Acknowledge alert')}
                         >
-                          <CheckCheck className="w-3.5 h-3.5" aria-hidden /> Acknowledge
+                          <CheckCheck className="w-3.5 h-3.5" aria-hidden /> {t('ev.anom.ack')}
                         </Button>
                       )}
                     </div>
@@ -665,37 +669,37 @@ export function EvidenceTab() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-stone-900">
-            <FileDown className="w-5 h-5 text-amber-600" aria-hidden /> One-click PDF report
+            <FileDown className="w-5 h-5 text-amber-600" aria-hidden /> {t('ev.pdf.title')}
           </CardTitle>
           <CardDescription>
-            A shareable A4 snapshot of the build — perfect for the WhatsApp group, the bank, or the family.
+            {t('ev.pdf.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <Button
             className="h-11 gap-2 bg-amber-600 text-white hover:bg-amber-700"
             onClick={() => setPdfOpen(true)}
-            aria-label="Generate PDF report"
+            aria-label={t('ev.pdf.generateAria')}
           >
-            <FileDown className="w-4 h-4" aria-hidden /> Generate PDF report
+            <FileDown className="w-4 h-4" aria-hidden /> {t('ev.pdf.generate')}
           </Button>
 
           <Dialog open={pdfOpen} onOpenChange={setPdfOpen}>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
-                <DialogTitle className="text-stone-900">PDF report preview</DialogTitle>
+                <DialogTitle className="text-stone-900">{t('ev.pdf.previewTitle')}</DialogTitle>
                 <DialogDescription>
-                  The report is generated from the live project record — nothing is hand-edited.
+                  {t('ev.pdf.previewDesc')}
                 </DialogDescription>
               </DialogHeader>
-              <ul className="space-y-2 text-sm text-stone-600 list-none" aria-label="Report contents">
+              <ul className="space-y-2 text-sm text-stone-600 list-none" aria-label={t('ev.pdf.contentsAria')}>
                 {[
-                  'Header with project, client, location and day count',
-                  'KPI grid — budget, spend vs plan, fundis verified, alerts',
-                  'Build phases — status, progress and budget',
-                  'Materials on site — quantities and stock value',
-                  'Last 15 transactions with notes',
-                  'Dated footer with page numbers (bias-free ledger stays in-app)',
+                  t('ev.pdf.itemHeader'),
+                  t('ev.pdf.itemKpi'),
+                  t('ev.pdf.itemPhases'),
+                  t('ev.pdf.itemMaterials'),
+                  t('ev.pdf.itemTransactions'),
+                  t('ev.pdf.itemFooter'),
                 ].map((line) => (
                   <li key={line} className="flex items-start gap-2">
                     <CheckCheck className="mt-0.5 w-4 h-4 shrink-0 text-amber-600" aria-hidden /> {line}
@@ -703,10 +707,10 @@ export function EvidenceTab() {
                 ))}
               </ul>
               <DialogFooter className="gap-2 sm:gap-0">
-                <Button variant="outline" className="min-h-11" onClick={() => setPdfOpen(false)}>Cancel</Button>
+                <Button variant="outline" className="min-h-11" onClick={() => setPdfOpen(false)}>{t('ev.pdf.cancel')}</Button>
                 <Button className="min-h-11 gap-2 bg-amber-600 text-white hover:bg-amber-700" disabled={pdfBusy} onClick={() => void downloadPdf()}>
                   {pdfBusy ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <FileDown className="w-4 h-4" aria-hidden />}
-                  {pdfBusy ? 'Building…' : 'Download PDF'}
+                  {pdfBusy ? t('ev.pdf.building') : t('ev.pdf.download')}
                 </Button>
               </DialogFooter>
             </DialogContent>

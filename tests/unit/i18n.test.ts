@@ -382,16 +382,17 @@ describe('#107 wave 5: tab bodies — every literal t() key resolves in both dic
   ].map((m) => m[1])
 
   const namespaceStringsIn = (src: string) =>
-    [...src.matchAll(/'(mat|fundis|money|evidence)\.[a-zA-Z0-9_.]+'/g)].map((m) => m[0].slice(1, -1))
+    [...src.matchAll(/'(mat|fundis|money|evidence|ev)\.[a-zA-Z0-9_.]+'/g)].map((m) => m[0].slice(1, -1))
 
   const WAVE5_SURFACES: Record<string, string[]> = {
     materials: ['src/frontend/mjengo/materials-tab.tsx'],
     fundis: ['src/frontend/mjengo/fundis-tab.tsx'],
-    // money / evidence are appended by the later wave-5 commits.
+    money: ['src/frontend/mjengo/money-tab.tsx'],
+    evidence: ['src/frontend/mjengo/evidence-tab.tsx'],
   }
 
   it('each wave-5 surface samples enough keys (guards against silent wiring regressions)', () => {
-    const minimums: Record<string, number> = { materials: 90, fundis: 80 }
+    const minimums: Record<string, number> = { materials: 90, fundis: 80, money: 200, evidence: 60 }
     for (const [family, files] of Object.entries(WAVE5_SURFACES)) {
       const keys = new Set(files.flatMap((f) => [...literalKeysIn(readSrc(f)), ...namespaceStringsIn(readSrc(f))]))
       expect(keys.size, `${family} surface sampled too few keys (${keys.size})`).toBeGreaterThan(minimums[family])
