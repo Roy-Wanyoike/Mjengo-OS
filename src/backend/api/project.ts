@@ -141,20 +141,34 @@ export const GET = publicRoute(
     // BEFORE the share-token path too: a supplier session is signed in and
     // gets the honest 403, not a share-link client view.
     if (session && session.user.role === 'supplier') return forbidden(session.user.role)
+    // BE-1 (audit 2026-09-10, issue #102): a share token is a bearer
+    // capability bound to exactly ONE project. The project it resolves is
+    // the ONLY project this route may answer for on the public path — a
+    // ?projectId query can never redirect it, and the token's project never
+    // falls back to "first project in the DB" (the cross-project read +
+    // shareToken-harvesting hole this closes).
+    let shareProject: { id: string; shareToken: string } | null = null
     if (!session) {
       const share = req.nextUrl.searchParams.get('share')
       if (!share) return unauthorized()
-      const project = share
-        ? await db.project.findUnique({ where: { shareToken: share } })
-        : null
-      if (!project) return unauthorized()
+      shareProject = await db.project.findUnique({ where: { shareToken: share } })
+      if (!shareProject) return unauthorized()
+    }
+    const queryProjectId = req.nextUrl.searchParams.get('projectId')
+    // A share token paired with a ?projectId that names a DIFFERENT project
+    // is a cross-project probe — answer with the same 404 as an unknown id
+    // (no existence oracle).
+    if (shareProject && queryProjectId && queryProjectId !== shareProject.id) {
+      return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
     // Tenant isolation: client-role sessions are PINNED to their own project —
-    // a ?projectId from the URL is ignored (mirrors /api/sync).
-    const projectId =
-      session?.user.role === 'client'
+    // a ?projectId from the URL is ignored (mirrors /api/sync). The public
+    // share path is pinned to the token's own project.
+    const projectId = shareProject
+      ? shareProject.id
+      : session?.user.role === 'client'
         ? session.user.projectId
-        : req.nextUrl.searchParams.get('projectId')
+        : queryProjectId
     const payload = await getProjectPayload(projectId)
     if (!payload) {
       return NextResponse.json({ error: projectId ? 'Project not found' : 'No project found' }, { status: 404 })
@@ -162,6 +176,18 @@ export const GET = publicRoute(
     // B4-INTEL: the §57 unified timeline rides along as an ADDITIVE key — the
     // rest of the payload is byte-identical to getProjectPayload's output.
     const timeline = await buildTimelineSlice(payload.project.id)
-    return NextResponse.json({ ...payload, timeline })
+    // Defense-in-depth per the v1 doctrine ("shareToken is a bearer
+    // capability, not a data field"): the PUBLIC share path never echoes
+    // token material — the caller already holds the one token it used.
+    // Owner sessions keep the field (the Share dialog builds the link from
+    // it). The public client surface is GET /api/share, which never echoes
+    // tokens either.
+    const body = shareProject
+      ? (() => {
+          const { shareToken: _stripped, ...projectWithoutToken } = payload.project
+          return { ...payload, project: projectWithoutToken, timeline }
+        })()
+      : { ...payload, timeline }
+    return NextResponse.json(body)
   },
 )
