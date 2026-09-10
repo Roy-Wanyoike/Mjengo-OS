@@ -98,7 +98,8 @@ export function enforceNextAuthSecretAtBoot(): void {
   // Dev/test: usable, but say it once.
   console.warn(
     '[auth] NEXTAUTH_SECRET is not set or too short — dev sessions run on the ' +
-      'next-auth fallback secret. Generate one (openssl rand -hex 32) before any ' +
-      'real deployment; production boot fails closed without it.',
+      'next-auth fallback secret (sign-in AND guarded APIs verify on it — ' +
+      'issue #94). Generate one (openssl rand -hex 32) before any real ' +
+      'deployment; production boot fails closed without it.',
   )
 }
