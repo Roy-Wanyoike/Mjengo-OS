@@ -12,6 +12,7 @@ import { Button } from '@/frontend/ui/button'
 import { Badge } from '@/frontend/ui/badge'
 import { RefreshCw, ShieldAlert, Info, AlertTriangle, TriangleAlert, History, Radar } from 'lucide-react'
 import { parseRiskFindings, RULE_LABELS, type FindingSeverity } from '@/backend/modules/intel/types'
+import { useT } from '@/frontend/i18n/provider'
 import { SeverityChip, ScoreRing } from '@/frontend/mjengo/intel/bits'
 
 function SeverityIcon({ severity }: { severity: FindingSeverity }) {
@@ -22,6 +23,7 @@ function SeverityIcon({ severity }: { severity: FindingSeverity }) {
 
 export function RiskSection() {
   const { data, dispatch, actionBusy, viewMode } = useMjengo()
+  const t = useT()
   const intel = data?.intel
   const risk = intel?.risk ?? null
   const findings = useMemo(() => (risk ? parseRiskFindings(risk.findings) : []), [risk])
@@ -30,16 +32,16 @@ export function RiskSection() {
   if (!data) return null
 
   return (
-    <section aria-label="Project risk">
+    <section aria-label={t('intel.risk.aria')}>
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <CardTitle className="flex items-center gap-2 text-base">
-                <ShieldAlert className="w-4 h-4 text-stone-500" aria-hidden /> Project risk
+                <ShieldAlert className="w-4 h-4 text-stone-500" aria-hidden /> {t('intel.risk.title')}
               </CardTitle>
               <CardDescription>
-                5 deterministic rules over this project&apos;s live rows — budget pace, schedule, procurement, price trend, attendance.
+                {t('intel.risk.desc')}
               </CardDescription>
             </div>
             {!isClient && (
@@ -48,10 +50,10 @@ export function RiskSection() {
                 variant="outline"
                 className="gap-1.5"
                 disabled={actionBusy !== null}
-                onClick={() => void dispatch('risk.recompute', {}, 'Recompute risk now')}
+                onClick={() => void dispatch('risk.recompute', {}, t('intel.risk.recomputeAudit'))}
               >
-                <RefreshCw className={`w-4 h-4 ${actionBusy === 'Recompute risk now' ? 'animate-spin' : ''}`} aria-hidden />
-                Recompute now
+                <RefreshCw className={`w-4 h-4 ${actionBusy === t('intel.risk.recomputeAudit') ? 'animate-spin' : ''}`} aria-hidden />
+                {t('intel.risk.recompute')}
               </Button>
             )}
           </div>
@@ -63,7 +65,7 @@ export function RiskSection() {
                 <Radar className="w-6 h-6 text-stone-400" />
               </div>
               <p className="text-sm text-stone-500 max-w-sm">
-                No risk assessment yet{!isClient && ' — run "Recompute now" to score the live data'}. Findings describe patterns, never people.
+                {t('intel.risk.empty', { run: !isClient ? t('intel.risk.emptyRun') : '' })}
               </p>
             </div>
           ) : (
@@ -78,27 +80,26 @@ export function RiskSection() {
                     <span className="text-xs text-stone-400">
                       computed {formatDistanceToNow(new Date(risk.computedAt), { addSuffix: true })}
                     </span>
-                    <span className="text-xs text-stone-400" aria-label={`${findings.length} findings`}>
-                      · {findings.length} finding{findings.length === 1 ? '' : 's'}
+                    <span className="text-xs text-stone-400" aria-label={t('intel.risk.findingsAria', { count: findings.length })}>
+                      · {t(findings.length === 1 ? 'intel.risk.findingOne' : 'intel.risk.findingMany', { count: findings.length })}
                     </span>
                   </div>
                   <p className="text-sm text-stone-600 leading-relaxed">
-                    Score = 100 minus severity weights (info 5 · warning 15 · critical 30, floored at 0). Higher is calmer —
-                    the same rows always produce the same score, so every finding can be traced back to its rule.
+                    {t('intel.risk.scoreDesc')}
                   </p>
                   <p className="text-[11px] text-stone-400 flex items-center gap-1.5">
                     <History className="w-3.5 h-3.5" aria-hidden />
-                    Every recompute is stored — the latest result wins here; history stays queryable.
+                    {t('intel.risk.historyNote')}
                   </p>
                 </div>
               </div>
 
               {findings.length === 0 ? (
                 <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700" role="status">
-                  No rule findings — the live rows are inside every threshold right now.
+                  {t('intel.risk.noFindings')}
                 </p>
               ) : (
-                <ul className="space-y-2.5" aria-label="Risk findings">
+                <ul className="space-y-2.5" aria-label={t('intel.risk.findingsListAria')}>
                   {findings.map((f, i) => (
                     <li key={`${f.rule}-${i}`} className="rounded-lg border border-stone-200 bg-stone-50/60 p-3.5">
                       <div className="flex items-start gap-2.5">
@@ -115,7 +116,7 @@ export function RiskSection() {
                           {f.evidence && (
                             <p className="mt-1.5 text-[11px] text-stone-400 flex items-center gap-1">
                               <Radar className="w-3 h-3 shrink-0" aria-hidden />
-                              <span className="truncate" title={f.evidence}>Evidence: {f.evidence}</span>
+                              <span className="truncate" title={f.evidence}>{t('intel.risk.evidence')}: {f.evidence}</span>
                             </p>
                           )}
                         </div>

@@ -14,6 +14,7 @@ import {
   Newspaper, RefreshCw, TrendingUp, ShieldAlert, Truck, Flag, ChevronRight, CalendarDays,
 } from 'lucide-react'
 import { parseDigestItems, type DigestItem } from '@/backend/modules/intel/types'
+import { useT } from '@/frontend/i18n/provider'
 
 function mondayOfThisWeek(): string {
   const d = new Date()
@@ -34,11 +35,12 @@ function ItemIcon({ kind }: { kind: string }) {
 }
 
 function ItemList({ items }: { items: DigestItem[] }) {
+  const t = useT()
   if (items.length === 0) {
-    return <p className="text-sm text-stone-400">No items recorded for this week.</p>
+    return <p className="text-sm text-stone-400">{t('intel.digest.noItems')}</p>
   }
   return (
-    <ul className="space-y-2" aria-label="Digest items">
+    <ul className="space-y-2" aria-label={t('intel.digest.itemsAria')}>
       {items.map((it, i) => (
         <li key={i} className="flex items-start gap-2.5">
           <span className="mt-0.5"><ItemIcon kind={it.kind} /></span>
@@ -54,6 +56,7 @@ function ItemList({ items }: { items: DigestItem[] }) {
 
 export function DigestSection() {
   const { data, dispatch, actionBusy, viewMode } = useMjengo()
+  const t = useT()
   const [openWeek, setOpenWeek] = useState<string | null>(null)
   const digests = data?.intel.digests ?? []
   const isClient = viewMode === 'client'
@@ -72,16 +75,16 @@ export function DigestSection() {
   }
 
   return (
-    <section aria-label="Weekly digest">
+    <section aria-label={t('intel.digest.aria')}>
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <CardTitle className="flex items-center gap-2 text-base">
-                <Newspaper className="w-4 h-4 text-stone-500" aria-hidden /> Weekly digest
+                <Newspaper className="w-4 h-4 text-stone-500" aria-hidden /> {t('intel.digest.title')}
               </CardTitle>
               <CardDescription>
-                One deterministic roll-up per week (Monday-based): risk, price movements, procurement counts, milestones.
+                {t('intel.digest.desc')}
               </CardDescription>
             </div>
             {!isClient && (
@@ -90,23 +93,23 @@ export function DigestSection() {
                 variant="outline"
                 className="gap-1.5"
                 disabled={actionBusy !== null}
-                onClick={() => void dispatch('digest.generate', {}, 'Generate this week\u2019s digest')}
+                onClick={() => void dispatch('digest.generate', {}, t('intel.digest.generateAudit'))}
               >
-                <RefreshCw className={`w-4 h-4 ${actionBusy === 'Generate this week\u2019s digest' ? 'animate-spin' : ''}`} aria-hidden />
-                {current ? 'Regenerate' : 'Generate digest'}
+                <RefreshCw className={`w-4 h-4 ${actionBusy === t('intel.digest.generateAudit') ? 'animate-spin' : ''}`} aria-hidden />
+                {current ? t('intel.digest.regenerate') : t('intel.digest.generate')}
               </Button>
             )}
           </div>
         </CardHeader>
         <CardContent className="pt-0 space-y-4">
           {current ? (
-            <div className="rounded-lg border border-stone-200 bg-stone-50/60 p-4" aria-label="Current week digest">
+            <div className="rounded-lg border border-stone-200 bg-stone-50/60 p-4" aria-label={t('intel.digest.currentAria')}>
               <div className="flex flex-wrap items-center gap-2 mb-2.5">
                 <Badge className="bg-stone-900 text-stone-50 text-[10px] gap-1">
-                  <CalendarDays className="w-3 h-3" aria-hidden /> Week of {weekLabel(current.weekStart)}
+                  <CalendarDays className="w-3 h-3" aria-hidden /> {t('intel.digest.weekOf', { week: weekLabel(current.weekStart) })}
                 </Badge>
                 <span className="text-[11px] text-stone-400">
-                  generated {formatDistanceToNow(new Date(current.createdAt), { addSuffix: true })}
+                  {t('intel.digest.generated')} {formatDistanceToNow(new Date(current.createdAt), { addSuffix: true })}
                 </span>
               </div>
               <p className="text-sm text-stone-700 leading-relaxed mb-3">{current.summary}</p>
@@ -118,20 +121,20 @@ export function DigestSection() {
                 <Newspaper className="w-6 h-6 text-stone-400" />
               </div>
               <p className="text-sm text-stone-500 max-w-sm">
-                No digest for the week of {weekLabel(thisWeek)} yet{!isClient && ' — hit "Generate digest"'}. It aggregates what already happened — nothing new is invented.
+                {t('intel.digest.empty', { week: weekLabel(thisWeek), run: !isClient ? t('intel.digest.emptyRun') : '' })}
               </p>
             </div>
           )}
 
           {previous.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">Previous weeks</p>
+              <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">{t('intel.digest.previous')}</p>
               <div className="space-y-1.5">
                 {previous.map((d) => (
                   <Collapsible key={d.id} open={openWeek === d.id} onOpenChange={(v) => setOpenWeek(v ? d.id : null)}>
                     <CollapsibleTrigger className="w-full text-left rounded-lg border border-stone-200 bg-white px-3.5 py-2.5 min-h-11 flex items-center gap-2 hover:bg-stone-50 transition-colors">
                       <ChevronRight className={`w-4 h-4 text-stone-400 transition-transform ${openWeek === d.id ? 'rotate-90' : ''}`} aria-hidden />
-                      <span className="text-sm font-medium text-stone-700">Week of {weekLabel(d.weekStart)}</span>
+                      <span className="text-sm font-medium text-stone-700">{t('intel.digest.weekOf', { week: weekLabel(d.weekStart) })}</span>
                       <span className="text-xs text-stone-400 truncate flex-1">{d.summary}</span>
                     </CollapsibleTrigger>
                     <CollapsibleContent>

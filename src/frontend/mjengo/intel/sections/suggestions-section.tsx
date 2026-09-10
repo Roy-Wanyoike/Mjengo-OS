@@ -9,23 +9,24 @@ import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/frontend/ui/card'
 import { Badge } from '@/frontend/ui/badge'
 import { Lightbulb, CheckCircle2, CircleAlert, PackageSearch } from 'lucide-react'
+import { useT } from '@/frontend/i18n/provider'
 
 export function SuggestionsSection() {
   const { data } = useMjengo()
+  const t = useT()
   const suggestions = data?.intel.suggestions ?? []
 
   if (!data) return null
 
   return (
-    <section aria-label="Procurement suggestions">
+    <section aria-label={t('intel.suggestions.aria')}>
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
-            <Lightbulb className="w-4 h-4 text-amber-500" aria-hidden /> Procurement suggestions
+            <Lightbulb className="w-4 h-4 text-amber-500" aria-hidden /> {t('intel.suggestions.title')}
           </CardTitle>
           <CardDescription>
-            Cover check over your price-tracked materials: which ones have an open request or PO naming them, and which
-            have none. Suggestions only — no request is created for you.
+            {t('intel.suggestions.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-0">
@@ -33,11 +34,11 @@ export function SuggestionsSection() {
             <div className="py-6 flex flex-col items-center text-center gap-2" role="status">
               <PackageSearch className="w-6 h-6 text-stone-300" aria-hidden />
               <p className="text-sm text-stone-500 max-w-sm">
-                No price-tracked materials yet — once orders and price points land, the cover check starts here.
+                {t('intel.suggestions.empty')}
               </p>
             </div>
           ) : (
-            <ul className="space-y-2" aria-label="Cover check per material">
+            <ul className="space-y-2" aria-label={t('intel.suggestions.listAria')}>
               {suggestions.map((s) => (
                 <li
                   key={s.materialName}
@@ -61,7 +62,7 @@ export function SuggestionsSection() {
                             : 'border-amber-200 bg-amber-100 text-amber-800'
                         }`}
                       >
-                        {s.status === 'covered' ? 'Covered' : 'No cover'}
+                        {s.status === 'covered' ? t('intel.suggestions.covered') : t('intel.suggestions.noCover')}
                       </Badge>
                     </div>
                     <p className="text-xs text-stone-600 mt-1 leading-relaxed">
@@ -73,8 +74,7 @@ export function SuggestionsSection() {
             </ul>
           )}
           <p className="mt-3 text-[11px] text-stone-400 leading-relaxed">
-            Deterministic rule: an open request (draft/submitted/approved) or PO (up to delivering) whose line names the
-            material counts as cover. Next-2-weeks demand estimates from consumption land with the BOQ connection.
+            {t('intel.suggestions.ruleNote')}
           </p>
         </CardContent>
       </Card>
