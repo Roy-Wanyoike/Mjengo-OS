@@ -471,6 +471,12 @@ bun run seed   # = seed.ts + users → tasks → domain → evidence → money
                #   → intel (re-run) → trust — fail-fast, with step notes
 ```
 
+Dev/demo-only by design: with `NODE_ENV=production` the seed **refuses to
+run** unless `I_HAVE_BACKED_UP_AND_WANT_TO_SEED_PRODUCTION=1` is set — and
+even then only against a local `file:` SQLite DB, with the demo admin account
+requiring `SEED_DEMO_ADMIN=1` (its password is public here). Details in
+[DEPLOYMENT.md §6.4](./DEPLOYMENT.md).
+
 The individual steps, if you want partial re-seeds (each extras script
 wipes only its own models — partial re-seeds are safe):
 

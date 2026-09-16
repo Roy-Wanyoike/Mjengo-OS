@@ -337,6 +337,26 @@ has **node, not bun**. For a demo/self-host instance with seed data either:
 
 Production data does not need seeds — users/projects are created via the app.
 
+**Production guard (issues #126/#180).** Every seed entry (`bun run seed`,
+`prisma/seed.ts`, `prisma/seed-extras/users.ts`) **refuses to run when
+`NODE_ENV=production`**: the chain deletes all rows in the tables it owns
+before writing demo data, so the only way through is an explicit, per-run
+acknowledgment —
+
+```bash
+I_HAVE_BACKED_UP_AND_WANT_TO_SEED_PRODUCTION=1 NODE_ENV=production bun run seed
+```
+
+— and even then the guard refuses if `DATABASE_URL` is anything but a local
+SQLite `file:` URL (defensive: the chain only supports the local demo DB, so
+a `postgres://` target is rejected). In bypass mode the `admin@mjengo.os`
+demo account is **not** created unless `SEED_DEMO_ADMIN=1` is also set (its
+password is public in README.md); the other demo accounts are still created
+with their documented public passwords — change or disable them before real
+use. Non-production runs (dev, CI, unset `NODE_ENV`) are unchanged. The
+rules live in `prisma/seed-guard.ts` and are pinned by
+`tests/unit/seed-guard.test.ts`.
+
 ### 6.5 The marketing-website image
 
 `mjengoos-website/Dockerfile` mirrors the root Dockerfile's conventions for

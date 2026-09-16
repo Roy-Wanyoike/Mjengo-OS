@@ -30,19 +30,72 @@
  * Every script is still standalone-runnable for partial re-seeds; each wipes
  * only the models it owns. This runner just chains them in the right order
  * and stops at the first failure.
+ *
+ * Production guard (#126/#180): the chain REFUSES to run when
+ * NODE_ENV=production unless I_HAVE_BACKED_UP_AND_WANT_TO_SEED_PRODUCTION=1
+ * is set (and even then only against a local SQLite file: DATABASE_URL —
+ * prisma/seed-guard.ts holds the rules; the admin demo account additionally
+ * needs SEED_DEMO_ADMIN=1, see prisma/seed-extras/users.ts).
  */
 import { spawnSync } from 'node:child_process'
 
-const steps: Array<{ script: string; note: string }> = [
-  { script: 'prisma/seed.ts', note: 'base projects/phases/tasks/workers/materials + professionals → land → supply → invoices → intel' },
-  { script: 'prisma/seed-extras/users.ts', note: '7 demo login accounts' },
-  { script: 'prisma/seed-extras/tasks.ts', note: 'priorities, assignees, blockers' },
-  { script: 'prisma/seed-extras/domain.ts', note: 'worker depth, driver leg, team roster' },
-  { script: 'prisma/seed-extras/evidence.ts', note: 'zones, photo comments, notifications, audit' },
-  { script: 'prisma/seed-extras/money.ts', note: 'escrow, milestones, ledger, payment requests' },
-  { script: 'prisma/seed-extras/intel.ts', note: 're-run — restore intel notifications money wiped (kind-scoped)' },
-  { script: 'prisma/seed-extras/trust.ts', note: 'attendance trust history + kiosk PINs' },
+import { assertSeedAllowed } from './seed-guard'
+
+assertSeedAllowed()
+
+const steps: Array<{ script: string; note: string; wipes: string }> = [
+  {
+    script: 'prisma/seed.ts',
+    note: 'base projects/phases/tasks/workers/materials + professionals → land → supply → invoices → intel',
+    wipes:
+      'ALL base + inline-extras tables: Notification, SiteZone, PhotoComment, VariationOrder, DrawPack, Milestone, EscrowWallet, AuditEvent, Recap, Transaction, Alert, SitePhoto, Consumption, Delivery, Attendance, Material, Worker, Task, Phase, Project + every model the inline professionals/land/supply/invoices/intel seeds own (Professional, LandParcel, Supplier, PurchaseOrder, Invoice, Ledger…)',
+  },
+  {
+    script: 'prisma/seed-extras/users.ts',
+    note: '7 demo login accounts',
+    wipes: 'User (all login accounts)',
+  },
+  {
+    script: 'prisma/seed-extras/tasks.ts',
+    note: 'priorities, assignees, blockers',
+    wipes: 'the task-v2 tasks it owns (matched by title) + their AuditEvent rows',
+  },
+  {
+    script: 'prisma/seed-extras/domain.ts',
+    note: 'worker depth, driver leg, team roster',
+    wipes: 'nothing (idempotent check-before-write)',
+  },
+  {
+    script: 'prisma/seed-extras/evidence.ts',
+    note: 'zones, photo comments, notifications, audit',
+    wipes: 'PhotoComment, SiteZone, Notification (all kinds)',
+  },
+  {
+    script: 'prisma/seed-extras/money.ts',
+    note: 'escrow, milestones, ledger, payment requests',
+    wipes:
+      'Notification + all money/ledger models: PaymentRequest, VariationOrder, DrawPack, Milestone, EscrowWallet, LedgerEntry, LedgerTransaction, LedgerAccount, IdempotencyRecord, WalletAccount',
+  },
+  {
+    script: 'prisma/seed-extras/intel.ts',
+    note: 're-run — restore intel notifications money wiped (kind-scoped)',
+    wipes: 'RiskAssessment, IntelDigest, PricePoint + its own 4 Notification kinds',
+  },
+  {
+    script: 'prisma/seed-extras/trust.ts',
+    note: 'attendance trust history + kiosk PINs',
+    wipes: 'Attendance rows of the 3 seeded projects (scoped) + Worker.pin',
+  },
 ]
+
+// Destructive-wipe summary (#126): printed BEFORE anything runs, so the
+// operator sees exactly what is about to be deleted. (An interactive
+// confirmation is deliberately NOT used — CI runs the chain non-interactively.)
+console.log(
+  '\n⚠  DESTRUCTIVE SEED — each step below DELETES ALL ROWS in the tables it owns\n' +
+    '   before writing fresh demo data (nothing is merged):\n' +
+    steps.map((s) => `     ${s.script.padEnd(32)} ${s.wipes}`).join('\n'),
+)
 
 let failed = false
 for (const { script, note } of steps) {
