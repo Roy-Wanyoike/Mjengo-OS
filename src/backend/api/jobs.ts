@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { forbidden } from '@/backend/lib/guard'
 import { route, safeError } from '@/backend/lib/route-kit'
@@ -11,6 +11,9 @@ import { enqueue, isJobType, loadRecentJobs, runDueJobs } from '@/backend/module
 //   · body {}                  → run everything queued + due
 //   · body {type, projectId?}  → enqueue-then-run that job now
 //   Returns { ran, results } with per-job status/result/lastError.
+// The handler pipeline itself is the exported handleJobsRunPost below — also
+// reused verbatim by the bearer wrapper in src/app/api/jobs/run/route.ts
+// (API-9, issue #160: ONE implementation, two auth selectors).
 //
 // GET (any signed-in role): the recent JobRecord list for the project —
 // client-role sessions are pinned to their own project (tenant isolation).
@@ -26,6 +29,42 @@ import { enqueue, isJobType, loadRecentJobs, runDueJobs } from '@/backend/module
 // W-BACKEND 4b: a body projectId that references no Project used to trip a
 // Prisma FK error inside enqueue → redacted 500. It now gets an honest 400
 // BEFORE any queue write (the same posture as /api/ai/*'s projectId gate).
+
+/**
+ * The raw POST /api/jobs/run handler body — ONE implementation shared by BOTH
+ * auth wrappers (API-9, issue #160): the session `route()` export below and
+ * the bearer `publicRoute()` twin in src/app/api/jobs/run/route.ts both
+ * delegate here, so the pipeline behavior (400 unknown project, 400 unknown
+ * type, enqueue-then-run, { ok, ran, results } shape) cannot drift between
+ * the session path the UI uses and the machine path the scheduler uses.
+ * Auth-neutral by construction: it reads only the (already-parsed) body —
+ * `_req` is accepted for call-shape symmetry and future use, the session is
+ * ignored (the wrappers enforce contractor/admin or the constant-time token).
+ */
+export async function handleJobsRunPost(_req: NextRequest, body: unknown): Promise<NextResponse> {
+  const parsed = (body ?? {}) as { type?: unknown; projectId?: unknown }
+
+  const type = typeof parsed.type === 'string' ? parsed.type.trim() : ''
+  const projectId = typeof parsed.projectId === 'string' && parsed.projectId.trim() ? parsed.projectId.trim() : null
+
+  // Existence check (4b) — an unknown projectId is a 400, never a redacted 500.
+  if (projectId) {
+    const exists = await db.project.findUnique({ where: { id: projectId }, select: { id: true } })
+    if (!exists) return NextResponse.json({ error: 'Project not found' }, { status: 400 })
+  }
+
+  if (type) {
+    if (!isJobType(type)) {
+      return NextResponse.json({ error: `Unknown job type "${type}"` }, { status: 400 })
+    }
+    // Enqueue-then-run: the drain below picks the row up (runAt = now).
+    await enqueue(type, projectId, {})
+  }
+
+  const { ran, results } = await runDueJobs(10)
+  return NextResponse.json({ ok: true, ran, results })
+}
+
 export const POST = route(
   {
     scope: 'api/jobs/run POST',
@@ -43,29 +82,9 @@ export const POST = route(
     body: { tolerateInvalid: true }, // the historical contract: unparseable body = {}
     onError: safeError(500, 'Job run failed'),
   },
-  async (_req, _session, body) => {
-    const parsed = (body ?? {}) as { type?: unknown; projectId?: unknown }
-
-    const type = typeof parsed.type === 'string' ? parsed.type.trim() : ''
-    const projectId = typeof parsed.projectId === 'string' && parsed.projectId.trim() ? parsed.projectId.trim() : null
-
-    // Existence check (4b) — an unknown projectId is a 400, never a redacted 500.
-    if (projectId) {
-      const exists = await db.project.findUnique({ where: { id: projectId }, select: { id: true } })
-      if (!exists) return NextResponse.json({ error: 'Project not found' }, { status: 400 })
-    }
-
-    if (type) {
-      if (!isJobType(type)) {
-        return NextResponse.json({ error: `Unknown job type "${type}"` }, { status: 400 })
-      }
-      // Enqueue-then-run: the drain below picks the row up (runAt = now).
-      await enqueue(type, projectId, {})
-    }
-
-    const { ran, results } = await runDueJobs(10)
-    return NextResponse.json({ ok: true, ran, results })
-  },
+  // The session wrapper — auth/policy wiring only; the pipeline is the shared
+  // handleJobsRunPost above (API-9: no duplicated handler body in this file).
+  async (req, _session, body) => handleJobsRunPost(req, body),
 )
 
 export const GET = route(
