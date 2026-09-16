@@ -4,8 +4,8 @@
 // the session-guarded handler re-exported from src/backend/api/jobs.ts.
 //
 // POST accepts EITHER credential:
-//   1. SESSION (contractor/admin) — the historical path, byte-identical:
-//      it literally IS the withGuard POST from src/backend/api/jobs.ts.
+//   1. SESSION (contractor/admin) — the historical path: the withGuard POST
+//      re-exported from src/backend/api/jobs.ts.
 //   2. BEARER TOKEN (opt-in machine path) — schedulers cannot hold a
 //      NextAuth session, so when env JOBS_RUN_TOKEN is set, a request
 //      presenting `Authorization: Bearer <token>` that matches it in
@@ -21,18 +21,16 @@
 // sidecar, deploy/systemd/mjengo-jobs.timer, or any external cron —
 // see DEPLOYMENT.md "Background jobs scheduler".
 //
-// NOTE: the bearer pipeline re-declares the POST handler from
-// src/backend/api/jobs.ts (verbatim). That file is owned by another
-// wave; when editing either copy, edit both — the durable fix is for
-// jobs.ts to export its raw handler so this file can reuse it (noted
-// in worklog task 6-a).
+// API-9 (issue #160): the POST handler body is NOT duplicated here anymore —
+// src/backend/api/jobs.ts exports the raw handleJobsRunPost(req, body) and
+// BOTH wrappers (the session route() export and the bearer publicRoute
+// below) delegate to it, so a behavior change can never land in one copy
+// and silently diverge the other.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { POST as guardedSessionPost } from '@/backend/api/jobs'
-import { db } from '@/backend/lib/db'
+import { POST as guardedSessionPost, handleJobsRunPost } from '@/backend/api/jobs'
 import { bearerTokenFromAuthorization, secretsMatch } from '@/backend/lib/jobs-token'
 import { publicRoute, safeError } from '@/backend/lib/route-kit'
-import { enqueue, isJobType, runDueJobs } from '@/backend/modules/jobs/service'
 
 export { GET } from '@/backend/api/jobs'
 
@@ -56,34 +54,12 @@ const bearerPost = publicRoute(
     body: { tolerateInvalid: true }, // the historical contract: unparseable body = {}
     onError: safeError(500, 'Job run failed'),
   },
-  // Handler body: VERBATIM COPY of src/backend/api/jobs.ts's POST
-  // handler (it ignores the session, so it is safe to run under the
-  // machine principal). The session, when a cookie rides along with a
+  // The SHARED handler from src/backend/api/jobs.ts (API-9: one
+  // implementation). It ignores the session, so it is safe to run under
+  // the machine principal; the session, when a cookie rides along with a
   // valid token, is decoded best-effort by publicRoute and likewise
   // ignored — the token takes precedence.
-  async (_req, _session, body) => {
-    const parsed = (body ?? {}) as { type?: unknown; projectId?: unknown }
-
-    const type = typeof parsed.type === 'string' ? parsed.type.trim() : ''
-    const projectId = typeof parsed.projectId === 'string' && parsed.projectId.trim() ? parsed.projectId.trim() : null
-
-    // Existence check (4b) — an unknown projectId is a 400, never a redacted 500.
-    if (projectId) {
-      const exists = await db.project.findUnique({ where: { id: projectId }, select: { id: true } })
-      if (!exists) return NextResponse.json({ error: 'Project not found' }, { status: 400 })
-    }
-
-    if (type) {
-      if (!isJobType(type)) {
-        return NextResponse.json({ error: `Unknown job type "${type}"` }, { status: 400 })
-      }
-      // Enqueue-then-run: the drain below picks the row up (runAt = now).
-      await enqueue(type, projectId, {})
-    }
-
-    const { ran, results } = await runDueJobs(10)
-    return NextResponse.json({ ok: true, ran, results })
-  },
+  async (req, _session, body) => handleJobsRunPost(req, body),
 )
 
 // ---------------------------------------------------------------- POST export
@@ -97,6 +73,7 @@ const bearerPost = publicRoute(
  *   · token set + presented + constant-time match → bearer pipeline.
  *   · token set + presented + mismatch → 401 (fail closed; the session
  *     path is NOT used as a fallback for a failed machine credential).
+ * Both paths end in the SAME handleJobsRunPost (src/backend/api/jobs.ts).
  */
 export async function POST(req: NextRequest, ctx: unknown): Promise<NextResponse> {
   const configured = process.env.JOBS_RUN_TOKEN

@@ -24,6 +24,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@/backend/api/jobs', () => ({
   GET: vi.fn(),
   POST: vi.fn(async () => new Response(JSON.stringify({ ok: true, via: 'session' }), { status: 200 })),
+  // API-9 (issue #160): the shared raw handler the bearer wrapper delegates
+  // to — represented by a marker (it never runs under the mocked
+  // publicRoute; its real behavior is pinned in jobs-run-handler.test.ts).
+  handleJobsRunPost: vi.fn(async () => new Response(JSON.stringify({ ok: true, via: 'shared-handler' }), { status: 200 })),
 }))
 vi.mock('@/backend/lib/route-kit', () => ({
   // publicRoute(opts, handler) → route handler; the bearer pipeline is
