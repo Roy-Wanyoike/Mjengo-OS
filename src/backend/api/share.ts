@@ -20,8 +20,9 @@ import { serveTrustDigestForShare } from '@/backend/modules/ai/trust-digest'
 // Rate limit (P3 review item, W3-B): the route stays PUBLIC (the token IS the
 // auth) but both verbs now enforce a 30/min per-IP bucket so scripted token
 // brute-forcing cannot run at full speed. 30/min is far above what a human
-// client view generates. In-process limiter — single-instance honesty note in
-// src/backend/lib/rate-limit.ts.
+// client view generates. Limiter backing store resolved in
+// src/backend/lib/rate-limit.ts (shared sqlite per host by default, issue
+// #158; in-process only when RATE_LIMIT_STORE=memory opts out).
 const CLIENT_ALLOWLIST: readonly ActionType[] = [
   'milestone.decide',
   'variation.decide',

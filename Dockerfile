@@ -75,6 +75,13 @@ COPY --from=builder --chown=node:node /app/node_modules/prisma ./node_modules/pr
 COPY --from=builder --chown=node:node /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
 
+# better-sqlite3 — the DEFAULT rate-limit/lockout store (issue #158; see
+# DEPLOYMENT.md §9.4). Loaded via createRequire at runtime, so it is invisible
+# to Next's standalone output tracing and must be COPYied explicitly. Without
+# this line the app still boots — it logs one fallback warning and runs on the
+# in-memory (per-process) stores.
+COPY --from=builder --chown=node:node /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
+
 # Schema + migration history for `prisma migrate deploy`.
 COPY --chown=node:node prisma/schema.prisma ./prisma/schema.prisma
 COPY --chown=node:node prisma/migrations ./prisma/migrations

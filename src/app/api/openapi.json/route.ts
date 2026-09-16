@@ -21,7 +21,9 @@ import { NextResponse } from 'next/server'
  * Honest facts baked into the text: simulated-by-default payment rails (Daraja
  * sandbox when env-configured), KES-only money,
  * ledger as source of truth, idempotent replays that 409 on a payload mismatch,
- * single-instance in-process rate buckets, and the one error shape { error, field? }.
+ * per-host shared rate buckets by default (in-process only when
+ * RATE_LIMIT_STORE=memory opts out — see rate-limit.ts), and the one error
+ * shape { error, field? }.
  */
 
 const json = (schema: object) => ({ content: { 'application/json': { schema } } })
