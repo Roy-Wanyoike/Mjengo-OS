@@ -49,6 +49,9 @@ function localToday(): string {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
 }
 
+/** Mirrors the server bound (lib/money-bounds MAX_MONEY_KES) for friendly pre-flight errors. */
+const MAX_SINGLE_MONEY_KES = 1_000_000_000
+
 export function ExpenseDialog({ open, onOpenChange, onSubmit, submitting }: ExpenseDialogProps) {
   const t = useT()
   const [type, setType] = useState('material')
@@ -77,6 +80,10 @@ export function ExpenseDialog({ open, onOpenChange, onSubmit, submitting }: Expe
   async function handleSubmit() {
     if (!amount || Number.isNaN(amountNum) || amountNum <= 0) {
       setAmountError(t('dialog.expense.error.amount'))
+      return
+    }
+    if (amountNum > MAX_SINGLE_MONEY_KES) {
+      setAmountError(t('dialog.expense.error.amountTooLarge'))
       return
     }
     setAmountError(null)

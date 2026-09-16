@@ -988,6 +988,7 @@ export const swDict = {
 
   // money tab — remaining toast/error strings (aiReview.* was already keyed)
   'money.error.topupAmount': 'Weka kiasi cha kuongeza zaidi ya sifuri',
+  'money.error.topupTooLarge': 'Kiasi kikubwa mno — kiwango cha juu cha hoja moja ni KSh 1,000,000,000',
   'money.topupOk': '{amount} imeongezwa kwenye pochi ya escrow',
   'money.topupFailed': 'Haikuweza kuongezwa',
   'money.error.msName': 'Weka jina la hatua',
@@ -1339,6 +1340,7 @@ export const swDict = {
   'dialog.expense.amountPh': 'k.m. 25000',
   'dialog.expense.preview': 'Muonekano wa matumizi papo hapo',
   'dialog.expense.error.amount': 'Kiasi lazima kiwe zaidi ya 0',
+  'dialog.expense.error.amountTooLarge': 'Kiasi kikubwa mno — kikomo cha matumizi moja ni KSh 1,000,000,000',
   'dialog.expense.note': 'Dokezo',
   'dialog.expense.notePh': 'k.m. begi 20 la saruji — Karioke Hardware',
   'dialog.expense.date': 'Tarehe',

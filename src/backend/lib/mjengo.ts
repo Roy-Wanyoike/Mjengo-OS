@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto'
 
 import { db } from '@/backend/lib/db'
+import { assertMoneyAmount } from '@/backend/lib/money-bounds'
 import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 import { logAudit, summarizeAction, kindForAction } from '@/backend/lib/audit'
 import { TRUST_ACTIONS, applyTrustAction } from '@/backend/actions/trust'
@@ -1429,9 +1430,9 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
     }
 
     case 'expense.create': {
-      const { type, amount, method, note, reference, date, costCode } = payload
+      const { type, method, note, reference, date, costCode } = payload
       if (!['material', 'wage', 'other', 'transport'].includes(type)) throw new Error("type must be 'material' | 'wage' | 'other' | 'transport'")
-      if (typeof amount !== 'number' || !(amount > 0)) throw new Error('amount must be a positive number')
+      const amount = assertMoneyAmount(payload?.amount)
       const payMethod = ['mpesa', 'cash', 'bank'].includes(method) ? method : 'mpesa'
       // F2/F-MONEY: the expense posts a balanced double-entry ledger txn
       // (debit EXPENSE:<projectId>, credit the cash pool for the rail) and the

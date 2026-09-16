@@ -14,6 +14,7 @@
 // here keeps consistent, and the finance slice exposes both so drift is visible.
 
 import { db } from '@/backend/lib/db'
+import { parseMoneyAmount, MONEY_AMOUNT_ERROR } from '@/backend/lib/money-bounds'
 import {
   postLedgerTransaction,
   postLedgerTransactionInTx,
@@ -295,8 +296,8 @@ export async function releaseMilestoneAtomic(
 // ---- Payment requests (spec §36/§59) ----
 
 export async function createPaymentRequest(projectId: string, p: any) {
-  const amount = Number(p.amount)
-  if (!(amount > 0)) throw new Error('Payment request amount must be positive')
+  const amount = parseMoneyAmount(p.amount)
+  if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
   // Requester identity from the session when one exists (payload is the fallback)
   const actor = await currentActor()
   const request = await db.paymentRequest.create({
@@ -589,8 +590,8 @@ export async function walletWithBalance(projectId: string, idOrCode: any) {
 }
 
 export async function depositWallet(projectId: string, p: any) {
-  const amount = Number(p.amount)
-  if (!(amount > 0)) throw new Error('Deposit amount must be positive')
+  const amount = parseMoneyAmount(p.amount)
+  if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
   // BE-2 (issue #103): wallet money movements are finance/admin actions —
   // gated at the service seam BEFORE any wallet/ledger read, so a refused
   // dispatch touches nothing.
@@ -663,8 +664,8 @@ function withdrawNaturalKey(
 }
 
 export async function withdrawWallet(projectId: string, p: any) {
-  const amount = Number(p.amount)
-  if (!(amount > 0)) throw new Error('Withdrawal amount must be positive')
+  const amount = parseMoneyAmount(p.amount)
+  if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
   // BE-2 (issue #103): finance/admin only, BEFORE any wallet/ledger read.
   const actor = await requireMoneyActor({
     allowed: MONEY_FINANCE_ROLES,
@@ -729,8 +730,8 @@ function transferNaturalKey(
 }
 
 export async function transferWallet(projectId: string, p: any) {
-  const amount = Number(p.amount)
-  if (!(amount > 0)) throw new Error('Transfer amount must be positive')
+  const amount = parseMoneyAmount(p.amount)
+  if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
   // BE-2 (issue #103): finance/admin only, BEFORE any wallet/ledger read.
   const actor = await requireMoneyActor({
     allowed: MONEY_FINANCE_ROLES,

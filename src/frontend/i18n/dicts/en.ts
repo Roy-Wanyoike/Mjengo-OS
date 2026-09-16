@@ -985,6 +985,7 @@ export const enDict = {
 
   // money tab — remaining toast/error strings (aiReview.* was already keyed)
   'money.error.topupAmount': 'Enter a top-up amount greater than zero',
+  'money.error.topupTooLarge': 'Amount is too large — the maximum single movement is KSh 1,000,000,000',
   'money.topupOk': '{amount} added to the escrow wallet',
   'money.topupFailed': 'Top-up failed',
   'money.error.msName': 'Give the milestone a name',
@@ -1336,6 +1337,7 @@ export const enDict = {
   'dialog.expense.amountPh': 'e.g. 25000',
   'dialog.expense.preview': 'Live preview of the expense',
   'dialog.expense.error.amount': 'Amount must be greater than 0',
+  'dialog.expense.error.amountTooLarge': 'Amount is too large — the maximum single expense is KSh 1,000,000,000',
   'dialog.expense.note': 'Note',
   'dialog.expense.notePh': 'e.g. 20 bags cement — Karioke Hardware',
   'dialog.expense.date': 'Date',

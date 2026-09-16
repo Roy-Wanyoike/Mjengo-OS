@@ -23,6 +23,7 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { zodIssueResponse } from '@/backend/lib/route-kit'
+import { MAX_MONEY_KES } from '@/backend/lib/money-bounds'
 
 // ---------------------------------------------------------------- primitives
 
@@ -30,7 +31,7 @@ import { zodIssueResponse } from '@/backend/lib/route-kit'
 export const moneyAmount = z
   .number('amount must be a number')
   .positive('amount must be positive')
-  .max(1_000_000_000, 'amount must be at most 1000000000')
+  .max(MAX_MONEY_KES, `amount must be at most ${MAX_MONEY_KES}`)
   .refine((v) => Math.round(v * 100) === v * 100, 'amount supports at most 2 decimal places')
 
 /** Wallet id OR code (service resolves both — see file header). */
