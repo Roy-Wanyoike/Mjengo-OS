@@ -51,12 +51,21 @@ Run the same gates CI runs:
 ```bash
 bun run lint          # eslint — 0 errors, 0 warnings
 bunx tsc --noEmit     # strict typecheck, 0 errors
-bun run test          # vitest — the full unit suite (1,700 tests /
-                      #   69 files at the time of the 2026-09-10 audit-fix
-                      #   wave; parallel audit-fix PRs add more)
+bun run test          # vitest — the full unit suite (1,888 tests /
+                      #   76 files — counts as of 2026-09-16; re-run
+                      #   vitest for the current number)
 ```
 
-All three must pass locally. CI runs the same gates on every push/PR:
+All three must pass locally.
+
+**Test-count convention:** living docs (README, CONTRIBUTING, DEPLOYMENT,
+RELEASE-NOTES) quote the suite size only with a date stamp ("counts as of
+2026-09-16 — re-run vitest for current"); dated reports and audit baselines
+(`docs/QA-REPORT-*.md`, `docs/audit/*.md`) keep the numbers that were true
+when they were written. If your PR adds tests, refresh the stamped counts
+— `git grep 'counts as of'` finds every site.
+
+CI runs the same gates on every push/PR:
 `ci.yml` re-runs lint and the strict typecheck (web app **and** marketing
 site) plus an informational `bun audit` and a real production build;
 `test.yml` runs the full vitest suite; `docker.yml` builds both production
@@ -73,8 +82,9 @@ site:lint` and `bun run site:typecheck`.
   split it into stacked PRs.
 - **Tests land with the code, in the same branch** — new behavior is pinned
   by new tests before it merges (the suite grew 495 → 1,513 tests across
-  waves 1–6, then to 1,700 across the 2026-09 audit waves — counts as of
-  the 2026-09-10 audit-fix wave; every merge re-ran the full suite).
+  waves 1–6, then 1,700 → 1,811 across the 2026-09-10 audit-fix wave and
+  1,888 after the 2026-09-16 hardening merges — counts as of 2026-09-16,
+  re-run vitest for current; every merge re-ran the full suite).
 - **Linked to an issue** — open or comment on one first, so the *why* is
   recorded before the *how*.
 - **Left open for review** — every change lands through a reviewed PR, never

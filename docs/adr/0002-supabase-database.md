@@ -11,10 +11,14 @@
 Mjengo-OS v0.2.5 runs on **Prisma + SQLite** (single file, single node). The product
 carries: a double-entry money core with escrow, append-only trust artifacts
 (DrawPacks, MjengoScores, AI notes/insights, TrustDigests), offline sync with
-entity versions, idempotency records, DB-backed jobs and feature flags — 61
-models across 10 domain slices. Before onboarding paying users we must choose
-the production database platform, because it shapes auth posture, tenancy
-enforcement, storage, realtime fan-out and the migration plan.
+entity versions, idempotency records, DB-backed jobs and feature flags — 68
+models as of 2026-09-16 (61 at ADR-writing time on 2026-09-09; re-verify
+with `grep -c '^model ' prisma/schema.prisma`), grouped into the domain
+modules of `src/backend/modules/` (15 as of 2026-09-16 — the module tree in
+ARCHITECTURE.md is the authoritative map). Before onboarding paying users
+we must choose the production database platform, because it shapes auth
+posture, tenancy enforcement, storage, realtime fan-out and the migration
+plan.
 
 Hard requirements that SQLite cannot meet in production:
 

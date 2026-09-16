@@ -92,7 +92,8 @@ bun install                       # uses bun.lock
 
 cp .env.example .env
 # edit .env:
-#   DATABASE_URL=file:../db/custom.db   (repo-relative; db/ is gitignored)
+#   DATABASE_URL=file:../db/custom.db   (repo-relative; db/ is gitignored —
+#                                         Prisma auto-creates it, see §4.1)
 #   NEXTAUTH_SECRET=$(openssl rand -hex 32)     # or: openssl rand -base64 32
 #   (≥ 32 chars. In production a missing/short secret is a BOOT ERROR —
 #    see §3 NEXTAUTH_SECRET and src/backend/lib/next-auth-guard.ts; dev
@@ -109,6 +110,15 @@ The database ships **empty** — seed the demo data next.
 
 - **`bunx prisma migrate deploy`** — the production path. Applies
   `prisma/migrations/` in order and records them in `_prisma_migrations`.
+  It also **auto-creates missing parent directories** for SQLite URLs —
+  verified 2026-09-16 against the repo-pinned Prisma 6.19.2: a scratch
+  copy of `prisma/` with no `db/` present ran
+  `DATABASE_URL=file:../db/custom.db prisma migrate deploy` → exit 0,
+  all 11 migrations applied, `db/custom.db` created. So a fresh clone
+  needs **no `mkdir db` step**. The guarantee is version-dependent: an
+  older or unpinned Prisma (`npx prisma@<other>`) can still fail with
+  "unable to open database file" — in that case pre-create the directory
+  (`mkdir -p db`).
   Baseline: `0_init` (the foundation schema, generated from
   `prisma/schema.prisma`); then nine **additive-only** migrations:
   `1_mjengo_score` (W3-3 trust score), `2_draw_pack` (W4-1 evidence
@@ -214,7 +224,7 @@ check the Overview tab renders KPIs and `/api/health` shows `db: "up"`.
 | Workflow | Job | Steps |
 |---|---|---|
 | `ci.yml` | `quality` | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run lint` → `bunx tsc --noEmit` |
-| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 1,700 tests / 69 files at the time of the 2026-09-10 audit-fix wave; no database or secrets required) |
+| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 1,888 tests / 76 files, counts as of 2026-09-16; re-run vitest for current. No database or secrets required) |
 | `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
 | `docker.yml` | `docker-build` | `docker build -t mjengoos-ci .` on a GitHub runner — **real verification of the Dockerfile** (the dev sandbox has no docker CLI). No registry push. |
 | `docker.yml` | `website-build` | `docker build -t mjengoos-website-ci ./mjengoos-website` — same posture, real verification of the marketing-site image. No registry push. |
@@ -303,7 +313,9 @@ to read it:
 
 - **Local dev / standalone site** — `mjengoos-website/data/submissions.json`
   (relative to the site process's working directory; gitignored runtime
-  PII). Pretty-print it with
+  PII — the `data/` directory is absent on a fresh clone but the contact
+  route creates it on first write with `mkdir -p` semantics, so no manual
+  setup is needed). Pretty-print it with
   `python3 -m json.tool mjengoos-website/data/submissions.json`.
 - **docker compose** — the file lives inside the `website` service container
   on the `website-data` volume (`/app/data/submissions.json`):
