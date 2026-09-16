@@ -23,11 +23,20 @@
  *  · role policy: WHO may receive (and thus attach) is decided upstream —
  *    supplyCan pins the site-team matrix; the service itself does no role
  *    check (it runs for any caller the guards let through) but DOES enforce
- *    attachment ownership — a foreign project's file is never attached.
+ *    attachment ownership — a foreign project's file is never attached;
+ *  · ATOMICITY (#196): the whole receive (line rewrite, photo links, Site
+ *    Store movements, delivery + PO status flips, notifications) is ONE
+ *    transaction — a failure injected at ANY step rolls back to zero partial
+ *    state, a retry after the failure posts the stock exactly once, and two
+ *    receives racing the guard cannot both win.
  *
  * @/backend/lib/db is swapped for an in-memory stub (the notify-channels /
- * outbox-versions pattern). currentActor() resolves null outside a request
- * scope, so receivedBy falls back to the payload (exercised on purpose).
+ * outbox-versions pattern) whose $transaction snapshots state and restores it
+ * on throw (the inventory-atomicity idiom) — updates REPLACE rows instead of
+ * mutating them in place so the snapshots restore cleanly. `fail` injects a
+ * one-shot write failure by model op for the rollback tests. currentActor()
+ * resolves null outside a request scope, so receivedBy falls back to the
+ * payload (exercised on purpose).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -46,17 +55,30 @@ vi.mock('@/backend/lib/db', () => {
     inventoryItems: new Map<string, Row>(), // upsert keyed project+material+location
     stockMovements: [] as Row[],
     notifications: [] as Row[],
-    writes: { lineDeleteMany: 0, deliveryUpdate: 0, photoCreateMany: 0 },
+    writes: { lineDeleteMany: 0, deliveryUpdate: 0, photoCreateMany: 0, deliveryClaim: 0 },
+    // #196 failure injection: name a model op ('stockMovement.create', …) and
+    // how many calls should throw. NOT restored by $transaction rollback —
+    // the counter models "the transient error went away", so a retry succeeds.
+    fail: { op: null as string | null, remaining: 0 },
     reset() {
       state.seq = 0
       for (const m of [state.orders, state.orderLines, state.suppliers, state.deliveries, state.deliveryLines, state.attachments, state.deliveryPhotos, state.inventoryItems]) m.clear()
       state.stockMovements = []
       state.notifications = []
-      state.writes = { lineDeleteMany: 0, deliveryUpdate: 0, photoCreateMany: 0 }
+      state.writes = { lineDeleteMany: 0, deliveryUpdate: 0, photoCreateMany: 0, deliveryClaim: 0 }
+      state.fail = { op: null, remaining: 0 }
     },
   }
 
   const id = (prefix: string) => `${prefix}_${++state.seq}`
+
+  /** One-shot (or n-shot) failure injection for the rollback tests. */
+  function maybeFail(op: string) {
+    if (state.fail.op === op && state.fail.remaining > 0) {
+      state.fail.remaining -= 1
+      throw new Error(`stub: simulated failure at ${op}`)
+    }
+  }
 
   /** Just enough of Prisma's where: equality, { in: [...] }, relation order.projectId. */
   function matches(row: Row, where: Row = {}): boolean {
@@ -78,8 +100,61 @@ vi.mock('@/backend/lib/db', () => {
     return true
   }
 
+  // #196: the transactional boundary the service now runs inside — snapshot
+  // every table on entry, restore on throw (the inventory-atomicity idiom).
+  // Rows are REPLACED (never mutated in place) by the update stubs below so
+  // the shallow Map snapshots roll back field changes too.
+  //
+  // TRANSACTIONS SERIALIZE (a promise queue): in a real database the
+  // conditional claim (`updateMany … status IN ('dispatched','arrived')`)
+  // takes a row lock, so a racing transaction waits for the winner to commit
+  // and only then re-evaluates the predicate (matching zero rows). Pure
+  // microtask interleaving would instead let a ROLLED-BACK loser restore a
+  // pre-winner snapshot and un-do the winner's writes mid-flight — something
+  // a real transaction manager can never do. The queue models the lock.
+  let txTail: Promise<unknown> = Promise.resolve()
+  async function runTx(fn: (tx: typeof db) => unknown) {
+    const snap = {
+      orders: new Map(state.orders),
+      orderLines: new Map(state.orderLines),
+      suppliers: new Map(state.suppliers),
+      deliveries: new Map(state.deliveries),
+      deliveryLines: new Map(state.deliveryLines),
+      attachments: new Map(state.attachments),
+      deliveryPhotos: new Map(state.deliveryPhotos),
+      inventoryItems: new Map(state.inventoryItems),
+      stockMovements: [...state.stockMovements],
+      notifications: [...state.notifications],
+      writes: { ...state.writes },
+    }
+    try {
+      return await fn(db)
+    } catch (err) {
+      state.orders = snap.orders
+      state.orderLines = snap.orderLines
+      state.suppliers = snap.suppliers
+      state.deliveries = snap.deliveries
+      state.deliveryLines = snap.deliveryLines
+      state.attachments = snap.attachments
+      state.deliveryPhotos = snap.deliveryPhotos
+      state.inventoryItems = snap.inventoryItems
+      state.stockMovements = snap.stockMovements
+      state.notifications = snap.notifications
+      state.writes = snap.writes
+      throw err
+    }
+  }
+
   const db = {
     __state: state,
+    async $transaction(fn: (tx: typeof db) => unknown) {
+      const run = txTail.then(() => runTx(fn))
+      txTail = run.then(
+        () => undefined,
+        () => undefined,
+      )
+      return run
+    },
     // ---- receiveDelivery path ----
     orderDelivery: {
       async findFirst({ where, include }: { where: Row; include?: Row }) {
@@ -99,21 +174,33 @@ vi.mock('@/backend/lib/db', () => {
         }
       },
       async update({ where, data }: { where: { id: string }; data: Row }) {
+        maybeFail('orderDelivery.update')
         const row = state.deliveries.get(where.id)
         if (!row) throw new Error(`stub: orderDelivery ${where.id} not found`)
-        Object.assign(row, data)
+        const next = { ...row, ...data }
+        state.deliveries.set(where.id, next)
         state.writes.deliveryUpdate++
-        return { ...row }
+        return { ...next }
+      },
+      // The #196 conditional claim: only rows still awaiting receive match.
+      async updateMany({ where, data }: { where: Row; data: Row }) {
+        maybeFail('orderDelivery.updateMany')
+        const matched = [...state.deliveries.values()].filter((r) => matches(r, where))
+        for (const r of matched) state.deliveries.set(r.id as string, { ...r, ...data })
+        state.writes.deliveryClaim++
+        return { count: matched.length }
       },
     },
     orderDeliveryLine: {
       async deleteMany({ where }: { where: Row }) {
+        maybeFail('orderDeliveryLine.deleteMany')
         const doomed = [...state.deliveryLines.values()].filter((r) => matches(r, where))
         for (const r of doomed) state.deliveryLines.delete(r.id as string)
         state.writes.lineDeleteMany++
         return { count: doomed.length }
       },
       async createMany({ data }: { data: Row[] }) {
+        maybeFail('orderDeliveryLine.createMany')
         for (const d of data) {
           const row = { id: id('dl'), ...d }
           state.deliveryLines.set(row.id as string, row)
@@ -131,6 +218,7 @@ vi.mock('@/backend/lib/db', () => {
     },
     deliveryPhoto: {
       async createMany({ data }: { data: Row[] }) {
+        maybeFail('deliveryPhoto.createMany')
         state.writes.photoCreateMany++
         for (const d of data) {
           const key = `${d.deliveryId}:${d.attachmentId}`
@@ -155,10 +243,12 @@ vi.mock('@/backend/lib/db', () => {
     },
     purchaseOrder: {
       async update({ where, data }: { where: { id: string }; data: Row }) {
+        maybeFail('purchaseOrder.update')
         const row = state.orders.get(where.id)
         if (!row) throw new Error(`stub: purchaseOrder ${where.id} not found`)
-        Object.assign(row, data)
-        return { ...row }
+        const next = { ...row, ...data }
+        state.orders.set(where.id, next)
+        return { ...next }
       },
       // The replay path: loadSupplySlice includes deliveries + lines + photos
       // (+ each photo's attachment) exactly as the repository asks.
@@ -190,6 +280,7 @@ vi.mock('@/backend/lib/db', () => {
     },
     notification: {
       async create({ data }: { data: Row }) {
+        maybeFail('notification.create')
         const row = { id: id('notif'), ...data }
         state.notifications.push(row)
         return { ...row }
@@ -198,12 +289,14 @@ vi.mock('@/backend/lib/db', () => {
     // ---- Site Store posting (postDeliveryToInventory) ----
     inventoryItem: {
       async upsert({ where, update, create }: { where: Row; update: Row; create: Row }) {
+        maybeFail('inventoryItem.upsert')
         const composite = where.projectId_materialName_location as { projectId: string; materialName: string; location: string }
         const key = `${composite.projectId}|${composite.materialName}|${composite.location}`
         const row = state.inventoryItems.get(key)
         if (row) {
-          Object.assign(row, update)
-          return { ...row }
+          const next = { ...row, ...update }
+          state.inventoryItems.set(key, next)
+          return { ...next }
         }
         const created = { id: id('inv'), ...create }
         state.inventoryItems.set(key, created)
@@ -212,6 +305,7 @@ vi.mock('@/backend/lib/db', () => {
     },
     stockMovement: {
       async create({ data }: { data: Row }) {
+        maybeFail('stockMovement.create')
         const row = { id: id('sm'), ...data }
         state.stockMovements.push(row)
         return { ...row }
@@ -253,7 +347,8 @@ const state = (db as unknown as { __state: {
   notifications: Array<Record<string, unknown>>
   stockMovements: Array<Record<string, unknown>>
   inventoryItems: Map<string, Record<string, unknown>>
-  writes: { lineDeleteMany: number; deliveryUpdate: number; photoCreateMany: number }
+  writes: { lineDeleteMany: number; deliveryUpdate: number; photoCreateMany: number; deliveryClaim: number }
+  fail: { op: string | null; remaining: number }
   reset: () => void
 } }).__state
 
@@ -459,7 +554,9 @@ describe('idempotency — re-linking can never duplicate evidence', () => {
       { orderLineId: 'pl_1', qtyReceived: 96, photoIds: ['att_a'] },
     ])
     const map = new Map([[lineFor('pl_1')!.id as string, lineFor('pl_1')!.id as string]])
-    const count = await linkDeliveryPhotos(deliveryId, refs, map, 'Clerk Wanjiku')
+    // #196: the linker now rides the CALLER's transaction — db doubles as tx
+    // (exactly what the stub's $transaction hands the service).
+    const count = await linkDeliveryPhotos(db, deliveryId, refs, map, 'Clerk Wanjiku')
     expect(count).toBe(2)
     expect(links()).toHaveLength(2) // no duplicates
     // The unique index the stub enforces keeps a raw double-write impossible:
@@ -489,6 +586,102 @@ describe('idempotency — re-linking can never duplicate evidence', () => {
       .filter((m) => m.type === 'received' && m.inventoryItemId === cementItem?.id)
       .reduce((s, m) => s + (m.quantity as number), 0)
     expect(netCement).toBe(92) // 96 − 4 rejected, posted ONCE
+  })
+})
+
+describe('atomicity (#196) — one receive is one transaction; crash-retry can never double-post', () => {
+  /** A clean full receive (photos included) used as the crash-retry subject. */
+  const fullPayload = (deliveryId: string) => ({
+    deliveryId,
+    lines: [
+      { orderLineId: 'pl_1', qtyReceived: 100 },
+      { orderLineId: 'pl_2', qtyReceived: 20 },
+    ],
+    photoIds: ['att_a'],
+    receivedBy: 'Clerk Wanjiku',
+  })
+
+  // Every write op on the receive path, in flow order: the claim, the line
+  // rewrite, the photo links, the Site Store upsert + movements, the final
+  // enrichment, the PO flip, the notifications. ('notification.create' is the
+  // exact #196 shape: a crash AFTER the stock write but BEFORE the flow was
+  // done used to strand the movements against a still-dispatched delivery.)
+  const WRITE_OPS = [
+    'orderDelivery.updateMany',
+    'orderDeliveryLine.deleteMany',
+    'orderDeliveryLine.createMany',
+    'deliveryPhoto.createMany',
+    'inventoryItem.upsert',
+    'stockMovement.create',
+    'orderDelivery.update',
+    'purchaseOrder.update',
+    'notification.create',
+  ] as const
+
+  it.each(WRITE_OPS)('a failure at %s rolls the whole receive back to zero partial state', async (op) => {
+    const deliveryId = seed()
+    state.fail = { op, remaining: 1 }
+    await expect(receiveDelivery(P1, fullPayload(deliveryId))).rejects.toThrow(/simulated failure/)
+
+    // Zero partial state — nothing the receive wrote survives the rollback:
+    // still awaiting receive, no line rewrite, no links, no Site Store rows,
+    // no notifications, no write counters.
+    const delivery = state.deliveries.get(deliveryId) as Record<string, unknown>
+    expect(delivery.status).toBe('dispatched')
+    expect(delivery.receivedAt).toBeNull()
+    expect(delivery.receivedBy).toBeNull()
+    expect([...state.deliveryLines.values()]).toHaveLength(0)
+    expect(links()).toHaveLength(0)
+    expect(state.stockMovements).toHaveLength(0)
+    expect(state.inventoryItems.size).toBe(0)
+    expect(state.notifications).toHaveLength(0)
+    expect(state.writes.deliveryClaim).toBe(0)
+    expect(state.writes.lineDeleteMany).toBe(0)
+    expect(state.writes.deliveryUpdate).toBe(0)
+    // The PO is untouched too (no premature 'delivered' flip).
+    expect((state.orders.get('po_1') as Record<string, unknown>).status).toBe('delivering')
+  })
+
+  it('retry after a mid-receive failure posts the stock EXACTLY ONCE (the crash-retry regression)', async () => {
+    const deliveryId = seed()
+    // Crash after the Site Store write but before the flow completes:
+    state.fail = { op: 'stockMovement.create', remaining: 1 }
+    await expect(receiveDelivery(P1, fullPayload(deliveryId))).rejects.toThrow(/simulated failure/)
+    expect(state.stockMovements).toHaveLength(0) // nothing stranded
+
+    // The transient error goes away — the site team retries the same payload.
+    const result = await receiveDelivery(P1, fullPayload(deliveryId))
+    expect(result.status).toBe('received')
+    const cementItem = [...state.inventoryItems.values()].find((i) => i.materialName === 'Cement')
+    const netCement = state.stockMovements
+      .filter((m) => m.type === 'received' && m.inventoryItemId === cementItem?.id)
+      .reduce((s, m) => s + (m.quantity as number), 0)
+    expect(netCement).toBe(100) // posted ONCE, not twice — the derived ledger is intact
+    expect(state.stockMovements.filter((m) => m.type === 'received')).toHaveLength(2) // one per line, no duplicates
+    expect(links()).toHaveLength(1)
+  })
+
+  it('double-submit: two receives racing the guard — exactly one wins, the loser fails honestly, stock posts once', async () => {
+    const deliveryId = seed()
+    const payload = fullPayload(deliveryId)
+    // Both submits read the pre-claim state; the transactions serialize on the
+    // claim (the stub's promise queue models the row lock). The loser's
+    // conditional update matches zero rows and it reports the winner's status.
+    const settled = await Promise.allSettled([receiveDelivery(P1, payload), receiveDelivery(P1, payload)])
+    const fulfilled = settled.filter((s) => s.status === 'fulfilled')
+    const rejected = settled.filter((s) => s.status === 'rejected')
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    expect(String((rejected[0] as PromiseRejectedResult).reason)).toMatch(/already RECEIVED/)
+    const delivery = state.deliveries.get(deliveryId) as Record<string, unknown>
+    expect(delivery.status).toBe('received')
+    expect(delivery.receivedBy).toBe('Clerk Wanjiku')
+    const cementItem = [...state.inventoryItems.values()].find((i) => i.materialName === 'Cement')
+    const netCement = state.stockMovements
+      .filter((m) => m.type === 'received' && m.inventoryItemId === cementItem?.id)
+      .reduce((s, m) => s + (m.quantity as number), 0)
+    expect(netCement).toBe(100) // exactly one receive's worth
+    expect(state.notifications).toHaveLength(1) // no duplicate notify either
   })
 })
 
