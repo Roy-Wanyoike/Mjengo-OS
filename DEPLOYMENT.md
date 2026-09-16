@@ -602,6 +602,27 @@ source-IP allowlist (`DARAJA_ALLOWED_IPS`, see §3) checked before the
 body is parsed — the unguessable path + query-API reconciliation remain
 the always-on integrity model.
 
+**Initiate-timeout residual risk (issue #211) — recorded and alerted,
+never silently lost.** If the STK push HTTP call itself fails without
+an answer (10s timeout / network error / unreadable 2xx body),
+Safaricom may STILL have accepted the push and the customer may still
+confirm it — but the `CheckoutRequestID` (the only key the callback and
+the sweep can ever match) was never learned. For that outcome-unknown
+class the wallet service records, at initiation time, an
+*unresolved-initiation* row (`daraja.unresolved:<attempt>:<request>` in
+the same idempotency store: request code, amount, payer, failure line).
+The sweep deliberately cannot resolve these rows (`stkpushquery` keys on
+the checkout id); a later verified-success callback for such a checkout
+still posts **nothing** (fail-closed — no invented credit), but it is no
+longer silently ignored: the server log gets a `console.warn` with the
+checkout id / receipt / amount, and when the payer MSISDN matches an
+unresolved initiation, the candidate project's finance audience gets a
+`payment.orphaned` notification naming the candidate request.
+**Operator path:** reconcile against the M-Pesa portal, then record the
+payment manually (or re-issue) — automatic crediting of an unmatched
+checkout is a deliberate never. Definitive initiation failures (a real
+HTTP rejection) write no row: no push went out, so no money can move.
+
 ## 8. Updating a deployment
 
 ```bash

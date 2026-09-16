@@ -36,6 +36,16 @@
 //     module's deliberate "failures are never recorded" rule);
 //   · no intent row / request not approved / already paid → honest no-op.
 //
+// Scope limit (issue #211): this sweep only ever addresses rows it can QUERY
+// — daraja.intent:<CheckoutRequestID>. Initiation attempts whose outcome was
+// UNKNOWN (push fetch timed out; daraja.unresolved:<attempt>:<request> rows
+// recorded by the wallet service at initiation time) are structurally
+// invisible to it: stkpushquery keys on the CheckoutRequestID, which is
+// exactly what a timed-out initiation never learned. Those rows exist for
+// finance reconciliation against the M-Pesa portal and to correlate the
+// orphan verified-success callback ALERT (daraja-callback.ts) — never for
+// automatic money movement.
+//
 // Scheduling (the honest model): there is no in-process scheduler — the
 // jobs drainer (POST /api/jobs/run via the JOBS_RUN_TOKEN bearer path or a
 // session; compose jobs-tick sidecar / systemd timer / cron in production)

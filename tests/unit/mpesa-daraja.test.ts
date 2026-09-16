@@ -29,7 +29,12 @@
  *  · callback: dedupe (in-memory + durable IdempotencyRecord) and the
  *    ledger idempotency key — a duplicate can never double-post; ResultCode
  *    != 0 → no post; unverified (query says failed) → no post; no intent →
- *    no post, honest 200; wrong secret path segment → 404.
+ *    no post, honest 200 — and since issue #211 an orphan VERIFIED-SUCCESS
+ *    callback ALERTS (console.warn always; payment.orphaned notification
+ *    when the payer MSISDN correlates an unresolved initiation) instead of
+ *    being silently ignored; initiate-timeout (outcomeUnknown) records the
+ *    unresolved-initiation row the alert correlates against;
+ *  · wrong secret path segment → 404.
  */
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -164,6 +169,15 @@ vi.mock('@/backend/lib/db', () => {
       const r = state.idempotency.get(where.key)
       return r ? { ...r } : null
     },
+    // issue #211: the orphan-callback alert scans unresolved-initiation rows
+    // (daraja.unresolved:*) by key prefix — same shape as daraja-reconcile.test.ts.
+    async findMany({
+      where,
+    }: { where?: { key?: { startsWith?: string } } } = {}) {
+      let rows = [...state.idempotency.values()]
+      if (where?.key?.startsWith) rows = rows.filter((r) => String(r.key).startsWith(where.key!.startsWith as string))
+      return rows.map((r) => ({ ...r }))
+    },
     async create({ data }: { data: { key: string } & Record<string, unknown> }) {
       if (state.idempotency.has(data.key)) {
         throw new Error(`stub: unique constraint failed on IdempotencyRecord.key=${data.key}`)
@@ -224,6 +238,7 @@ import {
 import {
   DARAJA_CALLBACK_KEY_PREFIX,
   DARAJA_INTENT_KEY_PREFIX,
+  DARAJA_UNRESOLVED_KEY_PREFIX,
   processDarajaStkCallback,
   recordDarajaIntent,
   resetDarajaCallbackStateForTests,
@@ -664,6 +679,9 @@ describe('initiatePayment — STK push shape + honest pending result', () => {
     const result = await getDarajaProvider()?.initiatePayment(INITIATION)
     expect(result?.status).toBe('failed')
     expect(result?.detail).toContain('ResponseCode 1')
+    // issue #211: a readable provider answer is a DEFINITIVE rejection — the
+    // outcome is known, so no unresolved-initiation row is ever written.
+    expect(result?.outcomeUnknown).toBeUndefined()
   })
 
   it('network TypeError → failed, leak-free (error class only, no URLs/secrets)', async () => {
@@ -673,6 +691,10 @@ describe('initiatePayment — STK push shape + honest pending result', () => {
     expect(result?.detail).toContain('unreachable')
     expect(result?.detail).not.toContain('safaricom')
     expect(result?.detail).not.toContain(ENV.DARAJA_CONSUMER_SECRET)
+    // the FIRST fetch (OAuth) is the one that died here — the STK push was
+    // never sent, so the outcome is definitively "nothing happened"
+    // (issue #211: outcomeUnknown only flags push-stage unknowns).
+    expect(result?.outcomeUnknown).toBeUndefined()
   })
 
   it('timeout (TimeoutError DOMException) → failed with the honest 10s line', async () => {
@@ -680,6 +702,48 @@ describe('initiatePayment — STK push shape + honest pending result', () => {
     const result = await getDarajaProvider()?.initiatePayment(INITIATION)
     expect(result?.status).toBe('failed')
     expect(result?.detail).toContain('timed out after 10s')
+    // OAuth-stage timeout: the push never went out → outcome known.
+    expect(result?.outcomeUnknown).toBeUndefined()
+  })
+
+  it('issue #211: OAuth OK but the STK push fetch times out → failed WITH outcomeUnknown (the push may still be live)', async () => {
+    stubFetch([
+      { match: '/oauth/', respond: () => oauthBody('tok-1', '3599') },
+      {
+        match: '/mpesa/stkpush/v1/processrequest',
+        respond: () => Promise.reject(new DOMException('The operation was aborted', 'TimeoutError')),
+      },
+    ])
+    const result = await getDarajaProvider()?.initiatePayment(INITIATION)
+    expect(result?.status).toBe('failed')
+    expect(result?.detail).toContain('timed out after 10s')
+    // the defining case of issue #211: Safaricom may have accepted the push
+    // before our fetch died — the outcome is UNKNOWN, and the providerRef is
+    // our own daraja-<ts> attempt marker, NOT a CheckoutRequestID.
+    expect(result?.outcomeUnknown).toBe(true)
+    expect(String(result?.providerRef)).toMatch(/^daraja-/)
+  })
+
+  it('issue #211: 2xx with an unreadable body → failed WITH outcomeUnknown (who Daraja accepted is unknowable)', async () => {
+    stubFetch([
+      { match: '/oauth/', respond: () => oauthBody('tok-1', '3599') },
+      { match: '/mpesa/stkpush/v1/processrequest', respond: () => new Response('not-json{', { status: 200 }) },
+    ])
+    const result = await getDarajaProvider()?.initiatePayment(INITIATION)
+    expect(result?.status).toBe('failed')
+    expect(result?.detail).toContain('unreadable response body')
+    expect(result?.outcomeUnknown).toBe(true)
+  })
+
+  it('issue #211: HTTP 5xx from the push endpoint → definitive failure (a real answer was seen)', async () => {
+    stubFetch([
+      { match: '/oauth/', respond: () => oauthBody('tok-1', '3599') },
+      { match: '/mpesa/stkpush/v1/processrequest', respond: () => new Response('boom', { status: 503 }) },
+    ])
+    const result = await getDarajaProvider()?.initiatePayment(INITIATION)
+    expect(result?.status).toBe('failed')
+    expect(result?.detail).toContain('HTTP 503')
+    expect(result?.outcomeUnknown).toBeUndefined()
   })
 })
 
@@ -813,6 +877,61 @@ describe('payPaymentRequest with a pending provider initiation', () => {
     expect(sweepRows[0].status).toBe('queued')
     expect((sweepRows[0].runAt as Date).getTime()).toBeGreaterThan(Date.now())
   })
+
+  it('issue #211: initiate-timeout (outcomeUnknown) → unresolved-initiation row recorded, honest throw, NO intent, no money', async () => {
+    setDarajaEnv()
+    // OAuth answers, the STK push fetch times out: Safaricom may still have
+    // accepted the push, but the CheckoutRequestID was never learned.
+    stubFetch([
+      { match: '/oauth/', respond: () => oauthBody('tok-1', '3599') },
+      {
+        match: '/mpesa/stkpush/v1/processrequest',
+        respond: () => Promise.reject(new DOMException('The operation was aborted', 'TimeoutError')),
+      },
+    ])
+    seedPaymentRequest()
+    await expect(
+      payPaymentRequest('proj-1', { id: PR_ID, method: 'mpesa', paidBy: 'Finance Fox', paidByRole: 'finance' }),
+    ).rejects.toThrow(/did not accept the payment.*timed out after 10s/s)
+    // the durable-intent pattern applied to the outcome-unknown class: what
+    // IS known survives at initiation time, keyed daraja.unresolved:<attempt>:<request>
+    const unresolved = [...state.idempotency.values()].filter((r) => String(r.key).startsWith(DARAJA_UNRESOLVED_KEY_PREFIX))
+    expect(unresolved).toHaveLength(1)
+    const payload = JSON.parse(String(unresolved[0].responseBody)) as Record<string, unknown>
+    expect(String(unresolved[0].key)).toBe(`${DARAJA_UNRESOLVED_KEY_PREFIX}${String(payload.providerRef)}:${PR_ID}`)
+    expect(payload.kind).toBe('payment.unresolved')
+    expect(payload.paymentRequestId).toBe(PR_ID)
+    expect(payload.requestCode).toBe('PR-2026-000001')
+    expect(payload.projectId).toBe('proj-1')
+    expect(payload.amount).toBe(1500)
+    expect(payload.payee).toBe('254708374149')
+    expect(payload.initiatedBy).toBe('Finance Fox')
+    expect(String(payload.failureDetail)).toContain('timed out after 10s')
+    // NO intent row was invented (no checkout id was ever learned), no sweep
+    // was seeded (nothing is sweepable), no money moved, request still approved.
+    expect([...state.idempotency.keys()].some((k) => k.startsWith(DARAJA_INTENT_KEY_PREFIX))).toBe(false)
+    expect([...state.jobs.values()].filter((j) => j.type === 'wallet.reconcile')).toHaveLength(0)
+    expect(state.txns.size).toBe(0)
+    expect(state.paymentRequests.get(PR_ID)?.status).toBe('approved')
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('issue #211: definitive initiation failure (HTTP 503) → honest throw, NO unresolved-initiation row', async () => {
+    setDarajaEnv()
+    stubFetch([
+      { match: '/oauth/', respond: () => oauthBody('tok-1', '3599') },
+      { match: '/mpesa/stkpush/v1/processrequest', respond: () => new Response('boom', { status: 503 }) },
+    ])
+    seedPaymentRequest()
+    await expect(
+      payPaymentRequest('proj-1', { id: PR_ID, method: 'mpesa', paidBy: 'Finance Fox', paidByRole: 'finance' }),
+    ).rejects.toThrow(/HTTP 503/)
+    // a real provider answer is definitive — the push never went out, so
+    // nothing is recorded and nothing can arrive later for it.
+    expect([...state.idempotency.values()].filter((r) => String(r.key).startsWith(DARAJA_UNRESOLVED_KEY_PREFIX))).toHaveLength(0)
+    expect(state.txns.size).toBe(0)
+    expect(state.paymentRequests.get(PR_ID)?.status).toBe('approved')
+  })
 })
 
 // ---------------------------------------------------------------- callbacks
@@ -892,13 +1011,86 @@ describe('processDarajaStkCallback — dedupe, verification, completion', () => 
     expect(state.paymentRequests.get(PR_ID)?.status).toBe('approved')
   })
 
-  it('no pending intent (unknown CheckoutRequestID) → ignored, never an invented credit', async () => {
+  it('no pending intent (unknown CheckoutRequestID) → ignored, never an invented credit — issue #211: now ALERTED, not silent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const outcome = await processDarajaStkCallback({
       Body: { stkCallback: { CheckoutRequestID: 'ws_CO_UNKNOWN', ResultCode: 0, ResultDesc: 'success' } },
     })
     expect(outcome.action).toBe('ignored')
     expect(outcome.detail).toContain('No pending provider intent')
     expect(state.txns.size).toBe(0)
+    // the silence is broken: the operator gets a server-log alert carrying
+    // the checkout id (no payer phone in this body → no notification row —
+    // there is no project to attach one to; the richer correlated case is
+    // pinned below). Money still never posts.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('ws_CO_UNKNOWN')
+    expect(notify).not.toHaveBeenCalled()
+    expect(state.paymentRequests.get(PR_ID)?.status).toBe('approved')
+    warn.mockRestore()
+  })
+
+  it('issue #211: orphan verified-success correlated with a timed-out initiation → payment.orphaned notification, still NO money posted', async () => {
+    // the initiation timed out earlier: the wallet service recorded what it
+    // knew as a daraja.unresolved:<attempt>:<request> row (no checkout id).
+    state.idempotency.set(`${DARAJA_UNRESOLVED_KEY_PREFIX}daraja-test:pr_1`, {
+      id: 'idem_unres_1',
+      key: `${DARAJA_UNRESOLVED_KEY_PREFIX}daraja-test:pr_1`,
+      scope: 'payment.provider_unresolved',
+      projectId: 'proj-1',
+      responseBody: JSON.stringify({
+        kind: 'payment.unresolved',
+        paymentRequestId: PR_ID,
+        requestCode: 'PR-2026-000001',
+        projectId: 'proj-1',
+        amount: 1500,
+        payee: '254708374149',
+        method: 'mpesa',
+        reference: 'PR-2026-000001',
+        providerRef: 'daraja-test',
+        initiatedBy: 'Finance Fox',
+        initiatedByRole: 'finance',
+        failureDetail: 'Daraja request timed out after 10s',
+      }),
+      createdAt: new Date(Date.now() - 60_000),
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Safaricom's late callback for that (never-learned) checkout — verified
+    // by the query API (the default stub says succeeded).
+    const outcome = await processDarajaStkCallback({
+      Body: {
+        stkCallback: {
+          CheckoutRequestID: 'ws_CO_LATE_9001',
+          ResultCode: 0,
+          ResultDesc: 'The service request is processed successfully.',
+          CallbackMetadata: {
+            Item: [
+              { Name: 'Amount', Value: 1500 },
+              { Name: 'MpesaReceiptNumber', Value: 'NLJ9ZZ42QK' },
+              { Name: 'PhoneNumber', Value: 254708374149 },
+            ],
+          },
+        },
+      },
+    })
+    // fail-closed unchanged: no intent row → no post, request stays approved
+    expect(outcome.action).toBe('ignored')
+    expect(outcome.detail).toContain('No pending provider intent')
+    expect(state.txns.size).toBe(0)
+    expect(state.paymentRequests.get(PR_ID)?.status).toBe('approved')
+    // ...but the operator signal fired on both channels
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('ws_CO_LATE_9001')
+    expect(String(warn.mock.calls[0][0])).toContain('NLJ9ZZ42QK')
+    expect(notify).toHaveBeenCalledTimes(1)
+    const notifyArgs = (notify as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(notifyArgs[0]).toBe('proj-1') // correlated via the unresolved row
+    expect(String(notifyArgs[1])).toContain('Unmatched M-Pesa payment')
+    expect(String(notifyArgs[2])).toContain('PR-2026-000001')
+    expect(String(notifyArgs[2])).toContain('ws_CO_LATE_9001')
+    expect((notifyArgs[3] as { kind: string }).kind).toBe('payment.orphaned')
+    expect((notifyArgs[3] as { audienceRole: string }).audienceRole).toBe('finance')
+    warn.mockRestore()
   })
 
   it('already-paid request → honest skip, no second post', async () => {

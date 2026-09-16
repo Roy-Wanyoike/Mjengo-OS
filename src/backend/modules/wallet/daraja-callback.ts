@@ -14,7 +14,14 @@
 //      — the callback body alone is NEVER sufficient for money movement;
 //   3. a pending intent row exists AND the backing PaymentRequest is still
 //      'approved' for that amount — a callback with no matching intent is
-//      logged and acknowledged 200, never credited (no invented money);
+//      acknowledged 200, never credited (no invented money). Since issue #211
+//      such an orphan VERIFIED-SUCCESS callback is no longer SILENT: the
+//      payer's money may really have moved (classically the STK push fetch
+//      timed out before the CheckoutRequestID was learned, so no intent row
+//      could exist) — console.warn + best-effort payment.orphaned
+//      notifications correlated against the unresolved-initiation rows the
+//      wallet service records at initiation time (see below). Fail-closed is
+//      unchanged: nothing posts without an intent row.
 //   4. the posting goes through the ledger module (postLedgerTransactionInTx)
 //      with idempotencyKey daraja.callback:<CheckoutRequestID>, so even a
 //      cross-process replay cannot double-post.
@@ -34,13 +41,20 @@ import { db } from '@/backend/lib/db'
 import { cashAccountForMethod, postLedgerTransactionInTx } from '@/backend/modules/ledger/service'
 import { notify } from '@/backend/modules/notify/service'
 import { phaseIdForMilestonePayment } from './service'
-import { getDarajaProvider } from './daraja'
+import { getDarajaProvider, msisdnFromPayee } from './daraja'
 
 export const DARAJA_INTENT_KEY_PREFIX = 'daraja.intent:'
 export const DARAJA_CALLBACK_KEY_PREFIX = 'daraja.callback:'
+/** Issue #211: initiation attempts whose OUTCOME IS UNKNOWN (push fetch
+ *  timed out / network-died / unreadable 2xx body) — Safaricom may still have
+ *  accepted the push, but the CheckoutRequestID is unrecoverable, so these
+ *  rows can never be swept (the query API keys on it). They exist for finance
+ *  reconciliation and to enrich the unmatched-callback alert. */
+export const DARAJA_UNRESOLVED_KEY_PREFIX = 'daraja.unresolved:'
 
 const INTENT_SCOPE = 'payment.provider_intent'
 const CALLBACK_SCOPE = 'payment.daraja_callback'
+const UNRESOLVED_SCOPE = 'payment.provider_unresolved'
 
 /** In-memory replay guard (single process; the DB record is the durable one). */
 const seenCheckouts = new Set<string>()
@@ -77,6 +91,34 @@ export interface DarajaIntentPayload {
 }
 
 /**
+ * An initiation whose outcome could not be determined (issue #211) — what the
+ * wallet service knew AT initiation time when the provider answered 'failed'
+ * with outcomeUnknown (push fetch threw / body unreadable). `providerRef` is
+ * our own daraja-<ts> attempt marker, NOT a CheckoutRequestID — the row is
+ * keyed by it so repeated attempts never collide. The sweep CANNOT resolve
+ * these rows (stkpushquery needs the CheckoutRequestID); they exist so (a)
+ * finance can reconcile against the M-Pesa portal and (b) a later
+ * verified-success callback that matches no intent can be ALERTED against
+ * them (payee phone + amount) — money still never auto-posts.
+ */
+export interface DarajaUnresolvedInitiationPayload {
+  kind: 'payment.unresolved'
+  paymentRequestId: string
+  requestCode: string
+  projectId: string
+  amount: number
+  payee: string
+  method: string
+  reference: string
+  /** Attempt marker (daraja-<ts>), NOT a CheckoutRequestID. */
+  providerRef: string
+  initiatedBy: string
+  initiatedByRole: string
+  /** The provider's own honest failure line (why the outcome is unknown). */
+  failureDetail: string
+}
+
+/**
  * Record the pending intent (called by payPaymentRequest when a real provider
  * returns 'pending'). Keyed daraja.intent:<CheckoutRequestID> — every STK
  * push gets a fresh CheckoutRequestID, so legitimate re-initiations never
@@ -89,6 +131,31 @@ export async function recordDarajaIntent(intent: DarajaIntentPayload): Promise<v
       scope: INTENT_SCOPE,
       projectId: intent.projectId,
       responseBody: JSON.stringify(intent),
+    },
+  })
+}
+
+/**
+ * Record an unresolved initiation (issue #211) — the durable-intent pattern
+ * applied at initiation time to the outcome-UNKNOWN class: a timed-out push
+ * may still be live on Safaricom's side, so the known facts (request, amount,
+ * payee, attempt marker, failure line) survive for finance reconciliation
+ * and the unmatched-callback alert. Keyed
+ * daraja.unresolved:<attempt-marker>:<paymentRequestId> — every timed-out
+ * attempt is a distinct possible live checkout, and the request id keeps the
+ * key unique even if two attempts land on the same millisecond. Throws
+ * bubble to the caller (the service logs best-effort, never fails the pay
+ * flow — the honest 'failed' error still surfaces to the operator).
+ */
+export async function recordDarajaUnresolvedInitiation(
+  initiation: DarajaUnresolvedInitiationPayload,
+): Promise<void> {
+  await db.idempotencyRecord.create({
+    data: {
+      key: `${DARAJA_UNRESOLVED_KEY_PREFIX}${initiation.providerRef}:${initiation.paymentRequestId}`,
+      scope: UNRESOLVED_SCOPE,
+      projectId: initiation.projectId,
+      responseBody: JSON.stringify(initiation),
     },
   })
 }
@@ -119,6 +186,33 @@ function parseIntent(row: { responseBody: string | null } | null): DarajaIntentP
   }
 }
 
+/** Defensive unresolved-initiation parse (same discipline as parseIntent). */
+function parseUnresolved(row: { responseBody: string | null } | null): DarajaUnresolvedInitiationPayload | null {
+  if (!row?.responseBody) return null
+  try {
+    const v = JSON.parse(row.responseBody) as Record<string, unknown>
+    if (v?.kind !== 'payment.unresolved') return null
+    const u: DarajaUnresolvedInitiationPayload = {
+      kind: 'payment.unresolved',
+      paymentRequestId: String(v.paymentRequestId ?? ''),
+      requestCode: String(v.requestCode ?? ''),
+      projectId: String(v.projectId ?? ''),
+      amount: Number(v.amount),
+      payee: String(v.payee ?? ''),
+      method: String(v.method ?? 'mpesa'),
+      reference: String(v.reference ?? ''),
+      providerRef: String(v.providerRef ?? ''),
+      initiatedBy: String(v.initiatedBy ?? 'Finance'),
+      initiatedByRole: String(v.initiatedByRole ?? 'finance'),
+      failureDetail: String(v.failureDetail ?? ''),
+    }
+    if (!u.paymentRequestId || !u.projectId || !(u.amount > 0) || !u.providerRef) return null
+    return u
+  } catch {
+    return null
+  }
+}
+
 export interface StkCallbackData {
   checkoutRequestID: string
   resultCode: number
@@ -126,6 +220,9 @@ export interface StkCallbackData {
   /** From CallbackMetadata when present (UNTRUSTED — log-only, never posted). */
   amount?: number
   receipt?: string
+  /** Payer MSISDN from CallbackMetadata when present (UNTRUSTED — used only
+   *  to ENRICH the unmatched-callback alert of issue #211, never to post). */
+  phone?: string
 }
 
 /** Safaricom STK callback shape: { Body: { stkCallback: { … } } }. */
@@ -150,6 +247,10 @@ export function extractStkCallback(body: unknown): StkCallbackData | null {
       if (!item || typeof item !== 'object') continue
       if (item.Name === 'Amount' && Number.isFinite(Number(item.Value))) data.amount = Number(item.Value)
       if (item.Name === 'MpesaReceiptNumber' && typeof item.Value === 'string') data.receipt = item.Value
+      if (item.Name === 'PhoneNumber') {
+        const msisdn = msisdnFromPayee(item.Value)
+        if (msisdn) data.phone = msisdn
+      }
     }
   }
   return data
@@ -246,10 +347,18 @@ async function completeVerifiedIntent(
   })
   const intent = parseIntent(intentRow)
   if (!intent) {
+    // Issue #211: a VERIFIED-success callback with no intent row is real
+    // money on the rail with no record here (classically: the push fetch
+    // timed out, so the CheckoutRequestID — the intent key — was never
+    // learned). Fail-closed is unchanged: nothing posts without an intent
+    // row. But the old SILENT ignore is gone — break the silence for the
+    // operator (console.warn + best-effort notifications correlated against
+    // the unresolved-initiation rows recorded at initiation time).
+    const alertNote = await alertUnmatchedVerifiedSuccess(cb)
     return {
       ok: true,
       action: 'ignored',
-      detail: `No pending provider intent for checkout ${checkoutRequestID} — nothing posted (MjengoOS never invents a credit for an unmatched callback)`,
+      detail: `No pending provider intent for checkout ${checkoutRequestID} — nothing posted (MjengoOS never invents a credit for an unmatched callback). ${alertNote}`,
     }
   }
 
@@ -358,4 +467,86 @@ async function completeVerifiedIntent(
     action: 'credited',
     detail: `Posted ledger ${result.ledgerRef} for ${intent.requestCode} (KSh ${result.amount}) — callback verified, request marked paid`,
   }
+}
+
+/**
+ * Issue #211 — the orphan verified-success alert. The callback (a) claimed
+ * ResultCode 0, (b) the reconciliation query independently confirmed the
+ * settlement, and (c) NO pending intent row matches the CheckoutRequestID —
+ * so money left the customer's M-Pesa with no record in MjengoOS. Nothing
+ * posts (fail-closed, always) — this helper only makes that LOUD:
+ *
+ *   · console.warn carries checkoutRequestID / receipt / amount for the log
+ *     trail (with or without a matching unresolved initiation);
+ *   · unresolved-initiation rows (what the wallet service could persist AT
+ *     initiation time when the push outcome was unknown — see
+ *     recordDarajaUnresolvedInitiation) are correlated by payer MSISDN and
+ *     each candidate project gets ONE best-effort notification
+ *     (kind 'payment.orphaned', finance audience) naming the candidate
+ *     payment request(s), so finance can reconcile against the M-Pesa portal
+ *     and record the payment manually.
+ *
+ * The correlation is deliberately heuristic — the CheckoutRequestID is
+ * genuinely unrecoverable for a timed-out initiation, and Safaricom's STK
+ * callback echoes no caller-chosen reference — and NOTHING about money ever
+ * depends on it: a false match only produces a human-in-the-loop alert.
+ * Best-effort by contract: storage/notification failures are logged, never
+ * thrown into the callback outcome. Returns the honest detail suffix.
+ */
+async function alertUnmatchedVerifiedSuccess(cb: StkCallbackData): Promise<string> {
+  const receipt = cb.receipt ?? 'unknown'
+  const amount = cb.amount !== undefined ? `KSh ${cb.amount}` : 'unknown amount'
+  console.warn(
+    `[daraja-callback] verified M-Pesa success with NO pending intent — checkout ${cb.checkoutRequestID}, receipt ${receipt}, ${amount}. ` +
+      `Money may have moved on the rail while MjengoOS posted nothing (fail-closed). If this was a timed-out initiation, reconcile against the M-Pesa portal.`,
+  )
+  // No payer MSISDN in the callback metadata → nothing to correlate against
+  // and no project to notify (notifications are per-project): the server log
+  // line above is the whole honest signal.
+  if (!cb.phone) {
+    return 'Operator alerted via the server log (the callback metadata carried no payer phone — no project to notify).'
+  }
+  let candidates: DarajaUnresolvedInitiationPayload[] = []
+  try {
+    const rows = await db.idempotencyRecord.findMany({
+      where: { key: { startsWith: DARAJA_UNRESOLVED_KEY_PREFIX } },
+    })
+    candidates = rows
+      .map(parseUnresolved)
+      .filter((u): u is DarajaUnresolvedInitiationPayload => u !== null && msisdnFromPayee(u.payee) === cb.phone)
+    // One alert row per (project, request) even if several attempts timed out.
+    const seen = new Set<string>()
+    candidates = candidates.filter((c) => {
+      const k = `${c.projectId}:${c.requestCode}`
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    })
+  } catch (e) {
+    console.error('[daraja-callback] unresolved-initiation lookup failed while alerting the orphan callback', e)
+  }
+  if (candidates.length === 0) {
+    return 'Operator alerted via the server log (no unresolved initiation matched the payer — reconcile against the M-Pesa portal).'
+  }
+  const byProject = new Map<string, DarajaUnresolvedInitiationPayload[]>()
+  for (const c of candidates) {
+    const list = byProject.get(c.projectId) ?? []
+    list.push(c)
+    byProject.set(c.projectId, list)
+  }
+  const names = candidates.map((c) => `${c.requestCode} (KSh ${c.amount})`).join(', ')
+  for (const [projectId, list] of byProject) {
+    const codes = list.map((c) => c.requestCode).join(', ')
+    try {
+      await notify(
+        projectId,
+        'Unmatched M-Pesa payment — operator action needed',
+        `A verified M-Pesa settlement (checkout ${cb.checkoutRequestID}, receipt ${receipt}, ${amount}) matches no recorded payment intent — it may belong to ${codes} (its initiation timed out before the checkout id was learned). Nothing was posted: reconcile against the M-Pesa portal and record the payment manually if confirmed.`,
+        { kind: 'payment.orphaned', audienceRole: 'finance' },
+      )
+    } catch (e) {
+      console.error('[daraja-callback] orphan-callback notification failed', e)
+    }
+  }
+  return `Operator alerted (kind payment.orphaned) — possible source: ${names}.`
 }

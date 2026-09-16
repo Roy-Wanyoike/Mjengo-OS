@@ -36,6 +36,17 @@ export interface ProviderResult {
   simulated: boolean
   /** Honest detail line for the audit trail / UI toast. */
   detail: string
+  /**
+   * FAILED initiation whose outcome could NOT be determined (issue #211):
+   * true only when NO usable provider answer was seen — the HTTP request
+   * threw (timeout / unreachable) or the 2xx body was unparseable. In that
+   * window Safaricom may still have accepted the push (and the customer may
+   * still confirm it), so the wallet service records an unresolved-initiation
+   * row instead of trusting 'failed' as final. An HTTP answer — even an
+   * error status — is a definitive outcome and stays false. Optional and
+   * absent on the simulated rails (their failures are always definitive).
+   */
+  outcomeUnknown?: boolean
 }
 
 /**
