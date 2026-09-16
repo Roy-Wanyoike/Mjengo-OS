@@ -19,6 +19,11 @@
  *   · HMAC (USSD_WEBHOOK_SECRET): secret set + unsigned/mismatched
  *     X-Signature → 401 (timing-safe compare); correct hex HMAC of the RAW
  *     body → 200; unset → documented open demo posture;
+ *   · PRODUCTION FAIL-CLOSED (SEC-4, audit wave 2): NODE_ENV=production +
+ *     unset secret → 503 JSON configuration error BEFORE any processing
+ *     (zero writes, zero audits, zero rate-limit consumption); production +
+ *     secret set keeps working (503 never shadows the HMAC gate);
+ *     NODE_ENV=test + unset keeps the open demo posture exactly;
  *   · PIN THROTTLE: 20/min/phone and 40 PIN-attempts/min per client IP,
  *     429 + Retry-After;
  *   · PIN LOCKOUT (BE-9, issue #106): 5 wrong PINs for one phone → the line
@@ -427,6 +432,82 @@ describe('X-Signature — HMAC shared-secret verification (USSD_WEBHOOK_SECRET)'
     const res = await ussdPost(ussdReq(KAMAU, '*384#*3'))
     expect(res.status).toBe(200)
     expect((await res.text()).endsWith(FOOTER)).toBe(true)
+  })
+})
+
+// ------------------------------------------- production fail-closed (SEC-4)
+
+describe('production fail-closed — unset secret → 503, no processing (SEC-4)', () => {
+  const rawBody = JSON.stringify({ sessionId: 'sess-1', phoneNumber: KAMAU, text: '*384#*3' })
+  const goodSig = createHmac('sha256', 'ussd-unit-secret').update(rawBody).digest('hex')
+
+  /** Run one assertion block with NODE_ENV=production; ALWAYS restored. */
+  async function asProduction<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    try {
+      return await fn()
+    } finally {
+      if (prev === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = prev
+    }
+  }
+
+  it('NODE_ENV=production + UNSET secret → 503 JSON configuration error, zero processing', async () => {
+    await asProduction(async () => {
+      const res = await ussdPost(ussdReq(KAMAU, '*384#*3'))
+      expect(res.status).toBe(503)
+      expect(await res.json()).toMatchObject({
+        error: expect.stringContaining('USSD_WEBHOOK_SECRET is not configured'),
+      })
+      expect(state.writes).toBe(0)
+      expect(state.audits).toEqual([])
+    })
+    expect(process.env.NODE_ENV).not.toBe('production') // restored for the file
+  })
+
+  it('production refuses BEFORE the grammar: an attendance attempt writes nothing', async () => {
+    await asProduction(async () => {
+      const res = await ussdPost(ussdReq(KAMAU, '*384#*1*1234*1'))
+      expect(res.status).toBe(503)
+      expect(state.attendance.size).toBe(0)
+      expect(state.writes).toBe(0)
+      expect(state.audits).toEqual([])
+    })
+  })
+
+  it('production + secret SET + correct HMAC → 200 — a configured route never sees the 503 gate', async () => {
+    process.env.USSD_WEBHOOK_SECRET = 'ussd-unit-secret'
+    await asProduction(async () => {
+      const res = await ussdPost(ussdReq(KAMAU, '*384#*3', {
+        raw: rawBody,
+        headers: { 'x-signature': goodSig },
+      }))
+      expect(res.status).toBe(200)
+      expect((await res.text()).endsWith(FOOTER)).toBe(true)
+    })
+  })
+
+  it('production + secret SET + unsigned → 401 (the HMAC gate answers, not the 503 gate)', async () => {
+    process.env.USSD_WEBHOOK_SECRET = 'ussd-unit-secret'
+    await asProduction(async () => {
+      const res = await ussdPost(ussdReq(KAMAU, '*384#*3', { raw: rawBody }))
+      expect(res.status).toBe(401)
+      expect(state.writes).toBe(0)
+    })
+  })
+
+  it("NODE_ENV='test' + UNSET secret → the open demo posture is untouched (dev/demo keeps warn-and-accept)", async () => {
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'test'
+    try {
+      const res = await ussdPost(ussdReq(KAMAU, '*384#*3'))
+      expect(res.status).toBe(200)
+      expect((await res.text()).endsWith(FOOTER)).toBe(true)
+    } finally {
+      if (prev === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = prev
+    }
   })
 })
 

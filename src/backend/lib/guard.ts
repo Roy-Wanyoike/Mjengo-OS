@@ -20,6 +20,10 @@ export async function getSessionFromReq(req: NextRequest): Promise<GuardSession>
   // mirror v4's derivation (see nextauth-fallback-secret.ts) and accept the
   // same tokens. Production is untouched: the #74 boot guard already fails
   // closed there, and candidates() is empty without the env secret anyway.
+  // SEC-2: "dev" means an EXPLICIT development/test runtime — on any other
+  // runtime (staging/preview/unset NODE_ENV) the deterministic fallback is
+  // publicly derivable, so candidates() stays empty and such tokens are
+  // unauthenticated (401) here.
   if (!token?.email && !envSecret) {
     for (const candidate of devFallbackSecretCandidates(req)) {
       token = await getToken({ req, secret: candidate })

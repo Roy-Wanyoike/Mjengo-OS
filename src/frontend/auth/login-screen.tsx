@@ -30,6 +30,17 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
 ]
 
 /**
+ * FE-1/MD-1 (audit wave 2): the demo quick-fill panel — and the known demo
+ * credentials it carries — is a NON-PRODUCTION affordance. Next.js inlines
+ * NODE_ENV into client bundles at build time, so this module-scope check is
+ * decided when the bundle is produced: a production build folds it to
+ * `false` and dead-code-eliminates the panel (and the DEMO_ACCOUNTS list it
+ * renders), keeping the credentials out of shipped production code. The
+ * manual login form stays always-available in every environment.
+ */
+const SHOW_DEMO_QUICKFILL = process.env.NODE_ENV !== 'production'
+
+/**
  * Full-screen login gate for the owner app. Share-link clients never see this
  * (the /?share=<token> view boots with no login) — this seals the
  * "Site team? Open the full app" flow.
@@ -156,50 +167,52 @@ export function LoginScreen() {
               </Button>
             </form>
 
-            <div className="mt-6 border-t border-stone-200 pt-4">
-              <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">
-                {t('login.demo.title')} <span className="normal-case font-normal">· {t('login.demo.subtitle')}</span>
-              </p>
-              <div
-                className="space-y-2 max-h-72 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full"
-                role="list"
-                aria-label={t('login.demo.aria')}
-              >
-                {DEMO_ACCOUNTS.map((acc) => {
-                  const roleLabel = t(`role.${acc.role}`)
-                  return (
-                    // FE-7 (issue #80): no listitem role on these buttons —
-                    // an explicit listitem role would override the native
-                    // button semantics for assistive tech. The container
-                    // keeps role="list"; the buttons announce themselves.
-                    <button
-                      key={acc.email}
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setEmail(acc.email)
-                        setPassword(acc.password)
-                        setError(null)
-                      }}
-                      aria-label={t('login.demo.fillAria', { label: roleLabel, email: acc.email })}
-                      className="w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 min-h-11 rounded-lg border border-stone-200 bg-white hover:bg-amber-50 hover:border-amber-300 transition-colors group"
-                    >
-                      <span className="min-w-0">
-                        <span className="block text-sm font-medium text-stone-800 truncate">
-                          {roleLabel} · <span className="font-mono text-xs">{acc.email}</span>
+            {SHOW_DEMO_QUICKFILL && (
+              <div className="mt-6 border-t border-stone-200 pt-4">
+                <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">
+                  {t('login.demo.title')} <span className="normal-case font-normal">· {t('login.demo.subtitle')}</span>
+                </p>
+                <div
+                  className="space-y-2 max-h-72 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full"
+                  role="list"
+                  aria-label={t('login.demo.aria')}
+                >
+                  {DEMO_ACCOUNTS.map((acc) => {
+                    const roleLabel = t(`role.${acc.role}`)
+                    return (
+                      // FE-7 (issue #80): no listitem role on these buttons —
+                      // an explicit listitem role would override the native
+                      // button semantics for assistive tech. The container
+                      // keeps role="list"; the buttons announce themselves.
+                      <button
+                        key={acc.email}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          setEmail(acc.email)
+                          setPassword(acc.password)
+                          setError(null)
+                        }}
+                        aria-label={t('login.demo.fillAria', { label: roleLabel, email: acc.email })}
+                        className="w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 min-h-11 rounded-lg border border-stone-200 bg-white hover:bg-amber-50 hover:border-amber-300 transition-colors group"
+                      >
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-stone-800 truncate">
+                            {roleLabel} · <span className="font-mono text-xs">{acc.email}</span>
+                          </span>
+                          {/* FE-4 (issue #80): stone-600 on white (6.99:1) — the old
+                              stone-400 was 2.31:1, unreadable in field light. */}
+                          <span className="block text-[11px] text-stone-600 truncate">{t(acc.hintKey)}</span>
                         </span>
-                        {/* FE-4 (issue #80): stone-600 on white (6.99:1) — the old
-                            stone-400 was 2.31:1, unreadable in field light. */}
-                        <span className="block text-[11px] text-stone-600 truncate">{t(acc.hintKey)}</span>
-                      </span>
-                      <span className="text-[11px] font-bold text-amber-700 shrink-0 group-hover:text-amber-800">
-                        {t('login.demo.fill')}
-                      </span>
-                    </button>
-                  )
-                })}
+                        <span className="text-[11px] font-bold text-amber-700 shrink-0 group-hover:text-amber-800">
+                          {t('login.demo.fill')}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
 

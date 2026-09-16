@@ -18,6 +18,11 @@
  *   · UNKNOWN PHONE → honest "not registered" reply, zero rows written;
  *   · SECRET SET → unsigned/mismatched X-Signature → 401 (timing-safe
  *     compare); UNSET → documented open demo posture;
+ *   · PRODUCTION FAIL-CLOSED (SEC-4, audit wave 2): NODE_ENV=production +
+ *     unset secret → 503 JSON configuration error BEFORE any processing
+ *     (zero writes, zero audits, zero rate-limit consumption); production +
+ *     secret set keeps working (503 never shadows the HMAC gate);
+ *     NODE_ENV=test + unset keeps the open demo posture exactly;
  *   · RATE LIMITS: 20/min/phone and 40/min/IP buckets, 429 + Retry-After;
  *   · VERSION: attendance written via WhatsApp bumps Attendance.version —
  *     the same appliers /api/actions, /api/sync and the USSD line share, so
@@ -527,6 +532,82 @@ describe('X-Signature — HMAC shared-secret verification (WHATSAPP_WEBHOOK_SECR
     const res = await whatsappPost(waReq(KAMAU, 'HELP'))
     expect(res.status).toBe(200)
     expect((await res.text()).endsWith(FOOTER)).toBe(true)
+  })
+})
+
+// ------------------------------------------- production fail-closed (SEC-4)
+
+describe('production fail-closed — unset secret → 503, no processing (SEC-4)', () => {
+  const rawBody = JSON.stringify({ from: KAMAU, text: 'HELP', timestamp: '2026-02-14T09:00:00Z' })
+  const goodSig = createHmac('sha256', 'wa-unit-secret').update(rawBody).digest('hex')
+
+  /** Run one assertion block with NODE_ENV=production; ALWAYS restored. */
+  async function asProduction<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    try {
+      return await fn()
+    } finally {
+      if (prev === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = prev
+    }
+  }
+
+  it('NODE_ENV=production + UNSET secret → 503 JSON configuration error, zero processing', async () => {
+    await asProduction(async () => {
+      const res = await whatsappPost(waReq(KAMAU, 'HELP'))
+      expect(res.status).toBe(503)
+      expect(await res.json()).toMatchObject({
+        error: expect.stringContaining('WHATSAPP_WEBHOOK_SECRET is not configured'),
+      })
+      expect(state.writes).toBe(0)
+      expect(state.audits).toEqual([])
+    })
+    expect(process.env.NODE_ENV).not.toBe('production') // restored for the file
+  })
+
+  it('production refuses BEFORE the grammar: a PRESENT attempt writes nothing', async () => {
+    await asProduction(async () => {
+      const res = await whatsappPost(waReq(KAMAU, 'PRESENT'))
+      expect(res.status).toBe(503)
+      expect(state.attendance.size).toBe(0)
+      expect(state.writes).toBe(0)
+      expect(state.audits).toEqual([])
+    })
+  })
+
+  it('production + secret SET + correct HMAC → 200 — a configured route never sees the 503 gate', async () => {
+    process.env.WHATSAPP_WEBHOOK_SECRET = 'wa-unit-secret'
+    await asProduction(async () => {
+      const res = await whatsappPost(waReq(KAMAU, 'HELP', {
+        raw: rawBody,
+        headers: { 'x-signature': goodSig },
+      }))
+      expect(res.status).toBe(200)
+      expect((await res.text()).endsWith(FOOTER)).toBe(true)
+    })
+  })
+
+  it('production + secret SET + unsigned → 401 (the HMAC gate answers, not the 503 gate)', async () => {
+    process.env.WHATSAPP_WEBHOOK_SECRET = 'wa-unit-secret'
+    await asProduction(async () => {
+      const res = await whatsappPost(waReq(KAMAU, 'HELP', { raw: rawBody }))
+      expect(res.status).toBe(401)
+      expect(state.writes).toBe(0)
+    })
+  })
+
+  it("NODE_ENV='test' + UNSET secret → the open demo posture is untouched (dev/demo keeps warn-and-accept)", async () => {
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'test'
+    try {
+      const res = await whatsappPost(waReq(KAMAU, 'HELP'))
+      expect(res.status).toBe(200)
+      expect((await res.text()).endsWith(FOOTER)).toBe(true)
+    } finally {
+      if (prev === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = prev
+    }
   })
 })
 

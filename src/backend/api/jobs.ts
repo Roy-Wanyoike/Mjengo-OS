@@ -30,6 +30,12 @@ export const POST = route(
   {
     scope: 'api/jobs/run POST',
     roles: ['contractor', 'admin'],
+    // SEC-1: this is the cron-callee MACHINE route — the scheduler POSTs it
+    // with bearer/any content type (tolerateInvalid body), so the default-on
+    // mutation safety gate is skipped here (and on the bearer twin in
+    // src/app/api/jobs/run/route.ts so both paths stay byte-equivalent).
+    // Every browser-reachable mutation keeps the gate.
+    skipMutationSafety: true,
     // Rate limit (S-SEC): 10 runs/min — each call drains up to 10 background
     // jobs (expensive), and an unvalidated projectId otherwise reaches prisma
     // on every request.

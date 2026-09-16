@@ -16,7 +16,10 @@
  *           client mobile tab strip is min-h-11;
  *   · FE-7  tab↔panel aria linkage (tab ids + aria-controls → panel id,
  *           panel aria-labelledby), the combobox pattern on GlobalSearch,
- *           and NO role="listitem" on the login demo buttons.
+ *           and NO role="listitem" on the login demo buttons;
+ *   · FE-1/MD-1  the login demo quick-fill panel is gated on module-scope
+ *           NODE_ENV !== 'production' (Next inlines NODE_ENV — build-time
+ *           removal from production bundles; manual login stays ungated).
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -165,6 +168,22 @@ describe('FE-7: the tabs pattern is completed end-to-end', () => {
     const src = readSrc('src/frontend/auth/login-screen.tsx')
     expect(src).not.toContain('role="listitem"')
     expect(src).toContain('role="list"') // container keeps the list semantics
+  })
+})
+
+// ---------------- FE-1/MD-1 · demo quick-fill production gate ----------------
+
+describe('FE-1/MD-1: the demo quick-fill panel is gated out of production', () => {
+  it('login-screen gates the demo panel on module-scope NODE_ENV (inlined by Next at build time)', () => {
+    const src = readSrc('src/frontend/auth/login-screen.tsx')
+    // The gate itself — Next inlines NODE_ENV into client bundles, so a
+    // production build folds this constant to `false` and dead-code-eliminates
+    // the panel (and the DEMO_ACCOUNTS credentials it renders).
+    expect(src).toContain("const SHOW_DEMO_QUICKFILL = process.env.NODE_ENV !== 'production'")
+    // …and the panel (title + accounts list) is the ONLY thing it wraps.
+    expect(src).toContain('{SHOW_DEMO_QUICKFILL && (')
+    // The manual login form itself stays always-available (ungated).
+    expect(src).toContain('<form onSubmit={handleSubmit}')
   })
 })
 

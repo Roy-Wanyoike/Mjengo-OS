@@ -1,12 +1,16 @@
 /**
- * BE-6 (issue #76) — the production webhook-posture warning.
+ * BE-6 (issue #76) — the production webhook-posture warning (updated by
+ * SEC-4, audit wave 2).
  *
- * /api/ussd and /api/whatsapp stay fail-open (documented gateway-trust demo
- * posture) when their optional HMAC secret is unset — the fix makes that
- * posture VISIBLE instead of changing it. Pinned here:
+ * /api/ussd and /api/whatsapp stay fail-open outside production (documented
+ * gateway-trust demo posture) when their optional HMAC secret is unset — but
+ * since SEC-4 the PRODUCTION posture FAILS CLOSED: the routes refuse POST
+ * with 503 until the secret is set, and this warning announces that disabled
+ * state. Pinned here:
  *   · NODE_ENV=production + secret unset → ONE loud console.warn naming the
- *     route, the env key and the exact remedy — a second call is SILENT
- *     (once per process, so a busy route cannot spam the log);
+ *     route, the env key, the 503 fail-closed state and the exact remedy — a
+ *     second call is SILENT (once per process, so a busy route cannot spam
+ *     the log);
  *   · NODE_ENV=production + secret SET → silent (the HMAC gate is live);
  *   · development/test + secret unset → silent (the demo posture is the
  *     documented default outside production);
@@ -42,12 +46,13 @@ describe('warnIfWebhookSecretUnsetInProduction (BE-6)', () => {
     warn.mockRestore()
   })
 
-  it('production + secret unset → ONE loud warning, naming the env key and the fix', () => {
+  it('production + secret unset → ONE loud warning, naming the env key, the 503 fail-closed state and the fix', () => {
     warnIfWebhookSecretUnsetInProduction('api/ussd', ENV_KEY)
     const line = String(warn.mock.calls[0]?.[0] ?? '')
     expect(line).toContain('api/ussd')
     expect(line).toContain('USSD_WEBHOOK_SECRET')
-    expect(line).toMatch(/unauthenticated webhook writes/i)
+    expect(line).toMatch(/FAILS CLOSED/i)
+    expect(line).toMatch(/503/)
     expect(line).toMatch(/PRODUCTION/i)
   })
 

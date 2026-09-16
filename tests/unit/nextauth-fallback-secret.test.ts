@@ -9,11 +9,13 @@
  *     inputs. If a next-auth upgrade changes v4's derivation, this fails
  *     and the mirror must be revisited.
  *  2. CANDIDATE GATING — no fallback when an env secret exists
- *     (NEXTAUTH_SECRET or the AUTH_SECRET alias) or in production.
+ *     (NEXTAUTH_SECRET or the AUTH_SECRET alias) or on ANY runtime other
+ *     than an explicit development/test (SEC-2: production, staging, and an
+ *     unset NODE_ENV all fail closed, with ONE loud console.error).
  *  3. END-TO-END — a REAL JWE minted with next-auth/jwt `encode` on a
  *     fallback candidate is decoded by guard.getSessionFromReq (both cookie
  *     variants: http and https login), plus the unchanged env-secret path
- *     and the honest-null paths.
+ *     and the honest-null paths (incl. the SEC-2 non-dev rejection).
  */
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -33,11 +35,15 @@ import {
   detectOriginMirror,
   devFallbackSecretCandidates,
   fallbackSecret,
+  isDevRuntime,
   parseUrlMirror,
 } from '@/backend/lib/nextauth-fallback-secret'
 
 // Silence dev quickstart warnings during these tests.
 vi.spyOn(console, 'warn').mockImplementation(() => {})
+// SEC-2: the non-dev rejection path logs ONE loud console.error — capture it
+// (and keep the suite output clean).
+const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
 const REAL_SECRET = 'x'.repeat(64)
 
@@ -63,6 +69,7 @@ function cleanEnv() {
 afterEach(() => {
   vi.unstubAllEnvs()
   cleanEnv()
+  errorSpy.mockClear()
 })
 
 // ----------------------------------------------------------------- golden
@@ -149,6 +156,60 @@ describe('candidate gating — the fallback never runs when it must not', () => 
   })
 })
 
+// ----------------------------------------------- SEC-2: non-dev runtimes
+
+describe('SEC-2 — the fallback is dev/test ONLY (explicit runtime check)', () => {
+  const savedNodeEnv = process.env.NODE_ENV
+
+  afterEach(() => {
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = savedNodeEnv
+  })
+
+  it('isDevRuntime: only explicit development/test count', () => {
+    for (const runtime of ['development', 'test']) {
+      process.env.NODE_ENV = runtime
+      expect(isDevRuntime()).toBe(true)
+    }
+    for (const runtime of ['production', 'staging', 'preview', '']) {
+      process.env.NODE_ENV = runtime
+      expect(isDevRuntime()).toBe(false)
+    }
+    delete process.env.NODE_ENV
+    expect(isDevRuntime()).toBe(false)
+  })
+
+  it('NODE_ENV unset → no candidates + ONE loud console.error naming NEXTAUTH_SECRET', () => {
+    cleanEnv()
+    delete process.env.NODE_ENV
+    expect(devFallbackSecretCandidates(reqWithCookie('x'))).toStrictEqual([])
+    // A second consult of the same runtime stays SILENT (once per process).
+    expect(devFallbackSecretCandidates(reqWithCookie('x'))).toStrictEqual([])
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    const line = String(errorSpy.mock.calls[0]?.[0] ?? '')
+    expect(line).toContain('NEXTAUTH_SECRET')
+    expect(line).toMatch(/openssl rand -hex 32/)
+  })
+
+  it('a non-dev runtime with a custom name (staging) → no candidates, fail closed', () => {
+    cleanEnv()
+    process.env.NODE_ENV = 'staging'
+    expect(devFallbackSecretCandidates(reqWithCookie('x'))).toStrictEqual([])
+    expect(errorSpy).toHaveBeenCalled()
+  })
+
+  it('a dev/test consult resets the once-guard — the NEXT non-dev consult warns again', () => {
+    cleanEnv()
+    process.env.NODE_ENV = 'production'
+    expect(devFallbackSecretCandidates(reqWithCookie('x'))).toStrictEqual([])
+    process.env.NODE_ENV = 'test'
+    expect(devFallbackSecretCandidates(reqWithCookie('x')).length).toBeGreaterThanOrEqual(2)
+    process.env.NODE_ENV = 'production'
+    expect(devFallbackSecretCandidates(reqWithCookie('x'))).toStrictEqual([])
+    expect(errorSpy).toHaveBeenCalledTimes(2)
+  })
+})
+
 // --------------------------------------------------------- end-to-end
 
 describe('guard.getSessionFromReq verifies real fallback-minted tokens (#94)', () => {
@@ -199,6 +260,24 @@ describe('guard.getSessionFromReq verifies real fallback-minted tokens (#94)', (
     cleanEnv()
     const session = await getSessionFromReq(reqWithCookie('not-a-jwe'))
     expect(session).toBeNull()
+  })
+
+  it('SEC-2: NODE_ENV=production → a fallback-minted token is UNAUTHENTICATED (null session)', async () => {
+    cleanEnv()
+    const savedNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    try {
+      // Minted exactly like a dev quickstart session (the forgeable key is
+      // derivable from public source) — on a non-dev runtime it must NOT
+      // verify: the guard treats it as no session (401 posture).
+      const secret = fallbackSecret(buildAuthOptions(false), v4DefaultUrl)
+      const token = await encode({ token: { ...claims, role: 'admin' }, secret, maxAge: 60 })
+      const session = await getSessionFromReq(reqWithCookie(token))
+      expect(session).toBeNull()
+    } finally {
+      if (savedNodeEnv === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = savedNodeEnv
+    }
   })
 
   it('withGuard: the fixed session actually reaches the handler (200, not 401)', async () => {

@@ -8,10 +8,10 @@ import { warnIfWebhookSecretUnsetInProduction } from '@/backend/lib/webhook-secr
 
 export const dynamic = 'force-dynamic'
 
-// BE-6 (issue #76): the production posture warning — ONE loud line when this
-// route would accept unauthenticated writes (secret unset). No-op in dev/test
-// and once the secret is set; the fail-open behavior itself is unchanged and
-// stays documented below.
+// BE-6 (issue #76) + SEC-4 (audit wave 2): the production posture signal —
+// ONE loud line when this route's secret is unset. No-op in dev/test and
+// once the secret is set. Since SEC-4 the warning announces the FAIL-CLOSED
+// state (POST → 503 until the secret is set), not an accepted open posture.
 warnIfWebhookSecretUnsetInProduction('api/whatsapp', 'WHATSAPP_WEBHOOK_SECRET')
 
 /**
@@ -57,13 +57,15 @@ warnIfWebhookSecretUnsetInProduction('api/whatsapp', 'WHATSAPP_WEBHOOK_SECRET')
  * to this route — every text reply carries the '— MjengoOS sim' footer and
  * GET /api/whatsapp documents this contract for the future wiring.
  *
- * Hardening (both optional, demo-safe — unset = open demo posture):
+ * Hardening (demo-safe — unset = open demo posture OUTSIDE production):
  *   · WHATSAPP_WEBHOOK_SECRET: when set, POSTs must carry `X-Signature:`
  *     lowercase-hex HMAC-SHA256 of the RAW request body under the secret
  *     (timing-safe compare — the same verifyWebhookSignature mechanics as
- *     the USSD route). Unset keeps the open demo posture, documented — and,
- *     since BE-6 (issue #76), logs ONE loud startup warning when
- *     NODE_ENV=production, so the open posture cannot ship silently.
+ *     the USSD route). Unset keeps the open demo posture in dev/test.
+ *     In production an unset secret FAILS CLOSED (SEC-4, audit wave 2):
+ *     POST returns 503 before any body read or processing — the route
+ *     refuses unauthenticated writes rather than accepting them, and the
+ *     BE-6 startup warning names the misconfiguration.
  *   · Rate limits: 20 req/min per phone PLUS 40 req/min per CLIENT-IP for
  *     EVERY POST (unlike USSD's PIN-only IP throttle — every WhatsApp POST
  *     carries a worker-identity attempt, so the IP bucket always applies).
@@ -104,6 +106,26 @@ function wa(text: string): NextResponse {
     status: 200,
     headers: { 'Content-Type': 'text/plain; charset=utf-8' },
   })
+}
+
+/**
+ * SEC-4 (audit wave 2): the production fail-closed posture. When
+ * NODE_ENV=production and WHATSAPP_WEBHOOK_SECRET is unset, POST is refused
+ * with 503 BEFORE any body read or processing — a missing secret must never
+ * mean "accept unauthenticated writes" (real attendance rows and notes) in
+ * production. Dev/test/demo runtimes keep the documented open
+ * gateway-trust posture exactly (warn-and-accept; vitest runs NODE_ENV=test,
+ * which relies on it).
+ */
+function unconfiguredWebhookSecret(): NextResponse {
+  return NextResponse.json(
+    {
+      error:
+        'WHATSAPP_WEBHOOK_SECRET is not configured — this webhook refuses unauthenticated writes in production. ' +
+        'Set the relay shared secret (POST then requires X-Signature: lowercase-hex HMAC-SHA256 of the raw request body) and restart the app.',
+    },
+    { status: 503 },
+  )
 }
 
 /** Digits-only phone normalization (MSISDN forms: +254…, 254…, 07…). */
@@ -215,6 +237,11 @@ function bodyTooLarge(): NextResponse {
 }
 
 export async function POST(req: NextRequest) {
+  // SEC-4 (audit wave 2): production + unset secret → 503, no processing —
+  // FAIL CLOSED. Non-production keeps the open demo posture unchanged.
+  if (process.env.NODE_ENV === 'production' && !process.env.WHATSAPP_WEBHOOK_SECRET) {
+    return unconfiguredWebhookSecret()
+  }
   try {
     // Raw body once: the HMAC (when enabled) is computed over the RAW bytes,
     // the 64 KB cap runs before JSON.parse, and the parse follows.
@@ -376,7 +403,9 @@ in-session identity. Optional hardening:
   WHATSAPP_WEBHOOK_SECRET: when set, POST requires
     X-Signature: <lowercase-hex HMAC-SHA256 of the RAW request body under the secret>
   (timing-safe compare). Unsigned or mismatched → 401. Unset = documented open
-  demo posture.
+  demo posture in dev/test only; in production (NODE_ENV=production) an unset
+  secret FAILS CLOSED — POST returns 503 with a configuration error before
+  any processing (SEC-4).
 
 Rate limits (shared token-bucket store — single instance, see
 src/backend/lib/rate-limit.ts):

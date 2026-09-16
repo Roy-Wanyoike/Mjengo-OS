@@ -3,7 +3,7 @@
 // One composable wrapper that folds the boilerplate every standard JSON route
 // in this app repeats, in the SAME order the routes already used it:
 //
-//   1. mutation Origin allowlist (optional, env-gated — see MUTATION_ORIGIN_ALLOWLIST)
+//   1. mutation safety gate (default ON — SEC-1, src/backend/lib/mutation-safety.ts)
 //   2. auth guard     → 401 'Sign in required' / 403 'Not permitted for role "x"'
 //      (delegated to withGuard — guard.ts stays the single source of 401/403)
 //   3. rate limit     → 429 'Too many requests' + Retry-After
@@ -36,6 +36,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { z, ZodIssue, ZodType } from 'zod'
 import { getSessionFromReq, safeErrorMessage, withGuard, type GuardSession } from './guard'
+import { mutationSafetyDenied } from './mutation-safety'
 import { enforceRateLimit } from './rate-limit'
 
 // ---------------------------------------------------------------- handlers
@@ -100,6 +101,14 @@ export interface RouteOptions<S extends ZodType | undefined> {
    * so v1's "Error bodies are not logged, 500s are" behavior is preserved.
    */
   onError?: (e: unknown, scope: string) => NextResponse
+  /**
+   * Skip the default-on mutation safety gate (SEC-1) — reserved for
+   * machine-to-machine routes whose callers cannot be assumed to send
+   * browser-shaped headers: /api/jobs/run (the scheduler bearer path; its
+   * browser/session path skips too so the two stay byte-equivalent).
+   * Browser-reachable routes must NOT set this.
+   */
+  skipMutationSafety?: boolean
 }
 
 // ---------------------------------------------------------------- error mappers
@@ -124,32 +133,15 @@ export function genericError(status: number, message: string, opts?: { okFalse?:
   return () => NextResponse.json(opts?.okFalse ? { ok: false, error: message } : { error: message }, { status })
 }
 
-// ---------------------------------------------------------------- origin allowlist
+// ---------------------------------------------------------------- mutation safety
 
-const MUTATING_METHODS = new Set(['POST', 'PUT', 'DELETE', 'PATCH'])
-
-/**
- * MUTATION_ORIGIN_ALLOWLIST (comma-separated Origins), when set: browsers may
- * only mutate (POST/PUT/DELETE/PATCH) from an allowlisted Origin — a classic
- * CSRF hardening gate. Requests WITHOUT an Origin header (curl, the USSD
- * aggregator, health probes — not CSRF vectors, they cannot carry credentials
- * cross-site) are allowed. UNSET = permissive: the sandbox preview embeds the
- * app in a cross-site iframe, so Origin checks must stay off by default or
- * the preview breaks. Read per request so the env can change without a redeploy.
- */
-function mutationOriginDenied(req: NextRequest): NextResponse | null {
-  const raw = process.env.MUTATION_ORIGIN_ALLOWLIST
-  if (!raw || !MUTATING_METHODS.has(req.method)) return null
-  const allowed = raw.split(',').map((s) => s.trim()).filter(Boolean)
-  if (allowed.length === 0) return null
-  const origin = req.headers.get('origin')
-  if (!origin) return null // non-browser caller — not a CSRF vector
-  if (allowed.includes(origin)) return null
-  return NextResponse.json(
-    { error: `Origin "${origin}" is not allowed to mutate this API` },
-    { status: 403 },
-  )
-}
+// SEC-1 replaced the old opt-in MUTATION_ORIGIN_ALLOWLIST gate (off by
+// default, so cross-site mutations passed with the default config) with the
+// default-on gate in src/backend/lib/mutation-safety.ts: same-origin browser
+// requests pass, cross-site browser requests 403, and body-carrying
+// non-browser callers must declare a JSON content type (415 otherwise).
+// MUTATION_ORIGIN_ALLOWLIST survives as the EXTRA-origins escape hatch for
+// legitimate cross-origin embedders (case-insensitive, comma-separated).
 
 // ---------------------------------------------------------------- body pipeline
 
@@ -243,9 +235,13 @@ async function runPipeline<C>(
   session: GuardSession,
   ctx: C,
 ): Promise<NextResponse> {
-  // 1. Optional mutation-Origin gate (env-gated, off by default).
-  const originDenied = mutationOriginDenied(req)
-  if (originDenied) return originDenied
+  // 1. Mutation safety gate (SEC-1, default on — same-origin browsers pass,
+  //    cross-site browsers 403, non-browser bodies need JSON content type).
+  //    Machine routes opt out via skipMutationSafety.
+  if (!opts.skipMutationSafety) {
+    const unsafe = mutationSafetyDenied(req)
+    if (unsafe) return unsafe
+  }
 
   // 2. Rate limit (outside the try — exactly where the routes kept it, so
   // malformed spam still burns tokens and limiter failures never mask 429s).
