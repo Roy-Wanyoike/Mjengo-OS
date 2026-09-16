@@ -121,8 +121,11 @@ export const POST = route(
     const project = await db.project.findUnique({ where: { id: projectId } })
     if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
 
-    // Client-role sessions see exactly their own project — never another one's rows.
-    if (session.user.role === 'client' && session.user.projectId && session.user.projectId !== projectId) {
+    // Client-role sessions see exactly their own project — never another one's
+    // rows. Issue #175 (SEC-7): an UNPINNED client (null projectId) previously
+    // SKIPPED this check entirely (fail-open) — a null pin now also refuses:
+    // a client with no assigned project has no notification writes.
+    if (session.user.role === 'client' && session.user.projectId !== projectId) {
       return NextResponse.json({ error: 'Not permitted for this project' }, { status: 403 })
     }
 
