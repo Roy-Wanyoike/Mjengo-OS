@@ -72,6 +72,7 @@ const AUDIT_KINDS: readonly string[] = [
   'escrow', 'milestone', 'variation', 'comment', 'notification', 'site_map',
   'inventory', 'boq', 'payment', 'wallet', 'ledger', 'auth', 'export', 'action',
   'mjengo_score', 'draw_pack',
+  'flag', // API-11 (issue #162): admin feature-flag toggles (POST /api/flags)
   'ai_review', // W6-1: AI draw review appends (advisory notes — humans decide)
   'ai_screen', // W6-3: evidence authenticity screen (advisory flags — humans decide)
   'ai_digest', // W6-2: diaspora trust digest generations (text + voice — humans decide)
