@@ -14,10 +14,10 @@ import { warnIfWebhookSecretUnsetInProduction } from '@/backend/lib/webhook-secr
 
 export const dynamic = 'force-dynamic'
 
-// BE-6 (issue #76): the production posture warning — ONE loud line when this
-// route would accept unauthenticated writes (secret unset). No-op in dev/test
-// and once the secret is set; the fail-open behavior itself is unchanged and
-// stays documented below.
+// BE-6 (issue #76) + SEC-4 (audit wave 2): the production posture signal —
+// ONE loud line when this route's secret is unset. No-op in dev/test and
+// once the secret is set. Since SEC-4 the warning announces the FAIL-CLOSED
+// state (POST → 503 until the secret is set), not an accepted open posture.
 warnIfWebhookSecretUnsetInProduction('api/ussd', 'USSD_WEBHOOK_SECRET')
 
 /**
@@ -61,9 +61,11 @@ warnIfWebhookSecretUnsetInProduction('api/ussd', 'USSD_WEBHOOK_SECRET')
  *   · USSD_WEBHOOK_SECRET: when set, POSTs must carry `X-Signature:`
  *     lowercase-hex HMAC-SHA256 of the RAW request body under the secret —
  *     aggregator authentication (the demo gateway-trust model then becomes
- *     a shared-secret one). Unset keeps the open demo posture — and, since
- *     BE-6 (issue #76), logs ONE loud startup warning when
- *     NODE_ENV=production, so the open posture cannot ship silently.
+ *     a shared-secret one). Unset keeps the open demo posture in dev/test.
+ *     In production an unset secret FAILS CLOSED (SEC-4, audit wave 2):
+ *     POST returns 503 before any body read or processing — the route
+ *     refuses unauthenticated writes rather than accepting them, and the
+ *     BE-6 startup warning names the misconfiguration.
  *
  * Audit-wave-2 hardening (issues #105 BE-4 / #106 BE-9):
  *   · 64 KB raw-body cap (declared Content-Length precheck + actual byte
@@ -109,6 +111,25 @@ function ussd(text: string): NextResponse {
     status: 200,
     headers: { 'Content-Type': 'text/plain; charset=utf-8' },
   })
+}
+
+/**
+ * SEC-4 (audit wave 2): the production fail-closed posture. When
+ * NODE_ENV=production and USSD_WEBHOOK_SECRET is unset, POST is refused
+ * with 503 BEFORE any body read or processing — a missing secret must never
+ * mean "accept unauthenticated writes" (real attendance rows) in production.
+ * Dev/test/demo runtimes keep the documented open gateway-trust posture
+ * exactly (warn-and-accept; vitest runs NODE_ENV=test, which relies on it).
+ */
+function unconfiguredWebhookSecret(): NextResponse {
+  return NextResponse.json(
+    {
+      error:
+        'USSD_WEBHOOK_SECRET is not configured — this webhook refuses unauthenticated writes in production. ' +
+        'Set the aggregator shared secret (POST then requires X-Signature: lowercase-hex HMAC-SHA256 of the raw request body) and restart the app.',
+    },
+    { status: 503 },
+  )
 }
 
 /** Raw-body cap mirroring POST /api/whatsapp's S2 gate (400, same family). */
@@ -233,6 +254,11 @@ function verifyWebhookSignature(req: NextRequest, raw: string): NextResponse | n
 }
 
 export async function POST(req: NextRequest) {
+  // SEC-4 (audit wave 2): production + unset secret → 503, no processing —
+  // FAIL CLOSED. Non-production keeps the open demo posture unchanged.
+  if (process.env.NODE_ENV === 'production' && !process.env.USSD_WEBHOOK_SECRET) {
+    return unconfiguredWebhookSecret()
+  }
   try {
     // Raw body once — capped BEFORE anything else (BE-4, issue #105): the
     // declared Content-Length precheck refuses an oversized request before
@@ -391,7 +417,7 @@ export async function GET() {
       '20 requests/min/phone + 40 PIN-attempts/min per client IP + 5 wrong PINs/phone ' +
       'within 15 min → 15-minute line lockout (in-process token bucket / tracker store — single instance)',
     auth: 'unauthenticated by design (gateway-trust model); the worker PIN is the in-session identity',
-    signature: 'USSD_WEBHOOK_SECRET (optional env): when set, POST requires X-Signature — lowercase-hex HMAC-SHA256 of the raw request body under the secret; unset = open demo posture',
+    signature: 'USSD_WEBHOOK_SECRET (optional env): when set, POST requires X-Signature — lowercase-hex HMAC-SHA256 of the raw request body under the secret; unset = open demo posture in dev/test only; in production (NODE_ENV=production) an unset secret FAILS CLOSED — POST returns 503 with a configuration error before any processing (SEC-4)',
     bodyCap: '64 KB raw (Content-Length precheck + actual byte count, before JSON.parse) → 400 beyond',
     honest:
       'No SMS/USSD aggregator is wired to this route — it speaks an Africa\'s Talking-style contract so one can be attached later. Attendance dispatches through the same domain actions (applyAction) as the app UI; every menu response is footered "MjengoOS sim".',
