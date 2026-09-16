@@ -8,6 +8,7 @@ import { Label } from '@/frontend/ui/label'
 import { Card, CardContent } from '@/frontend/ui/card'
 import { HardHat, LockKeyhole, LogIn, Mail } from 'lucide-react'
 import { useT } from '@/frontend/i18n/provider'
+import { useMjengo } from '@/frontend/hooks/use-mjengo'
 
 interface DemoAccount {
   email: string
@@ -49,6 +50,10 @@ const SHOW_DEMO_QUICKFILL = process.env.NODE_ENV !== 'production'
  */
 export function LoginScreen() {
   const t = useT()
+  // #191: the auth gate must not hide the outbox — a field supervisor whose
+  // session expired mid-offline still has queued work; acknowledge it here so
+  // the queue is never invisible (it auto-drains after sign-in).
+  const queuedCount = useMjengo((s) => s.outbox.length)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -220,6 +225,15 @@ export function LoginScreen() {
         <p className="mt-4 text-center text-xs text-stone-600 px-4">
           {t('login.shareNote')}
         </p>
+
+        {/* #191: queued actions are acknowledged on the login screen — the
+            outbox badge/panel live behind this gate, so without this note a
+            stranded queue is invisible until after sign-in. */}
+        {queuedCount > 0 && (
+          <p className="mt-2 text-center text-xs text-stone-600 px-4" role="status">
+            {t('login.queuedNote', { count: queuedCount })}
+          </p>
+        )}
 
         {/* Discreet bridge to the marketing site (proxied at /website by this
             app) — the site's "Sign in" links back here, closing the loop. */}

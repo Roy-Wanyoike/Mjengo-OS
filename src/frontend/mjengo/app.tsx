@@ -190,6 +190,26 @@ export function MjengoApp() {
     setOrigin(window.location.origin)
   }, [])
 
+  // ---------------- Post-auth outbox drain (issue #191) ----------------
+  // A reconnect drain that hits an EXPIRED session marks the queue
+  // auth-blocked (failed + honest lastError — use-mjengo syncNow) and next-auth
+  // swaps the app for the login screen, hiding the outbox UI. After re-login
+  // nothing drains the queue by itself: no offline→online transition fires
+  // (the store flag is already true) and the mount path raw-sets `online`. So
+  // once a session authenticates with the browser online, drainAfterAuth()
+  // re-queues the auth-blocked items and flushes once. Keyed on next-auth's
+  // `expires` (a fresh value per login) so an expiry + re-login RE-ARMS the
+  // drain instead of firing once ever; repeated fires are also harmless
+  // (syncNow no-ops without pending work).
+  const authDrainedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (status !== 'authenticated' || !session?.user?.email || !online) return
+    const sessionKey = String(session.expires ?? session.user.email)
+    if (authDrainedFor.current === sessionKey) return
+    authDrainedFor.current = sessionKey
+    void useMjengo.getState().drainAfterAuth()
+  }, [status, session, online])
+
   // ---------------- Real connectivity (F-INSIGHT, spec §50/§74) ----------------
   // The store's `online` flag starts persisted (possibly stale from a previous
   // session). On mount we re-sync it with the browser's real connectivity and

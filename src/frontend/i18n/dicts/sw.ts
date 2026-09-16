@@ -96,6 +96,9 @@ export const swDict = {
   'login.demo.procurement': 'Otieno — Finder/Vifaa/Uthibitisho, huanza kwenye Finder',
   'login.demo.qs': 'Kariuki — Ramu ya Ujenzi/Vifaa/Finder/Uthibitisho, huanza kwenye Vifaa',
   'login.shareNote': 'Wateja wa kiungo cha kushiriki hawahitaji akaunti — timu ya ujenzi hutuma kiungo kinachofanya kazi mara moja.',
+  // #191 — queued actions acknowledged on the login screen (the outbox UI
+  // lives behind this gate)
+  'login.queuedNote': 'Vitendo {count} vilivyohifadhiwa kwenye kifaa hiki vita sawazishwa utakapojiandikisha.',
   'login.website': 'Tovuti ya masoko',
 
   // ------------------------------------------------------------- header
@@ -650,6 +653,12 @@ export const swDict = {
   'sync.nothingFailed': 'Hakuna kilichofeli kinachosubiri kujaribiwa tena',
   'sync.retrying': 'Inajaribu tena vitendo {count} vilivyofeli — mara moja, bila kurudia-rudia',
   'sync.readOnlyClient': 'Mwonekano wa mteja wa kusoma tu — data ya eneo inasimamiwa na timu ya ujenzi',
+  // #191 — session-expiry drain handling: a 401 marks the batch auth-blocked
+  // (per-item lastError + one honest toast); other server-level drain
+  // refusals (500/429/403…) are surfaced with the server's reason.
+  'sync.sessionExpired': 'Session imeisha — vitendo {count} vilivyowekwa foleni viko salama na vita sawazishwa baada ya kujiandikisha',
+  'sync.authBlockedItem': 'Session imeisha — jiandikishe ili kusawazisha',
+  'sync.drainFailed': 'Usawazishaji umefeli — vitendo {count} viko salama kwenye kifaa hiki: {reason}',
 
   // offline outbox sheet (sync-outbox-panel.tsx; server-provided conflict
   // reasons / lastError strings stay verbatim — backend copy)
@@ -678,6 +687,8 @@ export const swDict = {
   'outbox.keepServer': 'Baki na toleo la seva',
   'outbox.keepMine': 'Baki na toleo langu',
   'outbox.serverWinsNote': 'Mistari ya fedha — seva daima inashinda; kitendo kipya cha kurekebisha pekee ndicho kinabadilisha historia ya pesa.',
+  // #191 — auth-blocked failure note (waits for sign-in, not a retry)
+  'outbox.authBlockedNote': 'Inasubiri kuingia — kitendo hiki kita sawazishwa kiotomatiki baada ya kujiandikisha.',
 
   // materials tab — toasts + dialog placeholders (labels/buttons are a later
   // per-tab wave; data-mirroring placeholders like 'Site Store' stay as-is)

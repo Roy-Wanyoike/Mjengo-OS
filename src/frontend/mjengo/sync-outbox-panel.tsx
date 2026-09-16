@@ -142,23 +142,34 @@ function OutboxRow({
       {item.syncStatus === 'failed' && item.lastError && (
         <p className="mt-1.5 text-xs text-red-700 leading-snug">{item.lastError}</p>
       )}
+
+      {/* #191: an auth-blocked failure waits for a SIGN-IN, not a retry — say
+          so instead of leaving a bare red chip the user can only hammer. */}
+      {item.syncStatus === 'failed' && item.authBlocked && (
+        <p className="mt-1 text-[11px] text-stone-600 leading-snug">
+          {t('outbox.authBlockedNote')}
+        </p>
+      )}
     </li>
   )
 }
 
 /**
  * Header sync control + per-item outbox sheet. The trigger keeps the
- * historical Sync button (flush the queue when offline); it stays reachable
- * whenever unresolved conflicts exist — coming back online auto-drains the
- * queue and surfaces exactly those conflicts for a human decision.
+ * historical Sync button (flush the queue when offline) and — #191 — stays
+ * reachable whenever UNRESOLVED work exists: conflicts (a human decision),
+ * failures (the retry footer), and an online + pending-only queue too. The
+ * old rule disabled it while online with no conflicts, which stranded an
+ * auth-blocked or pending queue with no user-reachable recovery path.
  */
 export function SyncOutboxPanel() {
-  const { online, outbox, syncing, syncNow, lastSyncAt, resolveConflict, retryAll } = useMjengo()
+  const { outbox, syncing, syncNow, lastSyncAt, resolveConflict, retryAll } = useMjengo()
   const t = useT()
   const [open, setOpen] = useState(false)
 
   const conflicts = outbox.filter((o) => o.syncStatus === 'conflict')
   const failed = outbox.filter((o) => o.syncStatus === 'failed')
+  const pending = outbox.filter((o) => o.syncStatus === 'pending')
   // Conflicts first (they need a human), then failures, then the live queue.
   const ordered = [
     ...conflicts,
@@ -177,11 +188,14 @@ export function SyncOutboxPanel() {
         <Button
           size="sm"
           variant="outline"
-          // Historical enable: flush while offline with a queue. Reachable
-          // while ONLINE only when unresolved conflicts await a decision.
-          disabled={outbox.length === 0 || syncing || (online && conflicts.length === 0)}
+          // #191: enabled whenever unresolved items exist — outbox only ever
+          // holds pending/syncing/failed/conflict (synced items move to
+          // history), so a non-empty outbox IS unresolved work. Clicking drains
+          // the pending queue (online or offline); the sheet below is the
+          // per-item view + conflict/retry recovery UI.
+          disabled={outbox.length === 0 || syncing}
           onClick={() => {
-            if (!online && outbox.length > 0 && !syncing) void syncNow()
+            if (!syncing && pending.length > 0) void syncNow()
           }}
           aria-label={
             conflicts.length > 0
