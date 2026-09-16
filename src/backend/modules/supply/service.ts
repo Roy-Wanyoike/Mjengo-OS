@@ -50,6 +50,7 @@ import { requiredApproverRoles } from './policy'
 import { materialMatches } from './compare'
 import type { CompareResult, RuleLike } from './types'
 import type { DeliveryDay } from './types'
+import type { TxClient } from '@/backend/modules/ledger/service'
 
 // ---------------- input helpers (money.ts/land.ts house conventions) ----------------
 
@@ -85,8 +86,11 @@ async function notify(
   body: string,
   audienceRole: string,
   recipient: string | null = null,
+  // #196: notifications ride the caller's transaction when there is one — a
+  // rolled-back receive must not leave orphan notification rows behind.
+  client: TxClient = db,
 ) {
-  await db.notification.create({
+  await client.notification.create({
     data: { projectId, kind, title, body, audienceRole, recipient },
   })
 }
@@ -1002,6 +1006,7 @@ export async function collectDeliveryPhotoRefs(
  * photoCount mirrors.
  */
 export async function linkDeliveryPhotos(
+  tx: TxClient,
   deliveryId: string,
   refs: DeliveryPhotoRefs,
   lineIdByOrderLineId: Map<string, string>,
@@ -1019,7 +1024,9 @@ export async function linkDeliveryPhotos(
   // already linked to THIS delivery are filtered out BEFORE the write, and a
   // concurrent duplicate (unique index DeliveryPhoto_deliveryId_attachmentId_key)
   // is tolerated — the first link wins, a replay links nothing new.
-  const alreadyLinked = await db.deliveryPhoto.findMany({
+  // #196: runs on the caller's transaction — links live and die with the
+  // receive that wrote them.
+  const alreadyLinked = await tx.deliveryPhoto.findMany({
     where: { deliveryId },
     select: { attachmentId: true },
   })
@@ -1034,14 +1041,14 @@ export async function linkDeliveryPhotos(
     }))
   if (toCreate.length > 0) {
     try {
-      await db.deliveryPhoto.createMany({ data: toCreate })
+      await tx.deliveryPhoto.createMany({ data: toCreate })
     } catch (e) {
       if (!String(e).includes('Unique constraint')) throw e
       // Lost a concurrent race for the same (delivery, attachment) pair —
       // the other writer's link stands; ours is a duplicate by definition.
     }
   }
-  return await db.deliveryPhoto.count({ where: { deliveryId } })
+  return await tx.deliveryPhoto.count({ where: { deliveryId } })
 }
 
 /**
@@ -1087,10 +1094,21 @@ export async function linkDeliveryPhotos(
  * legacy count-only rows predate this flow and the UI labels them honestly).
  * Replay: loadSupplySlice ships the links (+attachments) on every delivery —
  * the order card renders them exactly like the site-photo strip.
+ *
+ * ATOMICITY (#196): the WHOLE receive — line rewrite, photo links, Site Store
+ * movements, catalog clamps, delivery + PO status flips, notifications — runs
+ * in ONE db.$transaction, and the status flip is a CONDITIONAL update
+ * (`status IN ('dispatched','arrived')`) that runs BEFORE any stock posting.
+ * A crash/retry mid-receive therefore leaves zero partial state (the old shape
+ * posted movements before flipping the status, so a retry double-counted the
+ * derived stock), and two concurrent receives cannot both win — the loser's
+ * conditional update matches zero rows and fails honestly.
  */
 export async function receiveDelivery(projectId: string, payload: Record<string, unknown>) {
   const deliveryId = str(payload.deliveryId)
   if (!deliveryId) throw new Error('deliveryId required')
+  // Fast-fail read (NOT the guard — the transactional claim below is): wrong
+  // state / bad input dies here without touching anything.
   const delivery = await db.orderDelivery.findFirst({
     where: { id: deliveryId, order: { projectId } },
     include: { order: { include: { lines: true, supplier: true } }, lines: true },
@@ -1157,112 +1175,140 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
   const actor = await currentActor()
   const receivedBy = actor.name ?? str(payload.receivedBy) ?? 'Site team'
 
-  await db.orderDeliveryLine.deleteMany({ where: { deliveryId: delivery.id } })
-  await db.orderDeliveryLine.createMany({
-    data: received.map((r) => ({
-      deliveryId: delivery.id,
-      orderLineId: r.orderLineId,
-      qtyOrdered: r.qtyOrdered,
-      qtyReceived: r.qtyReceived,
-      qtyRejected: r.qtyRejected,
-      damageNote: r.damageNote,
-      condition: r.condition,
-    })),
-  })
-
-  // ---- Evidence photo links (issue "Photo attachments on delivery verification"):
-  // map orderLineId → the fresh OrderDeliveryLine row so line-scoped photos
-  // ride the exact per-line count record, then link (idempotent) and take the
-  // honest count. Runs BEFORE the status update so photoCount mirrors reality.
-  let linkedPhotoCount = 0
-  if (photoRefs.delivery.length > 0 || photoRefs.byOrderLine.size > 0) {
-    const lineRows = await db.orderDeliveryLine.findMany({ where: { deliveryId: delivery.id } })
-    const lineIdByOrderLineId = new Map(lineRows.map((r) => [r.orderLineId as string, r.id as string]))
-    linkedPhotoCount = await linkDeliveryPhotos(delivery.id, photoRefs, lineIdByOrderLineId, receivedBy)
-  }
-
-  // ---- Site Store posting (spec §33/§34): movements + catalog stock clamp ----
-  const inventoryResult = await postDeliveryToInventory(
-    projectId,
-    { supplierId: delivery.order.supplierId, orderCode: delivery.order.orderCode },
-    received,
-    receivedBy,
-  )
-
+  // ---- Variance analysis (pure — computed BEFORE any write so the claim
+  // below can flip the delivery to its FINAL status up front) ----
   const short = received.filter((r) => r.qtyReceived < r.qtyOrdered)
   const orderCode = delivery.order.orderCode
   const supplierName = delivery.order.supplier.businessName
   const now = new Date()
-
+  const targetStatus = short.length > 0 ? 'discrepancy' : 'received'
+  const rejectedTotal = received.reduce((s, r) => s + r.qtyRejected, 0)
+  let autoSummary = ''
   if (short.length > 0) {
-    // Physical ground truth ≠ paperwork — flagged for review, never an accusation
     const first = short[0]
     const missing = Math.round((first.qtyOrdered - first.qtyReceived) * 100) / 100
-    const rejectedTotal = received.reduce((s, r) => s + r.qtyRejected, 0)
-    const autoSummary = `Ordered ${first.qtyOrdered} · Received ${first.qtyReceived} — ${missing} missing, flagged for review${rejectedTotal > 0 ? ` · ${Math.round(rejectedTotal * 100) / 100} rejected on inspection` : ''}`
-    const fullNote =
-      note
+    autoSummary = `Ordered ${first.qtyOrdered} · Received ${first.qtyReceived} — ${missing} missing, flagged for review${rejectedTotal > 0 ? ` · ${Math.round(rejectedTotal * 100) / 100} rejected on inspection` : ''}`
+  }
+  const fullNote =
+    short.length > 0
+      ? note
         ? `${autoSummary} — ${note}`
         : short.length > 1
           ? `${autoSummary} (${short.length} short lines in total — see per-line counts)`
           : autoSummary
+      : note ?? 'All lines received in full'
 
-    await db.orderDelivery.update({
-      where: { id: delivery.id },
+  // ---- #196: ONE transaction for the whole receive. The old shape posted
+  // Site Store movements BEFORE flipping the delivery status, so a crash (or
+  // a retried request) between the two re-posted the stock and double-counted
+  // the derived closing. Now: the status guard is re-checked transactionally
+  // and the flip itself is a CONDITIONAL update that runs BEFORE any stock
+  // posting — two concurrent receives cannot both win (the loser's
+  // updateMany matches zero rows), and a failure at ANY step (lines, photos,
+  // stock, PO flip, notifications) rolls the whole receive back to zero.
+  return db.$transaction(async (tx) => {
+    // Transactional re-check of the guard — the fast-fail read above is not
+    // the guard; this one races inside the transaction that writes.
+    const fresh = await tx.orderDelivery.findFirst({
+      where: { id: deliveryId, order: { projectId } },
+    })
+    if (!fresh) throw new Error('Delivery not found in this project')
+    if (fresh.status === 'in_transit') {
+      throw new Error(
+        'The truck is still in transit — record the arrival (delivery.arrive) before receiving',
+      )
+    }
+    if (fresh.status !== 'dispatched' && fresh.status !== 'arrived') {
+      throw new Error(`Delivery is already ${fresh.status.toUpperCase()} — it cannot be re-received`)
+    }
+    // The claim: flip to the FINAL status only while still awaiting receive.
+    // Winning the claim is what authorizes every write that follows.
+    const claim = await tx.orderDelivery.updateMany({
+      where: { id: fresh.id, status: { in: ['dispatched', 'arrived'] } },
+      data: { status: targetStatus, receivedAt: now, receivedBy },
+    })
+    if (claim.count === 0) {
+      // Lost a race with a concurrent receive / driver-leg transition —
+      // nothing of ours was written; report the winner's status honestly.
+      const winner = await tx.orderDelivery.findFirst({ where: { id: fresh.id } })
+      throw new Error(
+        `Delivery is already ${(winner?.status ?? fresh.status).toUpperCase()} — it cannot be re-received`,
+      )
+    }
+
+    await tx.orderDeliveryLine.deleteMany({ where: { deliveryId: fresh.id } })
+    await tx.orderDeliveryLine.createMany({
+      data: received.map((r) => ({
+        deliveryId: fresh.id,
+        orderLineId: r.orderLineId,
+        qtyOrdered: r.qtyOrdered,
+        qtyReceived: r.qtyReceived,
+        qtyRejected: r.qtyRejected,
+        damageNote: r.damageNote,
+        condition: r.condition,
+      })),
+    })
+
+    // ---- Evidence photo links (issue "Photo attachments on delivery verification"):
+    // map orderLineId → the fresh OrderDeliveryLine row so line-scoped photos
+    // ride the exact per-line count record, then link (idempotent) and take the
+    // honest count.
+    let linkedPhotoCount = 0
+    if (photoRefs.delivery.length > 0 || photoRefs.byOrderLine.size > 0) {
+      const lineRows = await tx.orderDeliveryLine.findMany({ where: { deliveryId: fresh.id } })
+      const lineIdByOrderLineId = new Map(lineRows.map((r) => [r.orderLineId as string, r.id as string]))
+      linkedPhotoCount = await linkDeliveryPhotos(tx, fresh.id, photoRefs, lineIdByOrderLineId, receivedBy)
+    }
+
+    // ---- Site Store posting (spec §33/§34): movements + catalog stock clamp ----
+    const inventoryResult = await postDeliveryToInventory(
+      tx,
+      projectId,
+      { supplierId: delivery.order.supplierId, orderCode: delivery.order.orderCode },
+      received,
+      receivedBy,
+    )
+
+    // ---- Final enrichment (the status itself was claimed above, before the
+    // stock posting, so a crash can never leave stock posted against a
+    // still-awaiting delivery) ----
+    await tx.orderDelivery.update({
+      where: { id: fresh.id },
       data: {
-        status: 'discrepancy',
-        receivedAt: now,
-        receivedBy,
         note: fullNote,
         photoCount: linkedPhotoCount,
         gpsLat,
         gpsLng,
       },
     })
-    await db.purchaseOrder.update({ where: { id: delivery.order.id }, data: { status: 'delivered' } })
+    await tx.purchaseOrder.update({ where: { id: delivery.order.id }, data: { status: 'delivered' } })
 
-    const body = `${orderCode} (${supplierName}): ${autoSummary}. Photos: ${linkedPhotoCount}. Reconcile with the supplier before releasing payment.`
-    await notify(projectId, 'delivery.discrepancy', `Delivery discrepancy: ${orderCode}`, body, 'client', null)
-    await notify(projectId, 'delivery.discrepancy', `Delivery discrepancy: ${orderCode}`, body, 'contractor', null)
+    if (short.length > 0) {
+      // Physical ground truth ≠ paperwork — flagged for review, never an accusation
+      const body = `${orderCode} (${supplierName}): ${autoSummary}. Photos: ${linkedPhotoCount}. Reconcile with the supplier before releasing payment.`
+      await notify(projectId, 'delivery.discrepancy', `Delivery discrepancy: ${orderCode}`, body, 'client', null, tx)
+      await notify(projectId, 'delivery.discrepancy', `Delivery discrepancy: ${orderCode}`, body, 'contractor', null, tx)
+    } else {
+      await notify(
+        projectId,
+        'delivery.received',
+        `Delivery received: ${orderCode}`,
+        `${supplierName} delivered in full — verified on the ground by ${receivedBy}${linkedPhotoCount ? ` with ${linkedPhotoCount} photo(s)` : ''}.`,
+        'contractor',
+        null,
+        tx,
+      )
+    }
+
     return {
-      id: delivery.id,
+      id: fresh.id,
       orderId: delivery.order.id,
-      status: 'discrepancy',
+      status: targetStatus,
       shortLines: short.length,
       photosLinked: linkedPhotoCount,
       inventory: inventoryResult,
     }
-  }
-
-  await db.orderDelivery.update({
-    where: { id: delivery.id },
-    data: {
-      status: 'received',
-      receivedAt: now,
-      receivedBy,
-      note: note ?? 'All lines received in full',
-      photoCount: linkedPhotoCount,
-      gpsLat,
-      gpsLng,
-    },
   })
-  await db.purchaseOrder.update({ where: { id: delivery.order.id }, data: { status: 'delivered' } })
-  await notify(
-    projectId,
-    'delivery.received',
-    `Delivery received: ${orderCode}`,
-    `${supplierName} delivered in full — verified on the ground by ${receivedBy}${linkedPhotoCount ? ` with ${linkedPhotoCount} photo(s)` : ''}.`,
-    'contractor',
-    null,
-  )
-  return {
-    id: delivery.id,
-    orderId: delivery.order.id,
-    status: 'received',
-    shortLines: 0,
-    photosLinked: linkedPhotoCount,
-    inventory: inventoryResult,
-  }
 }
 
 /**
@@ -1277,6 +1323,7 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
  * Returns a plain summary for the audit trail + toasts.
  */
 async function postDeliveryToInventory(
+  tx: TxClient,
   projectId: string,
   order: { supplierId: string; orderCode: string },
   lines: Array<{
@@ -1296,7 +1343,7 @@ async function postDeliveryToInventory(
 
   for (const line of lines) {
     // 1) Site Store stock line (upsert keyed project+material+location)
-    const item = await db.inventoryItem.upsert({
+    const item = await tx.inventoryItem.upsert({
       where: { projectId_materialName_location: { projectId, materialName: line.orderLineName, location: 'Site Store' } },
       update: { unit: line.unit, supplierId: order.supplierId },
       create: { projectId, materialName: line.orderLineName, unit: line.unit, location: 'Site Store', supplierId: order.supplierId },
@@ -1305,7 +1352,7 @@ async function postDeliveryToInventory(
     // 2) net received → 'received' movement (unitCost from the PO line)
     const net = Math.round((line.qtyReceived - line.qtyRejected) * 100) / 100
     if (net > 0) {
-      await db.stockMovement.create({
+      await tx.stockMovement.create({
         data: {
           projectId,
           inventoryItemId: item.id,
@@ -1323,7 +1370,7 @@ async function postDeliveryToInventory(
     // 3) rejected qty → 'damaged' or 'returned' movement
     if (line.qtyRejected > 0) {
       const rejectedType = line.condition === 'damaged' || line.damageNote ? 'damaged' : 'returned'
-      await db.stockMovement.create({
+      await tx.stockMovement.create({
         data: {
           projectId,
           inventoryItemId: item.id,
@@ -1339,10 +1386,10 @@ async function postDeliveryToInventory(
     }
 
     // 4) clamp the supplier's catalog stock for the ordered quantity (silent skip)
-    const catalogItems = await db.catalogItem.findMany({ where: { supplierId: order.supplierId } })
+    const catalogItems = await tx.catalogItem.findMany({ where: { supplierId: order.supplierId } })
     const hit = catalogItems.find((c) => c.name === line.orderLineName) ?? catalogItems.find((c) => materialMatches(c.name, line.orderLineName))
     if (hit) {
-      await db.catalogItem.update({
+      await tx.catalogItem.update({
         where: { id: hit.id },
         data: { stockQty: Math.max(0, Math.round((hit.stockQty - line.qtyOrdered) * 100) / 100) },
       })
