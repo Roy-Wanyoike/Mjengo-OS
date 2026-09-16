@@ -1,0 +1,110 @@
+# Frontend Baseline Audit — Mjengo-OS (Task 2-b)
+
+Date: 2026-09-16 · Auditor: Agent 2-b (Frontend Baseline Lead) · Scope: Phase 0.5 frontend half + UX
+Repo state: main @ 8b0003a (clean clone, READ-ONLY audit — no files modified except this report)
+Method: static code-evidence audit (no installs/builds/servers run, per rules). Every claim cites file:line or symbol.
+
+---
+
+## 1. Tab inventory (14 TabKeys in `app.tsx:39-42` / `nav/tab-meta.ts:27-45`)
+
+13 owner-facing tabs + the supplier surface. Role visibility: `src/shared/permissions.ts:62-80` (ROLE_TABS, fail-closed to `['overview']`). Flag gating: `nav/tab-meta.ts:66-105` (`wallet`→money, `marketplace`→finder; `land_verification` gates the parcels section only, `land-tab.tsx:48-53`).
+
+| # | Surface | Renderer | Data source | Empty / loading / error states | Dead / fake elements | Classification |
+|---|---|---|---|---|---|---|
+| 1 | overview | `overview-tab.tsx` | `useMjengo` payload (`/api/project`); AI recap `fetch /api/ai/recap` (overview-tab.tsx:258); health `/api/health` (overview/role-cards.tsx:197); reports built client-side from live payload (`report-utils.ts`) | `if (!data) return null`; boot skeleton in app.tsx:44-64; health card "loading" copy; welcome screen for 0 projects | ReportsMenu busy-guard; comment add/resolve dispatch real | WORKING |
+| 2 | site (site-plan) | `site-plan-tab.tsx` | payload phases/tasks; full CRUD dispatch (task.create/update/block/unblock/complete/verify/delete, phase.create — site-plan-tab.tsx:241-348, 514, 523) | client-side pre-validation mirrors server guards (header comment :9-10) | none found | WORKING |
+| 3 | materials | `materials-tab.tsx` | payload materials + inventory.movements; `material.create`/`delivery.create`/`consumption.create` (:66-99); CSV export | dialog validation toasts; `if (!data) return null` | none found | WORKING |
+| 4 | finder | `finder-tab.tsx` → 4 sections | `supply.compare` = shared pure fn with server (search-section.tsx:29,97-101) + audit dispatch; request/quote/order/invoice lifecycles all via `dispatch(...)` (requests-section.tsx:76, quotes-card.tsx:86-176, invoices-section.tsx:132-216); delivery photo upload `POST /api/upload` (delivery-receive-dialog.tsx:169); jobs `/api/jobs/run` (intel jobs-section pattern) | empty cards per section (e.g. supplier.portal EmptyNote pattern); search needs material+qty toasts | none found | WORKING (invoices/orders sub-surface EN-only — see §3) |
+| 5 | fundis | `fundis-tab.tsx` | payload workers/attendance; checkin/out, muster, override, exception dispatch (:271-301, 339); `wages.pay` direct `POST /api/actions` for gate payload (:372) | payroll gate dialog; online-only guard (:365) | none found | WORKING (payroll rails simulated, honest label :357-362) |
+| 6 | money | `money-tab.tsx` | payload escrow/milestones/variations/finance slice; full lifecycle dispatch (:327-527); `ai.drawReview` direct fetch (:475); DrawPackViewer via `GET /api/share?token&drawPack` (draw-pack-viewer.tsx:67) | stale-payload fallbacks `EMPTY_FINANCE_SLICE` (:283), `drawPacks ?? []` (:303); `aiFlagOn` fail-closed (:313) | **escrow top-up is a simulated wallet**: random client-side reference preview `previewReference()` (:43-49) rendered under honest copy "Simulated wallet — Daraja sandbox wiring pending" (en.ts:1148) | WORKING / wallet rails MOCK-DEMO-ONLY (labeled, issue #43) |
+| 7 | land | `land-tab.tsx` → ParcelsSection + ProfessionalsSection | parcel/search lifecycle dispatch (land/sections/parcels/dialogs.tsx:80-596); professional upsert/credential/assignment dispatch (professionals/dialogs.tsx:95-404) | flag-off notice card (land-tab.tsx:25-42) | none found | WORKING (professionals + parcel dialogs EN-only) |
+| 8 | evidence | `evidence-tab.tsx` | bias-free ledger = payload auditEvents (:500-503); authenticity screen `GET/POST /api/ai/authenticity-screen` (:345,375); PDF built client-side; `alert.ack` (:653) | loading/empty/error rows (:438-445); 403/401 handled (:346-350) | none found | WORKING |
+| 9 | intel | `intel-tab.tsx` → 8 sections | payload intel slice (risk/score/digest/prices/reliability/suggestions); recompute dispatches; jobs `/api/jobs/run` (jobs-section.tsx:108,128); trust digest `/api/actions` (trust-digest-section.tsx:100) | score-section refuses fake 0/100 (header :9) | none found | WORKING |
+| 10 | copilot | `copilot-tab.tsx` | `POST /api/upload` then `/api/ai/analyze-photo` (:230,248); `/api/ai/voice-log` (:469); `/api/ai/parse-text` (:493); `/api/ai/anomaly-scan` (:658); `photo.apply` dispatch (:273) | client view = locked card (:73-89); offline + flag-off guards (:209-210) | none found | WORKING (AI flag-gated, online-only by design) |
+| 11 | ussd | `ussd-tab.tsx` + `whatsapp-panel.tsx` | USSD = **honest SIMULATION** dispatching real `attendance.checkin/record` (:246-261); WhatsApp = real `POST /api/whatsapp` webhook (whatsapp-panel.tsx:91) + `load()` refresh | read-only client guards; offline queue note | USSD is a phone-frame demo (labeled "SIMULATION", ussd.title en.ts:357); carrier line not provisioned (issue #40) | PARTIAL — SIMULATION (real data writes, demo channel) |
+| 12 | audit | `audit-tab.tsx` | `GET /api/audit` with filters + cursor pagination (:169); read-only | loading skeleton, error, 403 denied panel, 401 session-expired (:170-196); non-admin access-denied card (:228-245) | none found | WORKING (UI EN-only by design — audit data) |
+| 13 | settings | `settings-tab.tsx` | session (next-auth) profile; locale prefs localStorage (`i18n/store`); notif prefs `GET/PUT /api/notifications` (:108,143) with optimistic toggle + honest revert (:155); web push VAPID subscribe/unsubscribe (:302,346,371) | signed-out 401 notes (honest), error+retry, unsupported/blocked push states | none found | WORKING |
+| 14 | supplier | `supplier/supplier-portal.tsx` | `GET /api/supplier` scoped payload (:63); scoped `POST /api/actions` dispatch (:97) | skeletons, error banner + retry, 403 unlinked note (:64-67) | **no offline outbox** — supplier actions are online-only fetches | WORKING (online-only) |
+| — | auth login | `auth/login-screen.tsx` | real `signIn('credentials')` (:56); demo accounts list (:21-30) | inline `role="alert"` error (:134-138) | demo credentials hardcoded in bundle (see FE-1) | WORKING |
+| — | client share view | `app.tsx` + `use-mjengo.bootFromShare` | `GET /api/share?token` (use-mjengo.ts:594) | dead-link screen, network-fallback | read-only allowlist `CLIENT_ACTIONS` (client-actions.ts:8-27, 13 types) | WORKING |
+
+Cross-cutting: per-tab `ErrorBoundary context={tab:...}` keyed remount (app.tsx:466) + shell header boundary (:405) + route `error.tsx`/`global-error.tsx`; ⌘K palette (cmdk/command-palette.tsx) — honest entries only (navigate/switch/3 quick-nav actions); global search combobox on `/api/search` (header.tsx:207).
+
+## 2. Action layer & offline/sync architecture
+
+**dispatch()** (use-mjengo.ts:762-877):
+- share-link client → `POST /api/share` (allowlist `CLIENT_ACTIONS`, shared server-safe list in `src/shared/client-actions.ts`).
+- logged-in client-role → `POST /api/actions`.
+- owner online → `POST /api/actions`; on success server payload replaces state; on HTTP refusal → honest toast with server `{error}` (FE-6b, :842) + console.error; on network-level failure → **optimistic local write + outbox queue** (:845-866) with queued toast.
+- owner offline → optimistic `reduceLocal()` (25+ action mirrors, :261-562) + outbox item, stamped with entity `baseVersion` (`stampBaseVersion`, :231-258 — task.*, attendance.* rows versioned).
+
+**Outbox** (spec §40/§41): zustand-persisted (`mjengo-os-store` v1, migrate + partialize :1049-1077). Lifecycle pending→syncing→synced|failed|conflict; `syncNow()` drains `POST /api/sync` with per-item results; conflict metadata (REJECTED stale-version, serverVersion/baseVersion, keep-server suggestion); failed items keep retryCount + lastError, ONE manual `retryAll()` — no auto-retry loops; synced → `syncHistory` capped at 50. `resolveConflict()` keep-server (drop + reload) / keep-mine (force re-send; `server-wins` financial rows refused). UI: `sync-outbox-panel.tsx` (per-item sheet, conflict chips, retry footer). Reconnect: `setOnline(true)` auto-drains + toasts (use-mjengo.ts:743-760).
+
+**Offline boot** (`offline-boot.ts`): `shouldOfflineBoot` = persisted data AND (auth gate stuck 3.5s OR unauthenticated-while-offline) → boot app shell from cache, fail-closed to Overview (role unknown offline). app.tsx:226-233 arms it; online handler nudges next-auth refetch via visibilitychange (:199-219).
+
+**Service worker** (`public/sw.js` v3 + `sw-handlers.ts` pure fns + `tests/unit/sw-offline-shell.test.ts` / `push-routes.test.ts` source pins):
+- `/api/**` network-only, never cached (:170). Non-GET untouched.
+- Navigations network-first → last-good `'/'` shell (prod only; dev never caches) → precached `/offline.html` (:190-224).
+- `/photos/**` cache-first, version-independent cache, LRU cap 100 with persisted recency catalog (:229-253).
+- Immutable assets cache-first; `/_next/static` network-first w/ fallback (:261-312).
+- Push + notificationclick: same-origin deep-link `/?projectId=`, per-project tag (payload contract pinned both sides).
+
+**Gaps:** no Background Sync API (drain only on `online` event / manual); supplier portal has no queue; WhatsApp panel is server-dependent offline (documented in file header); offline boot with no persisted data lands on offline.html (honest but no app).
+
+## 3. i18n status
+
+- **Key parity: VERIFIED.** en.ts and sw.ts each carry **2,049 keys** (rg count; `dicts/check.ts:16-26` compile-time `AssertAllPresent` type gate; `tests/unit/i18n.test.ts` runtime parity + `{var}` placeholder-set parity + sampled-key wiring pins incl. per-tab minimums materials:90/fundis:80/money:200/evidence:60 + raw-English-toast bans on field surfaces).
+- 42 EN==SW identical values — proper nouns (`nav.finder`, `role.qs`, `USSD`, `Kiswahili`, `Site Store`, `MjengoOS`…), intentional.
+- **NOT translated (verified `useT()`-absent, `rg -L`):** `audit-tab.tsx` (whole tab); finder `invoices-section.tsx` + all `invoices/*` dialogs + `create-order/create-request/delivery-*` dialogs + `quotes-card/order-card` + dashboard `boq-card/rules-card` + `supplier-directory`; land `parcels/dialogs.tsx` + `professionals-section.tsx` + `professionals/*`; `map-view.tsx`; `project-switcher.tsx`; `photo-comments.tsx`; `site-map-card.tsx`; `timelapse-card.tsx`; `overview/role-cards.tsx`, `overview/timeline.tsx`, `overview/variance-card.tsx`; USSD tab **body** (LCD script lines, keypad aria-labels, "How the real line works", "Demo PINs" — only title/desc/badges via t(), 5 keys en.ts:357-361); CSV/PDF report content (`report-utils.ts`, `export-utils.ts`); dispatch labels (STATUS_LABELS pinned EN, i18n.test.ts:435-438). The dict itself admits gradual coverage (`settings.language.partialNote`, en.ts:176).
+- Root `<html lang="en">` never switches to `sw` (layout.tsx:42) — while `offline.html:12-19` DOES flip `document.lang` from the saved locale. Inconsistent.
+
+## 4. A11y status
+
+VERIFIED (source + `tests/unit/frontend-a11y.test.ts` pins): full tablist/tab/tabpanel pattern on both strips with roving tabindex (`nav/use-tablist.ts`, header.tsx:997-1026, mobile-bottom-nav.tsx:59-91); panel `aria-labelledby` dual-id (app.tsx:457-461); GlobalSearch combobox aria-expanded/controls/activedescendant (header.tsx:316-321); 44px targets (button.tsx default h-11/sm h-10/lg h-12/icon size-11; mobile nav min-h-14; supplier header h-11); dialog errors announced via `aria-describedby` + `role="alert"` (expense/create-project/worker dialogs); contrast tokens pinned (stone-600 light-bg text, footer stone-300, amber-700 text); layered error boundaries (per-tab key remount + shell + route + global); aria-live `role="log"` on USSD LCD & WhatsApp chat; `role="status"`/`role="alert"` on state banners.
+
+Gaps: a11y tests are **static source pins only** (no DOM/axe runtime suite — vitest is node-only by design); `<html lang>` static (FE-5); some EN-only aria labels in USSD keypad.
+
+## 5. Mobile / PWA
+
+`manifest.webmanifest` complete (name/id/scope/standalone/portrait/theme, 192+512+maskable icons); SW registered on window load (layout.tsx:56-61); `MobileBottomNav` (≤5 primary + camera quick-action gated on copilot capability + More sheet, safe-area insets, hidden md+ and in client view); `offline.html` bilingual self-contained shell; icons + apple-touch-icon present in public/icons.
+
+## 6. Findings
+
+| ID | Severity | Finding | Evidence | Proposed issue title |
+|---|---|---|---|---|
+| FE-1 | **P1** | Demo account emails+passwords (incl. `admin@mjengo.os`/`admin2026`) hardcoded in the shipped client bundle; if seeded users exist in a prod DB this is full admin takeover via the login screen's own UI | auth/login-screen.tsx:21-30 | "Remove/gate demo credentials from production login bundle" |
+| FE-2 | P2 | Money rails simulated end-to-end: client-side random top-up reference `previewReference()`, "Simulated wallet — Daraja sandbox wiring pending" copy; wages.payroll posts balanced ledger entries on simulated rails (honest labels, tracked #43) | money-tab.tsx:43-49,1149; en.ts:1148; fundis-tab.tsx:357-376 | "Escrow/wallet/payroll are ledger simulations — surface a persistent wallet-posture banner (extend #43)" |
+| FE-3 | P2 | i18n coverage overstated vs QA report: audit tab, finder invoices/orders/quotes/delivery dialogs + BOQ/rules, land professionals, overview role-cards/timeline/variance, site-map, timelapse, photo-comments, project-switcher, USSD body are EN-only | §3 list (rg -L useT); settings.language.partialNote en.ts:176 | "Finish Kiswahili wave: audit/finder-invoices/land-professionals/overview-cards surfaces" |
+| FE-4 | P2 | Supplier portal dispatch is a bare online-only fetch — no outbox/queue; a supplier offline loses the action to a toast (owner app queues the same action family) | supplier/supplier-portal.tsx:93-120 | "Supplier portal: queue actions offline or document online-only posture in-UI" |
+| FE-5 | P3 | `<html lang="en">` static while locale is SW; offline.html already flips `document.lang` — AT gets wrong pronunciation for Kiswahili app copy | layout.tsx:42 vs offline.html:12-19 | "Sync <html lang> with the persisted locale" |
+| FE-6 | P3 | Failed outbox items never auto-retry (single manual retryAll, no backoff); a field user can carry a red failed item indefinitely without noticing | use-mjengo.ts:1040-1047; sync-outbox-panel.tsx:236-251 | "Add bounded auto-retry/backoff for failed outbox items" |
+| FE-7 | P3 | Header ships an online/offline SIMULATION toggle in the owner UI that overrides the store's `online` (queues real outbox items artificially); can mislead in production | header.tsx:964-970 | "Hide the connectivity simulation toggle behind dev/demo mode" |
+| FE-8 | P3 | Frontend invariants (a11y, i18n wiring, SW) are enforced only by static source-string pins; no runtime DOM/component tests exist — refactors that preserve strings silently pass | tests/unit/frontend-a11y.test.ts header:4-9 | "Add a minimal DOM-level test target for tab strip + dialog error announcement" |
+| FE-9 | P3 | USSD tab body (LCD script, explainer, demo-PIN list) EN-only though tab is field-facing; prior QA calls the tab "bilingual by design" — inaccurate | ussd-tab.tsx:78-81,137-147,527-590; 5 i18n keys only (en.ts:357-361) | "Translate the USSD simulation body copy (LCD lines + explainer)" |
+| FE-10 | P3 | `supplier-portal.tsx` drops the dispatch `label` (`void label`, :110) — no client-side action context kept; benign (server writes its own audit) but inconsistent with owner dispatch contract | supplier/supplier-portal.tsx:110 | "Supplier dispatch: keep or remove the unused label param" |
+| FE-11 | P3 | PWA has no install/offline-ready cue and no periodic revalidation of the cached `'/'` shell beyond VERSION bump (`mjengoos-2f-3`) — stale shell risk after deploys until SW updates | public/sw.js:26,202-224 | "Add SW-update-available toast / shell revalidation hint" |
+| FE-12 | P3 | Money-tab `payment.pay`, fundis payroll, AI review, authenticity screen are online-only by design (honest toasts) — but there is no queued "needs network" worklist, so offline intent is lost | money-tab.tsx:513-516; fundis-tab.tsx:365-368; copilot-tab.tsx:209 | "Consider an offline 'pending network actions' hint for online-only flows" |
+
+**Mock/demo elements (honest, labeled):** USSD `*384#` phone-frame simulation (real writes); WhatsApp chat-frame simulation against the real webhook; escrow wallet simulation; `previewReference()` random refs. **No unlabeled mock data arrays found** in tab bodies — all lists render from `useMjengo` payload or dedicated fetches.
+
+## 7. Verdict vs prior QA report (docs/QA-REPORT-2026-09-10.md §4/§7)
+
+- ✅ "All 13 tabs render with live data" — structurally CONFIRMED (every tab consumes the real payload or a real API; USSD/WhatsApp are labeled simulations that still write real rows).
+- ✅ "2,049 key pairs, compile-time parity gate" — CONFIRMED exactly.
+- ✅ A11y pins, offline shell, dialog error announcement, supplier 44px — CONFIRMED in source + tests.
+- ⚠️ "All 13 tab bodies + core dialogs + client-facing strings render in both EN and SW" — **OVERSTATED**: §3 lists the EN-only sub-surfaces the report omits (finder invoices/orders dialogs, land professionals, overview role-cards/timeline/variance, site-map/timelapse/photo-comments/project-switcher, USSD body).
+- ⚠️ "USSD tab (bilingual by design)" — only the card chrome is translated; the simulation body is EN.
+- ⚠️ "zero console errors" — not verifiable statically; 14 console.error/warn call sites exist, all on failure paths (honest server-refusal logging), none on happy paths.
+
+## Worklog entry (Task 2-b)
+
+- Enumerated the full tab universe (14 TabKeys via `app.tsx`/`tab-meta.ts`/`permissions.ts`): 13 owner tabs + supplier portal; every tab traced to its data source (payload vs `/api/audit|supplier|health|search|ai/*|jobs/run|whatsapp|upload|notifications|push`) — all real, no unlabeled mock arrays.
+- Traced the action layer end-to-end: `dispatch()` four-path routing (share allowlist / client-role / owner-online / owner-offline-queue), optimistic `reduceLocal` (25+ mirrors), `baseVersion` stamping, `/api/sync` drain with per-item conflict metadata, manual-only retry, keep-server/keep-mine resolution, capped sync history, load-sequencing race guard (FE-6a).
+- Audited offline stack: `sw.js` v3 (API never cached; prod-only `'/'` shell; photo LRU cap 100; push deep-links), `offline-boot.ts` 3.5s auth-gate short-circuit, bilingual `offline.html`; gaps = no Background Sync, supplier portal online-only.
+- Verified i18n: 2,049/2,049 keys, compile-time + test parity, placeholder parity; produced the definitive EN-only surface list (audit tab, finder invoices/orders dialogs, land professionals, overview sub-cards, USSD body, PDF/CSV content, dispatch labels).
+- Verified a11y claims against source + `frontend-a11y.test.ts`: tablist/roving-tabindex/aria-controls链, combobox search, 44px targets, aria-describedby dialog errors, contrast pins, layered error boundaries — all present; noted tests are static pins only and `<html lang>` never flips to `sw`.
+- Classified all surfaces: 12 WORKING, USSD PARTIAL (labeled simulation, real writes), wallet rails MOCK-DEMO-ONLY within an otherwise working Money tab; login/share/cmdk/supplier portals wired to real endpoints.
+- Filed 12 findings (FE-1..FE-12): 1×P1 (demo credentials in bundle), 3×P2 (simulated money rails posture, i18n overstatement, supplier offline gap), 8×P3 (lang attr, retry backoff, sim toggle, static-only tests, USSD copy, label drop, SW staleness cue, online-only worklist).
+- Cross-checked prior QA report: tab/data/a11y/offline claims hold; "full EN/SW render parity" and "USSD bilingual" claims are overstated (documented above).
+- No repository files were modified; sole deliverable is this file (docs/audit/FRONTEND_BASELINE.md).
