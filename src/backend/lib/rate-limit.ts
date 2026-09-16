@@ -4,30 +4,32 @@ import { getToken } from 'next-auth/jwt'
 import { db } from '@/backend/lib/db'
 import { getSessionFromReq, unauthorized, type GuardSession } from '@/backend/lib/guard'
 import { mutationSafetyDenied } from '@/backend/lib/mutation-safety'
-import { createSqliteStores } from '@/backend/lib/rate-limit-sqlite'
+import { createSqliteStores, resolveRateLimitSqlitePath } from '@/backend/lib/rate-limit-sqlite'
 
 /**
  * In-process security primitives: rate limiting, login lockout and the shared
  * /api/ai/* route policy (W1-SEC, spec Doc A §52 security hardening).
  *
- * STORE RESOLUTION (W3-b, issue #33): the token buckets and login lockout
- * used to live in module-scope Maps of THIS Node process only — fine for one
- * Next.js server, silently wrong the moment several processes share the
- * traffic (a user effectively got `limit × instances` requests; a login
- * lockout only locked the instance that happened to serve the failures).
- * The seams are unchanged, but the backing stores are now env-resolved at
- * startup (resolveRateLimitStores below):
- *   · RATE_LIMIT_STORE unset / "memory" (default): in-process stores —
- *     byte-identical historical behavior (MemoryRateLimitStore + the
- *     in-process login trackers). Nothing changes for existing deploys.
- *   · RATE_LIMIT_STORE=sqlite: ONE shared SQLite file per host
- *     (RATE_LIMIT_SQLITE_PATH, default db/ratelimit.db — a separate file,
- *     never the Prisma database) backing both the buckets and the lockout
- *     trackers: writes are durable immediately, reads compute allowance from
- *     the persisted state, so exhaustion/lockout on process A is seen by
- *     process B. Any init failure logs ONE warning and falls back to the
- *     in-memory stores — rate limiting never prevents boot. See
- *     rate-limit-sqlite.ts for the persistence choice and honest tradeoffs.
+ * STORE RESOLUTION (W3-b issue #33 → issue #158): the token buckets and
+ * login lockout used to live in module-scope Maps of THIS Node process only —
+ * fine for one Next.js server, silently wrong the moment several processes
+ * share the traffic (a user effectively got `limit × instances` requests; a
+ * login lockout only locked the instance that happened to serve the
+ * failures). The seams are unchanged, but the backing stores are env-resolved
+ * at startup (resolveRateLimitStores below):
+ *   · RATE_LIMIT_STORE unset / "sqlite" (default, issue #158): ONE shared
+ *     SQLite file per host (RATE_LIMIT_SQLITE_PATH, default db/ratelimit.db
+ *     — a separate file, never the Prisma database) backing both the buckets
+ *     and the lockout trackers: writes are durable immediately, reads compute
+ *     allowance from the persisted state, so exhaustion/lockout on process A
+ *     is seen by process B. Any init failure logs ONE warning and falls back to
+ *     the in-memory stores — rate limiting never prevents boot (the CI/
+ *     read-only-FS posture).
+ *   · RATE_LIMIT_STORE=memory (explicit opt-out): in-process stores — the
+ *     historical behavior, exact for ONE process (single-process dev where a
+ *     sidecar file is unwanted). Unit tests run on this setting (see
+ *     vitest.config.mts) so the suite stays hermetic; the default wiring is
+ *     pinned explicitly in tests/unit/rate-limit-store.test.ts.
  * Multi-HOST still needs a Redis-backed implementation of these same seams
  * (INCR+TTL, or a Lua token-bucket script for this exact refill semantics) —
  * deliberately not built; no Redis dependency is added (the sqlite store
@@ -104,8 +106,10 @@ export async function principalFor(req: NextRequest): Promise<string> {
  * Synchronous by design — the login lockout below is sync too, and callers
  * (enforceRateLimit, auth.ts lockout calls) rely on that.
  *
- * Implementations: MemoryRateLimitStore (default, this process only) and
- * SqliteRateLimitStore (rate-limit-sqlite.ts, one shared file per host).
+ * Implementations: MemoryRateLimitStore (this process only — the explicit
+ * RATE_LIMIT_STORE=memory opt-out) and SqliteRateLimitStore
+ * (rate-limit-sqlite.ts, one shared file per host — the default since
+ * issue #158).
  * REDIS-READY SEAM for multi-host (documented, deliberately not implemented
  * — no new external service in this repo): implement with `INCR key` +
  * `EXPIRE` for fixed windows, or a Lua script holding {tokens, lastRefill}
@@ -125,7 +129,7 @@ export interface RateLimitStore {
 
 type BucketState = { tokens: number; lastRefill: number; limit: number; refillPerMs: number }
 
-/** In-process token buckets (the default store — see the file header). */
+/** In-process token buckets (the explicit memory opt-out — see the file header). */
 export class MemoryRateLimitStore implements RateLimitStore {
   private readonly buckets = new Map<string, BucketState>()
 
@@ -293,23 +297,33 @@ type ResolvedRateLimitStores = {
 
 /**
  * Env-driven store resolution, run ONCE at module init (startup — after both
- * in-memory store classes are declared). Default and every failure path end
- * at the in-memory stores — byte-identical historical behavior; the sqlite
- * path is strictly opt-in (issue #33: shared state for multi-process
- * single-host deployments). Fail-closed honest logging: any sqlite init
- * failure emits ONE warning and degrades to memory.
+ * in-memory store classes are declared). The DEFAULT (and every failure
+ * path) is the failure ladder of issue #158: attempt the shared SQLite store
+ * (multi-process safe on one host); ANY init failure logs ONE warning and
+ * degrades to the in-memory stores — rate limiting never prevents boot, so
+ * CI containers and read-only filesystems keep working (per-process
+ * counters). `RATE_LIMIT_STORE=memory` is the explicit opt-out that restores
+ * the historical single-process behavior; an unknown value warns and gets
+ * the default ladder (not a silent memory downgrade — the warning names the
+ * value and the valid options).
  */
 function resolveRateLimitStores(env: NodeJS.ProcessEnv): ResolvedRateLimitStores {
   const wanted = (env.RATE_LIMIT_STORE ?? '').trim().toLowerCase()
-  if (wanted === 'sqlite') {
-    const sqlite = createSqliteStores(env) // null + one console.warn on ANY init failure
-    if (sqlite) return { kind: 'sqlite', ...sqlite }
-  } else if (wanted && wanted !== 'memory') {
+  if (wanted === 'memory') {
+    return {
+      kind: 'memory',
+      rateLimitStore: new MemoryRateLimitStore(),
+      loginTrackerStore: new MemoryLoginTrackerStore(),
+    }
+  }
+  if (wanted && wanted !== 'sqlite') {
     console.warn(
       `[rate-limit] RATE_LIMIT_STORE="${wanted}" is not a known store (memory | sqlite) — ` +
-        `using the in-memory store (per-process counters).`,
+        `using the default sqlite store (one shared file per host; init failure falls back to memory).`,
     )
   }
+  const sqlite = createSqliteStores(env) // null + one console.warn on ANY init failure
+  if (sqlite) return { kind: 'sqlite', ...sqlite }
   return {
     kind: 'memory',
     rateLimitStore: new MemoryRateLimitStore(),
@@ -319,10 +333,21 @@ function resolveRateLimitStores(env: NodeJS.ProcessEnv): ResolvedRateLimitStores
 
 const resolvedStores = resolveRateLimitStores(process.env)
 
+// Boot-time observability (issue #158): ONE line stating which store is live.
+// Skipped under vitest (process.env.VITEST) — a test import is not a boot, and
+// the suite pins the resolution matrix explicitly in rate-limit-store.test.ts.
+if (!process.env.VITEST) {
+  console.info(
+    resolvedStores.kind === 'sqlite'
+      ? `[rate-limit] store: sqlite (${resolveRateLimitSqlitePath(process.env)}) — shared per host, multi-process safe`
+      : '[rate-limit] store: memory — per-process counters (set RATE_LIMIT_STORE=sqlite for multi-process sharing)',
+  )
+}
+
 /** Which backing store is live — observability for logs/tests ('memory' | 'sqlite'). */
 export const rateLimitStoreKind: 'memory' | 'sqlite' = resolvedStores.kind
 
-/** The live token-bucket store (memory by default; sqlite when opted in). */
+/** The live token-bucket store (the shared sqlite file by default; memory when opted out). */
 export const rateLimitStore: RateLimitStore = resolvedStores.rateLimitStore
 
 const loginTrackerStore: LoginTrackerStore = resolvedStores.loginTrackerStore
@@ -347,7 +372,7 @@ const pairLockKey = (email: string, ip: string): string =>
  * one account lock that account. A SECONDARY (email|ip) tracker is kept so a
  * distributed attack still gets per-pair throttling and the historical
  * same-IP behavior is unchanged. All state goes through the injected store —
- * in-process by default, the shared SQLite file when RATE_LIMIT_STORE=sqlite.
+ * the shared SQLite file by default, in-process when RATE_LIMIT_STORE=memory.
  */
 export function createLoginLockout(store: LoginTrackerStore): LoginLockout {
   const probes = (email: string, ip: string): Array<[LoginTrackerKind, string]> => [
@@ -415,9 +440,10 @@ const defaultLoginLockout = createLoginLockout(loginTrackerStore)
  *     recorded threat model). No second (phone|ip) key, unlike the login
  *     lockout: the route's existing 40/min per-IP PIN throttle already
  *     covers the rotating-source case.
- *   · SAME LoginTrackerStore seam (in-process map, or the shared sqlite file
- *     when RATE_LIMIT_STORE=sqlite — the 5th failure on process A is visible
- *     to process B), tracked under the 'ussd' kind, same 5/15min/15min
+ *   · SAME LoginTrackerStore seam (the shared sqlite file by default — the
+ *     5th failure on process A is visible to process B; in-process map when
+ *     RATE_LIMIT_STORE=memory), tracked under the 'ussd' kind, same
+ *     5/15min/15min
  *     lifecycle shape as the login lockout so the semantics cannot drift.
  *     CONSECUTIVE-failure semantics: the route clears the tracker on every
  *     successful PIN resolution, so only 5 wrong PINs IN A ROW trip it.

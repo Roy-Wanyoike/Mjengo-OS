@@ -38,8 +38,9 @@ import { actionFlagGate } from '@/backend/lib/action-flag-gate'
 // Rate limit (W1-SEC, Doc A §52): 60 actions/min per principal (session email,
 // else IP). Generous for real dispatch bursts; stops scripted abuse of the
 // one endpoint every mutation flows through. Counted BEFORE the idempotency
-// replay — replays are still requests. In-process limiter — single-instance
-// honesty note in src/backend/lib/rate-limit.ts.
+// replay — replays are still requests. Limiter backing store resolved in
+// src/backend/lib/rate-limit.ts (shared sqlite per host by default, issue
+// #158; in-process only when RATE_LIMIT_STORE=memory opts out).
 //
 // FEATURE-FLAG FAMILY GATE (spec §81, task 9-a; shared since W3-1): the
 // action families below are the user-facing surfaces of a flaggable feature

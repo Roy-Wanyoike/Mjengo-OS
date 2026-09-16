@@ -18,6 +18,12 @@
  *  3. HONEST FAILURE MODES — bad path / unknown env / Bun runtime → memory
  *     fallback with exactly ONE warning; runtime statement failure → fail
  *     OPEN with a warning, never a throw.
+ *  4. ISSUE #158 DEFAULT WIRING — unset RATE_LIMIT_STORE resolves the shared
+ *     sqlite store (when the path is writable); `memory` is the explicit
+ *     opt-out; unknown values warn and still get the default ladder; the
+ *     boot-time console.info line states the live store (suppressed under
+ *     vitest). The vitest config pins the suite itself to memory — these
+ *     tests opt OUT of that pin explicitly to observe the production default.
  *
  * db is stubbed exactly like rate-limit.test.ts (only enforceAiRoutePolicy
  * touches Prisma). better-sqlite3 is imported directly for row-level
@@ -85,18 +91,26 @@ function trackerRowCount(file: string): number {
 }
 
 let dir: string
+// vitest.config.mts pins RATE_LIMIT_STORE=memory for the whole suite (issue
+// #158: hermetic unit tests); the wiring tests below must be able to observe
+// the UNSET default, so they save/restore instead of deleting — a deleted
+// value would leak into later test files and flip THEIR module wiring to the
+// sqlite default (creating db/ratelimit.db in the repo root).
+let suiteRateLimitStore: string | undefined
 
 beforeEach(() => {
   vi.useFakeTimers({ now: T0 })
   dir = mkdtempSync(join(tmpdir(), 'rl-store-'))
   process.env.NEXTAUTH_SECRET = 'unit-test-secret'
+  suiteRateLimitStore = process.env.RATE_LIMIT_STORE
 })
 
 afterEach(() => {
   vi.useRealTimers()
   rmSync(dir, { recursive: true, force: true })
   delete process.env.NEXTAUTH_SECRET
-  delete process.env.RATE_LIMIT_STORE
+  if (suiteRateLimitStore === undefined) delete process.env.RATE_LIMIT_STORE
+  else process.env.RATE_LIMIT_STORE = suiteRateLimitStore
   delete process.env.RATE_LIMIT_SQLITE_PATH
 })
 
@@ -360,7 +374,7 @@ describe('SqliteLoginTrackerStore — cross-process sharing (issue #33)', () => 
 
 // ------------------------------------------------------ module-level wiring
 
-describe('module-level store resolution (env wiring at import time)', () => {
+describe('module-level store resolution (env wiring at import time, issue #158 default)', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -370,22 +384,52 @@ describe('module-level store resolution (env wiring at import time)', () => {
     vi.restoreAllMocks()
   })
 
-  it('RATE_LIMIT_STORE unset → in-memory store, zero warnings', async () => {
+  it('RATE_LIMIT_STORE unset (the default) → the shared sqlite store over a writable path, zero warnings', async () => {
+    delete process.env.RATE_LIMIT_STORE // observe the production default
+    process.env.RATE_LIMIT_SQLITE_PATH = join(dir, 'default-wired.db')
     const mod = await import('@/backend/lib/rate-limit')
-    expect(mod.rateLimitStoreKind).toBe('memory')
+    expect(mod.rateLimitStoreKind).toBe('sqlite')
     expect(console.warn).not.toHaveBeenCalled()
+    // And it is the real shared store through the public surface: 1-limit
+    // bucket, second hit limited, state survives a module re-instantiation.
+    expect(await mod.enforceRateLimit(req('10.9.0.5'), 'default', 1, 60_000)).toBeNull()
+    expect((await mod.enforceRateLimit(req('10.9.0.5'), 'default', 1, 60_000))!.status).toBe(429)
+    vi.resetModules()
+    const restarted = await import('@/backend/lib/rate-limit')
+    expect(restarted.rateLimitStoreKind).toBe('sqlite')
+    expect((await restarted.enforceRateLimit(req('10.9.0.5'), 'default', 1, 60_000))!.status).toBe(429)
   })
 
-  it('RATE_LIMIT_STORE=memory (explicit) → in-memory store, zero warnings', async () => {
+  it('default + unwritable path (CI / read-only FS) → memory fallback with exactly ONE warning; limiting still works', async () => {
+    delete process.env.RATE_LIMIT_STORE
+    process.env.RATE_LIMIT_SQLITE_PATH = join(dir, 'no-such-dir', 'rl.db')
+    const mod = await import('@/backend/lib/rate-limit')
+    expect(mod.rateLimitStoreKind).toBe('memory')
+    expect(console.warn).toHaveBeenCalledTimes(1)
+    expect(String((console.warn as unknown as (m: string) => void).mock.calls[0])).toContain('not active')
+    // The fallback store behaves exactly like the historical memory default.
+    expect(await mod.enforceRateLimit(req('10.9.0.6'), 'fell-default', 1, 60_000)).toBeNull()
+    expect(await mod.enforceRateLimit(req('10.9.0.6'), 'fell-default', 1, 60_000)).not.toBeNull()
+  })
+
+  it('RATE_LIMIT_STORE=memory (explicit opt-out) → in-memory store, zero warnings', async () => {
     process.env.RATE_LIMIT_STORE = 'memory'
     const mod = await import('@/backend/lib/rate-limit')
     expect(mod.rateLimitStoreKind).toBe('memory')
     expect(console.warn).not.toHaveBeenCalled()
   })
 
-  it('RATE_LIMIT_STORE=sqlite → module wires the sqlite store; state survives a full module re-instantiation (simulated process restart)', async () => {
+  it('RATE_LIMIT_STORE=sqlite (explicit opt-in) → same shared store as the default', async () => {
     process.env.RATE_LIMIT_STORE = 'sqlite'
     process.env.RATE_LIMIT_SQLITE_PATH = join(dir, 'wired.db')
+    const mod = await import('@/backend/lib/rate-limit')
+    expect(mod.rateLimitStoreKind).toBe('sqlite')
+    expect(console.warn).not.toHaveBeenCalled()
+  })
+
+  it('RATE_LIMIT_STORE=sqlite → module wires the sqlite store; state survives a full module re-instantiation (simulated process restart)', async () => {
+    process.env.RATE_LIMIT_STORE = 'sqlite'
+    process.env.RATE_LIMIT_SQLITE_PATH = join(dir, 'wired2.db')
     const first = await import('@/backend/lib/rate-limit')
     expect(first.rateLimitStoreKind).toBe('sqlite')
     expect(console.warn).not.toHaveBeenCalled()
@@ -416,12 +460,42 @@ describe('module-level store resolution (env wiring at import time)', () => {
     expect(await mod.enforceRateLimit(req('10.9.0.2'), 'fell', 1, 60_000)).not.toBeNull()
   })
 
-  it('unknown RATE_LIMIT_STORE value → memory + one honest warning naming the value', async () => {
+  it('unknown RATE_LIMIT_STORE value → ONE honest warning naming the value, then the DEFAULT sqlite ladder', async () => {
     process.env.RATE_LIMIT_STORE = 'redis'
+    process.env.RATE_LIMIT_SQLITE_PATH = join(dir, 'unknown-val.db')
     const mod = await import('@/backend/lib/rate-limit')
-    expect(mod.rateLimitStoreKind).toBe('memory')
+    // Not a silent memory downgrade: the warning fires, the default (sqlite
+    // over the writable path) is what runs.
     expect(console.warn).toHaveBeenCalledTimes(1)
     expect(String((console.warn as unknown as (m: string) => void).mock.calls[0])).toContain('redis')
+    expect(mod.rateLimitStoreKind).toBe('sqlite')
+  })
+
+  it('boot log: outside vitest ONE console.info line states the live store (suppressed under VITEST)', async () => {
+    const hadVitest = process.env.VITEST
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    try {
+      delete process.env.VITEST
+      process.env.RATE_LIMIT_STORE = 'memory'
+      vi.resetModules()
+      const mod = await import('@/backend/lib/rate-limit')
+      expect(mod.rateLimitStoreKind).toBe('memory')
+      expect(info).toHaveBeenCalledTimes(1)
+      expect(String(info.mock.calls[0])).toContain('memory')
+
+      // The sqlite default names the resolved path in its line.
+      info.mockClear()
+      delete process.env.RATE_LIMIT_STORE
+      process.env.RATE_LIMIT_SQLITE_PATH = join(dir, 'boot-line.db')
+      vi.resetModules()
+      const sqliteMod = await import('@/backend/lib/rate-limit')
+      expect(sqliteMod.rateLimitStoreKind).toBe('sqlite')
+      expect(info).toHaveBeenCalledTimes(1)
+      expect(String(info.mock.calls[0])).toContain(join(dir, 'boot-line.db'))
+    } finally {
+      if (hadVitest === undefined) delete process.env.VITEST
+      else process.env.VITEST = hadVitest
+    }
   })
 })
 

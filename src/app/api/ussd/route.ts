@@ -415,7 +415,7 @@ export async function GET() {
       '(shared-secret posture → only the stored kiosk PIN resolves)',
     rateLimit:
       '20 requests/min/phone + 40 PIN-attempts/min per client IP + 5 wrong PINs/phone ' +
-      'within 15 min → 15-minute line lockout (in-process token bucket / tracker store — single instance)',
+      'within 15 min → 15-minute line lockout (token bucket / tracker store shared per host by default, issue #158)',
     auth: 'unauthenticated by design (gateway-trust model); the worker PIN is the in-session identity',
     signature: 'USSD_WEBHOOK_SECRET (optional env): when set, POST requires X-Signature — lowercase-hex HMAC-SHA256 of the raw request body under the secret; unset = open demo posture in dev/test only; in production (NODE_ENV=production) an unset secret FAILS CLOSED — POST returns 503 with a configuration error before any processing (SEC-4)',
     bodyCap: '64 KB raw (Content-Length precheck + actual byte count, before JSON.parse) → 400 beyond',

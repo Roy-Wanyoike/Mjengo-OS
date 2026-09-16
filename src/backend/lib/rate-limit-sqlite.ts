@@ -12,7 +12,7 @@ import type {
 /**
  * SQLite-backed implementations of the rate-limit / login-lockout store seams
  * (W3-b, closes issue #33: "Rate-limit/lockout store is in-process only —
- * multi-instance deploys lose shared state").
+ * multi-instance deploys lose shared state"; issue #158 made this the DEFAULT).
  *
  * PERSISTENCE CHOICE — better-sqlite3, and why not the alternatives:
  *  · NOT the main Prisma client ($executeRaw + a runtime-CREATE'd table):
@@ -53,7 +53,10 @@ import type {
  *  · INIT failure (module missing, unwritable/bad path, Bun runtime, db
  *    open error): createSqliteStores returns null after ONE console.warn —
  *    the caller (rate-limit.ts resolveStores) falls back to the in-memory
- *    stores. Rate limiting never prevents boot.
+ *    stores. Rate limiting never prevents boot — this is what keeps CI
+ *    containers and read-only filesystems working under the sqlite DEFAULT
+ *    (issue #158): the app boots on per-process counters with one loud line
+ *    in the log, never a crash.
  *  · RUNTIME statement failure: fail OPEN with a once-per-store warning.
  *    The in-memory store these replace never fails; a degraded optional
  *    store must not wedge every request behind 429s (a full disk would
@@ -115,7 +118,8 @@ function loadSqliteConstructor(): { ctor: SqliteDatabaseCtor } | { error: string
       error:
         'the better-sqlite3 native addon hard-crashes under the Bun runtime ' +
         '(verified on Bun 1.3.x) — run the standalone server with node ' +
-        '(the Docker CMD) or keep RATE_LIMIT_STORE unset',
+        '(the Docker CMD), or set RATE_LIMIT_STORE=memory to opt out of the ' +
+        'shared store explicitly',
     }
   }
   try {
@@ -200,15 +204,19 @@ CREATE TABLE IF NOT EXISTS rl_login_tracker (
  * Build both SQLite stores (token buckets + login trackers) over one shared
  * file, or null on ANY init failure after logging ONE warning — the caller
  * falls back to the in-memory stores. Honest by construction: the app never
- * fails to boot because of rate limiting.
+ * fails to boot because of rate limiting. Selected by default since issue
+ * #158 (RATE_LIMIT_STORE unset or "sqlite"); the warning text is deliberately
+ * store-selection-agnostic because it fires for BOTH the default and the
+ * explicit opt-in.
  */
 export function createSqliteStores(env: NodeJS.ProcessEnv): SqliteStores | null {
   const path = resolveRateLimitSqlitePath(env)
   const opened = openSqliteDatabase(path)
   if ('error' in opened) {
     console.warn(
-      `[rate-limit] RATE_LIMIT_STORE=sqlite is not active: ${opened.error}. ` +
-        `Falling back to the in-memory store — per-process counters (issue #33 posture).`,
+      `[rate-limit] the shared SQLite rate-limit store is not active: ${opened.error}. ` +
+        `Falling back to the in-memory store — per-process counters (issue #158 default posture; ` +
+        `set RATE_LIMIT_STORE=memory to opt out explicitly and silence this warning).`,
     )
     return null
   }
@@ -219,7 +227,7 @@ export function createSqliteStores(env: NodeJS.ProcessEnv): SqliteStores | null 
     }
   } catch (err) {
     console.warn(
-      `[rate-limit] RATE_LIMIT_STORE=sqlite is not active: store construction failed ` +
+      `[rate-limit] the shared SQLite rate-limit store is not active: store construction failed ` +
         `(${describeError(err)}). Falling back to the in-memory store — per-process counters.`,
     )
     return null

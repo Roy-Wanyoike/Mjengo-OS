@@ -407,7 +407,7 @@ in-session identity. Optional hardening:
   secret FAILS CLOSED — POST returns 503 with a configuration error before
   any processing (SEC-4).
 
-Rate limits (shared token-bucket store — single instance, see
+Rate limits (token-bucket store shared per host by default, issue #158; see
 src/backend/lib/rate-limit.ts):
   20 requests/min per phone (bucket whatsapp:<from>)
   40 requests/min per client IP (bucket whatsapp-ip:<ip> — every POST carries a

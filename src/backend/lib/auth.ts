@@ -151,8 +151,9 @@ export function buildAuthOptions(secureCookies: boolean): NextAuthOptions {
        * EMAIL (5 failures within 15 min → 15-min lock even across rotating
        * source IPs — the IP is only a secondary tracker so a distributed
        * attack still gets per-pair throttling) — even a CORRECT password is
-       * rejected during the window. Tracking is in-process (see
-       * rate-limit.ts for the single-instance honesty note).
+       * rejected during the window. Tracking runs through the env-resolved
+       * store (rate-limit.ts): the shared sqlite file per host by default
+       * (issue #158), in-process only when RATE_LIMIT_STORE=memory opts out.
        *
        * Lockouts are surfaced CredentialsSignin-style: authorize THROWS with
        * a clear message, which next-auth v4 encodes as the `error` param on

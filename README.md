@@ -520,10 +520,12 @@ The four that matter day-to-day:
 | `AUTH_TRUST_HOST` | `1` behind a proxy | Makes next-auth v4's `detectOrigin` honor `x-forwarded-host`/`-proto` — without it, proxied sign-in silently pins to `http://localhost:3000` and breaks (PR #7). |
 | `NEXTAUTH_URL` | **unset** | The origin is derived per request, so redirects/cookies always target the host the user actually browses. Set only for one fixed public domain. |
 
-Everything else — feature-flag overrides (`NEXT_FLAGS_OFF`), rate-limit
-store, USSD/WhatsApp webhook secrets, SMS providers (webhook or Africa's
+Everything else — feature-flag overrides (`NEXT_FLAGS_OFF`), the rate-limit
+store knobs (`RATE_LIMIT_STORE` / `RATE_LIMIT_SQLITE_PATH` — the shared
+sqlite store is the default; `memory` opts out), USSD/WhatsApp webhook
+secrets, SMS providers (webhook or Africa's
 Talking), web push (VAPID), the M-Pesa Daraja sandbox block, S3/R2/MinIO
-object storage, background-job scheduler — is **optional, default-off and
+object storage, background-job scheduler — is **optional to configure and
 fail-closed**, documented inline in the annotated template
 [`.env.example`](./.env.example) (operational detail in
 [DEPLOYMENT.md §3](./DEPLOYMENT.md)).
@@ -537,8 +539,10 @@ defaults.
 
 Recruiter-friendly, and all of it verifiable in the repo:
 
-- **Per-route rate limiting + login lockout** — in-process buckets on auth,
-  share, project, AI and sync routes; lockout after repeated failures
+- **Per-route rate limiting + login lockout** — buckets on auth, share,
+  project, AI and sync routes backed by a SHARED SQLite store per host by
+  default (multi-process safe — `RATE_LIMIT_STORE=memory` opts back into
+  per-process counters); lockout after repeated failures
   (`src/backend/lib/rate-limit.ts`).
 - **Login-timing equalization** — a burn-hash comparison runs even when the
   user doesn't exist, so response timing can't distinguish "no such user"

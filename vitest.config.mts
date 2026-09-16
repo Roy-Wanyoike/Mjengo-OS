@@ -29,5 +29,13 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     fileParallelism: false,
+    // Hermetic store for every module-level rate-limit/lockout wiring (issue
+    // #158 made the multi-process SQLite store the DEFAULT): unit tests run on
+    // the in-memory stores so bucket/lockout state can never leak across test
+    // files or runs via a persisted db/ratelimit.db. The default wiring and
+    // its failure ladder are pinned EXPLICITLY (temp-file sqlite, vi.resetModules
+    // re-imports) in tests/unit/rate-limit-store.test.ts — this override only
+    // fixes what the rest of the suite runs on.
+    env: { RATE_LIMIT_STORE: 'memory' },
   },
 })
