@@ -10,6 +10,14 @@
 // leaving a row; transfers write their out+in legs as one atomic unit; and
 // every result reports the REAL derived closingQty (return/damage/adjust
 // used to hardcode 0).
+//
+// Input validation (#210): the movement ledger is the single source of truth
+// for stock (nothing is stored), so a bad quantity poisons every derived
+// number downstream with no error at write time. Every action therefore
+// parses its qty through parseMovementQty at the top of its transaction —
+// same fail-closed posture as receiveDelivery's moneyNumber checks: finite
+// number, > 0 for the six unsigned types, finite non-zero for adjust (signed
+// by design), inside sane bounds. unitCost (where accepted) is finite ≥ 0.
 
 import { db } from '@/backend/lib/db'
 import type { TxClient } from '@/backend/modules/ledger/service'
@@ -23,6 +31,46 @@ export interface MovementResult {
   type: string
   quantity: number
   closingQty: number
+}
+
+/** Sanity cap per movement (#210): finite ≠ sensible — a qty above this is a
+ * unit mistake (grams vs bags), not stock. Generous enough for bulk sites. */
+const MAX_MOVEMENT_QTY = 1_000_000_000
+
+/**
+ * Parse + validate a movement quantity at the service boundary (#210).
+ * Numeric strings coerce (moneyNumber semantics — the offline outbox replays
+ * JSON where qty is a number, but being strict about typeof would reject
+ * honest replays); anything non-finite, non-positive (unsigned types), zero
+ * (adjust), or absurd throws BEFORE any row is written.
+ */
+function parseMovementQty(action: string, raw: unknown, opts: { signed?: boolean } = {}): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n)) {
+    throw new Error(`${action}: qty must be a finite number (got ${typeof raw === 'string' ? `"${raw}"` : String(raw)})`)
+  }
+  if (opts.signed) {
+    if (n === 0) throw new Error(`${action}: qty cannot be zero — adjust up with a positive number, down with a negative one`)
+  } else if (n <= 0) {
+    throw new Error(`${action}: qty must be greater than zero`)
+  }
+  if (Math.abs(n) > MAX_MOVEMENT_QTY) {
+    throw new Error(`${action}: qty ${n} exceeds the per-movement cap of ${MAX_MOVEMENT_QTY.toLocaleString('en-US')} — check the unit (bags, tonnes…), not the digits`)
+  }
+  return n
+}
+
+/**
+ * Optional unit cost (#210): absent → null; present → finite and ≥ 0
+ * (a cost is money, never negative — same rule as the supply service).
+ */
+function parseUnitCost(action: string, raw: unknown): number | null {
+  if (raw === undefined || raw === null || raw === '') return null
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`${action}: unitCost must be zero or more (got ${typeof raw === 'string' ? `"${raw}"` : String(raw)})`)
+  }
+  return n
 }
 
 async function upsertItem(
@@ -66,8 +114,10 @@ async function findItem(tx: TxClient, projectId: string, inventoryItemId: string
 
 export async function openStock(projectId: string, p: any): Promise<MovementResult> {
   return db.$transaction(async (tx) => {
+    const qty = parseMovementQty('inventory.open', p.qty)
+    const unitCost = parseUnitCost('inventory.open', p.unitCost)
     const item = await upsertItem(tx, projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null)
-    const movement = await appendMovement(tx, projectId, item.id, 'opening', Number(p.qty), p.unitCost != null ? Number(p.unitCost) : null, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
+    const movement = await appendMovement(tx, projectId, item.id, 'opening', qty, unitCost, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
     const closing = derivedClosingQty(item.movements.concat([movement]))
     return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
   })
@@ -75,8 +125,10 @@ export async function openStock(projectId: string, p: any): Promise<MovementResu
 
 export async function receiveStock(projectId: string, p: any): Promise<MovementResult> {
   return db.$transaction(async (tx) => {
+    const qty = parseMovementQty('inventory.receive', p.qty)
+    const unitCost = parseUnitCost('inventory.receive', p.unitCost)
     const item = await upsertItem(tx, projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null)
-    const movement = await appendMovement(tx, projectId, item.id, 'received', Number(p.qty), p.unitCost != null ? Number(p.unitCost) : null, p.reference ?? null, p.note ?? null, p.recordedBy ?? 'Site Manager')
+    const movement = await appendMovement(tx, projectId, item.id, 'received', qty, unitCost, p.reference ?? null, p.note ?? null, p.recordedBy ?? 'Site Manager')
     const closing = derivedClosingQty(item.movements.concat([movement]))
     return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
   })
@@ -84,8 +136,8 @@ export async function receiveStock(projectId: string, p: any): Promise<MovementR
 
 export async function consumeStock(projectId: string, p: any): Promise<MovementResult> {
   return db.$transaction(async (tx) => {
+    const qty = parseMovementQty('inventory.consume', p.qty)
     const item = await findItem(tx, projectId, String(p.inventoryItemId))
-    const qty = Number(p.qty)
     // DB-2: project the closing balance from the movements that ALREADY exist
     // before touching the database — over-consumption must throw without
     // persisting a row (the old code appended first and only then checked).
@@ -104,8 +156,8 @@ export async function transferStock(projectId: string, p: any): Promise<any> {
   // "out" half and silently lost stock. The out leg is guarded by the same
   // negative-stock projection as consume.
   return db.$transaction(async (tx) => {
+    const qty = parseMovementQty('inventory.transfer', p.qty)
     const item = await findItem(tx, projectId, String(p.inventoryItemId))
-    const qty = Number(p.qty)
     if (derivedClosingQty(item.movements) - qty < 0) {
       throw new Error('Cannot transfer more than closing stock')
     }
@@ -118,8 +170,9 @@ export async function transferStock(projectId: string, p: any): Promise<any> {
 
 export async function returnStock(projectId: string, p: any): Promise<MovementResult> {
   return db.$transaction(async (tx) => {
+    const qty = parseMovementQty('inventory.return', p.qty)
     const item = await findItem(tx, projectId, String(p.inventoryItemId))
-    const movement = await appendMovement(tx, projectId, item.id, 'returned', Number(p.qty), null, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
+    const movement = await appendMovement(tx, projectId, item.id, 'returned', qty, null, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
     // DB-2: real derived closing — this path used to hardcode closingQty: 0.
     const closing = derivedClosingQty(item.movements.concat([movement]))
     return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
@@ -128,8 +181,9 @@ export async function returnStock(projectId: string, p: any): Promise<MovementRe
 
 export async function damageStock(projectId: string, p: any): Promise<MovementResult> {
   return db.$transaction(async (tx) => {
+    const qty = parseMovementQty('inventory.damage', p.qty)
     const item = await findItem(tx, projectId, String(p.inventoryItemId))
-    const movement = await appendMovement(tx, projectId, item.id, 'damaged', Number(p.qty), null, null, String(p.damageNote ?? 'damaged'), p.recordedBy ?? 'Site Manager')
+    const movement = await appendMovement(tx, projectId, item.id, 'damaged', qty, null, null, String(p.damageNote ?? 'damaged'), p.recordedBy ?? 'Site Manager')
     // DB-2: real derived closing — this path used to hardcode closingQty: 0.
     const closing = derivedClosingQty(item.movements.concat([movement]))
     return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
@@ -138,8 +192,11 @@ export async function damageStock(projectId: string, p: any): Promise<MovementRe
 
 export async function adjustStock(projectId: string, p: any): Promise<MovementResult> {
   return db.$transaction(async (tx) => {
+    // Signed by design: negative adjusts down, positive adjusts up — zero is
+    // a no-op that would only pollute the ledger.
+    const qty = parseMovementQty('inventory.adjust', p.qty, { signed: true })
     const item = await findItem(tx, projectId, String(p.inventoryItemId))
-    const movement = await appendMovement(tx, projectId, item.id, 'adjusted', Number(p.qty), null, null, String(p.reason ?? 'count correction'), p.recordedBy ?? 'Site Manager')
+    const movement = await appendMovement(tx, projectId, item.id, 'adjusted', qty, null, null, String(p.reason ?? 'count correction'), p.recordedBy ?? 'Site Manager')
     // DB-2: real derived closing — this path used to hardcode closingQty: 0.
     const closing = derivedClosingQty(item.movements.concat([movement]))
     return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
