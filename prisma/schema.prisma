@@ -175,6 +175,14 @@ model Attendance {
   // mutates the day-row (check-in/out, status, exceptions, overrides, payroll
   // paid stamp), checked against payload baseVersion by /api/sync.
   version         Int       @default(1)
+
+  // DB-7: one attendance day-row per (worker, date). Until now this was
+  // convention-only (findFirst-then-create in the appliers) — a concurrent
+  // check-in / USSD / offline-sync pair could create duplicate day rows and
+  // double-count wages. The unique index makes the invariant DB-enforced.
+  @@unique([workerId, date])
+  // DB-6: hot path — project payload slices and payroll group by project+day.
+  @@index([projectId, date])
 }
 
 model Material {
@@ -664,6 +672,12 @@ model MaterialRequest {
   lines           MaterialRequestLine[]
   quotes          Quote[]
   orders          PurchaseOrder[]
+
+  // DB-8 (deliberately NOT unique): requestCode has two generators —
+  // supply/service.ts nextRequestCode() is per-project max+1 (MR-1046…)
+  // while inventory/service.ts boqToRequest() is per-project count-based
+  // (MR-1005…) — the ranges can overlap, so uniqueness cannot be enforced
+  // until the generators are unified.
 }
 
 model MaterialRequestLine {
@@ -765,6 +779,11 @@ model PurchaseOrder {
   lines         PurchaseOrderLine[]
   deliveries    OrderDelivery[]
   invoices      Invoice[]
+
+  // DB-8: order codes are per-project sequential (supply/service.ts
+  // nextOrderCode = max+1 on THIS project); cross-project reuse is by design
+  // (detail routes look up by id first), so uniqueness is scoped to the pair.
+  @@unique([projectId, orderCode])
 }
 
 model PurchaseOrderLine {
@@ -887,6 +906,11 @@ model Invoice {
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
   lines            InvoiceLine[]
+
+  // DB-8: invoice codes are per-project sequential (invoices/service.ts
+  // nextInvoiceCode = max+1 on THIS project), so uniqueness is scoped to the
+  // pair — a global unique would break the multi-project generator contract.
+  @@unique([projectId, invoiceCode])
 }
 
 model InvoiceLine {
@@ -1005,6 +1029,10 @@ model LedgerEntry {
   amount    Float // positive KES
   memo      String?
   createdAt DateTime          @default(now())
+
+  // DB-6: hot path — balances are derived by loading an account's entries
+  // (ledger + wallet services); without this index every lookup is a scan.
+  @@index([accountId])
 }
 
 // Idempotency guard (spec §57): repeated Idempotency-Key requests replay the
@@ -1095,6 +1123,9 @@ model StockMovement {
   note            String?
   recordedBy      String // name/role
   createdAt       DateTime      @default(now())
+
+  // DB-6: hot path — derived closing stock sums an item's movement log.
+  @@index([inventoryItemId])
 }
 
 // Bill of Quantities (spec §28 chain head): project + versioned lines. Lines
