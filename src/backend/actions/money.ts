@@ -20,6 +20,7 @@
 //    never money; a pack failure never fails the release.
 
 import { db } from '@/backend/lib/db'
+import { parseMoneyAmount, MONEY_AMOUNT_ERROR } from '@/backend/lib/money-bounds'
 import {
   MONEY_FINANCE_ROLES,
   postEscrowTopup,
@@ -64,11 +65,6 @@ function autoReference(method: string): string {
   return `${prefix}-${suffix}`
 }
 
-function posNumber(v: unknown): number | null {
-  const n = Number(v)
-  return Number.isFinite(n) && n > 0 ? n : null
-}
-
 async function resolvePhase(phaseId: unknown, projectId: string): Promise<string | null> {
   if (!phaseId || typeof phaseId !== 'string') return null
   const phase = await db.phase.findFirst({ where: { id: phaseId, projectId } })
@@ -81,8 +77,8 @@ async function resolvePhase(phaseId: unknown, projectId: string): Promise<string
 export async function applyMoneyAction(type: string, payload: any, projectId: string): Promise<any> {
   switch (type) {
     case 'escrow.topup': {
-      const amount = posNumber(payload?.amount)
-      if (amount === null) throw new Error('Top-up amount must be a number greater than zero')
+      const amount = parseMoneyAmount(payload?.amount)
+      if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
       const method = ['mpesa', 'bank', 'card'].includes(payload?.method) ? String(payload.method) : 'mpesa'
       const reference =
         typeof payload?.reference === 'string' && payload.reference.trim()
@@ -115,8 +111,8 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
     case 'milestone.create': {
       const name = String(payload?.name ?? '').trim()
       if (!name) throw new Error('Milestone name required')
-      const amount = posNumber(payload?.amount)
-      if (amount === null) throw new Error('Milestone amount must be a number greater than zero')
+      const amount = parseMoneyAmount(payload?.amount)
+      if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
       const phaseId = await resolvePhase(payload?.phaseId, projectId)
       const milestone = await db.milestone.create({
         data: { projectId, phaseId, name, amount, status: 'locked' },

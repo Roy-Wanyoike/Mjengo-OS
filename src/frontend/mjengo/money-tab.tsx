@@ -209,6 +209,9 @@ function EscrowConsistencyChip({ escrow }: { escrow: NonNullable<ProjectPayload[
 
 // ---------------- main tab ----------------
 
+/** Mirrors the server bound (lib/money-bounds MAX_MONEY_KES) for friendly pre-flight errors. */
+const MAX_SINGLE_MONEY_KES = 1_000_000_000
+
 export function MoneyTab() {
   const { data, dispatch, online, outbox, viewMode, actionBusy, clientRole, shareToken } = useMjengo()
   const { data: session } = useSession()
@@ -327,6 +330,7 @@ export function MoneyTab() {
   async function topUp() {
     const amount = Number(tAmount)
     if (!tAmount || Number.isNaN(amount) || amount <= 0) { toast.error(t('money.error.topupAmount')); return }
+    if (amount > MAX_SINGLE_MONEY_KES) { toast.error(t('money.error.topupTooLarge')); return }
     const ok = await dispatch('escrow.topup', { amount, method: tMethod }, `Escrow top-up ${formatKES(amount)}`)
     if (ok) {
       toast.success(online ? t('money.topupOk', { amount: formatKES(amount) }) : offlineNote)
@@ -1125,7 +1129,7 @@ export function MoneyTab() {
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
               <Label htmlFor="topup-amount">{t('money.topup.amount')}</Label>
-              <Input id="topup-amount" type="number" min="1" value={tAmount} onChange={(e) => setTAmount(e.target.value)} placeholder={t('money.topup.ph')} inputMode="numeric" />
+              <Input id="topup-amount" type="number" min="1" max={MAX_SINGLE_MONEY_KES} value={tAmount} onChange={(e) => setTAmount(e.target.value)} placeholder={t('money.topup.ph')} inputMode="numeric" />
               {Number(tAmount) > 0 && (
                 <p className="text-xs text-stone-500">
                   {t('money.topup.preview', { amount: formatKES(Number(tAmount)), balance: formatKES(balance + Number(tAmount)) })}
