@@ -8,20 +8,37 @@ import { SITE } from "@/lib/site";
  *
  *  · Same-site Origin/Referer gate when the browser sends one (curl/tests
  *    send neither and pass — they are not browser CSRF/abuse vectors).
- *  · 5 submissions per hour, keyed per client — but x-forwarded-for is
- *    trusted ONLY when TRUST_PROXY is set, mirroring the main app's
- *    rate-limit.ts TRUST_PROXY pattern: with exactly one appending reverse
- *    proxy in front, the LAST XFF value is that proxy's view of the client;
- *    without the flag the header is client-spoofable (rotate XFF → fresh
- *    buckets), so it is ignored and all traffic shares ONE bucket — a
- *    conservative dev posture that fails closed in an unconfigured deploy.
+ *  · Rate limit (issue #131 / WD-1): 5 submissions per hour PER VISITOR
+ *    when TRUST_PROXY is set — keyed on the proxy-appended (LAST)
+ *    x-forwarded-for entry, mirroring the main app's rate-limit.ts
+ *    TRUST_PROXY pattern (with exactly one appending reverse proxy in front,
+ *    the last XFF value is that proxy's view of the client; the header is
+ *    client-spoofable without the flag, so it is ignored then). Two layers:
+ *      · per-visitor bucket — MAX_PER_HOUR (5) when keyed per client;
+ *      · GLOBAL backstop bucket — GLOBAL_MAX_PER_HOUR (200) across ALL
+ *        visitors, which is also the effective cap of the default
+ *        no-TRUST_PROXY posture: all traffic then shares that one bucket,
+ *        so a legitimate launch burst no longer 429s everyone at 5/hour,
+ *        while an unconfigured deploy still fails closed against a flood.
+ *    429s say which layer tripped (`reason`: "rate_limited_visitor" vs
+ *    "rate_limited_global") and the global layer logs a warning — a burst
+ *    that drops leads is visible in `docker compose logs website`.
+ *  · Restart persistence: DELIBERATELY declined (issue #131 AC). The
+ *    counters are in-memory, so a restart grants a fresh window — a
+ *    bounded relaxation (≤ 5/hr per visitor, ≤ 200/hr globally), not a
+ *    bypass. The website is a stateless marketing app with no database;
+ *    porting the main app's opt-in SQLite rate-limit store (PR #68) would
+ *    add a writable-DB dependency to a container whose only state is the
+ *    submissions file. Revisit only if the site grows multi-instance.
  *  · Raw-body size cap (~16KB) checked BEFORE JSON.parse (Content-Length
  *    honored, actual bytes re-verified after reading) — same shape as the
  *    main app's route-kit audit-#4 fix.
  *  · Honeypot field "companyWebsite": a visually-hidden input humans never
  *    fill; a filled one is a bot and the submission is rejected.
  *  · data/submissions.json is capped at 500 stored entries (oldest dropped
- *    on write) so the gitignored runtime PII file cannot grow unbounded.
+ *    on write) so the gitignored runtime PII file cannot grow unbounded —
+ *    and since issue #131 every eviction logs a warning with the count:
+ *    dropped leads are silent no longer (see DEPLOYMENT.md §6.3).
  *
  * Still no third-party service is contacted; validation stays server-side.
  */
@@ -50,7 +67,18 @@ const MAX_STORED_SUBMISSIONS = 500;
 
 const REQUESTS = new Map<string, number[]>();
 const WINDOW_MS = 60 * 60 * 1000; // 1 hour
+/** Per-visitor cap (TRUST_PROXY set — see the file header). */
 const MAX_PER_HOUR = 5;
+/**
+ * Global backstop (issue #131): one shared ceiling per hour across ALL
+ * visitors. It bounds abuse even when keying is per-visitor (floods of
+ * distinct keys) and it is the cap of the shared bucket used when
+ * TRUST_PROXY is unset, so the default posture tolerates launch bursts
+ * (200 leads/hour) instead of 429ing everyone after five.
+ */
+const GLOBAL_MAX_PER_HOUR = 200;
+/** Bucket key for the shared/global layer. */
+const GLOBAL_KEY = "global";
 
 /** True when TRUST_PROXY is explicitly enabled (non-empty, not 0/false). */
 function isTrustProxyEnabled(): boolean {
@@ -61,12 +89,14 @@ function isTrustProxyEnabled(): boolean {
 }
 
 /**
- * Rate-limit key (see the file header): with TRUST_PROXY set we take the
- * proxy-appended (last) x-forwarded-for entry; without it we deliberately
- * ignore the spoofable header and rate-limit everyone as one bucket.
+ * Rate-limit key (see the file header): with TRUST_PROXY set we key on the
+ * proxy-appended (LAST) x-forwarded-for entry — the main app's rate-limit.ts
+ * TRUST_PROXY pattern; without it the spoofable header is ignored entirely
+ * and all traffic shares the global bucket (capped at GLOBAL_MAX_PER_HOUR,
+ * not 5 — bursts survive, floods still fail closed).
  */
 function rateLimitKey(request: Request): string {
-  if (!isTrustProxyEnabled()) return "single-bucket";
+  if (!isTrustProxyEnabled()) return GLOBAL_KEY;
   const values = (request.headers.get("x-forwarded-for") ?? "")
     .split(",")
     .map((v) => v.trim())
@@ -74,12 +104,28 @@ function rateLimitKey(request: Request): string {
   return values.length > 0 ? `ip:${values[values.length - 1]}` : "anon";
 }
 
-function rateLimited(key: string): boolean {
+/** Record a hit for `key` in the rolling hour; returns the post-hit count. */
+function recordHit(key: string): number {
   const now = Date.now();
   const hits = (REQUESTS.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
   hits.push(now);
   REQUESTS.set(key, hits);
-  return hits.length > MAX_PER_HOUR;
+  return hits.length;
+}
+
+/**
+ * Record this request against `key` and the global backstop, then report
+ * which layer (if any) tripped: "visitor" (this client exceeded 5/hr —
+ * only possible with TRUST_PROXY keying), "global" (the shared 200/hr
+ * ceiling), or null (allowed).
+ */
+function rateLimitStatus(key: string): "visitor" | "global" | null {
+  const perKey = recordHit(key);
+  if (key === GLOBAL_KEY) {
+    return perKey > GLOBAL_MAX_PER_HOUR ? "global" : null;
+  }
+  if (perKey > MAX_PER_HOUR) return "visitor";
+  return recordHit(GLOBAL_KEY) > GLOBAL_MAX_PER_HOUR ? "global" : null;
 }
 
 /**
@@ -156,9 +202,27 @@ export async function POST(request: Request) {
   }
 
   const key = rateLimitKey(request);
-  if (rateLimited(key)) {
+  const limited = rateLimitStatus(key);
+  if (limited) {
+    if (limited === "global") {
+      // Visible operability (issue #131): the shared ceiling only trips on
+      // a flood — say so in the logs, with the cap, right where it happens.
+      console.warn(
+        `[contact] global submission cap reached (${GLOBAL_MAX_PER_HOUR}/hour) — requests are being rejected; ` +
+          (isTrustProxyEnabled()
+            ? "per-visitor keying is ON (TRUST_PROXY set): this is aggregate load, not one visitor."
+            : "per-visitor keying is OFF (TRUST_PROXY unset): all traffic shares one bucket — set TRUST_PROXY behind an appending proxy to key per visitor (see .env.example)."),
+      );
+    }
     return NextResponse.json(
-      { ok: false, error: "Too many submissions from this address. Please try again later." },
+      {
+        ok: false,
+        error:
+          limited === "visitor"
+            ? "Too many submissions from this address. Please try again later."
+            : "We're receiving a lot of submissions right now — please try again in a little while.",
+        reason: limited === "visitor" ? "rate_limited_visitor" : "rate_limited_global",
+      },
       { status: 429 },
     );
   }
@@ -221,8 +285,17 @@ export async function POST(request: Request) {
     }
     existing.push(submission);
     // Retention cap (MW-10): keep only the most recent entries so the
-    // plaintext contact data on disk stays bounded.
+    // plaintext contact data on disk stays bounded. Since issue #131 every
+    // eviction is LOUD — dropped leads are the one irreversible loss this
+    // endpoint can suffer, so operators get a count in the logs (visible
+    // via `docker compose logs website`; retrieval guide: DEPLOYMENT §6.3).
     if (existing.length > MAX_STORED_SUBMISSIONS) {
+      const dropped = existing.length - MAX_STORED_SUBMISSIONS;
+      console.warn(
+        `[contact] submission cap reached — dropping ${dropped} oldest ` +
+          `entr${dropped === 1 ? "y" : "ies"} (MAX_STORED_SUBMISSIONS=${MAX_STORED_SUBMISSIONS}); ` +
+          `dropped leads are unrecoverable — retrieve the file soon (DEPLOYMENT.md §6.3).`,
+      );
       existing = existing.slice(existing.length - MAX_STORED_SUBMISSIONS);
     }
     await fs.mkdir(path.dirname(file), { recursive: true });
