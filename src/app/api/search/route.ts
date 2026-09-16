@@ -50,6 +50,10 @@ const MAX_PER_GROUP = 5
 // loads at most MAX_SCAN rows (recent-first where an order exists) before the
 // in-memory LIKE filter; a matching row beyond the window is honestly missed
 // rather than the route loading unbounded tables into memory.
+// Issue #166: "recent-first" is now true for projects too — the unpinned
+// query orders createdAt DESC like every timestamped sibling, so the window
+// keeps the NEWEST 300 projects (asc kept the oldest 300, making every
+// project created after the first 300 unfindable by name).
 const MAX_SCAN = 300
 
 /** Cap the query itself — a giant string would still be scanned against every row. */
@@ -66,7 +70,7 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
     await Promise.all([
       projectId
         ? db.project.findMany({ where: { id: projectId } })
-        : db.project.findMany({ orderBy: { createdAt: 'asc' }, take: MAX_SCAN }),
+        : db.project.findMany({ orderBy: { createdAt: 'desc' }, take: MAX_SCAN }),
       db.landParcel.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
       // Worker has no timestamp column — a bare take still bounds the scan.
       db.worker.findMany({ where: { ...scope }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
