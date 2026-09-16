@@ -1,13 +1,22 @@
-# MjengoOS — Build with evidence 🇰🇪
+# MjengoOS — Construction Site OS 🇰🇪
 
-An **evidence-based construction project OS for Kenya**: phase budgets on a
-double-entry ledger, escrow-backed milestones released against photo proof,
-**MjengoScore** (an evidence-derived contractor trust score), hash-stamped
-**evidence draw packs** for diaspora clients, an **advisory AI layer** (draw
-review, photo authenticity screening, a weekly trust digest with voice) that
-describes and never approves, `*384#` USSD and WhatsApp attendance for
-feature phones, and share links that let clients abroad watch their build
-without an account.
+> **The evidence-backed operating system for a construction project — from
+> land verification and planning, through procurement and physical execution,
+> to payments, completion, and handover.**
+
+MjengoOS is an **offline-first Construction Operating System** built for Kenya
+and the wider African market. It connects **clients, contractors, project
+managers, site supervisors, quantity surveyors, procurement teams, suppliers
+and financial records** around one source of truth for a build — and it is
+designed for the way sites actually work: messy, distributed, cash-heavy and
+often offline.
+
+Concretely: phase budgets on a double-entry ledger, escrow-backed milestones
+released against photo proof, **MjengoScore** (an evidence-derived contractor
+trust score), hash-stamped **evidence draw packs** for diaspora clients, an
+**advisory AI layer** that describes and never approves, `*384#` USSD and
+WhatsApp attendance for feature phones, and share links that let clients
+abroad watch their build without an account.
 
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -18,20 +27,73 @@ without an account.
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
 **Philosophy:** *don't just record what people say happened — record the
-evidence around what happened.* Reported vs verified, everywhere. The ledger
-never lies; AI never approves; payments are idempotent; closing stock is
-always derived.
+evidence around what happened.* Reported vs verified, everywhere. **The
+physical world is the source of truth; software should capture, verify,
+reconcile and explain it.** The ledger never lies; AI never approves; payments
+are idempotent; closing stock is always derived.
 
 ## Contents
 
-- [The product in one page](#the-product-in-one-page) · [Visual tour](#visual-tour)
-- [Demo accounts (seed data)](#demo-accounts-seed-data) · [Feature tour (the real tabs)](#feature-tour-the-real-tabs) · [The AI surface (honest by design)](#the-ai-surface-honest-by-design)
-- [Architecture](#architecture)
-- [Tech stack](#tech-stack) · [Quick start](#quick-start)
-- [Environment variables](#environment-variables) · [Security engineering](#security-engineering)
-- [i18n — English + Kiswahili](#i18n--english--kiswahili) · [Deployment](#deployment)
-- [CI/CD](#cicd) · [Honesty notes (deliberate)](#honesty-notes-deliberate)
-- [Project structure & docs](#project-structure--docs) · [License](#license)
+- [Why MjengoOS?](#why-mjengoos) · [Core principles](#core-principles--enforced-not-aspirational) · [The project lifecycle](#the-project-lifecycle--land-to-handover)
+- [The product in one page](#the-product-in-one-page) · [Visual tour](#visual-tour) · [Demo accounts](#demo-accounts-seed-data) · [Feature tour](#feature-tour-the-real-tabs) · [The AI surface](#the-ai-surface-honest-by-design)
+- [Architecture](#architecture) · [Tech stack](#tech-stack) · [Quick start](#quick-start) · [Environment variables](#environment-variables)
+- [Security engineering](#security-engineering) · [i18n](#i18n--english--kiswahili) · [Deployment](#deployment) · [CI/CD](#cicd) · [Honesty notes](#honesty-notes-deliberate)
+- [Kenya-first, Africa-ready](#kenya-first-africa-ready) · [Project structure & docs](#project-structure--docs) · [Contributing](#contributing) · [License](#license)
+
+## Why MjengoOS?
+
+Construction management software usually assumes reliable internet,
+smartphones for everyone, accurate manual reporting, centralized teams, clean
+procurement and trustworthy inventory updates.
+
+Real construction sites don't work that way: intermittent connectivity,
+supervisors working from phones, fundis without smartphones, materials from
+multiple hardware stores with handwritten invoices, cash and mobile-money
+transactions, changing quantities, remote clients, multiple subcontractors —
+and project truth scattered across WhatsApp, paper, spreadsheets and
+conversations. MjengoOS is designed around those constraints rather than
+pretending them away. Nothing becomes system truth just because someone
+typed it into a form: every important event follows the same shape —
+**reported → evidence captured → verified → recorded** — and the platform
+preserves each step of that distinction.
+
+## Core principles — enforced, not aspirational
+
+Architectural invariants, pinned by tests where noted — not marketing promises.
+
+1. **Evidence first — reported ≠ verified.** A supervisor saying 500 bags of
+   cement arrived is a *report*; a delivery carrying supplier, PO, quantity,
+   timestamp, location, delivery note, photos, receiver and proof of delivery
+   is *evidence*. The distinction is kept everywhere: attendance has
+   verified / reported / exception levels (payroll gates on verification),
+   deliveries are counted per line (ordered 50 / received 48 = discrepancy),
+   land searches are *recorded*, never claimed registry-confirmed, and
+   MjengoScore is computed only from evidence rows.
+2. **AI never approves.** AI analyzes, classifies, extracts, recommends and
+   flags; it cannot approve payments, purchases, inventory adjustments,
+   contractual changes or milestone completion. Advisory notes gate nothing
+   (grep-pinned non-influence tests); the human decision columns
+   (`reviewedBy`/`decidedBy` …) exist in the schema and nothing writes them.
+3. **The ledger never lies.** Financial truth lives in an immutable
+   double-entry ledger: every posted transaction balances; corrections are
+   compensating entries (reversals), never edits; the escrow balance is
+   computed from ledger entries, never a stored projection; audit and AI rows
+   are append-only.
+4. **Payments are idempotent.** Retries, duplicated callbacks, provider
+   timeouts and offline replays must never turn one payment into two: payment
+   routes dedupe through `IdempotencyRecord` rows + `Idempotency-Key` headers;
+   offline sync dedupes by outbox id (a lost response can't double-post); the
+   Daraja sandbox reconcile sweep re-drives the *same* callback processor —
+   never a second money path.
+5. **Closing stock is always derived.** `opening + verified receipts +
+   approved adjustments − verified issues − consumption − transfers =
+   closing stock`. The Site Store is an append-only movement ledger, closing
+   stock is computed from it, and a consumption that would project negative
+   stock is rejected **before** anything persists.
+6. **Offline is a first-class state.** Offline is a normal operating mode:
+   mutations queue in a persisted outbox; on reconnect they sync, validate
+   and resolve conflicts per item (surfaced, never silently dropped); the
+   installable PWA never caches `/api/*` — no stale money or evidence.
 
 ## The product in one page
 
@@ -65,30 +127,26 @@ balanced ledger view:
 ![Money tab: escrow wallet, milestones, double-entry ledger](docs/screenshots/money.png)
 
 **Money → evidence draw pack** — the proof freezes the moment money moves: an
-immutable, SHA-256-stamped bundle of the evidence photos, ledger reference,
-open variations, attendance window and the MjengoScore at release — printable
-and forwardable through the client's share link:
+immutable, SHA-256-stamped bundle of evidence photos, ledger reference, open
+variations, attendance window and the MjengoScore at release:
 
 ![Evidence draw pack: photos, ledger ref, content hash](docs/screenshots/draw-pack.png)
 
 **Money → AI draw review** (flag-gated, advisory-only) — a vision + LLM pass
-over the frozen pack's photos and its milestone/invoice/budget context
-produces a confidence-labeled advisory note with findings; the approval click
-stays human:
+over the frozen pack's photos and context produces a confidence-labeled
+advisory note; the approval click stays human:
 
 ![AI draw review: advisory note with verdict and findings](docs/screenshots/ai-draw-review.png)
 
-**Evidence → authenticity screen** — 64-bit perceptual-hash duplicate
-detection ("this photo paid for the foundation AND the slab") plus a vision
-phase-consistency pass over the evidence photos; every flag is advisory and
-source-labeled rule vs AI:
+**Evidence → authenticity screen** — perceptual-hash duplicate detection
+("this photo paid for the foundation AND the slab") plus a vision
+phase-consistency pass; every flag is advisory and source-labeled rule vs AI:
 
 ![Evidence authenticity screen: duplicate and render-suspect flags](docs/screenshots/ai-authenticity.png)
 
 **Intel → trust digest** — a weekly "what your money did" digest whose every
 number is a ledger row (deterministic text, English + Kiswahili), read aloud
-as a voice note through the share link; an audio failure is honest and never
-degrades the text:
+as a voice note through the share link:
 
 ![Trust digest: EN/SW text, score delta, voice note](docs/screenshots/ai-trust-digest.png)
 
@@ -103,8 +161,7 @@ actor, IP, user-agent and request id:
 ![Evidence tab: photo evidence and audit timeline](docs/screenshots/evidence.png)
 
 **Intel → MjengoScore** — a deterministic 0–100 contractor trust score
-computed from the project's evidence rows (releases, attendance, budget
-pace, variations, deliveries, invoices) with per-component deductions and
+computed from the project's evidence rows, with per-component deductions and
 an honest "describes, humans decide" label:
 
 ![MjengoScore: trust ring, confidence, component breakdown](docs/screenshots/mjengo-score.png)
@@ -237,6 +294,46 @@ stricter seam. Engineering detail: [ARCHITECTURE.md](./ARCHITECTURE.md) ·
 release story: [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) · plan:
 [docs/wave6-plan.md](./docs/wave6-plan.md).
 
+## The project lifecycle — land to handover
+
+One connected chain — the project's operational memory from before the first
+wall to handover:
+
+```text
+Land & property verification (parcels · title deeds · searches · passport)
+  → planning (phases · tasks · BOQ · budget · health)
+  → procurement (request → approval rules → RFQ → quotes → PO)
+  → delivery verification (per-line counts · damage · GPS · photos)
+  → inventory (append-only movements · derived closing stock)
+  → workforce & attendance (app · USSD · WhatsApp · kiosk)
+  → site execution evidence (photos · reports · audit trail)
+  → milestone review (hash-stamped evidence draw pack)
+  → payment (chained approval · escrow · idempotent rails)
+  → ledger posting (balanced double entry · reversals, never edits)
+  → completion & handover (the timeline is the record)
+```
+
+The seeded demo walks the whole chain, every step a real surface: the
+contractor sets up the project and the diaspora client follows through a
+share link; the **Land** tab records the parcel, transcribes the title deed
+and files a registry-search request (recorded, never registry-confirmed);
+the QS works the BOQ → budget → variance report; a material request climbs
+the approval-rules engine; RFQs go out, quotes come back, the landed-cost
+comparison picks the supplier; the PO lands in the **supplier portal** as
+SENT (the seeded `PO-2026-000013` to Nairobi Hardware is exactly this
+moment) — the supplier confirms and dispatches; the supervisor receives per
+line (ordered 50 / received 48 = an honest discrepancy) and Site Store
+movements post automatically; the invoice hits the client decision queue
+with a **3-way-match** verdict; the payment climbs its approval chain,
+moves through the `PaymentProvider` seam (simulated by default, Daraja
+sandbox when configured), posts balanced ledger entries and freezes a
+SHA-256-stamped **evidence draw pack**; fundis check in via app, `*384#`,
+WhatsApp or kiosk QR with payroll gated on attendance verification; the
+advisory AI (flag-gated, default off) reviews the draw and reads the trust
+digest aloud while the approval click stays human; and MjengoScore updates
+from the evidence rows while the Bias-Free Ledger holds the whole story —
+the project's operational memory, ready for handover.
+
 ## Architecture
 
 ```mermaid
@@ -277,6 +374,17 @@ One Node process, one SQLite file, one uploads directory — no message queue,
 no external services. The marketing site runs as a second Next.js app on
 `:3001`, proxied through the web app at `/website` so a single origin serves
 the whole product; its **Sign in** button lands on the webapp login screen.
+
+The codebase is a **modular monolith with deliberate boundaries**: one
+deployable app, but `src/backend/modules/` gives each domain (supply,
+inventory, wallet, ledger, invoices, land, professionals, intel, notify,
+events, jobs, ai, drawpack) its own service + policy + types, so future
+extraction stays an option rather than a rewrite. The boundary decisions
+are written down: [ADR 0003 — repo topology](./docs/adr/0003-repo-topology.md),
+[ADR 0001 — mobile scope](./docs/adr/0001-mobile-scope.md) (PWA-first, no
+native app), and the target-state database design in
+[docs/SUPABASE-DATABASE-DESIGN.md](./docs/SUPABASE-DATABASE-DESIGN.md)
+(ADR 0002 — design phase, no runtime cutover yet).
 
 ### Source layout
 
@@ -381,9 +489,13 @@ bun prisma/seed-extras/trust.ts       # attendance trust history + PINs
 
 Then sign in with a demo account above. Scripts: `bun run lint`,
 `bunx tsc --noEmit`, `bun run db:push`, `bun run site:dev` (marketing site),
-`bun run build` / `start` (standalone production server).
+`bun run build` / `start` (standalone production server). The full
+contribution workflow (branches, gates, PR expectations) is in
+[CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ### Environment variables
+
+The four that matter day-to-day:
 
 | Variable | Value | Why |
 |---|---|---|
@@ -391,6 +503,14 @@ Then sign in with a demo account above. Scripts: `bun run lint`,
 | `NEXTAUTH_SECRET` | **production: required, stable**; dev: optional | Signs/encrypts JWT session cookies. Rotating it signs everyone out. Dev without it runs on next-auth v4's internal fallback secret (sign-in **and** guarded APIs work — issue #94, E2E-verified: [screenshot](./docs/screenshots/issue-94-e2e-verify.png)); production boot fails closed (< 32 chars). |
 | `AUTH_TRUST_HOST` | `1` behind a proxy | Makes next-auth v4's `detectOrigin` honor `x-forwarded-host`/`-proto` — without it, proxied sign-in silently pins to `http://localhost:3000` and breaks (PR #7). |
 | `NEXTAUTH_URL` | **unset** | The origin is derived per request, so redirects/cookies always target the host the user actually browses. Set only for one fixed public domain. |
+
+Everything else — feature-flag overrides (`NEXT_FLAGS_OFF`), rate-limit
+store, USSD/WhatsApp webhook secrets, SMS providers (webhook or Africa's
+Talking), web push (VAPID), the M-Pesa Daraja sandbox block, S3/R2/MinIO
+object storage, background-job scheduler — is **optional, default-off and
+fail-closed**, documented inline in the annotated template
+[`.env.example`](./.env.example) (operational detail in
+[DEPLOYMENT.md §3](./DEPLOYMENT.md)).
 
 Cookies are policy-switched per request in `src/backend/lib/auth.ts`: https
 (proxied) traffic gets `SameSite=None; Secure` (the only combination browsers
@@ -482,16 +602,15 @@ Three workflows live in `.github/workflows/`, all triggered on every push to
   (webapp + marketing site) on a GitHub runner (the dev sandbox has no docker
   CLI — CI is the image verification).
 
-The suite grew 495 → 899 → 1,019 → 1,102 → 1,244 → 1,513 → 1,645 tests across waves
-1–6, then 1,691 → 1,700 across the 2026-09 audit waves (69 files at the time
-of this docs fix — the parallel audit-fix PRs add more), re-run in full on
-every wave merge. **Honest state:** the workflow
-definitions are active and fire on every push/PR, but every run to date has
-failed to start its jobs — the GitHub account is locked by a billing issue
-("The job was not started because your account is locked due to a billing
-issue."), so no run has ever gone green. Until billing is restored, the
-gates hold locally: each wave merge re-ran lint, strict typecheck and the
-full test suite in the worktree before pushing.
+The suite grew 495 → 899 → 1,019 → 1,102 → 1,244 → 1,513 → 1,645 → 1,700
+across waves 1–6 and the 2026-09 audit waves, re-run in full on every wave
+merge. **Honest state:** the workflow definitions are active and fire on
+every push/PR, but every run to date has failed to start its jobs — the
+GitHub account is locked by a billing issue ("The job was not started
+because your account is locked due to a billing issue."), so no run has ever
+gone green. Until billing is restored, the gates hold locally: each wave
+merge re-ran lint, strict typecheck and the full test suite in the worktree
+before pushing.
 
 ## Honesty notes (deliberate)
 
@@ -504,12 +623,14 @@ full test suite in the worktree before pushing.
   honest flavors behind the same provider seam — a generic webhook
   (`NOTIFY_SMS_WEBHOOK_URL`, credentials stay in your gateway) or a direct
   Africa's Talking provider (`AT_API_KEY` + `AT_USERNAME`, the API key
-  lives in app env — the documented tradeoff). Either way rows honestly
-  record `sent`/`failed` + delivery detail — nothing pretends to have
-  sent when no provider is configured.
+  lives in app env — the documented tradeoff). Browser web push follows the
+  same pattern (VAPID pair, honest "not configured" state). Either way rows
+  honestly record `sent`/`failed` + delivery detail — nothing pretends to
+  have sent when no provider is configured.
 - Land verification records evidence; it never claims government
   confirmation. Supplier verification is a platform ladder, never conflated
-  with state licensing.
+  with state licensing. Professional verification is a directory ladder —
+  the platform never fabricates credentials or registration numbers.
 - USSD is a faithful simulation of the `*384#` flow that dispatches real
   attendance records; no telco gateway is wired yet.
 - The WhatsApp field line is the same honest pattern: a documented webhook
@@ -529,6 +650,28 @@ full test suite in the worktree before pushing.
   out during live verification the digest text survived — the text is the
   product, the audio is the bonus.
 
+## Kenya-first, Africa-ready
+
+MjengoOS starts with Kenya because the problem is concrete and immediate:
+M-Pesa workflows (Daraja sandbox behind the seam), USSD/SMS field channels
+for feature phones, Kiswahili as a first-class UI language, county-based
+supplier discovery, KSh-native money surfaces, land/parcel verification, and
+diaspora clients funding builds from abroad through share links. The
+underlying problem is continental — fragmented supply chains, unreliable
+connectivity, informal labor, fragmented payments, poor project visibility,
+remote property owners — and localization is treated as a domain capability
+(real i18n dictionaries, per-county supplier data, provider-seam payment
+rails), not hardcoded business logic.
+
+**Where this is going:** waves 1–6 are shipped
+([docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md)); the committed direction
+is written down — target-state database
+([docs/SUPABASE-DATABASE-DESIGN.md](./docs/SUPABASE-DATABASE-DESIGN.md),
+ADR 0002), topology and mobile decisions (ADR 0003 / 0001), aspirational
+product vision ([docs/PRODUCT-BLUEPRINT.md](./docs/PRODUCT-BLUEPRINT.md) —
+the README wins on current status); the live issue-level roadmap is the
+[GitHub issue tracker](https://github.com/Roy-Wanyoike/Mjengo-OS/issues).
+
 ## Project structure & docs
 
 | Path | What |
@@ -541,18 +684,34 @@ full test suite in the worktree before pushing.
 | `mjengoos-website/` | Marketing site (independent Next.js app, `:3001`, proxied at `/website`) |
 | `prisma/` | `schema.prisma` (68 models), `migrations/` (0_init + additive 1_mjengo_score … 8_trust_digest; 9_schema_reconcile closes the last drift — see DEPLOYMENT.md §4.1), `seed.ts` + `seed-extras/` |
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
+| `tests/unit/` | The vitest suite (69+ files, 1,700+ tests) — pure/unit-level, no DB or secrets needed |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
-| [docs/PRODUCT-BLUEPRINT.md](./docs/PRODUCT-BLUEPRINT.md) | Product vision document (aspirational — the README wins on current status) |
+| `docs/audit/` | **Phase-0 baseline entry point** — the 2026-09 production-readiness re-audit baselines (API, frontend, website, database, security, mock/demo, integration), one file per surface |
 | [docs/SUPABASE-DATABASE-DESIGN.md](./docs/SUPABASE-DATABASE-DESIGN.md) | Target-state Supabase/PostgreSQL design (68-table DDL, RLS policy matrix, storage, migration + rollback plan; ADR 0002) |
-| [docs/adr/0003-repo-topology.md](./docs/adr/0003-repo-topology.md) | ADR 0003 — one repo, directory + service boundaries (not branches, not polyrepo) with revisit triggers for splitting a surface out |
+| [docs/adr/](./docs/adr) | Architecture decision records — 0001 mobile scope (PWA-first), 0002 Supabase database, 0003 repo topology |
+| [docs/PRODUCT-BLUEPRINT.md](./docs/PRODUCT-BLUEPRINT.md) | Product vision document (aspirational — the README wins on current status) |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Build/run/test/deploy operations guide |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Day-to-day contribution workflow: branches, gates, PR expectations |
 | [docs/RELEASE-NOTES.md](./docs/RELEASE-NOTES.md) | Plain-language release notes — v0.1 → v0.2.5, wave by wave |
 | [docs/backlog.md](./docs/backlog.md) | PM release plan (waves 3–6) with paste-ready issue texts |
 | [docs/wave6-plan.md](./docs/wave6-plan.md) | Wave-6 release plan (research → specs → paste-ready issue texts) + the market-gap research it rests on (`docs/research/`) |
 | [SECURITY.md](./SECURITY.md) | Vulnerability reporting policy |
 
-Roadmap lives in [GitHub issues](https://github.com/Roy-Wanyoike/Mjengo-OS/issues).
+## Contributing
+
+Contributions are welcome — start with [CONTRIBUTING.md](./CONTRIBUTING.md)
+(setup, branch naming, the local gate: `bun run lint` + `bunx tsc --noEmit`
++ the full test suite). The house rules match the thesis: reuse the domain
+modules, preserve the invariants above, keep authorization server-enforced,
+and add tests — a feature is complete when UI + API + logic + schema +
+authorization + validation + error handling + auditability (+ offline
+behavior where relevant) + tests all exist, not when a screen exists.
 
 ## License
 
 [MIT](./LICENSE) — Copyright (c) 2026 Roy Wanyoike.
+
+---
+
+**Construction sites are physical. Their data should reflect reality.
+Build with evidence.**
