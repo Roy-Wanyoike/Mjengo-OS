@@ -26,14 +26,19 @@ Next.js 16 (App Router, RSC shell + client app)
   ├── shared/        src/shared/** — isomorphic contracts (permissions role
   │                  matrix, CLIENT_ACTIONS allowlist)
   └── backend/       src/backend/** — server-only: lib/ (guard, auth, audit,
-                    rate-limit, db, ai, mjengo payload+dispatcher) +
-                    actions/ + modules/** — each module = service + policy + types
+                    rate-limit, mutation-safety, db, storage drivers, ai,
+                    mjengo payload+dispatcher) +
+                    actions/ + modules/** — each module = service +
+                    policy + types where its domain needs them
         ├── ledger    double-entry accounts/transactions/entries (source of truth)
         ├── wallet    escrow, payment requests, provider seam (SimulatedProvider
         │            default; Daraja sandbox activates from env, reconcile sweep)
         ├── supply    requests → approvals → quotes → POs → deliveries → site store
         ├── inventory append-only stock movements, derived closing stock
         ├── invoices  lifecycle, 3-way match (PO ↔ invoice ↔ delivery)
+        ├── documents document intelligence: uploads → Attachment rows with
+        │            provenance, DRAFT-only extraction (VLM for images, PDF
+        │            text layer — no OCR), human approve/reject gate
         ├── drawpack  evidence draw packs — immutable, SHA-256-stamped proof
         │            bundles frozen at milestone release, served via the share
         │            link (one pack per release, DB-enforced unique)
@@ -41,6 +46,9 @@ Next.js 16 (App Router, RSC shell + client app)
         ├── professionals verified directory + credential checks
         ├── intel     risk engine, MjengoScore trust score (evidence-derived,
         │            append-only history), digest, price intelligence
+        ├── reports   budget-variance surface (BOQ / cost plan / variations /
+        │            actual / forecast) with per-phase spend attribution
+        │            tiers (issue #39 phase cost-codes)
         ├── ai        the Wave-6 advisory AI layer (see "The AI seam" below):
         │            provider.ts (ZaiProvider + resolveAiProvider — chat /
         │            vision / transcribe / speak, 20s per-call cap, leak-free
