@@ -54,6 +54,14 @@ export interface OutboxItem {
   suggestion?: 'keep-server'
   /** Last hard failure message (syncStatus 'failed'). */
   lastError?: string
+  /**
+   * #191: the last drain was refused 401 (session expired mid-offline) — the
+   * item waits for a SIGN-IN, not a data fix. Surfaced as failed + a
+   * session-expired lastError; drainAfterAuth() re-queues it once a session
+   * authenticates again. Never auto-retried blindly (retrying without a
+   * session just 401s again).
+   */
+  authBlocked?: boolean
   syncedAt?: number
   /** Set when a human resolved a conflict: server version kept, local version applied, or the item dropped. */
   resolution?: 'keep-server' | 'keep-mine-applied' | 'discarded'
@@ -146,6 +154,13 @@ interface MjengoState {
   resolveConflict: (id: string, choice: 'keep-server' | 'keep-mine') => Promise<boolean>
   /** Re-queue every failed item for ONE manual drain attempt (no auto-retry loops). */
   retryAll: () => void
+  /**
+   * #191: drain a queue stranded by an auth-blocked (401) drain. Called from
+   * app.tsx when a session (re)authenticates: re-queues auth-blocked items and
+   * flushes the pending queue once when online. Resolves to whether a drain
+   * was started.
+   */
+  drainAfterAuth: () => Promise<boolean>
 }
 
 function uid() {
@@ -158,6 +173,7 @@ function normalizeOutboxItem(item: OutboxItem): OutboxItem {
     ...item,
     syncStatus: item.syncStatus ?? 'pending',
     retryCount: typeof item.retryCount === 'number' ? item.retryCount : 0,
+    authBlocked: item.authBlocked === true,
   }
 }
 
@@ -890,6 +906,14 @@ export const useMjengo = create<MjengoState>()(
        *   · failed items stay queued with retryCount + lastError — ONE manual retryAll(), no auto loops
        *   · conflict items stay with the server's reason + rule until a human resolves them (§41)
        * A network-level failure re-queues items as pending (nothing is ever dropped).
+       *
+       * #191 — server-level refusals are never silent either: a 401 (session
+       * expired mid-offline) marks the batch auth-blocked with a
+       * session-expired lastError + toast, and any other non-ok drain response
+       * (500/429/403…) marks items failed with the surfaced reason. The old
+       * `json?.ok`-falsy path silently reverted everything to 'pending', so an
+       * expired session stranded the outbox invisibly (nothing ever re-drained
+       * after re-login — see drainAfterAuth).
        */
       syncNow: async () => {
         if (get().syncing) return
@@ -908,7 +932,31 @@ export const useMjengo = create<MjengoState>()(
               actions: queue.map(({ id, type, payload, projectId }) => ({ id, type, payload, projectId })),
             }),
           })
-          const json = await res.json()
+          // #191: an expired session refuses the WHOLE batch for auth, not
+          // data — mark it auth-blocked (failed + session-expired lastError)
+          // and tell the user their work is safe and will sync after sign-in.
+          // drainAfterAuth() re-queues the batch once a session returns; the
+          // login screen also acknowledges the queued count (#191).
+          if (res.status === 401) {
+            const json = await res.json().catch(() => null)
+            console.error('sync refused: session expired', json && typeof json === 'object' ? (json as { error?: unknown }).error : res.status)
+            set({
+              outbox: get().outbox.map((o) => (o.syncStatus === 'syncing'
+                ? {
+                    ...o,
+                    syncStatus: 'failed' as const,
+                    authBlocked: true,
+                    lastError: t('sync.authBlockedItem'),
+                    retryCount: (o.retryCount ?? 0) + 1,
+                  }
+                : o)),
+            })
+            toast.error(t('sync.sessionExpired', { count: queue.length }))
+            return { synced: 0, failed: queue.length, conflicts: 0 }
+          }
+          // Defensive parse: a non-JSON error body (proxy 502 page) must not
+          // fall into the network-failure catch — the server DID answer.
+          const json = await res.json().catch(() => null)
           if (json?.ok) {
             const results = (json.results ?? []) as SyncItemResult[]
             const byId = new Map(results.map((r) => [r.id, r]))
@@ -957,8 +1005,29 @@ export const useMjengo = create<MjengoState>()(
             }
             return { synced, failed, conflicts }
           }
-          // Server-level rejection: items stay queued exactly as they were.
-          set({ outbox: get().outbox.map((o) => (o.syncStatus === 'syncing' ? { ...o, syncStatus: 'pending' as const } : o)) })
+          // #191: any other server-level rejection (500/429/403…) is SURFACED,
+          // never silently re-queued as pending: items keep their place as
+          // failed with the server's reason as lastError (the panel's retry
+          // footer is the recovery UI), and the toast says the queue is safe
+          // on-device. Only a TRUE network-level failure (the catch below)
+          // re-queues as pending.
+          const reason =
+            json && typeof json === 'object' && typeof (json as { error?: unknown }).error === 'string' && (json as { error: string }).error.trim()
+              ? (json as { error: string }).error
+              : t('sync.applyFailed')
+          console.error('sync refused', json && typeof json === 'object' ? (json as { error?: unknown }).error : res.status)
+          set({
+            outbox: get().outbox.map((o) => (o.syncStatus === 'syncing'
+              ? {
+                  ...o,
+                  syncStatus: 'failed' as const,
+                  lastError: reason,
+                  retryCount: (o.retryCount ?? 0) + 1,
+                }
+              : o)),
+          })
+          toast.error(t('sync.drainFailed', { count: queue.length, reason }))
+          return { synced: 0, failed: queue.length, conflicts: 0 }
         } catch (e) {
           console.error('sync failed', e)
           // Network failure mid-drain: nothing applied client-side — re-queue, never drop.
@@ -1044,6 +1113,30 @@ export const useMjengo = create<MjengoState>()(
         set({ outbox: get().outbox.map((o) => (o.syncStatus === 'failed' ? { ...o, syncStatus: 'pending' as const } : o)) })
         toast.success(t('sync.retrying', { count: failed.length }))
         void get().syncNow()
+      },
+
+      /**
+       * #191 — re-login recovery. A reconnect drain that hit an expired
+       * session left the queue auth-blocked (failed + authBlocked), and after
+       * re-login nothing transitions offline→online (the flag is already
+       * true), so the queue would strand forever. app.tsx calls this when a
+       * session authenticates: auth-blocked items are re-queued, and the
+       * pending queue is flushed once (when online). Deliberately silent —
+       * syncNow owns the result toasts.
+       */
+      drainAfterAuth: async () => {
+        const authBlocked = get().outbox.filter((o) => o.syncStatus === 'failed' && o.authBlocked)
+        if (authBlocked.length > 0) {
+          set({
+            outbox: get().outbox.map((o) => (o.syncStatus === 'failed' && o.authBlocked
+              ? { ...o, syncStatus: 'pending' as const, authBlocked: false, lastError: undefined }
+              : o)),
+          })
+        }
+        const hasPending = get().outbox.some((o) => (o.syncStatus ?? 'pending') === 'pending')
+        if (!get().online || !hasPending || get().syncing) return false
+        await get().syncNow()
+        return true
       },
     }),
     {

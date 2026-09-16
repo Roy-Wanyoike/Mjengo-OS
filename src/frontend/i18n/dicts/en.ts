@@ -94,6 +94,9 @@ export const enDict = {
   'login.demo.procurement': 'Otieno — Finder/Materials/Evidence, lands on Finder',
   'login.demo.qs': 'Kariuki — Site Plan/Materials/Finder/Evidence, lands on Materials',
   'login.shareNote': "Share-link clients don't need an account — the site team sends a link that just works.",
+  // #191 — queued actions acknowledged on the login screen (the outbox UI
+  // lives behind this gate)
+  'login.queuedNote': '{count} saved action(s) on this device will sync when you sign in.',
   'login.website': 'Marketing website',
 
   // ------------------------------------------------------------- header
@@ -646,6 +649,12 @@ export const enDict = {
   'sync.nothingFailed': 'Nothing failed is waiting to retry',
   'sync.retrying': 'Retrying {count} failed action(s) — one attempt, no loops',
   'sync.readOnlyClient': 'Read-only client view — site data is managed by the site team',
+  // #191 — session-expiry drain handling: a 401 marks the batch auth-blocked
+  // (per-item lastError + one honest toast); other server-level drain
+  // refusals (500/429/403…) are surfaced with the server's reason.
+  'sync.sessionExpired': 'Session expired — {count} queued action(s) are safe and will sync after you sign in',
+  'sync.authBlockedItem': 'Session expired — sign in to sync',
+  'sync.drainFailed': 'Sync failed — {count} action(s) are safe on this device: {reason}',
 
   // offline outbox sheet (sync-outbox-panel.tsx; server-provided conflict
   // reasons / lastError strings stay verbatim — backend copy)
@@ -674,6 +683,8 @@ export const enDict = {
   'outbox.keepServer': 'Keep server version',
   'outbox.keepMine': 'Keep my version',
   'outbox.serverWinsNote': 'Financial rows — the server always wins; only a new correcting action changes money history.',
+  // #191 — auth-blocked failure note (waits for sign-in, not a retry)
+  'outbox.authBlockedNote': 'Waiting for sign-in — this action will sync automatically after you sign in.',
 
   // materials tab — toasts + dialog placeholders (labels/buttons are a later
   // per-tab wave; data-mirroring placeholders like 'Site Store' stay as-is)
