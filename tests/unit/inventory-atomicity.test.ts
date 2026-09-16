@@ -212,3 +212,87 @@ describe('transferStock — atomic out+in legs (DB-2)', () => {
     expect(derivedClosingQty(movementsOf(itemId))).toBe(10)
   })
 })
+
+describe('input validation — every movement action refuses a bad qty before any write (#210)', () => {
+  // Bad inputs the /api/actions surface (and the offline outbox) can hand the
+  // service: negative, zero, NaN, Infinity, non-numeric strings, absurd sizes.
+  const BAD = [
+    ['negative', -50],
+    ['zero', 0],
+    ['NaN', NaN],
+    ['Infinity', Infinity],
+    ['non-numeric string', 'abc'],
+    ['empty string', ''],
+    ['null', null],
+    ['absurd (over the 1e9 cap)', 2e9],
+  ] as const
+
+  // One seed so item-scoped actions have a real target; the new-line actions
+  // (open/receive) upsert by name and need no seed.
+  async function target(): Promise<string> {
+    return seedItem(10)
+  }
+
+  const CALLERS = {
+    'inventory.open': async (qty: unknown) => openStock(P, { materialName: 'Cement', unit: 'bags', qty, location: 'Site Store' }),
+    'inventory.receive': async (qty: unknown) => receiveStock(P, { materialName: 'Cement', unit: 'bags', qty, location: 'Site Store' }),
+    'inventory.consume': async (qty: unknown) => consumeStock(P, { inventoryItemId: await target(), qty }),
+    'inventory.transfer': async (qty: unknown) => transferStock(P, { inventoryItemId: await target(), qty, toLocation: 'Workshop' }),
+    'inventory.return': async (qty: unknown) => returnStock(P, { inventoryItemId: await target(), qty }),
+    'inventory.damage': async (qty: unknown) => damageStock(P, { inventoryItemId: await target(), qty }),
+    // adjust is signed by design — negative is VALID, so its bad list drops it.
+    'inventory.adjust': async (qty: unknown) => adjustStock(P, { inventoryItemId: await target(), qty }),
+  } as const
+
+  for (const [action, call] of Object.entries(CALLERS)) {
+    describe(`${action} refuses a bad qty before any write`, () => {
+      const cases = action === 'inventory.adjust' ? BAD.filter(([, v]) => v !== -50) : BAD
+      it.each(cases)('%s', async (_label, qty) => {
+        await expect(call(qty)).rejects.toThrow(`${action}: qty`)
+        // The refusal is BEFORE any write: no movement row survived (only the
+        // seed's opening row exists where one was seeded), and no NEW item was
+        // created (open/receive upserts never happened).
+        const movementRows = [...state.movements.values()].filter((m) => m.type !== 'opening')
+        expect(movementRows).toHaveLength(0)
+        const seededOrNone = action === 'inventory.open' || action === 'inventory.receive' ? 0 : 1
+        expect(state.items.size).toBe(seededOrNone)
+      })
+    })
+  }
+
+  it('adjust stays signed by design: negative adjusts down, positive up, zero is a no-op refused', async () => {
+    const itemId = await seedItem(10)
+    const down = await adjustStock(P, { inventoryItemId: itemId, qty: -3, reason: 'count correction' })
+    expect(down.closingQty).toBe(7)
+    const up = await adjustStock(P, { inventoryItemId: itemId, qty: 2, reason: 'count correction' })
+    expect(up.closingQty).toBe(9)
+    await expect(adjustStock(P, { inventoryItemId: itemId, qty: 0 })).rejects.toThrow(
+      'inventory.adjust: qty cannot be zero',
+    )
+  })
+
+  it('numeric strings coerce (outbox replay semantics) — the honest legacy behavior stays', async () => {
+    const r = await receiveStock(P, { materialName: 'Cement', unit: 'bags', qty: '5', location: 'Site Store' })
+    expect(r.quantity).toBe(5)
+    expect(r.closingQty).toBe(5)
+  })
+
+  it('unitCost is validated where accepted: negative / NaN refused, zero and absent pass', async () => {
+    await expect(
+      openStock(P, { materialName: 'Cement', unit: 'bags', qty: 10, location: 'Site Store', unitCost: -1 }),
+    ).rejects.toThrow('inventory.open: unitCost must be zero or more')
+    await expect(
+      receiveStock(P, { materialName: 'Cement', unit: 'bags', qty: 10, location: 'Site Store', unitCost: 'free' }),
+    ).rejects.toThrow('inventory.receive: unitCost must be zero or more')
+    const zero = await openStock(P, { materialName: 'Cement', unit: 'bags', qty: 10, location: 'Site Store', unitCost: 0 })
+    expect(zero.closingQty).toBe(10)
+    const none = await receiveStock(P, { materialName: 'Cement', unit: 'bags', qty: 5, location: 'Site Store' })
+    expect(none.closingQty).toBe(15)
+  })
+
+  it('the absurd-qty cap speaks honestly (unit mistakes, not digits)', async () => {
+    await expect(
+      receiveStock(P, { materialName: 'Cement', unit: 'bags', qty: 1e12, location: 'Site Store' }),
+    ).rejects.toThrow(/per-movement cap of 1,000,000,000/)
+  })
+})
