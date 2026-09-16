@@ -317,13 +317,45 @@ to read it:
 - **Retention cap — read it regularly:** the store keeps only the **500 most
   recent** submissions; every write past 500 drops the oldest entry, and
   there is no rotation or archive file, so dropped leads are gone for good.
-  Retrieve on a cadence, especially during onboarding bursts.
+  Retrieve on a cadence, especially during onboarding bursts. The eviction
+  is **not silent** (issue #131): every write past the cap logs
+  `[contact] submission cap reached — dropping N oldest …` (with the count)
+  to the website container's logs —
+  `docker compose logs website | grep "submission cap"` — so a burst that
+  outpaces retrieval is visible in operations, not just in hindsight.
 
 Each entry is the validated form payload —
 `{ id, ts, source, name, email, phone?, organization?, role?, country?,
 projectType?, message? }` — plaintext PII on disk; handle it accordingly
 (the file is gitignored, and the site's `.dockerignore` keeps `data/` out
 of images).
+
+#### Contact-form rate limiting (issue #131 / audit WD-1)
+
+`POST /api/contact` runs a two-layer limiter, both 1-hour rolling windows:
+
+| `TRUST_PROXY` | Per-visitor layer | Global backstop |
+|---|---|---|
+| **unset** (default) | — (header is client-spoofable; ignored) | all traffic shares **one 200/hr bucket** |
+| **set** (one appending proxy in front) | **5/hr** keyed on the proxy-appended (last) `x-forwarded-for` entry | **200/hr** across all visitors |
+
+- The default posture is burst-tolerant by design: a launch push producing
+  tens of leads an hour no longer 429s everyone (the old global cap was
+  5/hr), while a flood still fails closed at 200/hr.
+- A 429 response says which layer tripped:
+  `reason: "rate_limited_visitor"` vs `"rate_limited_global"`.
+- Tripping the **global** layer logs a warning that also states whether
+  per-visitor keying is on, and how to enable it — visible via
+  `docker compose logs website`.
+- Set `TRUST_PROXY=1` at **runtime** (not build time) only when exactly one
+  reverse proxy that appends the real client IP (nginx
+  `proxy_add_x_forwarded_for` etc.) fronts the website container directly —
+  see the site's `.env.example`. The app's `/website` rewrite does not
+  append the header, so integrated-mode compose deployments leave it unset.
+- Restart persistence of the counters is **deliberately declined**: they are
+  in-memory, so a restart grants a fresh window — bounded (≤ 5/hr per
+  visitor, ≤ 200/hr globally), not a bypass; the website stays a stateless
+  container with no database (rationale in the route's header comment).
 
 ### 6.4 Seeding a containerized database (honest note)
 
