@@ -23,8 +23,11 @@ import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encode } from 'next-auth/jwt'
 
-// In-memory project/phase store — the only tables POST /api/projects touches.
+// In-memory project/phase store — the tables POST /api/projects touches
+// (auditEvent captures the API-11 trail row so logAudit is exercised for
+// real instead of noisily failing against a missing mock).
 const created: Array<Record<string, unknown>> = []
+const auditRows: Array<Record<string, unknown>> = []
 vi.mock('@/backend/lib/db', () => ({
   db: {
     project: {
@@ -35,6 +38,12 @@ vi.mock('@/backend/lib/db', () => ({
       },
     },
     phase: { async create({ data }: { data: Record<string, unknown> }) { return { ...data } } },
+    auditEvent: {
+      async create({ data }: { data: Record<string, unknown> }) {
+        auditRows.push({ ...data })
+        return { ...data }
+      },
+    },
   },
 }))
 // The payload builders are irrelevant to the token contract under test.
