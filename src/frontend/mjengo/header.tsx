@@ -58,6 +58,7 @@ const NOTIFICATION_KINDS: Record<string, { label: string; Icon: LucideIcon; tint
   'digest.weekly': { label: 'Digest', Icon: Newspaper, tint: 'text-stone-500' },
   'risk.flagged': { label: 'Risk', Icon: ShieldAlert, tint: 'text-red-600' },
   'trust.digest': { label: 'Trust digest', Icon: Volume2, tint: 'text-emerald-600' }, // W6-2
+  'payment.orphaned': { label: 'Unmatched payment', Icon: TriangleAlert, tint: 'text-red-600' }, // issue #211 — operator action needed
 }
 
 function kindMeta(kind: string) {
@@ -72,7 +73,7 @@ const KIND_GROUPS: Array<{ key: string; labelKey: string; kinds: string[] }> = [
   { key: 'deliveries', labelKey: 'notif.group.deliveries', kinds: ['delivery.dispatched', 'delivery.discrepancy'] },
   { key: 'invoices', labelKey: 'notif.group.invoices', kinds: ['invoice.submitted', 'invoice.decided', 'invoice.disputed', 'invoice.paid'] },
   { key: 'intel', labelKey: 'notif.group.intel', kinds: ['price.alert', 'digest.weekly', 'risk.flagged', 'trust.digest'] },
-  { key: 'money', labelKey: 'notif.group.money', kinds: ['milestone', 'variation'] },
+  { key: 'money', labelKey: 'notif.group.money', kinds: ['milestone', 'variation', 'payment.orphaned'] },
   { key: 'site', labelKey: 'notif.group.site', kinds: ['recap', 'comment', 'attendance', 'anomaly', 'share', 'system'] },
 ]
 

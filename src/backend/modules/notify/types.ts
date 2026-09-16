@@ -20,6 +20,10 @@ export type NotificationKind =
   | 'project.delayed' | 'attendance.absent' | 'budget.alert' | 'ledger.reconciled'
   // W6-2 diaspora trust digest (event policy 'digest.trust'):
   | 'trust.digest'
+  // Issue #211: a verified M-Pesa settlement arrived with no matching intent
+  // (classically a timed-out initiation) — real money on the rail, nothing
+  // posted (fail-closed); finance must reconcile manually. Alert-only kind.
+  | 'payment.orphaned'
 
 export type NotificationChannel = 'in_app' | 'whatsapp' | 'sms' | 'push'
 export type AudienceRole = 'client' | 'contractor' | 'supervisor' | 'finance' | 'all'

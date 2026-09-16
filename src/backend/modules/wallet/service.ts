@@ -26,7 +26,7 @@ import {
 } from '@/backend/modules/ledger/service'
 import { notify } from '@/backend/modules/notify/service'
 import { getProvider, type PaymentMethod } from './providers'
-import { recordDarajaIntent } from './daraja-callback'
+import { recordDarajaIntent, recordDarajaUnresolvedInitiation } from './daraja-callback'
 import { seedDarajaReconcileSweep } from './daraja-reconcile'
 import { currentActor, type DeciderIdentity } from './session'
 
@@ -433,6 +433,43 @@ export async function payPaymentRequest(projectId: string, p: any) {
     )
   }
   if (initiation.status !== 'succeeded') {
+    // Issue #211 — outcome-UNKNOWN initiation (the push fetch itself
+    // timed out / the 2xx body was unreadable): Safaricom may STILL have
+    // accepted the push and the customer may still confirm it, but the
+    // CheckoutRequestID — the only key the callback and the reconcile sweep
+    // can ever match — was never learned. Persist what IS known right here,
+    // AT initiation time (the durable-intent pattern applied to the
+    // outcome-unknown class): an unresolved-initiation row keyed
+    // daraja.unresolved:<attempt>:<request> carrying the request, amount,
+    // payee and the honest failure line. A later verified-success callback
+    // for that checkout still cannot be auto-matched (fail-closed: nothing
+    // posts without an intent row) but is now ALERTED against these rows
+    // (payment.orphaned notification + console.warn) instead of being
+    // silently ignored; finance reconciles against the M-Pesa portal.
+    // Definitive failures (a real HTTP answer, a readable rejection) never
+    // write a row — no push went out, no money can move.
+    if (initiation.outcomeUnknown === true) {
+      try {
+        await recordDarajaUnresolvedInitiation({
+          kind: 'payment.unresolved',
+          paymentRequestId: request.id,
+          requestCode: request.requestCode,
+          projectId,
+          amount: request.amount,
+          payee: request.payee,
+          method,
+          reference,
+          providerRef: initiation.providerRef,
+          initiatedBy: paidBy,
+          initiatedByRole: paidByRole,
+          failureDetail: initiation.detail,
+        })
+      } catch (e) {
+        // Best-effort row — a failed write never masks the honest failure
+        // (the orphan-callback alert then degrades to console.warn only).
+        console.error('[wallet] failed to record the unresolved provider initiation', e)
+      }
+    }
     throw new Error(`Provider did not accept the payment: ${initiation.detail}`)
   }
 

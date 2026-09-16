@@ -27,7 +27,13 @@
 //   · initiatePayment = STK push (CustomerPayBillOnline). STK is ASYNC: the
 //     API accepting the push means the customer got a PIN prompt, NOT that
 //     money moved → the result is honestly 'pending' with the
-//     CheckoutRequestID as providerRef.
+//     CheckoutRequestID as providerRef. When the push HTTP call itself fails
+//     without an answer (timeout / network / unreadable 2xx body) the result
+//     is 'failed' WITH outcomeUnknown: true — Safaricom may still have
+//     accepted the push, so the wallet service records an unresolved-
+//     initiation row for reconciliation (issue #211; the CheckoutRequestID
+//     is genuinely unrecoverable in that window — the alert path, not the
+//     sweep, covers late settlement).
 //   · verifyPayment = stkpushquery: ResultCode 0 = settled; known failure
 //     codes (1032 user-cancelled, 1037 unreachable, 1 insufficient funds,
 //     2001 invalid initiator) = 'failed'; anything else = 'pending' — an
@@ -230,8 +236,16 @@ export class DarajaProvider implements PaymentProvider {
     return this.config.env === 'sandbox'
   }
 
-  private failed(providerRef: string, detail: string): ProviderResult {
-    return { providerRef, status: 'failed', simulated: this.simulated, detail }
+  private failed(providerRef: string, detail: string, opts?: { outcomeUnknown?: boolean }): ProviderResult {
+    return {
+      providerRef,
+      status: 'failed',
+      simulated: this.simulated,
+      detail,
+      // Issue #211: outcome-unknown failures (timeout / unreachable / an
+      // unparseable 2xx body) flag themselves — the push may still be live.
+      ...(opts?.outcomeUnknown === true ? { outcomeUnknown: true } : {}),
+    }
   }
 
   private pending(providerRef: string, detail: string): ProviderResult {
@@ -321,12 +335,24 @@ export class DarajaProvider implements PaymentProvider {
         TransactionDesc: String(input.description ?? input.reference ?? 'Payment').slice(0, 20),
       })
       if (r.authFailed) return this.failed(ref, 'Daraja authentication failed — check DARAJA_CONSUMER_KEY / DARAJA_CONSUMER_SECRET')
-      if (r.networkError) return this.failed(ref, r.networkError)
+      // networkError = the STK push fetch itself threw (timeout / DNS /
+      // connection reset): Safaricom may STILL have accepted the push and the
+      // customer may still see the PIN prompt — outcome genuinely unknown
+      // (issue #211). The ref is our own daraja-<ts> marker, NOT a
+      // CheckoutRequestID (that lives in the response we never saw).
+      if (r.networkError) return this.failed(ref, r.networkError, { outcomeUnknown: true })
       if (!r.ok) {
         return this.failed(ref, `Daraja STK push rejected (HTTP ${r.status})`)
       }
       const checkout = typeof r.json?.CheckoutRequestID === 'string' ? r.json.CheckoutRequestID : ''
       const responseCode = String(r.json?.ResponseCode ?? '')
+      // 2xx with an unparseable body: Daraja answered but we could not read
+      // WHO it accepted (no CheckoutRequestID recoverable) — outcome unknown,
+      // same class as a timeout (issue #211). A readable ResponseCode != 0 is
+      // a definitive rejection and stays outcome-known.
+      if (!r.json) {
+        return this.failed(ref, 'Daraja returned an unreadable response body — the STK push outcome cannot be determined', { outcomeUnknown: true })
+      }
       if (responseCode !== '0' || !checkout) {
         const why = String(r.json?.ResponseDescription ?? r.json?.errorMessage ?? 'no description').slice(0, 160)
         return this.failed(ref, `Daraja did not accept the STK push (ResponseCode ${responseCode || 'missing'}): ${why}`)
