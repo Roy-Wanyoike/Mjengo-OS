@@ -1184,6 +1184,7 @@ export const swDict = {
   'money.appr.varIncrease': 'Bajeti ya mradi itaongezwa kwa {amount} kwa "{title}".',
   'money.appr.varReduce': 'Bajeti ya mradi itapunguzwa kwa {amount} kwa "{title}".',
   'money.appr.note': 'Bonyeo moja la makusudi, si mbili za bahati — uamuzi unarekodiwa kwenye daftari la ukaguzi na haiwezi kuhaririwa baadaye.',
+  'money.appr.shareNote': 'Unaamua kupitia kiungo cha kushiriki — uthibitishaji huu wazi unahitajika kabla ya pesa kusogea, na uamuzi wako unarekodiwa kwenye daftari la ukaguzi.',
   'money.appr.confirm': 'Thibitisha uidhinishaji',
   'money.var.title': 'Ombi jipya la mabadiliko',
   'money.var.desc': 'Mabadiliko ya mpango yanayosogeza bajeti. Bajeti husogea baada ya {client} kuidhinisha pekee.',
@@ -1288,7 +1289,7 @@ export const swDict = {
   'share.aria.link': 'Kiungo cha mteja cha kusoma tu',
   'share.aria.copy': 'Nakili kiungo cha kushiriki',
   'share.regenerate': 'Tengeneza kiungo tena',
-  'share.note': 'Tuma hii kwa WhatsApp au barua pepe. Kutengeneza tena kunafuta uhalali wa kiungo cha zamani — na kila kifurushi cha malipo kilichoweza kufunguliwa nacho (kifurushi hutolewa kwa tokeni ile ile).',
+  'share.note': 'Tuma hii kwa WhatsApp au barua pepe. Kutengeneza tena kunafuta uhalali wa kiungo cha zamani — na kila kifurushi cha malipo kilichoweza kufunguliwa nacho (kifurushi hutolewa kwa tokeni ile ile). Viungo vinaisha baada ya siku 90 kwa chaguo-msingi; kutengeneza tena kunatoa kipya.',
   'share.previewLabel': 'Tazama kama mteja (kusoma tu)',
   'share.previewHint': 'Unaona haswa anachokiona mteja wako.',
   // ------------------------------------------------------------- W7 PWA offline (issue #78)
@@ -1418,7 +1419,7 @@ export const swDict = {
   'footer.owner.location': 'Nairobi, Kenya',
 
   // makosa ya kiungo cha kushiriki (use-mjengo.ts bootFromShare — FE-6)
-  'share.error.invalid': 'Kiungo hiki cha kushiriki si halali au kimeondolewa',
+  'share.error.invalid': 'Kiungo hiki cha kushiriki si halali, kimekwisha muda au kimeondolewa',
   'share.error.network': 'Imeshindwa kufikia MjengoOS — angalia muunganisho wako',
 
   // ------------------------------------------------------------- #107: kichupo cha AI Copilot

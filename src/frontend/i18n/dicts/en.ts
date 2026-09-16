@@ -1180,6 +1180,7 @@ export const enDict = {
   'money.appr.varIncrease': 'The project budget will increase by {amount} for “{title}”.',
   'money.appr.varReduce': 'The project budget will reduce by {amount} for “{title}”.',
   'money.appr.note': 'One deliberate click, not two accidental ones — the decision is recorded in the audit ledger and cannot be edited afterwards.',
+  'money.appr.shareNote': 'You are deciding from a share link — this explicit confirmation is required before money moves, and your decision is recorded in the audit ledger.',
   'money.appr.confirm': 'Confirm approval',
   'money.var.title': 'New variation order',
   'money.var.desc': 'A plan change that moves the budget. The budget only moves after {client} approves.',
@@ -1284,7 +1285,7 @@ export const enDict = {
   'share.aria.link': 'Read-only client share link',
   'share.aria.copy': 'Copy share link',
   'share.regenerate': 'Regenerate link',
-  'share.note': 'Send this over WhatsApp or email. Regenerating invalidates the old link — and every draw pack it could open (the pack is served through the same token).',
+  'share.note': 'Send this over WhatsApp or email. Regenerating invalidates the old link — and every draw pack it could open (the pack is served through the same token). Links expire after 90 days by default; regenerating issues a fresh one.',
   'share.previewLabel': 'Preview as client (read-only)',
   'share.previewHint': 'See exactly what your client sees.',
   // ------------------------------------------------------------- W7 PWA offline (issue #78)
@@ -1414,7 +1415,7 @@ export const enDict = {
   'footer.owner.location': 'Nairobi, Kenya',
 
   // share-link dead/unreachable errors (use-mjengo.ts bootFromShare — FE-6)
-  'share.error.invalid': 'This share link is invalid or has been revoked',
+  'share.error.invalid': 'This share link is invalid, expired or has been revoked',
   'share.error.network': 'Could not reach MjengoOS — check your connection',
 
   // ------------------------------------------------------------- #107: AI Copilot tab

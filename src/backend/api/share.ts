@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { db } from '@/backend/lib/db'
 import { applyAction, getProjectPayload, type ActionType } from '@/backend/lib/mjengo'
 import { publicRoute, safeError, genericError, zodIssueResponse } from '@/backend/lib/route-kit'
+import {
+  findLiveProjectByShareToken,
+  shareDecisionMissingConfirm,
+  SHARE_DECISION_CONFIRM_ERROR,
+} from '@/backend/lib/share-token'
 import { getDrawPackForShare } from '@/backend/modules/drawpack/service'
 import { loadLatestAiReviewNote } from '@/backend/modules/ai/draw-review'
 import { serveTrustDigestForShare } from '@/backend/modules/ai/trust-digest'
@@ -79,6 +83,10 @@ const shareBodySchema = z.strictObject({
  * LATEST trust digest row read-only (see the branch comment below) — the
  * deterministic weekly text, its honest audio state, and (on explicit
  * audio=1) an on-demand voice-note render.
+ *
+ * Issue #172 (SEC-3r): the token lookup is LIVE-only — an expired token
+ * answers the exact 404 an unknown one does ('Invalid or expired link',
+ * which the copy has always promised). No oracle, no distinct expiry leak.
  */
 export const GET = publicRoute(
   {
@@ -91,7 +99,7 @@ export const GET = publicRoute(
     if (!token) {
       return NextResponse.json({ error: 'Share token required' }, { status: 400 })
     }
-    const project = await db.project.findUnique({ where: { shareToken: token } })
+    const project = await findLiveProjectByShareToken(token)
     if (!project) {
       return NextResponse.json({ error: 'Invalid or expired link' }, { status: 404 })
     }
@@ -175,6 +183,15 @@ const bodyTooLarge = (): NextResponse =>
  * POST /api/share { token, type, payload } — client-decision actions only.
  * The actor is always stamped as the project's client (role 'client') so the
  * Bias-Free Ledger records exactly who decided, from a public link.
+ *
+ * Issue #172 (SEC-3r), two gates on the sessionless path:
+ *   · EXPIRY — the token lookup is LIVE-only (findLiveProjectByShareToken);
+ *     an expired link 404s exactly like an unknown one.
+ *   · CONFIRM-BEFORE-DECIDE — the money decisions (milestone.decide /
+ *     variation.decide) additionally require an explicit `confirm: true` in
+ *     the payload. A bearer link lets a client look; deciding takes intent.
+ *     The client view's decision dialogs (money-tab) send the flag after the
+ *     user clicks Confirm — a raw scripted POST without it is refused 400.
  */
 export const POST = publicRoute(
   {
@@ -210,7 +227,14 @@ export const POST = publicRoute(
     if (!actionType) {
       return NextResponse.json({ error: 'Not permitted from a client link' }, { status: 403 })
     }
-    const project = await db.project.findUnique({ where: { shareToken: token } })
+    // Confirm-before-decide (issue #172): decision-grade actions need the
+    // explicit flag — checked BEFORE the token lookup so an unconfirmed
+    // probe learns nothing about token validity (same ordering discipline
+    // as the S2 body validation above).
+    if (shareDecisionMissingConfirm(actionType, payload)) {
+      return NextResponse.json({ error: SHARE_DECISION_CONFIRM_ERROR }, { status: 400 })
+    }
+    const project = await findLiveProjectByShareToken(token)
     if (!project) {
       return NextResponse.json({ error: 'Invalid or expired link' }, { status: 404 })
     }

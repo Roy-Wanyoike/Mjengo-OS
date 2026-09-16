@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { getProjectPayload, getProjectsList } from '@/backend/lib/mjengo'
 import { route, safeError, genericError } from '@/backend/lib/route-kit'
+import { shareTokenExpiryFromNow } from '@/backend/lib/share-token'
 
 // Projects list + create — src/app/api/projects/route.ts is the shim.
 
@@ -119,6 +120,10 @@ export const POST = route(
     // padding) instead of leaning on Prisma's collision-resistant but not
     // unguessability-hardened cuid() default (kept in the schema only as a
     // defensive fallback for raw db writes — seeds still use it).
+    //
+    // Issue #172 (SEC-3r): every mint also stamps an EXPIRY — the link dies
+    // after SHARE_TOKEN_TTL_DAYS (default 90). A leaked link is no longer a
+    // permanent capability; share.regenerate re-mints with a fresh window.
     const shareToken = randomBytes(24).toString('base64url')
     const project = await db.project.create({
       data: {
@@ -131,6 +136,7 @@ export const POST = route(
         targetDate,
         status: 'active',
         shareToken,
+        shareTokenExpiresAt: shareTokenExpiryFromNow(),
       },
     })
 

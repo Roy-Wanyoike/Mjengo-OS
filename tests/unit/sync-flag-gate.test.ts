@@ -541,9 +541,9 @@ describe('POST /api/share — zod strictObject + 64 KB raw-body cap (S2)', () =>
     expect((await bodyOf(res)).error).toMatch(/Unknown field\(s\): "extra"/)
   })
 
-  it('valid milestone.decide → 200, actor stamped from the link (the pre-W3-1 behavior)', async () => {
+  it('valid milestone.decide (with the issue-#172 confirm flag) → 200, actor stamped from the link', async () => {
     const res = await sharePost(
-      shareReq({ token: 'tok-1', type: 'milestone.decide', payload: { id: 'ms-1', decision: 'approve' } }),
+      shareReq({ token: 'tok-1', type: 'milestone.decide', payload: { id: 'ms-1', decision: 'approve', confirm: true } }),
       undefined,
     )
     expect(res.status).toBe(200)

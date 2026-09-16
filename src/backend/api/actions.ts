@@ -5,6 +5,11 @@ import { CLIENT_ACTIONS } from '@/shared/client-actions'
 import { SUPPLIER_ACTIONS } from '@/shared/supplier-actions'
 import { publicRoute, safeError } from '@/backend/lib/route-kit'
 import { unauthorized, forbidden } from '@/backend/lib/guard'
+import {
+  findLiveProjectByShareToken,
+  shareDecisionMissingConfirm,
+  SHARE_DECISION_CONFIRM_ERROR,
+} from '@/backend/lib/share-token'
 import { kindForAction, withAuditContext } from '@/backend/lib/audit'
 import { actionFlagGate } from '@/backend/lib/action-flag-gate'
 
@@ -138,9 +143,17 @@ export const POST = publicRoute(
     let targetProjectId = projectId
 
     if (!session) {
-      // Share-link fallback: token IS the auth, but only for the client allowlist
+      // Share-link fallback: token IS the auth, but only for the client allowlist.
+      // Issue #172 (SEC-3r): money decisions additionally demand the explicit
+      // confirm flag — checked BEFORE the token lookup so an unconfirmed probe
+      // learns nothing about token validity (the POST /api/share ordering) —
+      // and the lookup itself is LIVE-only: an expired token 404s exactly
+      // like an unknown one.
       if (!shareToken) return unauthorized()
-      const project = await db.project.findUnique({ where: { shareToken } })
+      if (shareDecisionMissingConfirm(type, payload)) {
+        return NextResponse.json({ error: SHARE_DECISION_CONFIRM_ERROR }, { status: 400 })
+      }
+      const project = await findLiveProjectByShareToken(shareToken)
       if (!project) return NextResponse.json({ error: 'Invalid or expired link' }, { status: 404 })
       if (!CLIENT_ACTIONS.includes(type)) return unauthorized()
       actorPayload = { ...actorPayload, __actor: project.client, __role: 'client' }

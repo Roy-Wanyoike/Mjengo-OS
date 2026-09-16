@@ -3,6 +3,7 @@ import { db } from '@/backend/lib/db'
 import { getProjectPayload } from '@/backend/lib/mjengo'
 import { publicRoute, genericError } from '@/backend/lib/route-kit'
 import { unauthorized, forbidden } from '@/backend/lib/guard'
+import { findLiveProjectByShareToken } from '@/backend/lib/share-token'
 
 // Owner project payload — src/app/api/project/route.ts is the shim.
 // Requires a session; a VALID ?share=<token> is also accepted so share-link
@@ -147,11 +148,15 @@ export const GET = publicRoute(
     // ?projectId query can never redirect it, and the token's project never
     // falls back to "first project in the DB" (the cross-project read +
     // shareToken-harvesting hole this closes).
+    //
+    // Issue #172 (SEC-3r): the lookup is LIVE-only — an EXPIRED token is
+    // refused with the exact 401 an unknown one gets (no oracle), never
+    // falls through to a sessionless first-project default.
     let shareProject: { id: string; shareToken: string } | null = null
     if (!session) {
       const share = req.nextUrl.searchParams.get('share')
       if (!share) return unauthorized()
-      shareProject = await db.project.findUnique({ where: { shareToken: share } })
+      shareProject = await findLiveProjectByShareToken(share)
       if (!shareProject) return unauthorized()
     }
     const queryProjectId = req.nextUrl.searchParams.get('projectId')
