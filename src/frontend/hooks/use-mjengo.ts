@@ -34,7 +34,7 @@ export interface OutboxItem {
   projectId?: string | null
   /** v2 (spec §40/§41): the item's full sync lifecycle. Old persisted items are migrated to 'pending'. */
   syncStatus: OutboxSyncStatus
-  /** How many drain attempts returned a hard failure for this item (manual retry only — no auto-retry loops). */
+  /** How many drain attempts returned a hard failure for this item (manual + auto). */
   retryCount: number
   /** Server's explanation when the drain hit a conflict — kept until (and after) resolution. */
   conflictReason?: string
@@ -62,6 +62,16 @@ export interface OutboxItem {
    * session just 401s again).
    */
   authBlocked?: boolean
+  /**
+   * #132 — bounded auto-retry bookkeeping for hard failures: how many of the
+   * max 3 automatic attempts this item has consumed (stamped when a failure
+   * schedules the NEXT attempt). Persisted with the outbox so a reload does
+   * not reset the schedule. Auth-blocked (#191) and conflict items never
+   * carry a schedule — they wait for a sign-in / a human decision.
+   */
+  autoAttempts?: number
+  /** #132 — epoch ms when this failed item becomes eligible for its next automatic retry (unset once the 3 attempts are exhausted → manual-only). */
+  nextAttemptAt?: number
   syncedAt?: number
   /** Set when a human resolved a conflict: server version kept, local version applied, or the item dropped. */
   resolution?: 'keep-server' | 'keep-mine-applied' | 'discarded'
@@ -174,11 +184,114 @@ function normalizeOutboxItem(item: OutboxItem): OutboxItem {
     syncStatus: item.syncStatus ?? 'pending',
     retryCount: typeof item.retryCount === 'number' ? item.retryCount : 0,
     authBlocked: item.authBlocked === true,
+    // #132: pre-auto-retry items start with a clean slate (0 attempts used,
+    // no schedule) — their next hard failure schedules the first backoff.
+    autoAttempts: typeof item.autoAttempts === 'number' ? item.autoAttempts : 0,
+    nextAttemptAt: typeof item.nextAttemptAt === 'number' ? item.nextAttemptAt : undefined,
   }
 }
 
 /** Retention cap for the synced/resolved history — the live queue is never pruned. */
 const SYNC_HISTORY_CAP = 50
+
+// ---------------- #132 — bounded auto-retry for failed outbox items ----------------
+
+/** Up to 3 automatic attempts, then manual-only (the panel's retry footer). */
+export const AUTO_RETRY_MAX_ATTEMPTS = 3
+
+/** Backoff cadence before each automatic attempt: 5s → 30s → 2min. */
+export const AUTO_RETRY_DELAYS_MS = [5_000, 30_000, 120_000] as const
+
+/**
+ * The single module-level retry timer (soonest scheduled item wins). Timer
+ * bookkeeping lives outside the store on purpose — it is process state, never
+ * persisted; the SCHEDULE itself (nextAttemptAt/autoAttempts) is, so a reload
+ * restores it (rehydrate hook) instead of resetting it.
+ */
+let autoRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearAutoRetryTimer(): void {
+  if (autoRetryTimer !== null) {
+    clearTimeout(autoRetryTimer)
+    autoRetryTimer = null
+  }
+}
+
+/**
+ * #132 — stamp the next bounded auto-retry onto a hard-failed item: 5s →
+ * 30s → 2min, at most 3 automatic attempts, then manual-only. Auth-blocked
+ * (#191 — a 401 waits for a sign-in, retrying without a session just 401s
+ * again) and conflict items are never given a schedule by the callers.
+ */
+function withAutoRetrySchedule(o: OutboxItem): Partial<OutboxItem> {
+  const attempts = o.autoAttempts ?? 0
+  if (attempts >= AUTO_RETRY_MAX_ATTEMPTS) return {} // exhausted → manual-only
+  const delay = AUTO_RETRY_DELAYS_MS[Math.min(attempts, AUTO_RETRY_DELAYS_MS.length - 1)]
+  return { autoAttempts: attempts + 1, nextAttemptAt: Date.now() + delay }
+}
+
+/**
+ * #132 — re-queue hard-failed items whose backoff has elapsed (failed →
+ * pending). Conflicts and auth-blocked items are structurally excluded: a
+ * conflict needs a human §41 decision, an auth-blocked item needs a sign-in
+ * (drainAfterAuth owns it). Returns how many items were re-queued.
+ */
+function requeueDueFailedItems(): number {
+  const s = useMjengo.getState()
+  const due = new Set(
+    s.outbox
+      .filter((o) =>
+        o.syncStatus === 'failed' &&
+        o.authBlocked !== true &&
+        typeof o.nextAttemptAt === 'number' &&
+        o.nextAttemptAt <= Date.now())
+      .map((o) => o.id),
+  )
+  if (due.size === 0) return 0
+  useMjengo.setState({
+    outbox: s.outbox.map((o) =>
+      due.has(o.id)
+        ? { ...o, syncStatus: 'pending' as const, nextAttemptAt: undefined }
+        : o),
+  })
+  return due.size
+}
+
+/**
+ * (Re)arm the single auto-retry timer for the soonest scheduled failure.
+ * No-op when nothing is scheduled. Safe to call repeatedly — always
+ * recomputed from current state, so a newly-stamped earlier attempt
+ * preempts a later one.
+ */
+function armAutoRetryTimer(): void {
+  clearAutoRetryTimer()
+  const soonest = useMjengo.getState().outbox.reduce<number | null>((acc, o) => {
+    if (o.syncStatus !== 'failed' || o.authBlocked === true) return acc
+    if (typeof o.nextAttemptAt !== 'number') return acc
+    return acc === null || o.nextAttemptAt < acc ? o.nextAttemptAt : acc
+  }, null)
+  if (soonest === null) return
+  autoRetryTimer = setTimeout(runAutoRetryPass, Math.max(0, soonest - Date.now()))
+}
+
+/**
+ * #132 — the timer body: while online, re-queue due failures into one drain.
+ * Offline at fire time → parked (the next reconnect re-runs the pass);
+ * mid-drain → re-check shortly after the in-flight syncNow settles (its
+ * finally re-arms for any new failures anyway).
+ */
+function runAutoRetryPass(): void {
+  autoRetryTimer = null
+  const s = useMjengo.getState()
+  if (!s.online) return
+  if (s.syncing) {
+    autoRetryTimer = setTimeout(runAutoRetryPass, 1_000)
+    return
+  }
+  const requeued = requeueDueFailedItems()
+  if (requeued > 0) void useMjengo.getState().syncNow()
+  armAutoRetryTimer()
+}
 
 /**
  * FE-6a (issue #80) — load sequencing token. Every load(), switchProject() and
@@ -758,21 +871,34 @@ export const useMjengo = create<MjengoState>()(
 
       setOnline: (v) => {
         const wasOnline = get().online
+        set({ online: v })
+        if (!v) {
+          // Going offline parks the auto-retry schedule (#132): nothing
+          // useful can drain without a network, and the next offline→online
+          // transition re-runs the retry pass below.
+          clearAutoRetryTimer()
+          return
+        }
+        if (wasOnline) return
+        // Fresh reconnect (#132): failed items whose bounded backoff has
+        // elapsed re-queue NOW, joining the pending drain below — most
+        // failures are transient (timeout, 5xx, connectivity flapping), so
+        // the field user's red items recover without touching the panel.
+        requeueDueFailedItems()
         const pendingCount = get().outbox.filter((o) => (o.syncStatus ?? 'pending') === 'pending').length
         const conflictCount = get().outbox.filter((o) => o.syncStatus === 'conflict').length
-        set({ online: v })
-        if (v && !wasOnline) {
-          if (pendingCount > 0) {
-            // Real reconnection (or ending a simulated-offline run): drain the queue.
-            toast.success(t('sync.backOnlineDraining'))
-            void get().syncNow()
-          } else if (conflictCount > 0) {
-            // Nothing queued, but unresolved conflicts still need a human decision (§41).
-            toast.info(t('sync.backOnlineConflicts', { count: conflictCount }))
-          } else {
-            toast.success(t('sync.backOnline'))
-          }
+        if (pendingCount > 0) {
+          // Real reconnection (or ending a simulated-offline run): drain the queue.
+          toast.success(t('sync.backOnlineDraining'))
+          void get().syncNow()
+        } else if (conflictCount > 0) {
+          // Nothing queued, but unresolved conflicts still need a human decision (§41).
+          toast.info(t('sync.backOnlineConflicts', { count: conflictCount }))
+        } else {
+          toast.success(t('sync.backOnline'))
         }
+        // Not-yet-due failures keep their bounded schedule while online.
+        armAutoRetryTimer()
       },
 
       dispatch: async (type, payload, label) => {
@@ -903,7 +1029,9 @@ export const useMjengo = create<MjengoState>()(
        * Drain loop (spec §40): flush every PENDING item through POST /api/sync.
        * Per-item outcomes mark the lifecycle: synced | failed | conflict.
        *   · synced + resolved items move into `syncHistory` (retained, capped — never silently lost)
-       *   · failed items stay queued with retryCount + lastError — ONE manual retryAll(), no auto loops
+       *   · failed items stay queued with retryCount + lastError and a BOUNDED
+       *     auto-retry schedule (#132: 5s → 30s → 2min, max 3 automatic
+       *     attempts, then manual-only via retryAll)
        *   · conflict items stay with the server's reason + rule until a human resolves them (§41)
        * A network-level failure re-queues items as pending (nothing is ever dropped).
        *
@@ -982,7 +1110,16 @@ export const useMjengo = create<MjengoState>()(
                 }
               }
               failed += 1
-              return { ...o, syncStatus: 'failed' as const, lastError: r.error, retryCount: (o.retryCount ?? 0) + 1 }
+              return {
+                ...o,
+                syncStatus: 'failed' as const,
+                lastError: r.error,
+                retryCount: (o.retryCount ?? 0) + 1,
+                // #132: schedule the bounded automatic retry (skipped once
+                // the 3 attempts are used up — the panel footer is the
+                // manual escape hatch from there on).
+                ...withAutoRetrySchedule(o),
+              }
             })
             // Retain: live queue keeps pending/syncing/failed/conflict; synced items → history (capped).
             const live = marked.filter((o) => o.syncStatus !== 'synced')
@@ -1023,6 +1160,9 @@ export const useMjengo = create<MjengoState>()(
                   syncStatus: 'failed' as const,
                   lastError: reason,
                   retryCount: (o.retryCount ?? 0) + 1,
+                  // #132: bounded auto-retry applies to server-level refusals
+                  // too (most are transient 5xx/429s).
+                  ...withAutoRetrySchedule(o),
                 }
               : o)),
           })
@@ -1034,6 +1174,9 @@ export const useMjengo = create<MjengoState>()(
           set({ outbox: get().outbox.map((o) => (o.syncStatus === 'syncing' ? { ...o, syncStatus: 'pending' as const } : o)) })
         } finally {
           set({ syncing: false })
+          // #132: arm the single auto-retry timer for any freshly-scheduled
+          // failures (no-op when nothing is scheduled).
+          armAutoRetryTimer()
         }
       },
 
@@ -1106,11 +1249,18 @@ export const useMjengo = create<MjengoState>()(
         }
       },
 
-      /** One manual retry pass for hard-failed items — no auto-retry loops. */
+      /**
+       * Manual retry pass for hard-failed items — the human escape hatch the
+       * bounded auto-retry (#132) falls back to once its 3 attempts are
+       * exhausted (and an immediate override before that). Overrides any
+       * pending backoff schedule: the items are re-queued right now.
+       */
       retryAll: () => {
         const failed = get().outbox.filter((o) => o.syncStatus === 'failed')
         if (!failed.length) { toast.info(t('sync.nothingFailed')); return }
-        set({ outbox: get().outbox.map((o) => (o.syncStatus === 'failed' ? { ...o, syncStatus: 'pending' as const } : o)) })
+        set({ outbox: get().outbox.map((o) => (o.syncStatus === 'failed'
+          ? { ...o, syncStatus: 'pending' as const, nextAttemptAt: undefined }
+          : o)) })
         toast.success(t('sync.retrying', { count: failed.length }))
         void get().syncNow()
       },
@@ -1129,10 +1279,14 @@ export const useMjengo = create<MjengoState>()(
         if (authBlocked.length > 0) {
           set({
             outbox: get().outbox.map((o) => (o.syncStatus === 'failed' && o.authBlocked
-              ? { ...o, syncStatus: 'pending' as const, authBlocked: false, lastError: undefined }
+              ? { ...o, syncStatus: 'pending' as const, authBlocked: false, lastError: undefined, nextAttemptAt: undefined }
               : o)),
           })
         }
+        // #132: a session boot is also a fine moment to restore the
+        // auto-retry timer (covers a reload with scheduled failures; no-op
+        // when nothing is scheduled).
+        armAutoRetryTimer()
         const hasPending = get().outbox.some((o) => (o.syncStatus ?? 'pending') === 'pending')
         if (!get().online || !hasPending || get().syncing) return false
         await get().syncNow()
@@ -1156,6 +1310,12 @@ export const useMjengo = create<MjengoState>()(
         // Belt-and-braces: any stale shape is normalised after rehydration.
         if (state?.outbox) state.outbox = state.outbox.map(normalizeOutboxItem)
         if (state?.syncHistory) state.syncHistory = state.syncHistory.map(normalizeOutboxItem)
+        // #132: restore the auto-retry schedule after a reload — the persisted
+        // nextAttemptAt stamps survive, the timer itself does not. Deferred a
+        // tick because this callback can run while the module is still
+        // initialising (useMjengo is in its TDZ then); inert in node/tests
+        // (no storage → zustand never calls this back there).
+        setTimeout(() => armAutoRetryTimer(), 0)
       },
       partialize: (s) => ({
         online: s.online,

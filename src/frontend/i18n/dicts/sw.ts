@@ -651,7 +651,7 @@ export const swDict = {
   'sync.applyFailed': 'Toleo lako hakuweza kuwekwa',
   'sync.resolveNetwork': 'Kosa la mtandao — tatua tena ukiwa mtandaoni',
   'sync.nothingFailed': 'Hakuna kilichofeli kinachosubiri kujaribiwa tena',
-  'sync.retrying': 'Inajaribu tena vitendo {count} vilivyofeli — mara moja, bila kurudia-rudia',
+  'sync.retrying': 'Inajaribu tena sasa vitendo {count} vilivyofeli',
   'sync.readOnlyClient': 'Mwonekano wa mteja wa kusoma tu — data ya eneo inasimamiwa na timu ya ujenzi',
   // #191 — session-expiry drain handling: a 401 marks the batch auth-blocked
   // (per-item lastError + one honest toast); other server-level drain
@@ -670,7 +670,7 @@ export const swDict = {
   'outbox.allCaughtUp': 'Kila kitu kimesawazishwa',
   'outbox.emptyHint': 'Vitendo vilivyofanywa nje ya mtandao huwekwa foleni hapa, kisha vinatumwa kwa seva ukirudi mtandaoni.',
   'outbox.listAria': 'Vitendo vilivyowekwa foleni na vyenye migogoro vya nje ya mtandao',
-  'outbox.retryFailed': 'Jaribu tena vitendo {count} vilivyofeli — mara moja, bila kurudia-rudia',
+  'outbox.retryFailed': 'Jaribu tena sasa vitendo {count} vilivyofeli',
   'outbox.conflictsStay': 'Migogoro hubaki kwenye foleni hadi uamue — hakuna kinachobadilishwa kwa siri.',
   'outbox.aria.conflictsPending': 'migogoro {count} inahitaji uamuzi',
   'outbox.status.queued': 'Foleni',
@@ -689,6 +689,9 @@ export const swDict = {
   'outbox.serverWinsNote': 'Mistari ya fedha — seva daima inashinda; kitendo kipya cha kurekebisha pekee ndicho kinabadilisha historia ya pesa.',
   // #191 — auth-blocked failure note (waits for sign-in, not a retry)
   'outbox.authBlockedNote': 'Inasubiri kuingia — kitendo hiki kita sawazishwa kiotomatiki baada ya kujiandikisha.',
+  // #132 — majaribio otomatiki yenye kikomo kwa vitendo vilivyofeli (sekunde 5 → 30 → dakika 2, mara 3 hidi, kisha kwa mkono pekee).
+  'outbox.autoRetryNote': 'Kujaribu tena kiotomatiki — ujaribu wa {attempts} kati ya {max} mnamo {when}',
+  'outbox.autoRetryExhausted': 'Imejaribiwa tena kiotomatiki mara {max} bila mafanikio — tumia kitufe cha “Jaribu tena” hapa chini.',
 
   // materials tab — toasts + dialog placeholders (labels/buttons are a later
   // per-tab wave; data-mirroring placeholders like 'Site Store' stay as-is)

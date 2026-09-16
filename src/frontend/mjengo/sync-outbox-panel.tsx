@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { useMjengo, type OutboxItem } from '@/frontend/hooks/use-mjengo'
+import { useMjengo, AUTO_RETRY_MAX_ATTEMPTS, type OutboxItem } from '@/frontend/hooks/use-mjengo'
 import { Button } from '@/frontend/ui/button'
 import {
   Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger,
@@ -141,6 +141,26 @@ function OutboxRow({
 
       {item.syncStatus === 'failed' && item.lastError && (
         <p className="mt-1.5 text-xs text-red-700 leading-snug">{item.lastError}</p>
+      )}
+
+      {/* #132: a scheduled auto-retry replaces the bare red chip — the item
+          failed, but a bounded attempt (5s → 30s → 2min, max 3) is already
+          booked; once those are used up the manual footer is the only path. */}
+      {item.syncStatus === 'failed' && typeof item.nextAttemptAt === 'number' && (
+        <p className="mt-1 text-[11px] text-stone-600 leading-snug">
+          {t('outbox.autoRetryNote', {
+            attempts: item.autoAttempts ?? 0,
+            max: AUTO_RETRY_MAX_ATTEMPTS,
+            when: new Date(item.nextAttemptAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          })}
+        </p>
+      )}
+      {item.syncStatus === 'failed' &&
+        typeof item.nextAttemptAt !== 'number' &&
+        (item.autoAttempts ?? 0) >= AUTO_RETRY_MAX_ATTEMPTS && (
+        <p className="mt-1 text-[11px] text-stone-600 leading-snug">
+          {t('outbox.autoRetryExhausted', { max: AUTO_RETRY_MAX_ATTEMPTS })}
+        </p>
       )}
 
       {/* #191: an auth-blocked failure waits for a SIGN-IN, not a retry — say

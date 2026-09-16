@@ -647,7 +647,7 @@ export const enDict = {
   'sync.applyFailed': 'Could not apply your version',
   'sync.resolveNetwork': 'Network error — resolve again when online',
   'sync.nothingFailed': 'Nothing failed is waiting to retry',
-  'sync.retrying': 'Retrying {count} failed action(s) — one attempt, no loops',
+  'sync.retrying': 'Retrying {count} failed action(s) now',
   'sync.readOnlyClient': 'Read-only client view — site data is managed by the site team',
   // #191 — session-expiry drain handling: a 401 marks the batch auth-blocked
   // (per-item lastError + one honest toast); other server-level drain
@@ -666,7 +666,7 @@ export const enDict = {
   'outbox.allCaughtUp': 'All caught up',
   'outbox.emptyHint': 'Actions taken offline queue here, then flush to the server when you reconnect.',
   'outbox.listAria': 'Queued and conflicted offline actions',
-  'outbox.retryFailed': 'Retry {count} failed action(s) — one attempt, no loops',
+  'outbox.retryFailed': 'Retry {count} failed action(s) now',
   'outbox.conflictsStay': 'Conflicts stay in the queue until you decide — nothing is silently overwritten.',
   'outbox.aria.conflictsPending': '{count} conflicts need a decision',
   'outbox.status.queued': 'Queued',
@@ -685,6 +685,10 @@ export const enDict = {
   'outbox.serverWinsNote': 'Financial rows — the server always wins; only a new correcting action changes money history.',
   // #191 — auth-blocked failure note (waits for sign-in, not a retry)
   'outbox.authBlockedNote': 'Waiting for sign-in — this action will sync automatically after you sign in.',
+  // #132 — bounded auto-retry for failed items (5s → 30s → 2min, max 3
+  // attempts, then manual-only via the retry footer).
+  'outbox.autoRetryNote': 'Auto-retry attempt {attempts} of {max} — next try {when}',
+  'outbox.autoRetryExhausted': 'Auto-retried {max} time(s) without success — use “Retry failed” below.',
 
   // materials tab — toasts + dialog placeholders (labels/buttons are a later
   // per-tab wave; data-mirroring placeholders like 'Site Store' stay as-is)
