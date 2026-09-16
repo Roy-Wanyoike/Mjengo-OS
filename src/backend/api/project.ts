@@ -169,6 +169,14 @@ export const GET = publicRoute(
     // Tenant isolation: client-role sessions are PINNED to their own project —
     // a ?projectId from the URL is ignored (mirrors /api/sync). The public
     // share path is pinned to the token's own project.
+    // Issue #175 (SEC-7): an UNPINNED client (no projectId on the session)
+    // used to fall through to the owner first-project default — reading a
+    // foreign project incl. its shareToken. Fail closed instead: a client
+    // with no assigned project has no surface here. (Owner roles keep the
+    // documented first-project default — the fresh-contractor load path.)
+    if (!shareProject && session?.user.role === 'client' && !session.user.projectId) {
+      return NextResponse.json({ error: 'No project assigned to this account' }, { status: 403 })
+    }
     const projectId = shareProject
       ? shareProject.id
       : session?.user.role === 'client'
