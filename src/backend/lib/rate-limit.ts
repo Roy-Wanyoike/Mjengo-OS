@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getToken } from 'next-auth/jwt'
 import { db } from '@/backend/lib/db'
 import { getSessionFromReq, unauthorized, type GuardSession } from '@/backend/lib/guard'
+import { mutationSafetyDenied } from '@/backend/lib/mutation-safety'
 import { createSqliteStores } from '@/backend/lib/rate-limit-sqlite'
 
 /**
@@ -598,11 +599,14 @@ export type AiPolicyResult =
  * anomaly data. This gate enforces, in order:
  *   1. session via getSessionFromReq (guard.ts) → 401
  *   2. role allowlist AI_ROUTE_ROLES → 403 (honest message)
- *   3. rate limit (default 10/min per user, per route) → 429
- *   4. raw-body byte cap (default 128 KB, per-route `maxBytes` override for
+ *   3. mutation safety (SEC-1 — same default-on gate as route-kit's
+ *      pipeline: same-origin browsers pass, cross-site browsers 403,
+ *      non-browser bodies need the JSON content type) → 403/415
+ *   4. rate limit (default 10/min per user, per route) → 429
+ *   5. raw-body byte cap (default 128 KB, per-route `maxBytes` override for
  *      the media routes — declared Content-Length precheck + post-read byte
  *      count, BEFORE JSON.parse) → 400 honest size error
- *   5. body shape: unknown top-level fields and mistyped fields → 400;
+ *   6. body shape: unknown top-level fields and mistyped fields → 400;
  *      a `projectId` that is present but not an existing Project → 404.
  * It lives in this module (not guard.ts) because wave-1 file ownership pins
  * guard.ts to W1-PERM — guard.ts is imported read-only here.
@@ -646,7 +650,13 @@ export async function enforceAiRoutePolicy(
     }
   }
 
-  // 3. Rate limit before parsing the body — malformed spam counts too.
+  // 3. Mutation safety (SEC-1) — the AI routes are browser-reachable
+  //    POST/PUT surfaces; the gate is the SAME one route-kit's pipeline
+  //    applies (mirrors the auth-then-gate ordering there).
+  const unsafe = mutationSafetyDenied(req)
+  if (unsafe) return { ok: false, response: unsafe }
+
+  // 4. Rate limit before parsing the body — malformed spam counts too.
   const limited = await enforceRateLimit(
     req,
     opts.bucket,
@@ -655,7 +665,7 @@ export async function enforceAiRoutePolicy(
   )
   if (limited) return { ok: false, response: limited }
 
-  // 4. Body shape — the byte cap first (BE-5, issue #105): the declared
+  // 5. Body shape — the byte cap first (BE-5, issue #105): the declared
   //    Content-Length precheck refuses an oversized request before the body
   //    is buffered at all; the post-read count catches a lying small header.
   const maxBytes = opts.maxBytes ?? AI_ROUTE_DEFAULT_MAX_BODY_BYTES
@@ -702,7 +712,7 @@ export async function enforceAiRoutePolicy(
     }
   }
 
-  // 5. projectId must reference a real project when supplied.
+  // 6. projectId must reference a real project when supplied.
   const rawProjectId = obj.projectId
   const projectId = typeof rawProjectId === 'string' && rawProjectId ? rawProjectId : undefined
   if (projectId !== undefined) {

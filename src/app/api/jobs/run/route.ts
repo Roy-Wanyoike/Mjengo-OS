@@ -10,11 +10,12 @@
 //      NextAuth session, so when env JOBS_RUN_TOKEN is set, a request
 //      presenting `Authorization: Bearer <token>` that matches it in
 //      constant time (src/backend/lib/jobs-token.ts) runs the SAME
-//      pipeline (origin gate → 10/min rate limit → tolerate-invalid
-//      body → redacting error path) via route-kit's session-optional
-//      publicRoute. A presented-but-invalid token 401s — fail closed.
-//      Unset env = the bearer path is disabled entirely and the request
-//      flows through the session path unchanged (no default token).
+//      pipeline (10/min rate limit → tolerate-invalid body → redacting
+//      error path; the SEC-1 mutation gate is skipped on BOTH paths —
+//      machine route) via route-kit's session-optional publicRoute. A
+//      presented-but-invalid token 401s — fail closed. Unset env = the
+//      bearer path is disabled entirely and the request flows through the
+//      session path unchanged (no default token).
 //
 // What actually schedules the drain: the docker-compose `jobs-tick`
 // sidecar, deploy/systemd/mjengo-jobs.timer, or any external cron —
@@ -44,6 +45,10 @@ export { GET } from '@/backend/api/jobs'
 const bearerPost = publicRoute(
   {
     scope: 'api/jobs/run POST',
+    // SEC-1: machine route (same skip as the session twin in
+    // src/backend/api/jobs.ts) — the scheduler's POST carries no
+    // browser-shaped headers by design.
+    skipMutationSafety: true,
     // Rate limit (S-SEC): 10 runs/min — each call drains up to 10
     // background jobs (expensive), and an unvalidated projectId
     // otherwise reaches prisma on every request.
