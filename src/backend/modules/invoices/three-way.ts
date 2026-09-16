@@ -280,6 +280,15 @@ export function computeLedgerConsistency(input: {
   releasedMilestoneIds: string[]
   paidInvoiceReferences: string[]
 }): LedgerCheck {
+  // type:'reversal' rows are deliberately excluded from BOTH scans (issue
+  // #213 makes the exclusion explicit): their money effect lives entirely in
+  // the mirrored ledger transaction (and, since #213, the escrow projection
+  // restore that runs in the same db.$transaction) — summing their negative
+  // amounts into releases/walletInvoicePayments would double-negate spends
+  // the entity states still legitimately back. A reversal also does NOT
+  // un-release a milestone or un-pay an invoice (documented terminal state —
+  // see reverseTransaction in wallet/service.ts), so the entity-state sets
+  // below remain the honest backing for every debit-side ledger row.
   const milestoneRows = input.transactions.filter((t) => t.type === 'milestone')
   const invoiceRows = input.transactions.filter((t) => t.type === 'invoice')
 

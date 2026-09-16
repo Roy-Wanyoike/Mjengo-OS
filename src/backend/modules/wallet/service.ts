@@ -17,7 +17,7 @@ import { db } from '@/backend/lib/db'
 import {
   postLedgerTransaction,
   postLedgerTransactionInTx,
-  reverseLedgerTransaction,
+  reverseLedgerTransactionInTx,
   ensureAccount,
   ensureAccountTx,
   derivedBalance,
@@ -735,6 +735,48 @@ export async function transferWallet(projectId: string, p: any) {
 
 // ---- Reversals & manual journals (spec §39) ----
 
+/**
+ * Reverse a posted transaction (issue #213 hardening).
+ *
+ * LEDGER-BACKED ROWS: the mirrored reversal post, the EscrowWallet.balance
+ * projection restore and the `[reversed by LX-…]` marker on the original row
+ * ALL run in ONE db.$transaction — the same pattern the deposit/release
+ * paths use for their projection writes. Before #213 the reversal mirrored
+ * the ledger entries (restoring the DERIVED escrow balance) but never
+ * touched the projection, so every escrow-spend reversal permanently broke
+ * derived-vs-projected consistency (the Money-tab chip read "Drift —
+ * investigate" forever) and the restored money was UNSPENDABLE — every
+ * future spendEscrowInTx checks the projection, which still carried the
+ * decrement. The restore is derived, not hardcoded: the projection moves by
+ * the NEGATED escrow effect of the ORIGINAL txn's ESCROW:<projectId> legs
+ * (debits − credits), so spend reversals increment (escrow money comes
+ * back) and top-up reversals decrement (escrow money leaves) — direction
+ * falls out of the ledger, never out of a guess.
+ *
+ * POST-REVERSAL ENTITY STATES (documented terminal state — issue #213): a
+ * reversal restores the MONEY, not the decision. The milestone stays
+ * `released`, the invoice stays `paid`, the payment request stays `paid` —
+ * each is a historical decision with its audit trail, and money history is
+ * append-only (spec §39). The operator route for "the client approved the
+ * wrong milestone": reverse the release here (the money returns to escrow,
+ * spendable again — the re-release regression test pins this), then re-issue
+ * the spend as a NEW payment request / variation order / new milestone; the
+ * original decision history stays intact. Re-opening the ladder from
+ * `released` is deliberately NOT offered (that would rewrite decision
+ * history, which is immutable by doctrine).
+ *
+ * M-PESA RAIL REVERSALS (known limitation, deliberately unwired): the books
+ * are corrected here only — the customer's M-Pesa is never asked to return
+ * the money. The provider seam's refund() (daraja.ts, reversal request)
+ * exists and is tested but has ZERO callers by design: firing it needs the
+ * separate reversal credentials (#43) AND the reversal ResultURL callback
+ * is still unprocessed, so wiring it now would be a promise the rail cannot
+ * keep. An operator reconciles the rail side via the M-Pesa portal.
+ *
+ * LEGACY (pre-ledger) ROWS: the compensating CASH/EXPENSE post is
+ * projection-neutral by design — those rows predate the escrow projection
+ * discipline and never carried one.
+ */
 export async function reverseTransaction(projectId: string, p: any) {
   // BE-2 (issue #103): reversals rewrite money history — finance/admin only,
   // gated BEFORE any transaction lookup.
@@ -783,28 +825,71 @@ export async function reverseTransaction(projectId: string, p: any) {
     return { reversalTransactionId: compensating.id, ledgerRef: reversalLedger.ref }
   }
 
-  const ledgerTxn = await db.ledgerTransaction.findUnique({ where: { id: txn.ledgerTxnId } })
+  const ledgerTxn = await db.ledgerTransaction.findUnique({
+    where: { id: txn.ledgerTxnId },
+    include: { entries: { include: { account: true } } },
+  })
   if (!ledgerTxn) throw new Error('Backing ledger transaction not found')
   // BE-7 (issue #103): the REAL session actor on the mirrored reversal too.
-  const reversal = await reverseLedgerTransaction(ledgerTxn.id, String(p.reason ?? 'correction'), actor.name, actor.role)
-  const compensating =
-    (await db.transaction.findFirst({ where: { ledgerTxnId: reversal.id } })) ??
-    (await db.transaction.create({
-      data: {
-        projectId,
-        type: 'reversal',
-        amount: -txn.amount,
-        method: txn.method,
-        reference: reversal.ref,
-        // Phase cost-code (issue #39): same as the legacy branch — the
-        // reversal negates the original row's phase spend, so its code is
-        // copied (net attribution exact; null originals stay null).
-        phaseId: txn.phaseId,
-        ledgerTxnId: reversal.id,
-        note: `Reversal of ${txn.id.slice(-6)}: ${p.reason ?? 'correction'}`,
-        date: new Date(),
-      },
-    }))
+  // Issue #213: the mirrored post, the escrow projection restore and the
+  // original-row marker commit as ONE unit — a failure anywhere (e.g. the
+  // 'already reversed' guard racing a concurrent reversal) rolls back all of
+  // it, so the projection can never drift from the ledger again.
+  const { reversal, compensating } = await db.$transaction(async (tx) => {
+    const reversal = await reverseLedgerTransactionInTx(
+      tx,
+      ledgerTxn,
+      String(p.reason ?? 'correction'),
+      actor.name,
+      actor.role,
+    )
+    // Escrow projection restore (issue #213): when the ORIGINAL txn touched
+    // ESCROW:<projectId>, its posting kept the projection in sync (decrement
+    // on spend, increment on top-up) — the reversal must apply the NEGATED
+    // effect. Delta = original debits − credits on the escrow account:
+    //   · spend reversal (original leg: debit)  → +amount (money back)
+    //   · top-up reversal (original leg: credit) → −amount (money out)
+    // Derived from the mirrored legs' source of truth, never hardcoded.
+    const escrowCode = `ESCROW:${projectId}`
+    const escrowLegs = ledgerTxn.entries.filter((e) => e.account.code === escrowCode)
+    if (escrowLegs.length > 0) {
+      const delta = escrowLegs.reduce((sum, e) => sum + (e.side === 'debit' ? e.amount : -e.amount), 0)
+      if (delta !== 0) {
+        const escrowAccount = await ensureAccountTx(tx, escrowCode)
+        await tx.escrowWallet.upsert({
+          where: { projectId },
+          create: { projectId, balance: delta, ledgerAccountId: escrowAccount.id },
+          update: { balance: { increment: delta }, ledgerAccountId: escrowAccount.id },
+        })
+      }
+    }
+    const compensating =
+      (await tx.transaction.findFirst({ where: { ledgerTxnId: reversal.id } })) ??
+      (await tx.transaction.create({
+        data: {
+          projectId,
+          type: 'reversal',
+          amount: -txn.amount,
+          method: txn.method,
+          reference: reversal.ref,
+          // Phase cost-code (issue #39): same as the legacy branch — the
+          // reversal negates the original row's phase spend, so its code is
+          // copied (net attribution exact; null originals stay null).
+          phaseId: txn.phaseId,
+          ledgerTxnId: reversal.id,
+          note: `Reversal of ${txn.id.slice(-6)}: ${p.reason ?? 'correction'}`,
+          date: new Date(),
+        },
+      }))
+    // Marker on the original legacy row — parity with the legacy branch
+    // (issue #213 AC): the ledger-backed branch used to skip this, so the
+    // original row never said it had been reversed.
+    await tx.transaction.update({
+      where: { id: txn.id },
+      data: { note: `${txn.note ?? ''} [reversed by ${reversal.ref}]`.trim() },
+    })
+    return { reversal, compensating }
+  })
   return { reversalTransactionId: compensating.id, ledgerRef: reversal.ref }
 }
 

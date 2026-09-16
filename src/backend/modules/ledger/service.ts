@@ -187,16 +187,36 @@ export async function postLedgerTransactionInTx(tx: Prisma.TransactionClient, in
   return txn
 }
 
-/** Reverse a posted transaction with mirrored entries (never edit history). */
-export async function reverseLedgerTransaction(txnId: string, reason: string, postedBy: string, postedRole: string) {
-  const original = await db.ledgerTransaction.findUnique({
-    where: { id: txnId },
-    include: { entries: { include: { account: true } } },
-  })
-  if (!original) throw new Error('Ledger transaction not found')
-  if (original.status === 'reversed') throw new Error('Transaction already reversed')
+/**
+ * A loaded ledger transaction with its entries (and their account codes) —
+ * the shape `reverseLedgerTransactionInTx` reverses. Structural so both the
+ * real Prisma client and in-memory test stubs satisfy it.
+ */
+export interface ReversibleLedgerTxn {
+  id: string
+  ref: string
+  projectId: string | null
+  status: string
+  entries: { side: string; amount: number; memo: string | null; account: { code: string } }[]
+}
 
-  const reversal = await postLedgerTransaction({
+/**
+ * Reverse a posted transaction with mirrored entries, INSIDE a caller-owned
+ * db.$transaction (issue #213) — the in-tx twin of postLedgerTransactionInTx.
+ * Callers (the wallet service's reverseTransaction) wrap this with their own
+ * projection updates so the mirrored post and every derived-cache repair
+ * commit or roll back as ONE unit. The original must be pre-loaded with
+ * `include: { entries: { include: { account: true } } }`.
+ */
+export async function reverseLedgerTransactionInTx(
+  tx: Prisma.TransactionClient,
+  original: ReversibleLedgerTxn,
+  reason: string,
+  postedBy: string,
+  postedRole: string,
+) {
+  if (original.status === 'reversed') throw new Error('Transaction already reversed')
+  return postLedgerTransactionInTx(tx, {
     projectId: original.projectId,
     description: `REVERSAL of ${original.ref} — ${reason}`,
     lines: original.entries.map((e) => ({
@@ -209,7 +229,16 @@ export async function reverseLedgerTransaction(txnId: string, reason: string, po
     postedRole,
     reversalOfId: original.id,
   })
-  return reversal
+}
+
+/** Reverse a posted transaction with mirrored entries (never edit history). */
+export async function reverseLedgerTransaction(txnId: string, reason: string, postedBy: string, postedRole: string) {
+  const original = await db.ledgerTransaction.findUnique({
+    where: { id: txnId },
+    include: { entries: { include: { account: true } } },
+  })
+  if (!original) throw new Error('Ledger transaction not found')
+  return db.$transaction((tx) => reverseLedgerTransactionInTx(tx, original, reason, postedBy, postedRole))
 }
 
 /** Derived balance for an account — the ONLY way balance is known (spec §39). */
