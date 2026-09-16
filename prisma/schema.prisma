@@ -10,6 +10,13 @@ datasource db {
 model Project {
   id                 String              @id @default(cuid())
   shareToken         String              @unique @default(cuid())
+  // SEC-3r (issue #172): when the current shareToken dies. Nullable on
+  // purpose — NULL = a grandfathered token minted before the expiry feature
+  // (pre-migration-11 rows, seeds): those keep the old never-expires contract
+  // and pick up a TTL the moment the link is rotated via share.regenerate.
+  // Every NEW mint (project creation, share.regenerate) stamps now+TTL
+  // (SHARE_TOKEN_TTL_DAYS, default 90).
+  shareTokenExpiresAt DateTime?
   name               String
   client             String
   clientType         String              @default("diaspora") // diaspora, local, company

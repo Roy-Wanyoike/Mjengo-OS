@@ -20,7 +20,7 @@ import type { DrawPackLink } from '@/backend/modules/drawpack/service'
 import { DrawPackViewer } from '@/frontend/mjengo/draw-pack-viewer'
 import { useT } from '@/frontend/i18n/provider'
 import {
-  Banknote, BookOpen, Camera, Check, CheckCheck, FileCheck2, Hourglass, ImageOff, Loader2, Lock, Minus, Plus, Send, ShieldCheck, Sparkles, TrendingUp, Wallet, X,
+  Banknote, BookOpen, Camera, Check, CheckCheck, FileCheck2, Hourglass, ImageOff, Link2, Loader2, Lock, Minus, Plus, Send, ShieldCheck, Sparkles, TrendingUp, Wallet, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, dateShort } from '@/frontend/lib/format'
@@ -369,8 +369,13 @@ export function MoneyTab() {
   }
 
   async function decideMilestone(m: MilestoneRow, decision: 'approve' | 'reject') {
+    // confirm: true (issue #172 / SEC-3r) — the SERVER demands this explicit
+    // flag for money decisions dispatched from a share link (the dialog the
+    // user just clicked through is the intent). Harmless extra field on the
+    // session paths (client-role / owner), which the appliers ignore.
     const ok = await dispatch('milestone.decide', {
-      id: m.id, decision, by: clientName, note: decision === 'reject' && rejectNote.trim() ? rejectNote.trim() : undefined,
+      id: m.id, decision, by: clientName, confirm: true,
+      note: decision === 'reject' && rejectNote.trim() ? rejectNote.trim() : undefined,
     }, `Milestone ${decision}: ${m.name}`)
     if (ok) {
       toast.success(decision === 'approve'
@@ -401,8 +406,10 @@ export function MoneyTab() {
   }
 
   async function decideVariation(v: VariationRow, decision: 'approve' | 'reject') {
+    // confirm: true (issue #172 / SEC-3r) — same gate as decideMilestone.
     const ok = await dispatch('variation.decide', {
-      id: v.id, decision, by: clientName, note: decision === 'reject' && rejectNote.trim() ? rejectNote.trim() : undefined,
+      id: v.id, decision, by: clientName, confirm: true,
+      note: decision === 'reject' && rejectNote.trim() ? rejectNote.trim() : undefined,
     }, `Variation ${decision}: ${v.title}`)
     if (ok) {
       toast.success(decision === 'approve'
@@ -1344,6 +1351,16 @@ export function MoneyTab() {
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
             {t('money.appr.note')}
           </p>
+          {/* Issue #172 (SEC-3r): on the share-link surface this confirmation
+              dialog is exactly what the server's confirm flag demands — say
+              so, so the step reads as security, not friction. Owner/
+              client-role sessions never see the line. */}
+          {Boolean(shareToken) && (
+            <p className="flex items-start gap-1.5 rounded-md bg-amber-50 p-2.5 text-xs leading-relaxed text-amber-900">
+              <Link2 className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+              {t('money.appr.shareNote')}
+            </p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setApproveConfirm(null)}>{t('money.cancel')}</Button>
             <Button

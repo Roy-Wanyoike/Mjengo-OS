@@ -22,6 +22,7 @@ import {
 } from '@/backend/modules/wallet/service'
 import { getProvider } from '@/backend/modules/wallet/providers'
 import { currentActor } from '@/backend/modules/wallet/session'
+import { shareTokenExpiryFromNow } from '@/backend/lib/share-token'
 import { INTEL_ACTIONS, applyIntelAction } from '@/backend/actions/intel'
 import { AI_ACTIONS, applyAiAction } from '@/backend/actions/ai'
 import { loadLandSlice } from '@/backend/modules/land/repository'
@@ -419,6 +420,20 @@ const TEAM_ACTIONS: readonly string[] = ['team.add', 'team.update', 'team.remove
 /** Roles that may run an AI draw review (W6-1) — clients read notes via the share link. */
 const AI_REVIEW_ROLES: readonly string[] = ['contractor', 'admin']
 
+/** Roles that may rotate a client's share link (issue #172 / SEC-3r).
+ *
+ * share.regenerate kills the client's live link and mints a new bearer
+ * capability — that is acting FOR the client, so it belongs to the same
+ * owner roles that can already act for them (TEAM_ROLES minus supervisor:
+ * contractor/admin). Previously ANY non-client/supplier session (a QS, a
+ * procurement user) could rotate a client's link mid-build; the shared
+ * role-gate below now refuses everyone else server-side, mirroring the
+ * TEAM_ACTIONS pattern. */
+const SHARE_ROTATE_ROLES: readonly string[] = ['contractor', 'admin']
+
+/** The share-link lifecycle action gated above (issue #172). */
+const SHARE_ROTATE_ACTIONS: readonly string[] = ['share.regenerate']
+
 /** §33 professional roles a roster entry may carry. */
 const PROJECT_TEAM_ROLES: readonly string[] = ['contractor', 'supervisor', 'qs', 'architect', 'engineer', 'surveyor', 'client_rep']
 
@@ -607,6 +622,13 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
   if ((AI_ACTIONS as readonly string[]).includes(type) && !AI_REVIEW_ROLES.includes(effectiveRole)) {
     throw new Error(
       `Only a contractor or admin may run an AI review action — "${effectiveRole}" is not permitted. Clients read AI output through their share link.`,
+    )
+  }
+  // Issue #172 (SEC-3r): rotating a share link is acting for the client —
+  // contractor/admin only (see SHARE_ROTATE_ROLES above).
+  if (SHARE_ROTATE_ACTIONS.includes(type) && !SHARE_ROTATE_ROLES.includes(effectiveRole)) {
+    throw new Error(
+      `Only a contractor or admin may rotate a client share link — "${effectiveRole}" is not permitted.`,
     )
   }
   // §24 client-direct ordering: a client (or share-link) caller may reach the
@@ -1542,14 +1564,21 @@ async function applyCoreAction(type: ActionType, payload: any, projectId: string
     }
 
     case 'share.regenerate': {
-      // Rotate the read-only client share link (invalidates the old token)
+      // Rotate the read-only client share link (invalidates the old token).
+      // Issue #172 (SEC-3r): every re-mint also RESETS the expiry window
+      // (now + SHARE_TOKEN_TTL_DAYS, default 90) — a grandfathered
+      // never-expires token picks up a real TTL here, and the rotation is
+      // audited by applyAction's logAudit like every action.
       const { id } = payload
       if (!id) throw new Error('project id required')
       const existing = await db.project.findUnique({ where: { id } })
       if (!existing) throw new Error('Project not found')
       // crypto-strong 96-bit token (Math.random is predictable — this is a read-only capability secret)
       const shareToken = `c${randomBytes(12).toString('hex')}`
-      const project = await db.project.update({ where: { id }, data: { shareToken } })
+      const project = await db.project.update({
+        where: { id },
+        data: { shareToken, shareTokenExpiresAt: shareTokenExpiryFromNow() },
+      })
       return { shareToken: project.shareToken }
     }
 
