@@ -59,6 +59,19 @@ export function ContactForm({ config }: { config: Config }) {
       if (res.ok && json.ok) {
         setStatus("success");
         track(config.analyticsEvent, { source: config.source });
+        // Issue #146: the early-access signup IS the demo request in the pilot
+        // posture — fire the (previously dead) demo_requested funnel event too,
+        // once per session so repeat submits don't double-count.
+        if (config.source === "signup") {
+          try {
+            if (sessionStorage.getItem("demo_requested") !== "1") {
+              sessionStorage.setItem("demo_requested", "1");
+              track("demo_requested", { source: config.source });
+            }
+          } catch {
+            // sessionStorage unavailable (private mode) — the event simply doesn't fire.
+          }
+        }
         form.reset();
         return;
       }
@@ -124,7 +137,7 @@ export function ContactForm({ config }: { config: Config }) {
 
       <div className="grid gap-5 sm:grid-cols-2">
         <Field label="Role" htmlFor="cf-role" error={fieldErrors.role}>
-          <select id="cf-role" name="role" className={cn(inputBase, "appearance-none bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 12 12%22%3E%3Cpath d=%22M2 4l4 4 4-4%22 fill=%22none%22 stroke=%22%236B706D%22 stroke-width=%221.5%22/%3E%3C/svg%3E')] bg-[position:right_0.9rem_center] bg-no-repeat pr-9")} defaultValue="">
+          <select id="cf-role" name="role" required aria-required="true" className={cn(inputBase, "appearance-none bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 12 12%22%3E%3Cpath d=%22M2 4l4 4 4-4%22 fill=%22none%22 stroke=%22%236B706D%22 stroke-width=%221.5%22/%3E%3C/svg%3E')] bg-[position:right_0.9rem_center] bg-no-repeat pr-9")} defaultValue="">
             <option value="" disabled>Choose your role</option>
             {(config.roles ?? DEFAULT_ROLES).map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
