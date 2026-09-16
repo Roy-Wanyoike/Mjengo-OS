@@ -35,16 +35,38 @@ interface Payload {
 const ENDPOINT = process.env.NEXT_PUBLIC_ANALYTICS_ENDPOINT;
 const isDev = process.env.NODE_ENV !== "production";
 
-/** Route → canonical "page viewed" event mapping. */
+// Issue #134: an unset endpoint means ZERO traffic/funnel measurement — fail
+// loud ONCE in dev so misconfiguration is obvious, never in production.
+let warnedNoEndpoint = false;
+if (isDev && !ENDPOINT && typeof console !== "undefined") {
+  if (!warnedNoEndpoint) {
+    warnedNoEndpoint = true;
+    console.warn(
+      "[analytics] NEXT_PUBLIC_ANALYTICS_ENDPOINT is not set — analytics events are being dropped (dev only; set it in mjengoos-website/.env.local to collect).",
+    );
+  }
+}
+
+/** Route → canonical "page viewed" event mapping (all 19 routes — issue #134). */
 const ROUTE_EVENTS: Record<string, string> = {
   "/": "page_viewed",
   "/platform": "platform_viewed",
   "/land-verification": "land_verification_viewed",
   "/marketplace": "marketplace_viewed",
-  "/materials": "marketplace_viewed",
+  "/materials": "materials_viewed",
   "/wallet": "wallet_viewed",
   "/ai": "ai_viewed",
   "/pricing": "pricing_viewed",
+  "/about": "about_viewed",
+  "/contact": "contact_viewed",
+  "/signup": "signup_viewed",
+  "/projects": "projects_viewed",
+  "/professionals": "professionals_viewed",
+  "/resources": "resources_viewed",
+  "/security": "security_viewed",
+  "/privacy": "privacy_viewed",
+  "/terms": "terms_viewed",
+  "/solutions": "solutions_viewed",
 };
 
 export function track(event: AnalyticsEvent, props?: Record<string, unknown>): void {
