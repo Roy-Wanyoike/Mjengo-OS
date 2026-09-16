@@ -1,4 +1,5 @@
 import { FINANCE_ROLES } from '@/backend/lib/guard'
+import { logAudit, summarizeAction } from '@/backend/lib/audit'
 import { route } from '@/backend/lib/route-kit'
 import { transferWallet, walletWithBalance } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
@@ -54,14 +55,43 @@ export const POST = route(
       return v1Err(422, 'Cannot transfer to the same wallet', 'toWalletId')
     }
     if (sameRef) return v1Err(422, 'Cannot transfer to the same wallet', 'toWalletId')
-    return await withIdempotency(req, 'v1.wallet.transfer', ownerProjectId || null, () =>
-      transferWallet(ownerProjectId, {
-        fromWalletId: id,
-        toWalletId: body.toWalletId,
-        amount: body.amount,
-        note: body.note,
-        by: session.user.name,
-      }),
+    return await withIdempotency(
+      req,
+      'v1.wallet.transfer',
+      ownerProjectId || null,
+      async () => {
+        const result = await transferWallet(ownerProjectId, {
+          fromWalletId: id,
+          toWalletId: body.toWalletId,
+          amount: body.amount,
+          note: body.note,
+          by: session.user.name,
+        })
+        // DB-4: v1 money mutations write audit events — only when the money
+        // actually moved (see wallet-deposit.ts for the replay/failure notes).
+        // The service returns the from/to codes; entity-scoped to the SOURCE
+        // wallet (the URL resource).
+        await logAudit(
+          ownerProjectId || session.user.projectId || 'platform',
+          'wallet',
+          { name: session.user.name, role: session.user.role },
+          summarizeAction('wallet.transfer', { amount: body.amount }, result),
+          {
+            type: 'wallet.transfer',
+            amount: body.amount,
+            fromWalletId: id,
+            toWalletId: body.toWalletId,
+            note: body.note ?? null,
+            ledgerRef: result.ledgerRef,
+          },
+          {
+            entity: 'WalletAccount',
+            entityId: wallet.id,
+            after: { from: result.from, to: result.to, amount: body.amount },
+          },
+        )
+        return result
+      },
       body, // payload fingerprint: a key reused with a different body → 409 (BE-9)
     )
   },

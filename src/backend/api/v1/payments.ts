@@ -1,5 +1,6 @@
 import { PAYMENT_ROLES } from '@/backend/lib/guard'
 import { db } from '@/backend/lib/db'
+import { logAudit, summarizeAction } from '@/backend/lib/audit'
 import { route } from '@/backend/lib/route-kit'
 import { payPaymentRequest } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
@@ -27,7 +28,8 @@ import { mapServiceError, v1Err, V1_MUTATION_LIMIT } from './respond'
  * The payment runs through the provider seam (spec §40, simulated rails) and
  * posts a balanced double-entry ledger transaction; the legacy Transaction row
  * gains costCode + ledgerTxnId. Every financial transaction is audited via
- * applyAction-style trails (the service notifies + the caller can audit).
+ * applyAction-style trails: the service notifies, and this route writes the
+ * AuditEvent (DB-4 — the "the caller can audit" note below is now true).
  *
  * Feature flag (spec §81, task 9-a): gated by `wallet` — OFF → 403 for
  * non-admin sessions BEFORE the request is resolved or money moves (admins
@@ -66,15 +68,45 @@ export const POST = route(
       req,
       'v1.payment.pay',
       request.projectId,
-      () =>
-        payPaymentRequest(request.projectId, {
+      async () => {
+        const result = await payPaymentRequest(request.projectId, {
           id: request.id,
           method: body.method,
           reference: body.reference,
           costCode: body.costCode,
           paidBy: session.user.name,
           paidByRole: session.user.role,
-        }),
+        })
+        // DB-4: v1 money mutations write audit events — only when the money
+        // actually moved (replays serve the stored response without re-running
+        // this; a failed payment throws before the audit line). Mirrors the
+        // /api/actions payment.pay trail: same kind, same summarizer.
+        await logAudit(
+          request.projectId,
+          'payment',
+          { name: session.user.name, role: session.user.role },
+          summarizeAction('payment.pay', { method: body.method }, result),
+          {
+            type: 'payment.pay',
+            paymentRequestId: request.id,
+            requestCode: request.requestCode,
+            amount: request.amount,
+            payee: request.payee,
+            method: body.method ?? request.method,
+            reference: body.reference ?? null,
+            costCode: body.costCode ?? null,
+            ledgerRef: result.ledgerRef,
+            transactionId: result.transactionId,
+          },
+          {
+            entity: 'PaymentRequest',
+            entityId: request.id,
+            before: { status: request.status },
+            after: { status: 'paid' },
+          },
+        )
+        return result
+      },
       body, // payload fingerprint: a key reused with a different body → 409 (BE-9)
     )
   },
