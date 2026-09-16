@@ -729,6 +729,72 @@ describe('validation — fail-closed BEFORE any delivery rows are written', () =
   })
 })
 
+describe('over-delivery (#201) — beyond the ordered qty is REJECTED, never silently posted', () => {
+  it('an over-received line is refused with an honest per-line error and NOTHING is written', async () => {
+    const deliveryId = seed()
+    await expect(
+      receiveDelivery(P1, {
+        deliveryId,
+        lines: [{ orderLineId: 'pl_1', qtyReceived: 120 }, { orderLineId: 'pl_2', qtyReceived: 20 }],
+        photoIds: ['att_a'],
+      }),
+    ).rejects.toThrow(/Cement.*received 120 but only 100 bag were ordered.*not accepted at receive/)
+    // Zero partial state: still awaiting receive, no lines, no links, no
+    // Site Store rows, no notifications.
+    expect((state.deliveries.get(deliveryId) as Record<string, unknown>).status).toBe('dispatched')
+    expect(state.writes.lineDeleteMany).toBe(0)
+    expect(state.writes.deliveryUpdate).toBe(0)
+    expect([...state.deliveryLines.values()]).toHaveLength(0)
+    expect(links()).toHaveLength(0)
+    expect(state.stockMovements).toHaveLength(0)
+    expect(state.inventoryItems.size).toBe(0)
+    expect(state.notifications).toHaveLength(0)
+  })
+
+  it('a mixed short + over delivery is refused too — the over line blocks the whole receive', async () => {
+    const deliveryId = seed()
+    await expect(
+      receiveDelivery(P1, {
+        deliveryId,
+        // pl_1 short (90 < 100) AND pl_2 over (25 > 20): the over bound fires
+        // first-class; the short flag never gets a chance to record quietly.
+        lines: [{ orderLineId: 'pl_1', qtyReceived: 90 }, { orderLineId: 'pl_2', qtyReceived: 25 }],
+      }),
+    ).rejects.toThrow(/Ballast.*received 25 but only 20 tonne were ordered/)
+    expect((state.deliveries.get(deliveryId) as Record<string, unknown>).status).toBe('dispatched')
+    expect(state.stockMovements).toHaveLength(0)
+    expect(state.notifications).toHaveLength(0)
+  })
+
+  it('the bound is on what ARRIVED — over is over even when rejections bring the net back under the order', async () => {
+    const deliveryId = seed()
+    await expect(
+      receiveDelivery(P1, {
+        deliveryId,
+        // 105 arrived (5 over the 100 ordered), 10 rejected → net 95 ≤ 100.
+        // Still refused: counting more than was ordered is the over-delivery.
+        lines: [{ orderLineId: 'pl_1', qtyReceived: 105, qtyRejected: 10, condition: 'damaged' }, { orderLineId: 'pl_2', qtyReceived: 20 }],
+      }),
+    ).rejects.toThrow(/received 105 but only 100/)
+    expect(state.stockMovements).toHaveLength(0)
+  })
+
+  it('the boundary is exact: qtyReceived === qtyOrdered is a clean full receive (unchanged behavior)', async () => {
+    const deliveryId = seed()
+    const result = await receiveDelivery(P1, {
+      deliveryId,
+      lines: [{ orderLineId: 'pl_1', qtyReceived: 100 }, { orderLineId: 'pl_2', qtyReceived: 20 }],
+    })
+    expect(result.status).toBe('received')
+    expect(result.shortLines).toBe(0)
+    const cementItem = [...state.inventoryItems.values()].find((i) => i.materialName === 'Cement')
+    const netCement = state.stockMovements
+      .filter((m) => m.type === 'received' && m.inventoryItemId === cementItem?.id)
+      .reduce((s, m) => s + (m.quantity as number), 0)
+    expect(netCement).toBe(100)
+  })
+})
+
 describe('role policy — who may attach is decided upstream; the service enforces ownership', () => {
   it('supplyCan: only the site team may run delivery.receive (the guards\u2019 matrix)', () => {
     for (const role of ['contractor', 'supervisor', 'procurement', 'finance', 'admin'] as const) {

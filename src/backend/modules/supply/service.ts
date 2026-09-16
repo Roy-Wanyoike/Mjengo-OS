@@ -1063,6 +1063,18 @@ export async function linkDeliveryPhotos(
  * rides the delivery row for review, matching seeded PO-2026-000009; payment
  * release stays gated by the invoices module's 3-way match.
  *
+ * OVER-DELIVERY RULE (#201): qtyReceived > qtyOrdered on ANY line is REJECTED
+ * up front — over-delivery is a decision, never a silent posting. Posture
+ * (conservative by design): the receive accepts at most the ordered quantity
+ * per line; excess stock must be arranged as a NEW purchase order, not
+ * smuggled in through the receive count. Rationale: one delivery per PO
+ * (dispatchOrder refuses a second dispatch record), so qtyOrdered IS the
+ * remaining upper bound — no accumulation to track; short/damaged variances
+ * stay flaggable because they are losses against paperwork, while overage
+ * inflates the derived Site Store ledger AND the supplier's receivable with
+ * no review gate at the receiving moment (the 3-way match only catches it at
+ * invoice time, relative to billed qty).
+ *
  * INVENTORY INTEGRATION (spec §28/§33/§34 — F-PROCURE): the same receive also
  * posts the store ledger — per line, net received = qtyReceived − qtyRejected
  * becomes a 'received' StockMovement (InventoryItem upsert keyed material +
@@ -1148,6 +1160,14 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
     if (qtyRejected < 0) throw new Error(`Line "${orderLine.name}": rejected quantity must be zero or more`)
     if (qtyReceived - qtyRejected < 0) {
       throw new Error(`Line "${orderLine.name}": rejected (${qtyRejected}) cannot exceed what arrived (${qtyReceived})`)
+    }
+    // #201 — the over-delivery bound: what ARRIVED can never exceed what was
+    // ordered (one delivery per PO, so qtyOrdered is the remaining bound).
+    // Rejected up front, before any row is written — see the rule above.
+    if (qtyReceived > orderLine.qty) {
+      throw new Error(
+        `Line "${orderLine.name}": received ${qtyReceived} but only ${orderLine.qty} ${orderLine.unit} were ordered — over-delivery is not accepted at receive. Count at most the ordered quantity (short/damaged lines are flagged for review); arrange the excess with the supplier on a new purchase order.`,
+      )
     }
     const conditionRaw = str(rec.condition) ?? 'ok'
     const condition = ['ok', 'damaged', 'partial'].includes(conditionRaw) ? conditionRaw : 'ok'

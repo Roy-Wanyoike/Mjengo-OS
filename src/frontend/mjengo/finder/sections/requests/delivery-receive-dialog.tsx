@@ -122,6 +122,13 @@ function DeliveryReceiveForm({
     const received = Number(counts[l.id])
     return Number.isFinite(received) && received < l.qty
   })
+  // #201 — over-entry preview: the server REJECTS any line received beyond
+  // the ordered qty (over-delivery is a decision, not a silent posting), so
+  // the dialog flags it before submit instead of letting it die server-side.
+  const overPreview = order.lines.filter((l) => {
+    const received = Number(counts[l.id])
+    return Number.isFinite(received) && received > l.qty
+  })
   const rejectedTotal = order.lines.reduce((s, l) => s + (Number(rejected[l.id]) || 0), 0)
 
   function captureLocation() {
@@ -223,6 +230,15 @@ function DeliveryReceiveForm({
       toast.error('A rejected count cannot exceed what arrived on that line')
       return
     }
+    // #201 — same bound the server enforces: refuse the submit locally so the
+    // offline outbox never queues a payload the server will reject.
+    if (overPreview.length > 0) {
+      const l = overPreview[0]
+      toast.error(
+        `${l.name}: received ${fmtQty(Number(counts[l.id]))} but only ${fmtQty(l.qty)} ${l.unit} were ordered — over-delivery is not accepted. Count at most the ordered quantity; arrange the excess on a new purchase order.`,
+      )
+      return
+    }
     const [lat, lng] = gps
       .split(',')
       .map((s) => Number(s.trim()))
@@ -288,6 +304,7 @@ function DeliveryReceiveForm({
             const received = Number(counts[line.id])
             const rejectedQty = Number(rejected[line.id]) || 0
             const short = Number.isFinite(received) && received < line.qty
+            const over = Number.isFinite(received) && received > line.qty
             const damagedLine = conditions[line.id] === 'damaged' || rejectedQty > 0
             return (
               <div key={line.id} className={`space-y-2 rounded-lg border px-3 py-2 ${damagedLine ? 'border-orange-200 bg-orange-50/50' : 'border-stone-200'}`}>
@@ -307,7 +324,7 @@ function DeliveryReceiveForm({
                       value={counts[line.id] ?? ''}
                       onChange={(e) => setCounts((c) => ({ ...c, [line.id]: e.target.value }))}
                       aria-label={`Received count for ${line.name}`}
-                      className={`h-9 text-right tabular-nums ${short ? 'border-orange-300 bg-orange-50 focus-visible:ring-orange-400' : ''}`}
+                      className={`h-9 text-right tabular-nums ${over ? 'border-rose-300 bg-rose-50 focus-visible:ring-rose-400' : short ? 'border-orange-300 bg-orange-50 focus-visible:ring-orange-400' : ''}`}
                     />
                     <span className="text-[11px] text-stone-400">/ {fmtQty(line.qty)}</span>
                   </div>
@@ -382,6 +399,24 @@ function DeliveryReceiveForm({
             )
           })}
         </div>
+
+        {overPreview.length > 0 && (
+          <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900">
+            {overPreview.map((l) => {
+              const received = Number(counts[l.id])
+              return (
+                <p key={l.id} className="font-medium">
+                  {l.name}: ordered {fmtQty(l.qty)} · received {fmtQty(received)} — {fmtQty(received - l.qty)} over the ordered count
+                </p>
+              )
+            })}
+            <p className="pt-1 font-normal">
+              Over-delivery is not accepted at receive — it would inflate the Site Store and the supplier&apos;s receivable without
+              a review gate. Count at most the ordered quantity; arrange the excess with {order.supplierName} on a new purchase
+              order.
+            </p>
+          </div>
+        )}
 
         {shortPreview.length > 0 && (
           <div role="alert" className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-xs text-orange-900">
