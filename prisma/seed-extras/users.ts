@@ -13,9 +13,20 @@
 //   supervisor@mjengo.os / mjengo2026  → Wanjiru (Site Supervisor) (W1-PERM role nav)
 //   procurement@mjengo.os / mjengo2026 → Otieno (Procurement)       (W1-PERM role nav)
 //   qs@mjengo.os         / mjengo2026  → Kariuki (QS)               (W1-PERM role nav)
+//
+// Production posture (#126/#180): guarded by prisma/seed-guard.ts — refuses
+// to run at all when NODE_ENV=production without
+// I_HAVE_BACKED_UP_AND_WANT_TO_SEED_PRODUCTION=1. In that bypass mode the
+// ADMIN account is additionally SKIPPED unless SEED_DEMO_ADMIN=1 (its
+// password is repo-public); every other demo account is still created with
+// its documented public password and must be changed immediately.
 
 import { PrismaClient } from '@prisma/client'
 import { randomBytes, scryptSync } from 'node:crypto'
+
+import { SEED_DEMO_ADMIN_ENV, assertSeedAllowed, shouldSeedDemoAdmin } from '../seed-guard'
+
+assertSeedAllowed()
 
 const db = new PrismaClient()
 
@@ -43,6 +54,19 @@ async function main() {
     throw new Error('Suppliers missing — run the supply seed first (bun prisma/seed-extras/supply.ts)')
   }
 
+  // #180: in production-bypass mode the repo-public admin password is NOT
+  // planted unless the operator explicitly opts in (SEED_DEMO_ADMIN=1).
+  const seedAdmin = shouldSeedDemoAdmin(process.env)
+  if (!seedAdmin) {
+    console.error(
+      `\n⚠  admin@mjengo.os NOT created: seeding runs in production-bypass mode and\n` +
+        `  ${SEED_DEMO_ADMIN_ENV} is not set to 1. The demo admin password is public in\n` +
+        `  README.md — set ${SEED_DEMO_ADMIN_ENV}=1 only if you accept that risk, then\n` +
+        `  change the password immediately. NOTE: every other demo account below IS\n` +
+        `  created with its public password — change or disable them before real use.\n`,
+    )
+  }
+
   await db.user.createMany({
     data: [
       {
@@ -59,13 +83,18 @@ async function main() {
         role: 'client',
         projectId: p1.id,
       },
-      {
-        email: 'admin@mjengo.os',
-        passwordHash: hashPassword('admin2026'),
-        name: 'Mjengo Admin',
-        role: 'admin',
-        projectId: null,
-      },
+      // #180: skipped in production-bypass mode unless SEED_DEMO_ADMIN=1
+      ...(seedAdmin
+        ? [
+            {
+              email: 'admin@mjengo.os',
+              passwordHash: hashPassword('admin2026'),
+              name: 'Mjengo Admin',
+              role: 'admin',
+              projectId: null,
+            },
+          ]
+        : []),
       {
         email: 'finance@mjengo.os',
         passwordHash: hashPassword('mjengo2026'),

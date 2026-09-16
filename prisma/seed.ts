@@ -4,6 +4,11 @@ import { seedLand } from './seed-extras/land'
 import { seedSupply } from './seed-extras/supply'
 import { seedInvoices } from './seed-extras/invoices'
 import { seedIntel } from './seed-extras/intel'
+import { assertSeedAllowed } from './seed-guard'
+
+// Production guard (#126/#180): refuse to wipe anything when
+// NODE_ENV=production without the explicit bypass — see prisma/seed-guard.ts.
+assertSeedAllowed()
 
 const db = new PrismaClient()
 
@@ -33,6 +38,11 @@ function lastWeekdays(n: number): Array<[number, string]> {
 }
 
 async function main() {
+  console.log(
+    '\n⚠  DESTRUCTIVE: this seed DELETES ALL ROWS in the tables it owns (and the\n' +
+      '   inline professionals/land/supply/invoices/intel seeds re-wipe theirs)\n' +
+      '   before writing demo data — nothing is merged.\n',
+  )
   // wipe in FK-safe order (children, then parents)
   await db.notification.deleteMany()
   await db.siteZone.deleteMany()
