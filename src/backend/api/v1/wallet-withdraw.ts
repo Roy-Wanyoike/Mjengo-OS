@@ -1,4 +1,5 @@
 import { FINANCE_ROLES } from '@/backend/lib/guard'
+import { logAudit, summarizeAction } from '@/backend/lib/audit'
 import { route } from '@/backend/lib/route-kit'
 import { withdrawWallet, walletWithBalance } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
@@ -42,16 +43,44 @@ export const POST = route(
     const idRef = walletRef.safeParse(id)
     if (!idRef.success) return v1Err(400, idRef.error.issues[0].message, 'id')
     const projectId = body.projectId ?? session.user.projectId ?? ''
-    const { wallet } = await walletWithBalance(projectId, id)
+    const { wallet, balance: balanceBefore } = await walletWithBalance(projectId, id)
     const ownerProjectId = wallet.ownerType === 'project' ? wallet.ownerId ?? projectId : projectId
-    return await withIdempotency(req, 'v1.wallet.withdraw', ownerProjectId || null, () =>
-      withdrawWallet(ownerProjectId, {
-        walletId: id,
-        amount: body.amount,
-        destination: body.destination,
-        note: body.note,
-        by: session.user.name,
-      }),
+    return await withIdempotency(
+      req,
+      'v1.wallet.withdraw',
+      ownerProjectId || null,
+      async () => {
+        const result = await withdrawWallet(ownerProjectId, {
+          walletId: id,
+          amount: body.amount,
+          destination: body.destination,
+          note: body.note,
+          by: session.user.name,
+        })
+        // DB-4: v1 money mutations write audit events — only when the money
+        // actually moved (see wallet-deposit.ts for the replay/failure notes).
+        await logAudit(
+          ownerProjectId || session.user.projectId || 'platform',
+          'wallet',
+          { name: session.user.name, role: session.user.role },
+          summarizeAction('wallet.withdraw', { amount: body.amount }, result),
+          {
+            type: 'wallet.withdraw',
+            amount: body.amount,
+            destination: body.destination ?? 'mpesa',
+            note: body.note ?? null,
+            ledgerRef: result.ledgerRef,
+            walletCode: result.walletCode,
+          },
+          {
+            entity: 'WalletAccount',
+            entityId: wallet.id,
+            before: { balance: balanceBefore },
+            after: { balance: result.balance },
+          },
+        )
+        return result
+      },
       body, // payload fingerprint: a key reused with a different body → 409 (BE-9)
     )
   },

@@ -1,4 +1,5 @@
 import { FINANCE_ROLES } from '@/backend/lib/guard'
+import { logAudit, summarizeAction } from '@/backend/lib/audit'
 import { route } from '@/backend/lib/route-kit'
 import { depositWallet, walletWithBalance } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
@@ -45,17 +46,48 @@ export const POST = route(
     const projectId = body.projectId ?? session.user.projectId ?? ''
     // Resolve the wallet's owning project first so deposits post into the
     // right ledger scope even without an explicit projectId.
-    const { wallet } = await walletWithBalance(projectId, id)
+    const { wallet, balance: balanceBefore } = await walletWithBalance(projectId, id)
     const ownerProjectId = wallet.ownerType === 'project' ? wallet.ownerId ?? projectId : projectId
-    return await withIdempotency(req, 'v1.wallet.deposit', ownerProjectId || null, () =>
-      depositWallet(ownerProjectId, {
-        walletId: id,
-        amount: body.amount,
-        source: body.source,
-        reference: body.reference,
-        idempotencyKey: undefined, // handled by withIdempotency / natural keys in the service
-        by: session.user.name,
-      }),
+    return await withIdempotency(
+      req,
+      'v1.wallet.deposit',
+      ownerProjectId || null,
+      async () => {
+        const result = await depositWallet(ownerProjectId, {
+          walletId: id,
+          amount: body.amount,
+          source: body.source,
+          reference: body.reference,
+          idempotencyKey: undefined, // handled by withIdempotency / natural keys in the service
+          by: session.user.name,
+        })
+        // DB-4: v1 money mutations write audit events. Inside the idempotency
+        // callback — fires ONLY when the money actually moved (a replay serves
+        // the stored response without re-running this; a failure throws
+        // before the audit line). Same writer/summarizer as applyAction, so
+        // the trail is uniform across /api/actions and /api/v1.
+        await logAudit(
+          ownerProjectId || session.user.projectId || 'platform',
+          'wallet',
+          { name: session.user.name, role: session.user.role },
+          summarizeAction('wallet.deposit', { amount: body.amount }, result),
+          {
+            type: 'wallet.deposit',
+            amount: body.amount,
+            source: body.source ?? 'mpesa',
+            reference: body.reference ?? null,
+            ledgerRef: result.ledgerRef,
+            walletCode: result.walletCode,
+          },
+          {
+            entity: 'WalletAccount',
+            entityId: wallet.id,
+            before: { balance: balanceBefore },
+            after: { balance: result.balance },
+          },
+        )
+        return result
+      },
       body, // payload fingerprint: a key reused with a different body → 409 (BE-9)
     )
   },

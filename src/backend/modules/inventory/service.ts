@@ -2,8 +2,18 @@
 // business rules. Signatures below are the contract the dispatcher expects:
 // every function is atomic with its StockMovement append and returns a
 // { inventoryItemId, movement, closingQty } result shape.
+//
+// DB-2 hardening: every write path runs in ONE db.$transaction (the wallet /
+// ledger house pattern — guards INSIDE the transaction, not before it);
+// consume/transfer project the closing balance from the movements that
+// already exist BEFORE persisting, so over-consumption throws without
+// leaving a row; transfers write their out+in legs as one atomic unit; and
+// every result reports the REAL derived closingQty (return/damage/adjust
+// used to hardcode 0).
 
 import { db } from '@/backend/lib/db'
+import type { TxClient } from '@/backend/modules/ledger/service'
+import { derivedClosingQty } from './repository'
 
 export interface MovementResult {
   inventoryItemId: string
@@ -15,8 +25,15 @@ export interface MovementResult {
   closingQty: number
 }
 
-async function upsertItem(projectId: string, materialName: string, unit: string, location: string, supplierId?: string | null) {
-  return db.inventoryItem.upsert({
+async function upsertItem(
+  tx: TxClient,
+  projectId: string,
+  materialName: string,
+  unit: string,
+  location: string,
+  supplierId?: string | null,
+) {
+  return tx.inventoryItem.upsert({
     where: { projectId_materialName_location: { projectId, materialName, location } },
     update: { unit, supplierId: supplierId ?? undefined },
     create: { projectId, materialName, unit, location, supplierId: supplierId ?? null },
@@ -25,6 +42,7 @@ async function upsertItem(projectId: string, materialName: string, unit: string,
 }
 
 async function appendMovement(
+  tx: TxClient,
   projectId: string,
   inventoryItemId: string,
   type: string,
@@ -34,62 +52,98 @@ async function appendMovement(
   note: string | null,
   recordedBy: string,
 ) {
-  return db.stockMovement.create({
+  return tx.stockMovement.create({
     data: { projectId, inventoryItemId, type, quantity, unitCost, reference, note, recordedBy },
   })
 }
 
+/** Item scoped to the project, WITH its movement log, inside a transaction. */
+async function findItem(tx: TxClient, projectId: string, inventoryItemId: string) {
+  const item = await tx.inventoryItem.findFirst({ where: { id: inventoryItemId, projectId }, include: { movements: true } })
+  if (!item) throw new Error('Inventory item not found')
+  return item
+}
+
 export async function openStock(projectId: string, p: any): Promise<MovementResult> {
-  const item = await upsertItem(projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null)
-  const movement = await appendMovement(projectId, item.id, 'opening', Number(p.qty), p.unitCost != null ? Number(p.unitCost) : null, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
-  const closing = item.movements.concat([movement]).reduce((s, m) => s + (m.type === 'consumed' || m.type === 'damaged' || m.type === 'transferred_out' ? -m.quantity : m.quantity), 0)
-  return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+  return db.$transaction(async (tx) => {
+    const item = await upsertItem(tx, projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null)
+    const movement = await appendMovement(tx, projectId, item.id, 'opening', Number(p.qty), p.unitCost != null ? Number(p.unitCost) : null, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
+    const closing = derivedClosingQty(item.movements.concat([movement]))
+    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+  })
 }
 
 export async function receiveStock(projectId: string, p: any): Promise<MovementResult> {
-  const item = await upsertItem(projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null)
-  const movement = await appendMovement(projectId, item.id, 'received', Number(p.qty), p.unitCost != null ? Number(p.unitCost) : null, p.reference ?? null, p.note ?? null, p.recordedBy ?? 'Site Manager')
-  const closing = item.movements.concat([movement]).reduce((s, m) => s + (m.type === 'consumed' || m.type === 'damaged' || m.type === 'transferred_out' ? -m.quantity : m.quantity), 0)
-  return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+  return db.$transaction(async (tx) => {
+    const item = await upsertItem(tx, projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null)
+    const movement = await appendMovement(tx, projectId, item.id, 'received', Number(p.qty), p.unitCost != null ? Number(p.unitCost) : null, p.reference ?? null, p.note ?? null, p.recordedBy ?? 'Site Manager')
+    const closing = derivedClosingQty(item.movements.concat([movement]))
+    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+  })
 }
 
 export async function consumeStock(projectId: string, p: any): Promise<MovementResult> {
-  const item = await db.inventoryItem.findFirst({ where: { id: String(p.inventoryItemId), projectId }, include: { movements: true } })
-  if (!item) throw new Error('Inventory item not found')
-  const movement = await appendMovement(projectId, item.id, 'consumed', Number(p.qty), null, p.reference ?? null, p.note ?? null, p.recordedBy ?? 'Site Manager')
-  const closing = item.movements.concat([movement]).reduce((s, m) => s + (m.type === 'consumed' || m.type === 'damaged' || m.type === 'transferred_out' ? -m.quantity : m.quantity), 0)
-  if (closing < 0) throw new Error('Cannot consume more than closing stock')
-  return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+  return db.$transaction(async (tx) => {
+    const item = await findItem(tx, projectId, String(p.inventoryItemId))
+    const qty = Number(p.qty)
+    // DB-2: project the closing balance from the movements that ALREADY exist
+    // before touching the database — over-consumption must throw without
+    // persisting a row (the old code appended first and only then checked).
+    if (derivedClosingQty(item.movements) - qty < 0) {
+      throw new Error('Cannot consume more than closing stock')
+    }
+    const movement = await appendMovement(tx, projectId, item.id, 'consumed', qty, null, p.reference ?? null, p.note ?? null, p.recordedBy ?? 'Site Manager')
+    const closing = derivedClosingQty(item.movements.concat([movement]))
+    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+  })
 }
 
 export async function transferStock(projectId: string, p: any): Promise<any> {
-  const item = await db.inventoryItem.findFirst({ where: { id: String(p.inventoryItemId), projectId }, include: { movements: true } })
-  if (!item) throw new Error('Inventory item not found')
-  const out = await appendMovement(projectId, item.id, 'transferred_out', Number(p.qty), null, null, `→ ${p.toLocation}: ${p.note ?? ''}`, p.recordedBy ?? 'Site Manager')
-  const to = await upsertItem(projectId, item.materialName, item.unit, String(p.toLocation), item.supplierId)
-  const into = await appendMovement(projectId, to.id, 'transferred_in', Number(p.qty), null, null, `← ${item.location}`, p.recordedBy ?? 'Site Manager')
-  return { from: { inventoryItemId: item.id, movementId: out.id }, to: { inventoryItemId: to.id, movementId: into.id } }
+  // DB-2: the out and in legs are ONE atomic unit — the old code wrote them
+  // back-to-back with no transaction, so a failure between them stranded the
+  // "out" half and silently lost stock. The out leg is guarded by the same
+  // negative-stock projection as consume.
+  return db.$transaction(async (tx) => {
+    const item = await findItem(tx, projectId, String(p.inventoryItemId))
+    const qty = Number(p.qty)
+    if (derivedClosingQty(item.movements) - qty < 0) {
+      throw new Error('Cannot transfer more than closing stock')
+    }
+    const out = await appendMovement(tx, projectId, item.id, 'transferred_out', qty, null, null, `→ ${p.toLocation}: ${p.note ?? ''}`, p.recordedBy ?? 'Site Manager')
+    const to = await upsertItem(tx, projectId, item.materialName, item.unit, String(p.toLocation), item.supplierId)
+    const into = await appendMovement(tx, projectId, to.id, 'transferred_in', qty, null, null, `← ${item.location}`, p.recordedBy ?? 'Site Manager')
+    return { from: { inventoryItemId: item.id, movementId: out.id }, to: { inventoryItemId: to.id, movementId: into.id } }
+  })
 }
 
 export async function returnStock(projectId: string, p: any): Promise<MovementResult> {
-  const item = await db.inventoryItem.findFirst({ where: { id: String(p.inventoryItemId), projectId }, include: { movements: true } })
-  if (!item) throw new Error('Inventory item not found')
-  const movement = await appendMovement(projectId, item.id, 'returned', Number(p.qty), null, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
-  return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: 0 }
+  return db.$transaction(async (tx) => {
+    const item = await findItem(tx, projectId, String(p.inventoryItemId))
+    const movement = await appendMovement(tx, projectId, item.id, 'returned', Number(p.qty), null, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
+    // DB-2: real derived closing — this path used to hardcode closingQty: 0.
+    const closing = derivedClosingQty(item.movements.concat([movement]))
+    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+  })
 }
 
 export async function damageStock(projectId: string, p: any): Promise<MovementResult> {
-  const item = await db.inventoryItem.findFirst({ where: { id: String(p.inventoryItemId), projectId }, include: { movements: true } })
-  if (!item) throw new Error('Inventory item not found')
-  const movement = await appendMovement(projectId, item.id, 'damaged', Number(p.qty), null, null, String(p.damageNote ?? 'damaged'), p.recordedBy ?? 'Site Manager')
-  return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: 0 }
+  return db.$transaction(async (tx) => {
+    const item = await findItem(tx, projectId, String(p.inventoryItemId))
+    const movement = await appendMovement(tx, projectId, item.id, 'damaged', Number(p.qty), null, null, String(p.damageNote ?? 'damaged'), p.recordedBy ?? 'Site Manager')
+    // DB-2: real derived closing — this path used to hardcode closingQty: 0.
+    const closing = derivedClosingQty(item.movements.concat([movement]))
+    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+  })
 }
 
 export async function adjustStock(projectId: string, p: any): Promise<MovementResult> {
-  const item = await db.inventoryItem.findFirst({ where: { id: String(p.inventoryItemId), projectId }, include: { movements: true } })
-  if (!item) throw new Error('Inventory item not found')
-  const movement = await appendMovement(projectId, item.id, 'adjusted', Number(p.qty), null, null, String(p.reason ?? 'count correction'), p.recordedBy ?? 'Site Manager')
-  return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: 0 }
+  return db.$transaction(async (tx) => {
+    const item = await findItem(tx, projectId, String(p.inventoryItemId))
+    const movement = await appendMovement(tx, projectId, item.id, 'adjusted', Number(p.qty), null, null, String(p.reason ?? 'count correction'), p.recordedBy ?? 'Site Manager')
+    // DB-2: real derived closing — this path used to hardcode closingQty: 0.
+    const closing = derivedClosingQty(item.movements.concat([movement]))
+    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+  })
 }
 
 // ---- BOQ ----

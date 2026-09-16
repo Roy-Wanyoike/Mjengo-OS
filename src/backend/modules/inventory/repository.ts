@@ -4,6 +4,24 @@
 import { db } from '@/backend/lib/db'
 import type { InventorySlice, BoqSlice, StockMovementRow, StockMovementType } from './types'
 
+/**
+ * Signed quantity for a single movement: out-flows (consumed / damaged /
+ * transferred_out) are negative, every other movement type adds to closing
+ * stock. Shared by the slice loader and every inventory service write path so
+ * "derived closing" has exactly one definition (DB-2).
+ */
+export function movementDelta(type: string, quantity: number): number {
+  return type === 'consumed' || type === 'damaged' || type === 'transferred_out' ? -quantity : quantity
+}
+
+/**
+ * Derived closing stock = Σ movementDelta over the append-only movement log.
+ * Never stored — always projected (spec §33/§35).
+ */
+export function derivedClosingQty(movements: readonly { type: string; quantity: number }[]): number {
+  return movements.reduce((sum, m) => sum + movementDelta(m.type, m.quantity), 0)
+}
+
 export async function loadInventorySlice(projectId: string): Promise<InventorySlice> {
   const items = await db.inventoryItem.findMany({
     where: { projectId },
@@ -19,9 +37,7 @@ export async function loadInventorySlice(projectId: string): Promise<InventorySl
     const returnedQty = sum('returned')
     const damagedQty = sum('damaged')
     const adjustedQty = sum('adjusted')
-    const closingQty =
-      openingQty + receivedQty + returnedQty + sum('transferred_in') -
-      sum('transferred_out') - consumedQty - damagedQty + adjustedQty
+    const closingQty = derivedClosingQty(item.movements)
     const lastCost = item.movements.find((m) => m.unitCost != null)?.unitCost ?? 0
     const movements: StockMovementRow[] = item.movements.map((m) => ({
       id: m.id,
