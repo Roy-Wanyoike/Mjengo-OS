@@ -413,7 +413,14 @@ DATABASE_URL=… NEXTAUTH_SECRET=… node .next/standalone/server.js
 Run it under systemd/PM2/supervisor with `PORT`/`HOSTNAME=0.0.0.0` env, and
 apply schema changes with `bunx prisma migrate deploy` (or
 `node node_modules/prisma/build/index.js migrate deploy` on a node-only host)
-**before** restarting the server.
+**before** restarting the server. If you run the app itself under systemd,
+run it as the dedicated `mjengo` service user (creation step in §7.3) with
+the same hardening family as `mjengo-jobs.service` — but the app unit
+additionally **writes** (the SQLite file, uploads), so it needs explicit
+`ReadWritePaths=` entries for its database directory (e.g.
+`ReadWritePaths=/srv/mjengo` for `DATABASE_URL=file:/srv/mjengo/custom.db`)
+and any upload/log directories it owns; the jobs unit needs none because
+it only POSTs.
 
 ### 7.1 Reverse proxy (the PR #7 lesson)
 
@@ -512,6 +519,10 @@ ships the pair `mjengo-jobs.service` + `mjengo-jobs.timer` (plus
 `mjengo-jobs.env.example`):
 
 ```bash
+# once per host: the dedicated, no-login service user (issue #197 —
+# the unit never runs as root):
+useradd --system --user-group --home-dir /nonexistent \
+        --shell /usr/sbin/nologin mjengo
 install -D -m 0644 deploy/systemd/mjengo-jobs.service /etc/systemd/system/
 install -D -m 0644 deploy/systemd/mjengo-jobs.timer   /etc/systemd/system/
 install -D -m 0600 deploy/systemd/mjengo-jobs.env.example /etc/mjengo/jobs.env
@@ -526,6 +537,30 @@ catch-up drain on the next boot, which is safe (see idempotency below).
 mjengo-jobs.service` shows both the failure and each drain's
 `{ok, ran, results}` reply. The secret lives only in the root-only
 `/etc/mjengo/jobs.env` (chmod 600), never in the tracked unit files.
+
+The service runs as the dedicated `mjengo` system user under a full
+sandboxing block (`NoNewPrivileges`, `ProtectSystem=strict`,
+`PrivateTmp`, `PrivateDevices`, empty `CapabilityBoundingSet`, syscall /
+address-family / namespace filters — see the unit file). Two deliberate
+properties, so nobody "fixes" them backwards:
+
+- `/etc/mjengo/jobs.env` **stays `root:root`, chmod 600** — the systemd
+  manager (PID 1) reads `EnvironmentFile=` and passes the values into
+  the service's environment; the `mjengo` user never opens the file, so
+  no ownership change is needed (and none should be made).
+- The unit has **no `ReadWritePaths=`** — it only POSTs and prints the
+  JSON reply to stdout (→ the journal); under `ProtectSystem=strict`
+  the whole filesystem is read-only for it, which is exactly right for
+  a curl oneshot. `IPAddressDeny=`/`IPAddressAllow=` are likewise unset
+  because `MJENGO_JOBS_URL` may legitimately point at a remote host; on
+  a same-host install you may add `IPAddressDeny=any` +
+  `IPAddressAllow=localhost`.
+
+Measured with `systemd-analyze security --offline` (systemd 257):
+exposure **9.4 UNSAFE** before (root, no sandboxing) → **1.2 OK** after.
+The observable drain behavior is unchanged — same journal lines, and a
+401/5xx still fails the unit (curl's non-zero exit), keeping the
+fail-closed contract intact.
 
 **Option C — any external cron.** Anything that can POST with a header
 works: a host crontab, cron-job.org, a GitHub Actions scheduled
