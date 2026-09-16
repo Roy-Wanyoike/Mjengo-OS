@@ -16,10 +16,18 @@
 // verify the same tokens next-auth minted.
 //
 // SCOPE/POSTURE:
-//   · DEV/TEST ONLY. In production the boot guard (#74) already throws at
-//     module load when the secret is missing/short — fail closed. If that
-//     guard is bypassed somehow, this module still refuses to derive
-//     (candidates = []) and guarded routes keep 401ing.
+//   · DEV/TEST ONLY — and that means an EXPLICIT `NODE_ENV=development` or
+//     `NODE_ENV=test` (audit-2 SEC-2: the old `NODE_ENV !== 'production'`
+//     check accepted the fallback on any OTHER runtime too — staging,
+//     preview, docker `dev`, or an unset NODE_ENV — where this
+//     publicly-derivable key would verify forged admin JWTs). Every other
+//     runtime is treated as unauthenticated: candidates() is empty, the
+//     guard 401s, and ONE loud console.error per process explains that
+//     NEXTAUTH_SECRET must be set.
+//   · In production the boot guard (#74) already throws at module load when
+//     the secret is missing/short — fail closed. If that guard is bypassed
+//     somehow, this module still refuses to derive (candidates = []) and
+//     guarded routes keep 401ing.
 //   · NEXTAUTH_SECRET set (any env) → no candidates — current behavior is
 //     untouched, byte for byte.
 //   · The derivation is DETERMINISTIC for the fresh-cloner case: with no
@@ -43,9 +51,34 @@ import { createHash } from 'node:crypto'
 import type { NextRequest } from 'next/server'
 import { buildAuthOptions } from '@/backend/lib/auth'
 
-/** Dev/test only — the fallback never applies to a production runtime. */
+/** Dev/test only — the fallback applies ONLY to an explicit development/test runtime (SEC-2). */
 export function isDevRuntime(): boolean {
-  return process.env.NODE_ENV !== 'production'
+  return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'
+}
+
+/**
+ * SEC-2: ONE loud console.error per process (per runtime mode) when the
+ * forgeable fallback would have been consulted on a non-dev runtime with no
+ * env secret — the operator of a staging/preview/misconfigured deployment
+ * gets an actionable line instead of silent 401s. The warned runtime is
+ * remembered (not a plain boolean) so a test that flips NODE_ENV back and
+ * forth still sees the warning exactly once per stretch — in a real process
+ * the runtime never changes, so this is once per process.
+ */
+let warnedNonDevRuntime: string | undefined
+
+function warnFallbackRejectedOnce(): void {
+  const runtime = process.env.NODE_ENV ?? '<unset>'
+  if (warnedNonDevRuntime === runtime) return
+  warnedNonDevRuntime = runtime
+  console.error(
+    `[auth] NEXTAUTH_SECRET is not set and NODE_ENV is "${runtime}" — the ` +
+      `next-auth dev fallback secret is PUBLICLY DERIVABLE from the repo source, ` +
+      `so session verification refuses it outside development/test. Every guarded ` +
+      `API will answer 401 until a real secret is set. Generate one ` +
+      `(openssl rand -hex 32), set NEXTAUTH_SECRET in the deployment environment, ` +
+      `and restart.`,
+  )
 }
 
 /** Mirror of next-auth v4 `utils/detect-origin.js` (4.24.x). */
@@ -91,12 +124,23 @@ export function fallbackSecret(
 
 /**
  * Candidate fallback secrets for the dev quickstart without NEXTAUTH_SECRET.
- * Empty whenever the fallback must not run (secret set, or production).
+ * Empty whenever the fallback must not run (secret set, or any runtime other
+ * than an explicit development/test — SEC-2).
  */
 export function devFallbackSecretCandidates(req: NextRequest): string[] {
   // Any resolvable env secret (NEXTAUTH_SECRET or v4's AUTH_SECRET alias —
   // same precedence the route handler uses) means no fallback is needed.
-  if (process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET || !isDevRuntime()) return []
+  if (process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET) return []
+  if (!isDevRuntime()) {
+    // SEC-2: staging / preview / unset NODE_ENV — the deterministic fallback
+    // is forgeable from public source, so verification fails closed here.
+    warnFallbackRejectedOnce()
+    return []
+  }
+  // A dev/test runtime consults the fallback silently — the documented #94
+  // quickstart posture. The reset keeps the once-per-stretch warning honest
+  // for tests that flip NODE_ENV; a real runtime never changes mid-process.
+  warnedNonDevRuntime = undefined
 
   const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host')
   const proto = req.headers.get('x-forwarded-proto')
