@@ -371,7 +371,7 @@ function seedPaymentRequest(overrides: Record<string, unknown> = {}) {
     requestedByRole: 'contractor',
     requestedByName: 'Site Manager',
     description: 'Cement delivery payment',
-    amount: 1500,
+    amount: 150000n,
     payee: '254708374149',
     method: 'mpesa',
     status: 'approved',
@@ -950,8 +950,8 @@ describe('processDarajaStkCallback — dedupe, verification, completion', () => 
     expect(state.txns.size).toBe(1)
     const lines = postedLines()
     expect(lines).toHaveLength(2)
-    expect(lines).toContainEqual({ side: 'debit', amount: 1500, code: 'EXPENSE:proj-1', memo: null })
-    expect(lines).toContainEqual({ side: 'credit', amount: 1500, code: 'CASH_MPESA', memo: null })
+    expect(lines).toContainEqual({ side: 'debit', amount: 150000n, code: 'EXPENSE:proj-1', memo: null })
+    expect(lines).toContainEqual({ side: 'credit', amount: 150000n, code: 'CASH_MPESA', memo: null })
     const pr = state.paymentRequests.get(PR_ID) as Record<string, unknown>
     expect(pr.status).toBe('paid')
     expect(pr.paidAt).toBeTruthy()
@@ -966,6 +966,7 @@ describe('processDarajaStkCallback — dedupe, verification, completion', () => 
     expect(notify).toHaveBeenCalledTimes(1)
     const notifyArgs = (notify as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(notifyArgs[0]).toBe('proj-1')
+    expect(String(notifyArgs[2])).toContain('KSh 1,500.00 to 254708374149') // boundary renders KSh, never cents
     expect(String(notifyArgs[2])).toContain('verified')
   })
 
@@ -1131,7 +1132,7 @@ describe('processDarajaStkCallback — dedupe, verification, completion', () => 
     const outcome = await processDarajaStkCallback(body)
     expect(outcome.action).toBe('credited')
     const lines = postedLines()
-    expect(lines.find((l) => l.code === 'EXPENSE:proj-1')?.amount).toBe(1500)
+    expect(lines.find((l) => l.code === 'EXPENSE:proj-1')?.amount).toBe(150000n)
   })
 })
 

@@ -2,6 +2,15 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// MONEY CONVENTION (issue #122 — integer-cents, "the ledger never lies"):
+//   · every money column is `BigInt` holding KES CENTS (6500050 = KSh 65,000.50)
+//   · boundaries convert once: parse with src/backend/lib/money.ts
+//     (parseMoneyCents/assertMoneyCents IN, centsToKes OUT) — KSh decimals
+//     never travel deeper than the first parse
+//   · quantities stay Float (site quantities are not money; Supabase path
+//     uses numeric(18,3) — ADR-0002)
+//   · the Supabase/Postgres path stores NUMERIC(18,2) KES and converts to
+//     cents at the repository boundary; this module is the canonical form
 datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
@@ -21,7 +30,7 @@ model Project {
   client             String
   clientType         String              @default("diaspora") // diaspora, local, company
   location           String
-  budget             Float
+  budget             BigInt // cents — integer money (issue #122; was Float KSh)
   startDate          DateTime
   targetDate         DateTime
   status             String              @default("active") // active, completed, on_hold
@@ -89,7 +98,7 @@ model Phase {
   project        Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   name           String
   order          Int
-  budget         Float
+  budget         BigInt // cents — integer money (issue #122; was Float KSh)
   status         String      @default("pending") // pending, in_progress, done
   progressManual Int? // manual override; falls back to tasks average
   tasks          Task[]
@@ -140,7 +149,7 @@ model Worker {
   role        String // Fundi wa Mawe (Mason), Foreman, Mtumishi (Labourer)...
   phone       String
   pin         String? // 4-digit kiosk PIN (worker identity on shared site device)
-  dailyRate   Float
+  dailyRate   BigInt // cents — integer money (issue #122; was Float KSh)
   active      Boolean      @default(true)
   // Worker record depth (Doc A §14, backend wave): identity + skills +
   // employment terms + who to call when something happens on site.
@@ -166,7 +175,7 @@ model Attendance {
   checkOut        DateTime?
   status          String    @default("present") // present, absent, half_day, excused
   method          String    @default("geofence") // geofence, ussd, app, kiosk_pin, qr_card, manager
-  wage            Float
+  wage            BigInt // cents — integer money (issue #122; was Float KSh)
   paid            Boolean   @default(false)
   synced          Boolean   @default(true)
   // Workforce Trust: reported vs verified presence
@@ -196,7 +205,7 @@ model Material {
   id           String        @id @default(cuid())
   name         String
   unit         String // bag, tonne, piece, roll, kg, metre
-  unitPrice    Float // indicative KES price
+  unitPrice    BigInt // cents (issue #122) — indicative KES price
   deliveries   Delivery[]
   consumptions Consumption[]
 }
@@ -208,8 +217,8 @@ model Delivery {
   materialId    String
   material      Material @relation(fields: [materialId], references: [id])
   quantity      Float
-  unitCost      Float
-  totalCost     Float
+  unitCost      BigInt // cents — integer money (issue #122; was Float KSh)
+  totalCost     BigInt // cents — integer money (issue #122; was Float KSh)
   supplier      String
   date          DateTime
   source        String   @default("manual") // manual, voice, photo, mpesa
@@ -262,7 +271,7 @@ model Transaction {
   projectId   String
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   type        String // wage, material, transport, other, invoice, milestone, payment_request
-  amount      Float
+  amount      BigInt // cents — integer money (issue #122; was Float KSh)
   method      String   @default("mpesa") // mpesa, cash, bank, card, wallet
   reference   String?
   costCode    String? // finance cost-code dimension (spec §36)
@@ -322,7 +331,7 @@ model EscrowWallet {
   id              String   @id @default(cuid())
   projectId       String   @unique
   project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  balance         Float    @default(0) // KES held in escrow (ledger-derived projection)
+  balance         BigInt    @default(0) // cents (issue #122) — KES held in escrow (ledger-derived projection)
   ledgerAccountId String? // backing LedgerAccount (liability account)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -334,7 +343,7 @@ model Milestone {
   project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   phaseId          String?
   name             String
-  amount           Float // KES to release on completion
+  amount           BigInt // cents (issue #122) — KES to release on completion
   status           String    @default("locked") // locked, evidence_submitted, release_requested, approved, released, rejected
   evidencePhotoIds String    @default("[]") // JSON array of SitePhoto ids (proof-of-work)
   requestedAt      DateTime?
@@ -356,7 +365,7 @@ model VariationOrder {
   phaseId      String?
   title        String
   description  String
-  budgetImpact Float // + increase, - saving (KES)
+  budgetImpact BigInt // cents (issue #122) — + increase, - saving (KES)
   status       String    @default("submitted") // submitted, approved, rejected
   submittedBy  String?
   decidedBy    String?
@@ -385,7 +394,7 @@ model DrawPack {
   projectId         String
   project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   milestoneName     String // frozen at decision time
-  amount            Float // KES released (frozen)
+  amount            BigInt // cents (issue #122) — KES released (frozen)
   currency          String    @default("KES")
   ledgerRef         String // frozen ledger transaction ref of the release (LX-…)
   ledgerTxnId       String // frozen ledger transaction id
@@ -630,9 +639,9 @@ model Supplier {
   email             String?
   warehouseLocation String?
   deliveryZones     String          @default("") // CSV of zones/counties served
-  deliveryFeeBase   Float           @default(0) // KES base delivery fee
-  freeDeliveryOver  Float? // free delivery above this order value (KES)
-  minimumOrder      Float           @default(0) // minimum order value (KES)
+  deliveryFeeBase   BigInt           @default(0) // cents (issue #122) — KES base delivery fee
+  freeDeliveryOver  BigInt? // cents (issue #122) — free delivery above this order value (KES)
+  minimumOrder      BigInt           @default(0) // cents (issue #122) — minimum order value (KES)
   verificationState Int             @default(0) // 0-5 ladder
   reliabilityScore  Int             @default(50) // 0-100 from transaction history
   responseHours     Int             @default(24) // average quote response time
@@ -656,7 +665,7 @@ model CatalogItem {
   brand         String? // e.g. "Simba", "Devki", "Bamburi"
   specification String? // e.g. "42.5N 50kg bag", "Y12 deformed bar"
   unit          String // bag, length, tonne, roll, sheet
-  unitPrice     Float // KES
+  unitPrice     BigInt // cents (issue #122) — KES
   stockQty      Float    @default(0)
   minOrderQty   Float    @default(1)
   createdAt     DateTime @default(now())
@@ -702,8 +711,8 @@ model ApprovalRule {
   id           String   @id @default(cuid())
   projectId    String
   project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  minAmount    Float    @default(0) // KES lower bound (inclusive)
-  maxAmount    Float? // KES upper bound (inclusive); null = no ceiling
+  minAmount    BigInt    @default(0) // cents (issue #122) — KES lower bound (inclusive)
+  maxAmount    BigInt? // cents (issue #122) — KES upper bound (inclusive); null = no ceiling
   approverRole String // supervisor, contractor, client, finance
   priority     Int      @default(0) // lower = evaluated first
   active       Boolean  @default(true)
@@ -736,11 +745,11 @@ model Quote {
   request      MaterialRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   supplierId   String
   supplier     Supplier        @relation(fields: [supplierId], references: [id])
-  unitPrice    Float // KES — primary line unit price (single-line compare)
-  deliveryFee  Float           @default(0)
-  transportFee Float           @default(0)
-  fees         Float           @default(0)
-  totalLanded  Float // KES — full landed cost for the requested quantities
+  unitPrice    BigInt // cents (issue #122) — KES — primary line unit price (single-line compare)
+  deliveryFee  BigInt           @default(0) // cents — integer money (issue #122; was Float KSh)
+  transportFee BigInt           @default(0) // cents — integer money (issue #122; was Float KSh)
+  fees         BigInt           @default(0) // cents — integer money (issue #122; was Float KSh)
+  totalLanded  BigInt // cents (issue #122) — KES — full landed cost for the requested quantities
   deliveryEta  String? // e.g. "2 days", "same day"
   validUntil   DateTime? // quote validity window (spec §32)
   terms        String? // payment/delivery terms text (spec §32)
@@ -760,8 +769,8 @@ model QuoteLine {
   name      String
   unit      String
   qty       Float
-  unitPrice Float
-  lineTotal Float
+  unitPrice BigInt // cents — integer money (issue #122; was Float KSh)
+  lineTotal BigInt // cents — integer money (issue #122; was Float KSh)
 }
 
 // Purchase order — approved request + selected supplier.
@@ -774,9 +783,9 @@ model PurchaseOrder {
   request       MaterialRequest?    @relation(fields: [requestId], references: [id], onDelete: SetNull)
   supplierId    String
   supplier      Supplier            @relation(fields: [supplierId], references: [id])
-  subtotal      Float
-  deliveryFee   Float               @default(0)
-  total         Float
+  subtotal      BigInt // cents — integer money (issue #122; was Float KSh)
+  deliveryFee   BigInt               @default(0) // cents — integer money (issue #122; was Float KSh)
+  total         BigInt // cents — integer money (issue #122; was Float KSh)
   status        String              @default("draft") // draft, pending_approval, approved, sent, confirmed, delivering, delivered, closed, cancelled
   paymentSource String              @default("client") // client, contractor, project_wallet, finance
   createdByRole String // who placed the order
@@ -800,8 +809,8 @@ model PurchaseOrderLine {
   name          String
   unit          String
   qty           Float
-  unitPrice     Float
-  lineTotal     Float
+  unitPrice     BigInt // cents — integer money (issue #122; was Float KSh)
+  lineTotal     BigInt // cents — integer money (issue #122; was Float KSh)
   deliveryLines OrderDeliveryLine[]
 }
 
@@ -896,9 +905,9 @@ model Invoice {
   supplierId       String?
   supplier         Supplier?      @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   status           String         @default("draft") // draft, submitted, approved, rejected, paid, disputed
-  subtotal         Float          @default(0)
-  tax              Float          @default(0)
-  total            Float          @default(0)
+  subtotal         BigInt          @default(0) // cents — integer money (issue #122; was Float KSh)
+  tax              BigInt          @default(0) // cents — integer money (issue #122; was Float KSh)
+  total            BigInt          @default(0) // cents — integer money (issue #122; was Float KSh)
   dueDate          DateTime?
   issuedAt         DateTime?
   submittedAt      DateTime?
@@ -926,8 +935,8 @@ model InvoiceLine {
   invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   name      String
   qty       Float
-  unitPrice Float
-  lineTotal Float
+  unitPrice BigInt // cents — integer money (issue #122; was Float KSh)
+  lineTotal BigInt // cents — integer money (issue #122; was Float KSh)
 }
 
 // ---------------- MjengoOS v2 — Intel (module: intel) ----------------
@@ -979,7 +988,7 @@ model PricePoint {
   id           String   @id @default(cuid())
   materialName String // e.g. "Cement 50kg", "Steel bar Y12"
   region       String // Nairobi, Kiambu, Machakos
-  unitPrice    Float // KES
+  unitPrice    BigInt // cents (issue #122) — KES
   recordedAt   DateTime @default(now())
   source       String   @default("seed") // order, manual, seed
 }
@@ -1033,7 +1042,7 @@ model LedgerEntry {
   accountId String
   account   LedgerAccount     @relation(fields: [accountId], references: [id])
   side      String // debit, credit
-  amount    Float // positive KES
+  amount    BigInt // cents (issue #122) — positive KES
   memo      String?
   createdAt DateTime          @default(now())
 
@@ -1078,7 +1087,7 @@ model PaymentRequest {
   requestedByRole   String // contractor, supervisor, finance, client
   requestedByName   String
   description       String
-  amount            Float // KES
+  amount            BigInt // cents (issue #122) — KES
   payee             String // who gets paid
   method            String    @default("mpesa") // mpesa, bank, card, wallet, cash
   status            String    @default("pending") // pending, approved, rejected, paid
@@ -1125,7 +1134,7 @@ model StockMovement {
   inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
   type            String // opening, received, consumed, transferred_in, transferred_out, returned, damaged, adjusted
   quantity        Float // positive KES qty; sign semantics by type
-  unitCost        Float? // KES when known
+  unitCost        BigInt? // cents (issue #122) — KES when known
   reference       String? // PO code / delivery id / consumption id
   note            String?
   recordedBy      String // name/role
@@ -1156,7 +1165,7 @@ model BoqLine {
   materialName String
   unit         String
   qty          Float
-  estUnitPrice Float   @default(0)
+  estUnitPrice BigInt   @default(0) // cents — integer money (issue #122; was Float KSh)
   category     String? // structural, finishes, plumbing, electrical...
   note         String?
 }

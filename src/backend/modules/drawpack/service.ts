@@ -39,6 +39,7 @@
 
 import { createHash } from 'node:crypto'
 import { db } from '@/backend/lib/db'
+import { centsToKes, type Cents } from '@/backend/lib/money'
 import { logAudit } from '@/backend/lib/audit'
 import { runPostFreezeAuthenticityScreen } from '@/backend/modules/ai/authenticity'
 
@@ -51,7 +52,7 @@ export const DRAW_PACK_SCHEMA_VERSION = 1
 export interface VariationSnapshot {
   id: string
   title: string
-  budgetImpact: number
+  budgetImpact: number // KSh in the frozen JSON artifact (DB stores cents — #122)
   submittedAt: string // ISO date — frozen
 }
 
@@ -80,7 +81,7 @@ export interface DrawPackContent {
   v: number
   milestoneId: string
   milestoneName: string
-  amount: number
+  amount: number // KSh in the portable JSON artifact (DB stores cents — #122)
   currency: string
   ledgerRef: string
   ledgerTxnId: string
@@ -174,12 +175,12 @@ function dayStr(d: Date): string {
 export function buildDrawPackContent(input: {
   milestoneId: string
   milestoneName: string
-  amount: number
+  amount: Cents
   currency?: string
   ledgerRef: string
   ledgerTxnId: string
   evidencePhotoIds: string[]
-  variations: Array<{ id: string; title: string; budgetImpact: number; status: string; createdAt: Date }>
+  variations: Array<{ id: string; title: string; budgetImpact: Cents; status: string; createdAt: Date }>
   attendanceRows: Array<{ date: string; status: string; verification: string }>
   requestedAt: Date | null
   decidedAt: Date
@@ -211,7 +212,7 @@ export function buildDrawPackContent(input: {
     .map<VariationSnapshot>((v) => ({
       id: v.id,
       title: v.title,
-      budgetImpact: v.budgetImpact,
+      budgetImpact: centsToKes(v.budgetImpact),
       submittedAt: v.createdAt.toISOString(),
     }))
   // Honest score citation: only when the latest row actually computed a
@@ -228,7 +229,7 @@ export function buildDrawPackContent(input: {
     v: DRAW_PACK_SCHEMA_VERSION,
     milestoneId: input.milestoneId,
     milestoneName: input.milestoneName,
-    amount: input.amount,
+    amount: centsToKes(input.amount),
     currency: input.currency ?? 'KES',
     ledgerRef: input.ledgerRef,
     ledgerTxnId: input.ledgerTxnId,
@@ -251,7 +252,7 @@ export async function createDrawPackForRelease(
   input: {
     milestoneId: string
     milestoneName: string
-    amount: number
+    amount: Cents
     evidencePhotoIds: string[]
     requestedAt: Date | null
     decidedAt: Date
@@ -390,7 +391,7 @@ interface DrawPackRow {
   milestoneId: string
   projectId: string
   milestoneName: string
-  amount: number
+  amount: Cents
   currency: string
   ledgerRef: string
   ledgerTxnId: string
@@ -415,7 +416,7 @@ function detailFromRow(row: DrawPackRow): DrawPackDetail {
     v: row.schemaVersion,
     milestoneId: row.milestoneId,
     milestoneName: row.milestoneName,
-    amount: row.amount,
+    amount: centsToKes(row.amount),
     currency: row.currency,
     ledgerRef: row.ledgerRef,
     ledgerTxnId: row.ledgerTxnId,
@@ -429,7 +430,7 @@ function detailFromRow(row: DrawPackRow): DrawPackDetail {
     milestoneId: row.milestoneId,
     projectId: row.projectId,
     milestoneName: row.milestoneName,
-    amount: row.amount,
+    amount: centsToKes(row.amount),
     currency: row.currency,
     ledgerRef: row.ledgerRef,
     ledgerTxnId: row.ledgerTxnId,
@@ -485,6 +486,7 @@ export async function loadDrawPacks(projectId: string): Promise<DrawPackLink[]> 
   })
   return rows.map((r) => ({
     ...r,
+    amount: centsToKes(r.amount),
     createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : new Date(r.createdAt).toISOString(),
   }))
 }

@@ -43,6 +43,7 @@
 // request.approved, order.sent, delivery.received, delivery.discrepancy.
 
 import { db } from '@/backend/lib/db'
+import { assertNonNegativeMoneyCents, centsToKes, fmtKes, mulQtyCents, parseMoneyCents, sumCents, type Cents } from '@/backend/lib/money'
 import { currentActor } from './session'
 import { compareSuppliers as pureCompare } from './compare'
 import { estimateRequestTotal, materialKey } from './insights'
@@ -54,7 +55,12 @@ import type { TxClient } from '@/backend/modules/ledger/service'
 
 // ---------------- input helpers (money.ts/land.ts house conventions) ----------------
 
-function kes(n: number): string {
+function kes(nCents: Cents): string {
+  return fmtKes(nCents)
+}
+
+/** Display twin for values that are already KSh numbers (pure-engine outputs). */
+function kesKSh(n: number): string {
   return `KSh ${Math.round(n).toLocaleString('en-KE')}`
 }
 
@@ -71,6 +77,16 @@ function moneyNumber(v: unknown): number | null {
   if (v === undefined || v === null || v === '') return null
   const n = Number(v)
   return Number.isFinite(n) && n >= 0 ? n : null
+}
+
+/**
+ * Optional money payload → cents (issue #122): absent/null/'' → null (field
+ * not set); anything present must be a non-negative ≤2-dp KSh amount or the
+ * call throws — garbage never silently drops a money field.
+ */
+function optCents(v: unknown, field: string): Cents | null {
+  if (v === undefined || v === null || v === '') return null
+  return assertNonNegativeMoneyCents(v, field)
 }
 
 function optNum(v: unknown): number | null {
@@ -206,8 +222,8 @@ async function estimateForRequest(requestId: string) {
   ])
   return estimateRequestTotal(
     lines.map((l) => ({ materialName: l.materialName, qty: l.qty })),
-    suppliers.map((s) => ({ catalogItems: s.catalogItems })),
-    quotes.map((q) => ({ status: q.status, totalLanded: q.totalLanded })),
+    suppliers.map((s) => ({ catalogItems: s.catalogItems.map((c) => ({ ...c, unitPrice: centsToKes(c.unitPrice) })) })),
+    quotes.map((q) => ({ status: q.status, totalLanded: centsToKes(q.totalLanded) })),
   )
 }
 
@@ -239,12 +255,12 @@ export async function compareSuppliers(
       town: s.town,
       lat: s.lat,
       lng: s.lng,
-      deliveryFeeBase: s.deliveryFeeBase,
-      freeDeliveryOver: s.freeDeliveryOver,
-      minimumOrder: s.minimumOrder,
+      deliveryFeeBase: centsToKes(s.deliveryFeeBase),
+      freeDeliveryOver: s.freeDeliveryOver === null ? null : centsToKes(s.freeDeliveryOver),
+      minimumOrder: centsToKes(s.minimumOrder),
       reliabilityScore: s.reliabilityScore,
       responseHours: s.responseHours,
-      catalogItems: s.catalogItems,
+      catalogItems: s.catalogItems.map((c) => ({ ...c, unitPrice: centsToKes(c.unitPrice) })),
     })),
     site,
   )
@@ -266,11 +282,11 @@ export async function upsertSupplier(_projectId: string, payload: Record<string,
   if (payload.email !== undefined) data.email = str(payload.email)
   if (payload.warehouseLocation !== undefined) data.warehouseLocation = str(payload.warehouseLocation)
   if (payload.deliveryZones !== undefined) data.deliveryZones = str(payload.deliveryZones) ?? ''
-  const deliveryFeeBase = moneyNumber(payload.deliveryFeeBase)
+  const deliveryFeeBase = optCents(payload.deliveryFeeBase, 'deliveryFeeBase')
   if (deliveryFeeBase !== null) data.deliveryFeeBase = deliveryFeeBase
-  const freeDeliveryOver = moneyNumber(payload.freeDeliveryOver)
+  const freeDeliveryOver = optCents(payload.freeDeliveryOver, 'freeDeliveryOver')
   if (freeDeliveryOver !== null) data.freeDeliveryOver = freeDeliveryOver
-  const minimumOrder = moneyNumber(payload.minimumOrder)
+  const minimumOrder = optCents(payload.minimumOrder, 'minimumOrder')
   if (minimumOrder !== null) data.minimumOrder = minimumOrder
   const reliabilityScore = payload.reliabilityScore !== undefined ? optNum(payload.reliabilityScore) : null
   if (reliabilityScore !== null) data.reliabilityScore = Math.max(0, Math.min(100, Math.round(reliabilityScore)))
@@ -297,9 +313,9 @@ export async function upsertSupplier(_projectId: string, payload: Record<string,
       email: (data.email as string | null) ?? null,
       warehouseLocation: (data.warehouseLocation as string | null) ?? null,
       deliveryZones: (data.deliveryZones as string) ?? '',
-      deliveryFeeBase: (data.deliveryFeeBase as number) ?? 0,
-      freeDeliveryOver: (data.freeDeliveryOver as number | null) ?? null,
-      minimumOrder: (data.minimumOrder as number) ?? 0,
+      deliveryFeeBase: (data.deliveryFeeBase as Cents | undefined) ?? 0n,
+      freeDeliveryOver: (data.freeDeliveryOver as Cents | null | undefined) ?? null,
+      minimumOrder: (data.minimumOrder as Cents | undefined) ?? 0n,
       reliabilityScore: (data.reliabilityScore as number) ?? 50,
       responseHours: (data.responseHours as number) ?? 24,
       lat: (data.lat as number | null) ?? null,
@@ -315,8 +331,9 @@ export async function upsertCatalogItem(_projectId: string, payload: Record<stri
   const id = str(payload.id)
   const name = str(payload.name)
   const unit = str(payload.unit)
-  const unitPrice = moneyNumber(payload.unitPrice)
-  if (unitPrice === null) throw new Error('Unit price must be zero or more')
+  // issue #122: catalog prices are stored as integer cents — the KSh payload
+  // is converted + validated here (a raw number would corrupt reads ×100).
+  const unitPrice = assertNonNegativeMoneyCents(payload.unitPrice, 'unitPrice')
 
   if (id) {
     const existing = await db.catalogItem.findUnique({ where: { id } })
@@ -448,7 +465,13 @@ export async function submitRequest(projectId: string, payload: Record<string, u
   }
 
   const estimate = await estimateForRequest(request.id)
-  const rules: RuleLike[] = await db.approvalRule.findMany({ where: { projectId, active: true } })
+  const ruleRows = await db.approvalRule.findMany({ where: { projectId, active: true } })
+  // RuleLike ladder runs in KSh (advisory bands); rows are cents — one conversion.
+  const rules: RuleLike[] = ruleRows.map((r) => ({
+    ...r,
+    minAmount: centsToKes(r.minAmount),
+    maxAmount: r.maxAmount === null ? null : centsToKes(r.maxAmount),
+  }))
   let chain = requiredApproverRoles(rules, estimate.total)
   if (chain.length === 0) chain = ['client'] // conservative default, documented
   // §24: the client never sits on their own approval — their rung falls to
@@ -478,7 +501,7 @@ export async function submitRequest(projectId: string, payload: Record<string, u
       projectId,
       'request.approved',
       `Auto-approved: ${request.requestCode}`,
-      `${kes(estimate.total)} estimated — within the ${roleLabel(chain[0])} limit, no second sign-off needed.`,
+      `${kesKSh(estimate.total)} estimated — within the ${roleLabel(chain[0])} limit, no second sign-off needed.`,
       request.requestedByRole,
       null,
     )
@@ -503,7 +526,7 @@ export async function submitRequest(projectId: string, payload: Record<string, u
     projectId,
     'approval.requested',
     `Approval needed: ${request.requestCode}`,
-    `${kes(estimate.total)} estimated (${estimate.source === 'quotes' ? 'from quotes' : 'from catalog averages'}) — waiting for the ${roleLabel(chain[0])} decision.`,
+    `${kesKSh(estimate.total)} estimated (${estimate.source === 'quotes' ? 'from quotes' : 'from catalog averages'}) — waiting for the ${roleLabel(chain[0])} decision.`,
     chain[0],
     null,
   )
@@ -647,9 +670,11 @@ export async function requestQuotes(projectId: string, payload: Record<string, u
 export async function receiveQuote(projectId: string, payload: Record<string, unknown>) {
   const quote = await getQuoteOrThrow(payload.id, projectId)
   if (quote.status !== 'requested') throw new Error(`Quote is already ${quote.status.toUpperCase()}`)
-  const deliveryFee = moneyNumber(payload.deliveryFee) ?? 0
-  const transportFee = moneyNumber(payload.transportFee) ?? 0
-  const fees = moneyNumber(payload.fees) ?? 0
+  // issue #122: quote money is stored as integer cents — KSh payloads are
+  // converted + validated here; totals accumulate exactly in bigint.
+  const deliveryFee = optCents(payload.deliveryFee, 'deliveryFee') ?? 0n
+  const transportFee = optCents(payload.transportFee, 'transportFee') ?? 0n
+  const fees = optCents(payload.fees, 'fees') ?? 0n
   const deliveryEta = str(payload.deliveryEta)
   const stockOk = payload.stockOk === undefined ? true : Boolean(payload.stockOk)
   const validUntil = payload.validUntil ? new Date(String(payload.validUntil)) : undefined
@@ -657,42 +682,41 @@ export async function receiveQuote(projectId: string, payload: Record<string, un
 
   const rawLines = Array.isArray(payload.lines) ? payload.lines : []
 
-  let unitPrice: number
-  let totalLanded: number
+  let unitPrice: Cents
+  let totalLanded: Cents
   if (rawLines.length) {
     // Multi-line bid: one price per REQUEST line (positional, qty from request)
     const requestLines = quote.request.lines
     if (rawLines.length !== requestLines.length) {
       throw new Error(`This request has ${requestLines.length} line(s) — price every one (${rawLines.length} given)`)
     }
-    const priced: Array<{ name: string; unit: string; qty: number; unitPrice: number }> = []
+    const priced: Array<{ name: string; unit: string; qty: number; unitPrice: Cents }> = []
     for (let i = 0; i < requestLines.length; i++) {
       const rec = (rawLines[i] ?? {}) as Record<string, unknown>
-      const price = posNumber(rec.unitPrice)
+      const price = parseMoneyCents(rec.unitPrice)
       if (price === null) throw new Error(`Line "${requestLines[i].materialName}": quoted unit price must be greater than zero`)
       priced.push({ name: requestLines[i].materialName, unit: requestLines[i].unit, qty: requestLines[i].qty, unitPrice: price })
     }
     unitPrice = priced[0].unitPrice // header price = primary (first) line — compare-basis
-    totalLanded = Math.round(
-      priced.reduce((s, l) => s + l.qty * l.unitPrice, 0) * 100 + (deliveryFee + transportFee + fees) * 100,
-    ) / 100
+    totalLanded = sumCents([...priced.map((l) => mulQtyCents(l.qty, l.unitPrice)), deliveryFee, transportFee, fees])
     await db.quoteLine.deleteMany({ where: { quoteId: quote.id } })
     await db.quoteLine.createMany({
-      data: priced.map((l) => ({ quoteId: quote.id, name: l.name, unit: l.unit, qty: l.qty, unitPrice: l.unitPrice, lineTotal: Math.round(l.qty * l.unitPrice * 100) / 100 })),
+      data: priced.map((l) => ({ quoteId: quote.id, name: l.name, unit: l.unit, qty: l.qty, unitPrice: l.unitPrice, lineTotal: mulQtyCents(l.qty, l.unitPrice) })),
     })
   } else {
-    unitPrice = posNumber(payload.unitPrice) ?? -1
-    if (unitPrice <= 0) throw new Error('Quoted unit price must be greater than zero')
+    unitPrice = parseMoneyCents(payload.unitPrice) ?? -1n
+    if (unitPrice <= 0n) throw new Error('Quoted unit price must be greater than zero')
     const firstLine = quote.request.lines[0]
     if (!firstLine) throw new Error('The request has no lines to quote against')
-    totalLanded = Math.round((unitPrice * firstLine.qty + deliveryFee + transportFee + fees) * 100) / 100
+    totalLanded = sumCents([mulQtyCents(firstLine.qty, unitPrice), deliveryFee, transportFee, fees])
   }
 
   const updated = await db.quote.update({
     where: { id: quote.id },
     data: { unitPrice, deliveryFee, transportFee, fees, totalLanded, deliveryEta, stockOk, validUntil, terms, status: 'received' },
   })
-  return { id: updated.id, totalLanded, lineCount: rawLines.length || undefined }
+  // KSh at the action boundary (issue #122) — the row stores cents
+  return { id: updated.id, totalLanded: centsToKes(totalLanded), lineCount: rawLines.length || undefined }
 }
 
 /** `quote.decline` { id, reason? } — supplier declined (reason rides the audit). */
@@ -736,14 +760,14 @@ export async function createOrder(projectId: string, payload: Record<string, unk
   }
 
   // Price every request line: supplier catalog first, quote price fallback
-  const lineData: Array<{ name: string; unit: string; qty: number; unitPrice: number; lineTotal: number }> = []
+  const lineData: Array<{ name: string; unit: string; qty: number; unitPrice: Cents; lineTotal: Cents }> = []
   for (const line of request.lines) {
-    let unitPrice: number | null = null
+    let unitPrice: Cents | null = null
     const exact = supplier.catalogItems.find((c) => materialKey(c.name) === materialKey(line.materialName))
     const fuzzy = supplier.catalogItems.find((c) => materialMatches(c.name, line.materialName))
     const catalogHit = exact ?? fuzzy
     if (catalogHit) unitPrice = catalogHit.unitPrice
-    else if (quote && quote.status === 'received' && quote.unitPrice > 0 && line.id === request.lines[0]?.id) {
+    else if (quote && quote.status === 'received' && quote.unitPrice > 0n && line.id === request.lines[0]?.id) {
       unitPrice = quote.unitPrice
     }
     if (unitPrice === null) {
@@ -751,14 +775,14 @@ export async function createOrder(projectId: string, payload: Record<string, unk
         `${supplier.businessName} does not stock "${line.materialName}" — pick a supplier that stocks it or request a quote first`,
       )
     }
-    const lineTotal = Math.round(unitPrice * line.qty * 100) / 100
+    const lineTotal = mulQtyCents(line.qty, unitPrice)
     lineData.push({ name: line.materialName, unit: line.unit, qty: line.qty, unitPrice, lineTotal })
   }
 
-  const subtotal = Math.round(lineData.reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
+  const subtotal = sumCents(lineData.map((l) => l.lineTotal))
   const deliveryFee =
-    supplier.freeDeliveryOver !== null && subtotal >= supplier.freeDeliveryOver ? 0 : supplier.deliveryFeeBase
-  const total = Math.round((subtotal + deliveryFee) * 100) / 100
+    supplier.freeDeliveryOver !== null && subtotal >= supplier.freeDeliveryOver ? 0n : supplier.deliveryFeeBase
+  const total = subtotal + deliveryFee
 
   const paymentSource = ['client', 'contractor', 'project_wallet', 'finance'].includes(String(payload.paymentSource))
     ? String(payload.paymentSource)
@@ -787,7 +811,7 @@ export async function createOrder(projectId: string, payload: Record<string, unk
     },
   })
   await db.materialRequest.update({ where: { id: request.id }, data: { status: 'converted' } })
-  return { id: order.id, orderCode, total, subtotal, deliveryFee }
+  return { id: order.id, orderCode, total: centsToKes(total), subtotal: centsToKes(subtotal), deliveryFee: centsToKes(deliveryFee) }
 }
 
 /** `order.update` { id, note? } — note edits (v1 orders are born approved; edits are notes). */
@@ -806,8 +830,14 @@ export async function approveOrder(projectId: string, payload: Record<string, un
   if (!['draft', 'pending_approval'].includes(order.status)) {
     throw new Error(`${order.orderCode} is ${order.status.toUpperCase()} — orders from approved requests need no separate approval`)
   }
-  const rules: RuleLike[] = await db.approvalRule.findMany({ where: { projectId, active: true } })
-  const chain = requiredApproverRoles(rules, order.total)
+  const ruleRows = await db.approvalRule.findMany({ where: { projectId, active: true } })
+  // RuleLike ladder runs in KSh (advisory bands); rows are cents — one conversion.
+  const rules: RuleLike[] = ruleRows.map((r) => ({
+    ...r,
+    minAmount: centsToKes(r.minAmount),
+    maxAmount: r.maxAmount === null ? null : centsToKes(r.maxAmount),
+  }))
+  const chain = requiredApproverRoles(rules, centsToKes(order.total))
   const actor = await currentActor()
   if (actor.role && !chain.includes(actor.role)) {
     throw new Error(
@@ -1175,7 +1205,7 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
       orderLineId: orderLine.id,
       orderLineName: orderLine.name,
       unit: orderLine.unit,
-      unitPrice: orderLine.unitPrice,
+      unitPrice: centsToKes(orderLine.unitPrice),
       qtyOrdered: orderLine.qty,
       qtyReceived,
       qtyRejected,
@@ -1463,9 +1493,11 @@ const APPROVER_ROLES = ['supervisor', 'contractor', 'client', 'finance']
 
 /** `rule.upsert` { id?, minAmount, maxAmount?, approverRole, priority?, active? }. */
 export async function upsertRule(projectId: string, payload: Record<string, unknown>) {
-  const minAmount = moneyNumber(payload.minAmount)
-  if (minAmount === null) throw new Error('minAmount must be zero or more')
-  const maxAmount = payload.maxAmount === undefined || payload.maxAmount === null ? null : moneyNumber(payload.maxAmount)
+  // issue #122: approval bands are stored in cents — KSh payload converted
+  // + validated here; the ladder comparison and reads run on cents/KSh once.
+  const minAmount = optCents(payload.minAmount, 'minAmount')
+  if (minAmount === null) throw new Error('minAmount must be a zero-or-more KSh amount (max 2dp)')
+  const maxAmount = optCents(payload.maxAmount, 'maxAmount')
   if (maxAmount !== null && maxAmount <= minAmount) {
     throw new Error('maxAmount must be greater than minAmount (or empty for no ceiling)')
   }

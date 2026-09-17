@@ -322,7 +322,7 @@ const STK_PUSH_OK = () =>
 function seedPaymentRequest(overrides: Record<string, unknown> = {}) {
   const row: Record<string, unknown> = {
     id: PR_ID, requestCode: 'PR-2026-000042', projectId: 'proj-1',
-    description: 'Sweep fixture payment', amount: 1500,
+    description: 'Sweep fixture payment', amount: 150000n,
     payee: '254708374149', method: 'mpesa', status: 'approved',
     paidAt: null, paidTxnId: null,
     ...overrides,
@@ -413,8 +413,8 @@ describe('runDarajaReconcile — settles pending intents like the callback', () 
     expect(state.txns.size).toBe(1)
     const lines = postedLines()
     expect(lines).toHaveLength(2)
-    expect(lines).toContainEqual({ side: 'debit', amount: 1500, code: 'EXPENSE:proj-1' })
-    expect(lines).toContainEqual({ side: 'credit', amount: 1500, code: 'CASH_MPESA' })
+    expect(lines).toContainEqual({ side: 'debit', amount: 150000n, code: 'EXPENSE:proj-1' })
+    expect(lines).toContainEqual({ side: 'credit', amount: 150000n, code: 'CASH_MPESA' })
     expect(state.paymentRequests.get(PR_ID)?.status).toBe('paid')
     expect(state.transactions.size).toBe(1) // legacy Transaction row linked
     // the durable dedupe record — same key family the callback writes

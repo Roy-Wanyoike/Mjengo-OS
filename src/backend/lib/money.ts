@@ -58,6 +58,15 @@ export function parseMoneyCents(v: unknown): Cents | null {
 }
 
 /**
+ * Parse UNTRUSTED input into non-negative cents (zero allowed — tax lines,
+ * zero-priced items). Same rules otherwise.
+ */
+export function parseNonNegativeMoneyCents(v: unknown): Cents | null {
+  if (v === 0 || v === '0' || v === '0.0' || v === '0.00') return 0n
+  return parseMoneyCents(v)
+}
+
+/**
  * Parse UNTRUSTED input into signed cents (negative allowed — variation
  * orders record savings as negative budget impact). Same 2-dp / bound rules
  * applied to the absolute value; zero is refused (money must move).
@@ -97,6 +106,13 @@ export function assertMoneyCents(v: unknown, field = 'amount'): Cents {
 export function assertSignedMoneyCents(v: unknown, field = 'amount'): Cents {
   const c = parseSignedMoneyCents(v)
   if (c === null) throw new Error(`${field}: ${moneyAmountError(true)}`)
+  return c
+}
+
+/** Validating variant that throws (zero allowed — tax, rates, zero-priced). */
+export function assertNonNegativeMoneyCents(v: unknown, field = 'amount'): Cents {
+  const c = parseNonNegativeMoneyCents(v)
+  if (c === null) throw new Error(`${field}: must be a non-negative number of at most ${MAX_MONEY_KES} (KSh) with no more than 2 decimal places`)
   return c
 }
 

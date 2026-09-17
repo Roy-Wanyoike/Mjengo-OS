@@ -246,17 +246,17 @@ const attRow = () => state.attendance.get('att-1') as Record<string, unknown>
 beforeEach(() => {
   state.reset()
   state.projects.set('proj-1', { id: 'proj-1', name: 'Test Build', client: 'Client', createdAt: new Date('2026-01-01') })
-  state.phases.set('phase-1', { id: 'phase-1', projectId: 'proj-1', name: 'Foundations', order: 1, budget: 100_000, status: 'in_progress', progressManual: null })
+  state.phases.set('phase-1', { id: 'phase-1', projectId: 'proj-1', name: 'Foundations', order: 1, budget: 10_000_000n, status: 'in_progress', progressManual: null })
   state.tasks.set('task-1', {
     id: 'task-1', phaseId: 'phase-1', title: 'Pour slab', status: 'in_progress', progress: 30,
     priority: 'normal', assignedToId: null, blockedById: null, blockedReason: null,
     verifiedAt: null, verifiedByName: null, dueDate: null, createdAt: new Date(), updatedAt: new Date(),
     version: 3,
   })
-  state.workers.set('worker-1', { id: 'worker-1', projectId: 'proj-1', name: 'Kamau', role: 'Fundi', phone: '+254700000001', dailyRate: 800, active: true })
+  state.workers.set('worker-1', { id: 'worker-1', projectId: 'proj-1', name: 'Kamau', role: 'Fundi', phone: '+254700000001', dailyRate: 80_000n, active: true })
   state.attendance.set('att-1', {
     id: 'att-1', workerId: 'worker-1', projectId: 'proj-1', date: todayEAT(),
-    checkIn: new Date(), checkOut: null, status: 'present', method: 'app', wage: 800, paid: false,
+    checkIn: new Date(), checkOut: null, status: 'present', method: 'app', wage: 80_000n, paid: false,
     verification: 'reported', evidence: null, exceptionReason: null, exceptionNote: null,
     overrideLog: null, recordedBy: null, version: 2,
   })
@@ -368,7 +368,7 @@ describe('POST /api/sync — attendance day-rows version the same way', () => {
   it('single-row action: fresh baseVersion + force applies a status correction (the §41 human decision path)', async () => {
     const json = await flush([{ id: 'b-3', type: 'attendance.setStatus', payload: { workerId: 'worker-1', status: 'absent', baseVersion: 2 }, projectId: 'proj-1', force: true }])
     expect(json.results[0]).toMatchObject({ id: 'b-3', ok: true })
-    expect(attRow()).toMatchObject({ status: 'absent', version: 3, wage: 0 })
+    expect(attRow()).toMatchObject({ status: 'absent', version: 3, wage: 0n })
   })
 
   it('bulk muster roll: a per-record stale baseVersion rejects the item', async () => {

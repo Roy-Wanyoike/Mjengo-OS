@@ -353,8 +353,8 @@ function getState() {
 const P = 'proj-1'
 const d = (n: number) => new Date(`2026-01-${String(n).padStart(2, '0')}T10:00:00.000Z`)
 
-interface SeedPhase { id: string; order: number; budget: number; status?: string }
-interface SeedTxn { id: string; amount: number; day: number; type?: string; phaseId?: string | null }
+interface SeedPhase { id: string; order: number; budget: bigint; status?: string }
+interface SeedTxn { id: string; amount: bigint; day: number; type?: string; phaseId?: string | null }
 
 function seedProject(phases: SeedPhase[], txns: SeedTxn[]) {
   state.projects.set(P, { id: P, name: 'Test Bungalow', client: 'Amina Test' })
@@ -370,11 +370,11 @@ function seedProject(phases: SeedPhase[], txns: SeedTxn[]) {
   }
 }
 
-function seedMilestone(id: string, phaseId: string | null, amount = 650_000, status = 'release_requested') {
+function seedMilestone(id: string, phaseId: string | null, amount = 65_000_000n, status = 'release_requested') {
   state.milestones.set(id, { id, projectId: P, phaseId, name: `Milestone ${id}`, amount, status, evidencePhotoIds: '[]' })
 }
 
-function seedEscrow(balance: number) {
+function seedEscrow(balance: bigint) {
   state.escrowWallets.set('wallet-1', { id: 'wallet-1', projectId: P, balance, ledgerAccountId: null })
 }
 
@@ -388,13 +388,13 @@ describe('budget variance report — phase cost-code attribution', () => {
   it('every row stamped → mode "real": DIRECT attribution, zero estimate', async () => {
     seedProject(
       [
-        { id: 'phase-a', order: 1, budget: 100_000 },
-        { id: 'phase-b', order: 2, budget: 100_000 },
+        { id: 'phase-a', order: 1, budget: 10000000n },
+        { id: 'phase-b', order: 2, budget: 10000000n },
       ],
       [
-        { id: 't1', amount: 40_000, day: 1, phaseId: 'phase-a' },
-        { id: 't2', amount: 60_000, day: 2, phaseId: 'phase-b' },
-        { id: 't3', amount: 10_000, day: 3, phaseId: 'phase-a' },
+        { id: 't1', amount: 4000000n, day: 1, phaseId: 'phase-a' },
+        { id: 't2', amount: 6000000n, day: 2, phaseId: 'phase-b' },
+        { id: 't3', amount: 1000000n, day: 3, phaseId: 'phase-a' },
       ],
     )
     const r = await buildBudgetVarianceReport(P)
@@ -422,13 +422,13 @@ describe('budget variance report — phase cost-code attribution', () => {
     // earliest phase).
     seedProject(
       [
-        { id: 'phase-a', order: 1, budget: 100_000 },
-        { id: 'phase-b', order: 2, budget: 100_000 },
+        { id: 'phase-a', order: 1, budget: 10000000n },
+        { id: 'phase-b', order: 2, budget: 10000000n },
       ],
       [
-        { id: 't1', amount: 30_000, day: 1 },
-        { id: 't2', amount: 30_000, day: 2 },
-        { id: 't3', amount: 30_000, day: 3 },
+        { id: 't1', amount: 3000000n, day: 1 },
+        { id: 't2', amount: 3000000n, day: 2 },
+        { id: 't3', amount: 3000000n, day: 3 },
       ],
     )
     const r = await buildBudgetVarianceReport(P)
@@ -447,13 +447,13 @@ describe('budget variance report — phase cost-code attribution', () => {
     // spend already covers its 30k target → the estimate fills B).
     seedProject(
       [
-        { id: 'phase-a', order: 1, budget: 100_000 },
-        { id: 'phase-b', order: 2, budget: 100_000 },
+        { id: 'phase-a', order: 1, budget: 10000000n },
+        { id: 'phase-b', order: 2, budget: 10000000n },
       ],
       [
-        { id: 't1', amount: 40_000, day: 1, phaseId: 'phase-a' },
-        { id: 't2', amount: 30_000, day: 2 },
-        { id: 't3', amount: 30_000, day: 3 },
+        { id: 't1', amount: 4000000n, day: 1, phaseId: 'phase-a' },
+        { id: 't2', amount: 3000000n, day: 2 },
+        { id: 't3', amount: 3000000n, day: 3 },
       ],
     )
     const r = await buildBudgetVarianceReport(P)
@@ -471,13 +471,13 @@ describe('budget variance report — phase cost-code attribution', () => {
   it('legacy milestone linkage (uncoded rows) still derives exactly — tier 2', async () => {
     seedProject(
       [
-        { id: 'phase-a', order: 1, budget: 100_000 },
-        { id: 'phase-b', order: 2, budget: 100_000 },
+        { id: 'phase-a', order: 1, budget: 10000000n },
+        { id: 'phase-b', order: 2, budget: 10000000n },
       ],
       [
-        { id: 't1', amount: 30_000, day: 1 },
-        { id: 't2', amount: 30_000, day: 2 },
-        { id: 't3', amount: 30_000, day: 3 },
+        { id: 't1', amount: 3000000n, day: 1 },
+        { id: 't2', amount: 3000000n, day: 2 },
+        { id: 't3', amount: 3000000n, day: 3 },
       ],
     )
     seedMilestone('m1', 'phase-b')
@@ -499,10 +499,10 @@ describe('budget variance report — phase cost-code attribution', () => {
   it('a stored code SUPERSEDES the milestone derivation on the same row', async () => {
     seedProject(
       [
-        { id: 'phase-a', order: 1, budget: 100_000 },
-        { id: 'phase-b', order: 2, budget: 100_000 },
+        { id: 'phase-a', order: 1, budget: 10000000n },
+        { id: 'phase-b', order: 2, budget: 10000000n },
       ],
-      [{ id: 't1', amount: 40_000, day: 1, phaseId: 'phase-a' }],
+      [{ id: 't1', amount: 4000000n, day: 1, phaseId: 'phase-a' }],
     )
     seedMilestone('m1', 'phase-b')
     state.paymentRequests.set('pr1', {
@@ -518,10 +518,10 @@ describe('budget variance report — phase cost-code attribution', () => {
 
   it('a stamped negative reversal nets its phase down — Σ invariant holds', async () => {
     seedProject(
-      [{ id: 'phase-a', order: 1, budget: 100_000 }],
+      [{ id: 'phase-a', order: 1, budget: 10000000n }],
       [
-        { id: 't1', amount: 100_000, day: 1, phaseId: 'phase-a' },
-        { id: 't2', amount: -60_000, day: 2, phaseId: 'phase-a', type: 'reversal' },
+        { id: 't1', amount: 10000000n, day: 1, phaseId: 'phase-a' },
+        { id: 't2', amount: -6_000_000n, day: 2, phaseId: 'phase-a', type: 'reversal' },
       ],
     )
     const r = await buildBudgetVarianceReport(P)
@@ -533,15 +533,15 @@ describe('budget variance report — phase cost-code attribution', () => {
 
   it('a FOREIGN phaseId (other project) is never counted to a phantom phase — falls back to the estimate, Σ intact', async () => {
     state.projects.set('proj-2', { id: 'proj-2', name: 'Other', client: 'Bob' })
-    state.phases.set('phase-x', { id: 'phase-x', projectId: 'proj-2', name: 'x', order: 1, budget: 1, status: 'in_progress', progressManual: null })
+    state.phases.set('phase-x', { id: 'phase-x', projectId: 'proj-2', name: 'x', order: 1, budget: 100n, status: 'in_progress', progressManual: null })
     seedProject(
       [
-        { id: 'phase-a', order: 1, budget: 100_000 },
-        { id: 'phase-b', order: 2, budget: 100_000 },
+        { id: 'phase-a', order: 1, budget: 10000000n },
+        { id: 'phase-b', order: 2, budget: 10000000n },
       ],
       [
-        { id: 't1', amount: 50_000, day: 1, phaseId: 'phase-x' }, // foreign — cannot occur via the API
-        { id: 't2', amount: 50_000, day: 2 },
+        { id: 't1', amount: 5000000n, day: 1, phaseId: 'phase-x' }, // foreign — cannot occur via the API
+        { id: 't2', amount: 5000000n, day: 2 },
       ],
     )
     const r = await buildBudgetVarianceReport(P)
@@ -554,7 +554,7 @@ describe('budget variance report — phase cost-code attribution', () => {
   })
 
   it('no spend → mode "none"; unknown project → null (route 404)', async () => {
-    seedProject([{ id: 'phase-a', order: 1, budget: 100_000 }], [])
+    seedProject([{ id: 'phase-a', order: 1, budget: 10000000n }], [])
     const r = await buildBudgetVarianceReport(P)
     expect(r!.phaseAttribution.mode).toBe('none')
     expect(r!.phaseAttribution.codedSpent).toBe(0)
@@ -564,7 +564,7 @@ describe('budget variance report — phase cost-code attribution', () => {
   it('project with no phases: stamped spend reports honestly, no crash', async () => {
     state.projects.set(P, { id: P, name: 'No Phases', client: 'Amina Test' })
     state.transactions.set('t1', {
-      id: 't1', projectId: P, type: 'material', amount: 50_000, method: 'mpesa',
+      id: 't1', projectId: P, type: 'material', amount: 5000000n, method: 'mpesa',
       reference: null, costCode: null, phaseId: 'phase-gone', ledgerTxnId: null,
       note: '', date: d(1), createdAt: d(1),
     })
@@ -582,52 +582,52 @@ describe('posting seams — phase cost-code stamps (money math untouched)', () =
   beforeEach(() => state.reset())
 
   it('resolvePostingPhaseId: absent → null (honest no-attribution)', async () => {
-    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 1, status: 'pending' })
+    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 100n, status: 'pending' })
     expect(await resolvePostingPhaseId(db, P, null)).toBeNull()
     expect(await resolvePostingPhaseId(db, P, undefined)).toBeNull()
   })
 
   it('resolvePostingPhaseId: in-project phase → its id', async () => {
-    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 1, status: 'pending' })
+    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 100n, status: 'pending' })
     expect(await resolvePostingPhaseId(db, P, 'phase-a')).toBe('phase-a')
   })
 
   it('resolvePostingPhaseId: FOREIGN phase → fail-closed honest error', async () => {
-    state.phases.set('phase-x', { id: 'phase-x', projectId: 'proj-2', name: 'x', order: 1, budget: 1, status: 'pending' })
+    state.phases.set('phase-x', { id: 'phase-x', projectId: 'proj-2', name: 'x', order: 1, budget: 100n, status: 'pending' })
     await expect(resolvePostingPhaseId(db, P, 'phase-x')).rejects.toThrow(/does not belong to this project/i)
     await expect(resolvePostingPhaseId(db, P, 'phase-missing')).rejects.toThrow(/foreign phase cost-code/i)
   })
 
   it('releaseMilestoneAtomic: stamps the milestone phase; escrow/ledger math unchanged', async () => {
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
-    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 500_000, status: 'in_progress' })
+    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 50000000n, status: 'in_progress' })
     seedMilestone('m1', 'phase-a', 200_000)
-    seedEscrow(1_000_000)
+    seedEscrow(100000000n)
     const out = await releaseMilestoneAtomic(P, {
-      milestone: { id: 'm1', name: 'Milestone m1', amount: 200_000, phaseId: 'phase-a' },
+      milestone: { id: 'm1', name: 'Milestone m1', amount: 20000000n, phaseId: 'phase-a' },
       decider: { name: 'Amina Test', role: 'client' },
       note: null,
     })
-    expect(out.balance).toBe(800_000)
+    expect(out.balance).toBe(80_000_000n)
     const row = [...state.transactions.values()].find((t) => t.type === 'milestone')
     expect(row?.phaseId).toBe('phase-a') // THE stamp
-    expect(row?.amount).toBe(200_000) // money math untouched
+    expect(row?.amount).toBe(20_000_000n) // money math untouched (cents)
     expect(row?.ledgerTxnId).toBe(out.ledgerTxnId)
     // balanced double entry: ESCROW debit 200k == EXPENSE credit 200k
     const ledger = state.ledgerTxns.get(out.ledgerTxnId as string)
     expect(ledger).toBeTruthy()
     const legs = [...state.entries.values()].filter((e) => e.transactionId === out.ledgerTxnId)
-    expect(legs.filter((e) => e.side === 'debit')[0]?.amount).toBe(200_000)
-    expect(legs.filter((e) => e.side === 'credit')[0]?.amount).toBe(200_000)
+    expect(legs.filter((e) => e.side === 'debit')[0]?.amount).toBe(20_000_000n)
+    expect(legs.filter((e) => e.side === 'credit')[0]?.amount).toBe(20_000_000n)
     expect(state.milestones.get('m1')?.status).toBe('released')
   })
 
   it('releaseMilestoneAtomic: milestone without a phase → honest null code (legacy rows)', async () => {
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
     seedMilestone('m1', null, 100_000)
-    seedEscrow(500_000)
+    seedEscrow(50000000n)
     await releaseMilestoneAtomic(P, {
-      milestone: { id: 'm1', name: 'M', amount: 100_000, phaseId: null },
+      milestone: { id: 'm1', name: 'M', amount: 10000000n, phaseId: null },
       decider: { name: 'Amina Test', role: 'client' },
       note: null,
     })
@@ -637,36 +637,36 @@ describe('posting seams — phase cost-code stamps (money math untouched)', () =
 
   it('releaseMilestoneAtomic: FOREIGN phase → honest error, NO money moves (rollback)', async () => {
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
-    state.phases.set('phase-x', { id: 'phase-x', projectId: 'proj-2', name: 'x', order: 1, budget: 1, status: 'pending' })
+    state.phases.set('phase-x', { id: 'phase-x', projectId: 'proj-2', name: 'x', order: 1, budget: 100n, status: 'pending' })
     seedMilestone('m1', 'phase-x', 200_000)
-    seedEscrow(1_000_000)
+    seedEscrow(100000000n)
     await expect(
       releaseMilestoneAtomic(P, {
-        milestone: { id: 'm1', name: 'M', amount: 200_000, phaseId: 'phase-x' },
+        milestone: { id: 'm1', name: 'M', amount: 20000000n, phaseId: 'phase-x' },
         decider: { name: 'Amina Test', role: 'client' },
         note: null,
       }),
     ).rejects.toThrow(/does not belong to this project/i)
     expect(state.transactions.size).toBe(0) // no legacy row
     expect(state.ledgerTxns.size).toBe(0) // no ledger post
-    expect([...state.escrowWallets.values()][0]?.balance).toBe(1_000_000) // balance untouched
+    expect([...state.escrowWallets.values()][0]?.balance).toBe(100000000n) // balance untouched (cents)
     expect(state.milestones.get('m1')?.status).toBe('release_requested') // not released
   })
 
   it('payPaymentRequest: a milestone-linked request pays the milestone phase — stamp + exact', async () => {
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
-    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 500_000, status: 'in_progress' })
+    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 50000000n, status: 'in_progress' })
     seedMilestone('m1', 'phase-a', 300_000)
     state.paymentRequests.set('pr1', {
       id: 'pr1', projectId: P, requestCode: 'PR-2026-000001', status: 'approved',
-      amount: 300_000, payee: 'Fundi', description: 'walling', method: 'cash',
+      amount: 30000000n, payee: 'Fundi', description: 'walling', method: 'cash',
       relatedEntityType: 'milestone', relatedEntityId: 'm1', paidTxnId: null,
     })
     const out = await payPaymentRequest(P, { id: 'pr1', method: 'cash' })
     expect(out.status).toBe('paid')
     const row = [...state.transactions.values()].find((t) => t.type === 'payment_request')
     expect(row?.phaseId).toBe('phase-a')
-    expect(row?.amount).toBe(300_000)
+    expect(row?.amount).toBe(30_000_000n)
     expect(state.paymentRequests.get('pr1')?.paidTxnId).toBe(row?.id)
   })
 
@@ -674,7 +674,7 @@ describe('posting seams — phase cost-code stamps (money math untouched)', () =
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
     state.paymentRequests.set('pr1', {
       id: 'pr1', projectId: P, requestCode: 'PR-2026-000002', status: 'approved',
-      amount: 75_000, payee: 'Supplier', description: 'misc', method: 'cash',
+      amount: 7500000n, payee: 'Supplier', description: 'misc', method: 'cash',
       relatedEntityType: null, relatedEntityId: null, paidTxnId: null,
     })
     await payPaymentRequest(P, { id: 'pr1', method: 'cash' })
@@ -687,12 +687,12 @@ describe('posting seams — phase cost-code stamps (money math untouched)', () =
     seedMilestone('m1', null, 50_000)
     state.paymentRequests.set('pr1', {
       id: 'pr1', projectId: P, requestCode: 'PR-2026-000003', status: 'approved',
-      amount: 50_000, payee: 'Fundi', description: 'x', method: 'cash',
+      amount: 5000000n, payee: 'Fundi', description: 'x', method: 'cash',
       relatedEntityType: 'milestone', relatedEntityId: 'm1', paidTxnId: null,
     })
     state.paymentRequests.set('pr2', {
       id: 'pr2', projectId: P, requestCode: 'PR-2026-000004', status: 'approved',
-      amount: 25_000, payee: 'Fundi', description: 'y', method: 'cash',
+      amount: 2500000n, payee: 'Fundi', description: 'y', method: 'cash',
       relatedEntityType: 'milestone', relatedEntityId: 'missing-milestone', paidTxnId: null,
     })
     await payPaymentRequest(P, { id: 'pr1', method: 'cash' })
@@ -704,26 +704,26 @@ describe('posting seams — phase cost-code stamps (money math untouched)', () =
 
   it('payInvoice: payload phaseId (valid) → stamped; invoice flips paid; amount unchanged', async () => {
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
-    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 500_000, status: 'in_progress' })
+    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'a', order: 1, budget: 50000000n, status: 'in_progress' })
     state.invoices.set('inv1', {
       id: 'inv1', invoiceCode: 'INV-2026-000001', projectId: P, orderId: null, supplierId: null,
-      status: 'approved', subtotal: 150_000, tax: 0, total: 150_000, paymentMethod: null,
+      status: 'approved', subtotal: 15000000n, tax: 0, total: 15000000n, paymentMethod: null,
     })
     const out = await payInvoice(P, { id: 'inv1', method: 'cash', phaseId: 'phase-a' })
     expect(out.status).toBe('paid')
     const row = [...state.transactions.values()].find((t) => t.type === 'invoice')
     expect(row?.phaseId).toBe('phase-a')
-    expect(row?.amount).toBe(150_000)
+    expect(row?.amount).toBe(15_000_000n)
     expect(state.invoices.get('inv1')?.status).toBe('paid')
     expect(state.ledgerTxns.size).toBe(1) // posted exactly once
   })
 
   it('payInvoice: FOREIGN payload phaseId → honest error BEFORE money moves', async () => {
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
-    state.phases.set('phase-x', { id: 'phase-x', projectId: 'proj-2', name: 'x', order: 1, budget: 1, status: 'pending' })
+    state.phases.set('phase-x', { id: 'phase-x', projectId: 'proj-2', name: 'x', order: 1, budget: 100n, status: 'pending' })
     state.invoices.set('inv1', {
       id: 'inv1', invoiceCode: 'INV-2026-000002', projectId: P, orderId: null, supplierId: null,
-      status: 'approved', subtotal: 150_000, tax: 0, total: 150_000, paymentMethod: null,
+      status: 'approved', subtotal: 15000000n, tax: 0, total: 15000000n, paymentMethod: null,
     })
     await expect(payInvoice(P, { id: 'inv1', method: 'cash', phaseId: 'phase-x' })).rejects.toThrow(
       /does not belong to this project/i,
@@ -737,7 +737,7 @@ describe('posting seams — phase cost-code stamps (money math untouched)', () =
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
     state.invoices.set('inv1', {
       id: 'inv1', invoiceCode: 'INV-2026-000003', projectId: P, orderId: null, supplierId: null,
-      status: 'approved', subtotal: 20_000, tax: 0, total: 20_000, paymentMethod: null,
+      status: 'approved', subtotal: 2000000n, tax: 0, total: 2000000n, paymentMethod: null,
     })
     await payInvoice(P, { id: 'inv1', method: 'cash' })
     const row = [...state.transactions.values()].find((t) => t.type === 'invoice')
@@ -747,28 +747,28 @@ describe('posting seams — phase cost-code stamps (money math untouched)', () =
   it('reverseTransaction: a stamped original reverses to the SAME phase (net attribution exact)', async () => {
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
     state.transactions.set('t1', {
-      id: 't1', projectId: P, type: 'milestone', amount: 100_000, method: 'mpesa',
+      id: 't1', projectId: P, type: 'milestone', amount: 10000000n, method: 'mpesa',
       reference: 'MJP-x', costCode: 'milestone', phaseId: 'phase-a', ledgerTxnId: null,
       note: 'orig', date: d(1), createdAt: d(1),
     })
     const out = await reverseTransaction(P, { id: 't1', reason: 'wrong phase', by: 'Finance' })
     const row = state.transactions.get(out.reversalTransactionId as string)
     expect(row?.phaseId).toBe('phase-a') // copied — negates the same phase
-    expect(row?.amount).toBe(-100_000)
+    expect(row?.amount).toBe(-10_000_000n)
     expect(row?.type).toBe('reversal')
   })
 
   it('reverseTransaction: an UNCoded original reverses to null (legacy behavior unchanged)', async () => {
     state.projects.set(P, { id: P, name: 'Test', client: 'Amina Test' })
     state.transactions.set('t1', {
-      id: 't1', projectId: P, type: 'material', amount: 40_000, method: 'cash',
+      id: 't1', projectId: P, type: 'material', amount: 4000000n, method: 'cash',
       reference: null, costCode: null, phaseId: null, ledgerTxnId: null,
       note: 'wages-ish', date: d(1), createdAt: d(1),
     })
     const out = await reverseTransaction(P, { id: 't1', reason: 'correction' })
     const row = state.transactions.get(out.reversalTransactionId as string)
     expect(row?.phaseId).toBeNull()
-    expect(row?.amount).toBe(-40_000)
+    expect(row?.amount).toBe(-4_000_000n)
   })
 })
 
@@ -779,18 +779,18 @@ describe('stamped posting → report rollup (the full issue #39 loop)', () => {
 
   it('a milestone release lands exactly on its phase in the report — no estimate for it', async () => {
     state.projects.set(P, { id: P, name: 'Loop Test', client: 'Amina Test' })
-    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'Foundation', order: 1, budget: 800_000, status: 'in_progress' })
-    state.phases.set('phase-b', { id: 'phase-b', projectId: P, name: 'Walling', order: 2, budget: 1_200_000, status: 'pending' })
-    seedEscrow(2_000_000)
+    state.phases.set('phase-a', { id: 'phase-a', projectId: P, name: 'Foundation', order: 1, budget: 80000000n, status: 'in_progress' })
+    state.phases.set('phase-b', { id: 'phase-b', projectId: P, name: 'Walling', order: 2, budget: 120000000n, status: 'pending' })
+    seedEscrow(200000000n)
     // legacy uncoded spend + one REAL coded release
     state.transactions.set('legacy1', {
-      id: 'legacy1', projectId: P, type: 'wage', amount: 30_000, method: 'mpesa',
+      id: 'legacy1', projectId: P, type: 'wage', amount: 3000000n, method: 'mpesa',
       reference: null, costCode: null, phaseId: null, ledgerTxnId: null,
       note: 'wages', date: d(1), createdAt: d(1),
     })
     seedMilestone('m1', 'phase-a', 200_000)
     await releaseMilestoneAtomic(P, {
-      milestone: { id: 'm1', name: 'Foundation package', amount: 200_000, phaseId: 'phase-a' },
+      milestone: { id: 'm1', name: 'Foundation package', amount: 20000000n, phaseId: 'phase-a' },
       decider: { name: 'Amina Test', role: 'client' },
       note: null,
     })

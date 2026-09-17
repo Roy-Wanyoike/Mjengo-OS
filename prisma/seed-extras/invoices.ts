@@ -57,9 +57,9 @@ export async function seedInvoices(db: PrismaClient): Promise<void> {
       orderId: null,
       supplierId: karenTimber.id,
       status: 'paid',
-      subtotal: 44200,
-      tax: 0, // VAT-inclusive pricing (demo)
-      total: 46000, // incl. delivery
+      subtotal: 4420000n,
+      tax: 0n, // VAT-inclusive pricing (demo)
+      total: 4600000n, // incl. delivery
       dueDate: daysAgo(16, 12),
       issuedAt: daysAgo(24, 11),
       submittedAt: daysAgo(23, 9),
@@ -76,9 +76,9 @@ export async function seedInvoices(db: PrismaClient): Promise<void> {
   })
   await db.invoiceLine.createMany({
     data: [
-      { invoiceId: inv21.id, name: 'Roofing sheet — box profile 30G (2m)', qty: 30, unitPrice: 1150, lineTotal: 34500 },
-      { invoiceId: inv21.id, name: 'Binding wire (25kg roll)', qty: 2, unitPrice: 4850, lineTotal: 9700 },
-      { invoiceId: inv21.id, name: 'Delivery — Karen to Kitengela', qty: 1, unitPrice: 1800, lineTotal: 1800 },
+      { invoiceId: inv21.id, name: 'Roofing sheet — box profile 30G (2m)', qty: 30, unitPrice: 115000n, lineTotal: 3450000n },
+      { invoiceId: inv21.id, name: 'Binding wire (25kg roll)', qty: 2, unitPrice: 485000n, lineTotal: 970000n },
+      { invoiceId: inv21.id, name: 'Delivery — Karen to Kitengela', qty: 1, unitPrice: 180000n, lineTotal: 180000n },
     ],
   })
 
@@ -90,9 +90,9 @@ export async function seedInvoices(db: PrismaClient): Promise<void> {
       orderId: po9.id,
       supplierId: nairobiHardware.id,
       status: 'approved', // decided, awaiting payment
-      subtotal: 59250,
-      tax: 0,
-      total: 62750,
+      subtotal: 5925000n,
+      tax: 0n,
+      total: 6275000n,
       dueDate: daysAhead(9, 12),
       issuedAt: daysAgo(7, 11),
       submittedAt: daysAgo(6, 9),
@@ -105,9 +105,9 @@ export async function seedInvoices(db: PrismaClient): Promise<void> {
   })
   await db.invoiceLine.createMany({
     data: [
-      { invoiceId: inv27.id, name: 'Cement 50kg (32.5N)', qty: 50, unitPrice: 795, lineTotal: 39750 },
-      { invoiceId: inv27.id, name: 'Ballast (screened)', qty: 10, unitPrice: 1950, lineTotal: 19500 },
-      { invoiceId: inv27.id, name: 'Delivery — Industrial Area to Kitengela', qty: 1, unitPrice: 3500, lineTotal: 3500 },
+      { invoiceId: inv27.id, name: 'Cement 50kg (32.5N)', qty: 50, unitPrice: 79500n, lineTotal: 3975000n },
+      { invoiceId: inv27.id, name: 'Ballast (screened)', qty: 10, unitPrice: 195000n, lineTotal: 1950000n },
+      { invoiceId: inv27.id, name: 'Delivery — Industrial Area to Kitengela', qty: 1, unitPrice: 350000n, lineTotal: 350000n },
     ],
   })
   // Approval trail for the decision (entityType invoice — plain fields, no FK)
@@ -133,9 +133,9 @@ export async function seedInvoices(db: PrismaClient): Promise<void> {
       orderId: po12.id,
       supplierId: kiambuRoad.id,
       status: 'submitted',
-      subtotal: 136000,
-      tax: 0,
-      total: 138500,
+      subtotal: 13600000n,
+      tax: 0n,
+      total: 13850000n,
       dueDate: daysAhead(7, 12),
       issuedAt: daysAgo(3, 11),
       submittedAt: daysAgo(1, 9),
@@ -146,9 +146,9 @@ export async function seedInvoices(db: PrismaClient): Promise<void> {
   })
   await db.invoiceLine.createMany({
     data: [
-      { invoiceId: inv31.id, name: 'Cement 50kg (32.5N)', qty: 50, unitPrice: 760, lineTotal: 38000 },
-      { invoiceId: inv31.id, name: 'Steel bar Y12 (12m length)', qty: 10, unitPrice: 9800, lineTotal: 98000 },
-      { invoiceId: inv31.id, name: 'Delivery — Kiambu Road to Kitengela', qty: 1, unitPrice: 2500, lineTotal: 2500 },
+      { invoiceId: inv31.id, name: 'Cement 50kg (32.5N)', qty: 50, unitPrice: 76000n, lineTotal: 3800000n },
+      { invoiceId: inv31.id, name: 'Steel bar Y12 (12m length)', qty: 10, unitPrice: 980000n, lineTotal: 9800000n },
+      { invoiceId: inv31.id, name: 'Delivery — Kiambu Road to Kitengela', qty: 1, unitPrice: 250000n, lineTotal: 250000n },
     ],
   })
   // Pending client decision (138,500 → client band)

@@ -1,4 +1,5 @@
 import { db } from '@/backend/lib/db'
+import { centsToKes } from '@/backend/lib/money'
 import { route } from '@/backend/lib/route-kit'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { orderRef, supplyOrderDetailQuery, validateQuery } from './schemas'
@@ -84,9 +85,9 @@ export const GET = route(
         supplierId: order.supplierId,
         supplierName: order.supplier.businessName,
         requestCode: order.request?.requestCode ?? null,
-        subtotal: order.subtotal,
-        deliveryFee: order.deliveryFee,
-        total: order.total,
+        subtotal: centsToKes(order.subtotal),
+        deliveryFee: centsToKes(order.deliveryFee),
+        total: centsToKes(order.total),
         paymentSource: order.paymentSource,
         createdByRole: order.createdByRole,
         note: order.note,
@@ -102,7 +103,9 @@ export const GET = route(
         unitPrice: l.unitPrice,
         lineTotal: l.lineTotal,
       })),
-      deliveries: order.deliveries.map((d) => deliveryRecord(d, order)),
+      deliveries: order.deliveries.map((d) =>
+        deliveryRecord(d, { orderCode: order.orderCode, lines: order.lines.map((l) => ({ ...l, unitPrice: centsToKes(l.unitPrice), lineTotal: centsToKes(l.lineTotal) })) }),
+      ),
     })
   },
 )

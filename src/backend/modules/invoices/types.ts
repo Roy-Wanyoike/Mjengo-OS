@@ -5,7 +5,7 @@
 // ledger-consistency projection (roadmap §8). The 3-way match (PO vs invoice
 // vs delivery) is computed by the shared pure functions in three-way.ts.
 
-import type { Invoice, InvoiceLine, PurchaseOrder, Supplier } from '@prisma/client'
+import type { PurchaseOrder, Supplier } from '@prisma/client'
 
 // ---- domain enums ----
 
@@ -68,8 +68,48 @@ export interface LedgerCheck {
 
 // ---- slice shapes ----
 
-export interface InvoiceWithLines extends Invoice {
-  lines: InvoiceLine[]
+/**
+ * One invoice line as the API/UI sees it — money in KSh numbers (the DB
+ * stores cents; the repository converts at this boundary — issue #122).
+ */
+export interface InvoiceLineDTO {
+  id: string
+  invoiceId: string
+  name: string
+  qty: number
+  unitPrice: number
+  lineTotal: number
+}
+
+/**
+ * An invoice with its lines, ready for JSON: money in KSh numbers.
+ * Deliberately NOT the Prisma row type anymore — bigint cents must never
+ * leak into a payload (JSON.stringify would throw).
+ */
+export interface InvoiceWithLines {
+  id: string
+  invoiceCode: string
+  projectId: string
+  orderId: string | null
+  supplierId: string | null
+  status: InvoiceStatus | string
+  createdBy: string | null
+  subtotal: number
+  tax: number
+  total: number
+  dueDate: Date | null
+  issuedAt: Date | null
+  submittedAt: Date | null
+  decidedAt: Date | null
+  decidedBy: string | null
+  paidAt: Date | null
+  paidByRole: string | null
+  paymentMethod: string | null
+  paymentReference: string | null
+  note: string | null
+  createdAt: Date
+  updatedAt: Date
+  lines: InvoiceLineDTO[]
   supplierName: string | null
   orderCode: string | null
 }

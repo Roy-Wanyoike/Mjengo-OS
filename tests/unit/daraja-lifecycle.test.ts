@@ -314,7 +314,7 @@ function seedPr(id: string, overrides: Record<string, unknown> = {}) {
     requestCode: `PR-2026-${id === PR1_ID ? '000101' : '000102'}`,
     projectId: 'proj-1',
     description: 'Lifecycle fixture payment',
-    amount: id === PR1_ID ? 1500 : 2200,
+    amount: id === PR1_ID ? 150000n : 220000n,
     payee: '254708374149',
     method: 'mpesa',
     status: 'approved',
@@ -449,8 +449,8 @@ describe('M-Pesa STK lifecycle — one continuous story on shared state (issue #
     expect(state.txns.size).toBe(1)
     const lines = postedLines()
     expect(lines).toHaveLength(2)
-    expect(lines).toContainEqual(expect.objectContaining({ side: 'debit', amount: 1500, code: 'EXPENSE:proj-1' }))
-    expect(lines).toContainEqual(expect.objectContaining({ side: 'credit', amount: 1500, code: 'CASH_MPESA' }))
+    expect(lines).toContainEqual(expect.objectContaining({ side: 'debit', amount: 150000n, code: 'EXPENSE:proj-1' }))
+    expect(lines).toContainEqual(expect.objectContaining({ side: 'credit', amount: 150000n, code: 'CASH_MPESA' }))
     expect(state.paymentRequests.get(PR1_ID)?.status).toBe('paid')
     expect(state.paymentRequests.get(PR1_ID)?.paidTxnId).toBeTruthy()
     expect(state.transactions.size).toBe(1) // exactly one legacy Transaction row

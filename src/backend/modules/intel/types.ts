@@ -273,7 +273,7 @@ export interface IntelSlice {
   /** Latest MjengoScore row (append-only history; latest wins, older rows stay queryable). */
   score: MjengoScore | null
   digests: IntelDigest[]
-  pricePoints: PricePoint[]
+  pricePoints: Array<Omit<PricePoint, 'unitPrice'> & { unitPrice: number }> // KSh (cents→KSh at the slice boundary — #122)
   // computed (server-side) by the repository:
   priceTrends: PriceTrendRow[]
   suggestions: ProcurementSuggestion[]

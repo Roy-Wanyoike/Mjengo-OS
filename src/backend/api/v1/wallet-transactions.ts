@@ -1,5 +1,6 @@
 import { FINANCE_ROLES } from '@/backend/lib/guard'
 import { db } from '@/backend/lib/db'
+import { centsToKes } from '@/backend/lib/money'
 import { route } from '@/backend/lib/route-kit'
 import { walletWithBalance } from '@/backend/modules/wallet/service'
 import { jsonOk } from '@/backend/modules/wallet/http'
@@ -126,10 +127,10 @@ export const GET = route(
         entries: t.entries.map((e) => ({
           accountCode: e.account.code,
           side: e.side,
-          amount: e.amount,
+          amount: centsToKes(e.amount),
           memo: e.memo,
         })),
-        total: t.entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0),
+        total: centsToKes(t.entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0n)),
       })),
       nextCursor,
       hasMore,

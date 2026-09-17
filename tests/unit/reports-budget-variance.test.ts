@@ -153,7 +153,7 @@ const P1 = 'proj-1'
 function seedProject(id = P1, name = 'Riverside Villas') {
   state.projects.set(id, {
     id, name, client: 'Mama Njeri', clientType: 'diaspora', location: 'Karen',
-    budget: 0, status: 'active', shareToken: 'tok-1',
+    budget: 0n, status: 'active', shareToken: 'tok-1',
     startDate: new Date('2026-01-05T09:00:00Z'), targetDate: new Date('2026-08-01T09:00:00Z'),
     createdAt: new Date('2026-01-05T09:00:00Z'), updatedAt: new Date('2026-01-05T09:00:00Z'),
   })
@@ -161,7 +161,7 @@ function seedProject(id = P1, name = 'Riverside Villas') {
 
 function phase(over: Record<string, unknown> = {}) {
   return {
-    id: state._id('f'), projectId: P1, name: 'Phase', order: 0, budget: 0,
+    id: state._id('f'), projectId: P1, name: 'Phase', order: 0, budget: 0n,
     status: 'pending', progressManual: null,
     createdAt: new Date('2026-01-06T09:00:00Z'), updatedAt: new Date('2026-01-06T09:00:00Z'),
     ...over,
@@ -179,7 +179,7 @@ function task(phaseId: string, progress: number) {
 
 function txn(over: Record<string, unknown> = {}) {
   const row = {
-    id: state._id('t'), projectId: P1, type: 'other', amount: 0, method: 'mpesa',
+    id: state._id('t'), projectId: P1, type: 'other', amount: 0n, method: 'mpesa',
     reference: null, costCode: null, ledgerTxnId: null, note: null,
     date: new Date('2026-02-01T10:00:00Z'), createdAt: new Date('2026-02-01T10:00:00Z'),
     ...over,
@@ -207,12 +207,12 @@ function pr(over: Record<string, unknown> = {}) {
 /** Fixture A: 3 phases (2 started), 3 unattributed txns — the canonical allocation walk. */
 function seedAllocationFixture() {
   seedProject()
-  state.phases.set('f1', phase({ id: 'f1', name: 'Foundation', order: 1, budget: 300_000, status: 'in_progress', progressManual: 50 }))
-  state.phases.set('f2', phase({ id: 'f2', name: 'Walls', order: 2, budget: 100_000, status: 'pending', progressManual: null }))
-  state.phases.set('f3', phase({ id: 'f3', name: 'Roof', order: 3, budget: 100_000, status: 'pending', progressManual: 25 }))
-  txn({ id: 't-mat', type: 'material', amount: 100_000, date: new Date('2026-02-01T10:00:00Z'), note: 'Cement 100 bags' })
-  txn({ id: 't-wage', type: 'wage', amount: 100_000, date: new Date('2026-02-02T10:00:00Z'), note: 'Week 5 wages' })
-  txn({ id: 't-tra', type: 'transport', amount: 50_000, date: new Date('2026-02-03T10:00:00Z'), note: 'Ballast haulage' })
+  state.phases.set('f1', phase({ id: 'f1', name: 'Foundation', order: 1, budget: 30_000_000n, status: 'in_progress', progressManual: 50 }))
+  state.phases.set('f2', phase({ id: 'f2', name: 'Walls', order: 2, budget: 10_000_000n, status: 'pending', progressManual: null }))
+  state.phases.set('f3', phase({ id: 'f3', name: 'Roof', order: 3, budget: 10_000_000n, status: 'pending', progressManual: 25 }))
+  txn({ id: 't-mat', type: 'material', amount: 10_000_000n, date: new Date('2026-02-01T10:00:00Z'), note: 'Cement 100 bags' })
+  txn({ id: 't-wage', type: 'wage', amount: 10_000_000n, date: new Date('2026-02-02T10:00:00Z'), note: 'Week 5 wages' })
+  txn({ id: 't-tra', type: 'transport', amount: 5_000_000n, date: new Date('2026-02-03T10:00:00Z'), note: 'Ballast haulage' })
 }
 
 beforeEach(() => {
@@ -239,15 +239,15 @@ describe('project rollup — the mjengo derivations, reused not reinvented', () 
 
   it('spentPct rounds (250k/300k → 83); a zero-budget project reports 0, never NaN', async () => {
     seedProject()
-    state.phases.set('f1', phase({ id: 'f1', budget: 300_000, status: 'in_progress', progressManual: 10 }))
-    txn({ amount: 250_000 })
+    state.phases.set('f1', phase({ id: 'f1', budget: 30_000_000n, status: 'in_progress', progressManual: 10 }))
+    txn({ amount: 25_000_000n })
     const r = await buildBudgetVarianceReport(P1)
     expect(r!.project.spentPct).toBe(83)
 
     state.reset()
     seedProject()
-    state.phases.set('f0', phase({ id: 'f0', budget: 0, status: 'in_progress', progressManual: 10 }))
-    txn({ amount: 5_000 })
+    state.phases.set('f0', phase({ id: 'f0', budget: 0n, status: 'in_progress', progressManual: 10 }))
+    txn({ amount: 500_000n })
     const zero = await buildBudgetVarianceReport(P1)
     expect(zero!.project.budgetTotal).toBe(0)
     expect(zero!.project.spentPct).toBe(0)
@@ -256,8 +256,8 @@ describe('project rollup — the mjengo derivations, reused not reinvented', () 
 
   it('progressPct is overallProgress (budget-weighted, progressManual wins) — 0 when no budget at all', async () => {
     seedProject()
-    state.phases.set('fa', phase({ id: 'fa', name: 'A', order: 1, budget: 200_000, status: 'in_progress', progressManual: 50 }))
-    state.phases.set('fb', phase({ id: 'fb', name: 'B', order: 2, budget: 100_000, status: 'in_progress' }))
+    state.phases.set('fa', phase({ id: 'fa', name: 'A', order: 1, budget: 20_000_000n, status: 'in_progress', progressManual: 50 }))
+    state.phases.set('fb', phase({ id: 'fb', name: 'B', order: 2, budget: 10_000_000n, status: 'in_progress' }))
     task('fb', 20)
     task('fb', 60)
     const r = await buildBudgetVarianceReport(P1)
@@ -266,7 +266,7 @@ describe('project rollup — the mjengo derivations, reused not reinvented', () 
 
     state.reset()
     seedProject()
-    state.phases.set('fp', phase({ id: 'fp', budget: 0, status: 'in_progress', progressManual: 80 }))
+    state.phases.set('fp', phase({ id: 'fp', budget: 0n, status: 'in_progress', progressManual: 80 }))
     const noBudget = await buildBudgetVarianceReport(P1)
     expect(noBudget!.project.progressPct).toBe(0)
   })
@@ -303,10 +303,10 @@ describe('phase budget-share allocation — the documented estimate path', () =>
 
   it('all-pending project falls back to every phase, ties keep the EARLIEST phase (deterministic)', async () => {
     seedProject()
-    state.phases.set('fp', phase({ id: 'fp', name: 'P', order: 1, budget: 50_000, status: 'pending', progressManual: null }))
-    state.phases.set('fq', phase({ id: 'fq', name: 'Q', order: 2, budget: 150_000, status: 'pending', progressManual: null }))
-    txn({ id: 'x1', amount: 30_000, date: new Date('2026-02-01T10:00:00Z') }) // spend recorded before any phase started
-    txn({ id: 'x2', amount: 30_000, date: new Date('2026-02-02T10:00:00Z') })
+    state.phases.set('fp', phase({ id: 'fp', name: 'P', order: 1, budget: 5_000_000n, status: 'pending', progressManual: null }))
+    state.phases.set('fq', phase({ id: 'fq', name: 'Q', order: 2, budget: 15_000_000n, status: 'pending', progressManual: null }))
+    txn({ id: 'x1', amount: 3_000_000n, date: new Date('2026-02-01T10:00:00Z') }) // spend recorded before any phase started
+    txn({ id: 'x2', amount: 3_000_000n, date: new Date('2026-02-02T10:00:00Z') })
     const r = await buildBudgetVarianceReport(P1)
     const byId = new Map(r!.phases.map((f) => [f.id, f]))
     // x1 → fq (bigger share target 45k vs 15k); then both deficits tie at −15k → x2 → fp (earliest).
@@ -331,14 +331,14 @@ describe('phase budget-share allocation — the documented estimate path', () =>
 describe('exact milestone attribution — the one phase-attributed money flow', () => {
   function seedExactFixture(milestonePhaseId: string | null, relatedEntityId: string | null = 'm1') {
     seedProject()
-    state.phases.set('fa', phase({ id: 'fa', name: 'Foundation', order: 1, budget: 200_000, status: 'pending', progressManual: null }))
-    state.phases.set('fb', phase({ id: 'fb', name: 'Frame', order: 2, budget: 100_000, status: 'in_progress' }))
+    state.phases.set('fa', phase({ id: 'fa', name: 'Foundation', order: 1, budget: 20_000_000n, status: 'pending', progressManual: null }))
+    state.phases.set('fb', phase({ id: 'fb', name: 'Frame', order: 2, budget: 10_000_000n, status: 'in_progress' }))
     task('fb', 40)
     task('fb', 60)
     milestone({ id: 'm1', phaseId: milestonePhaseId })
     pr({ relatedEntityId, paidTxnId: 'tm' })
-    txn({ id: 'tm', type: 'milestone', amount: 80_000, note: 'Milestone release' })
-    txn({ id: 'tu', type: 'other', amount: 20_000, note: 'Site expenses' })
+    txn({ id: 'tm', type: 'milestone', amount: 8_000_000n, note: 'Milestone release' })
+    txn({ id: 'tu', type: 'other', amount: 2_000_000n, note: 'Site expenses' })
   }
 
   it('a milestone-paid txn lands on its phase EXACTLY — even when that phase is pending', async () => {
@@ -383,8 +383,8 @@ describe('exact milestone attribution — the one phase-attributed money flow', 
 describe('per-phase rows — variance, progress and top transactions', () => {
   it('topTransactions: top-5 by amount desc, note null → "", ISO dates', async () => {
     seedProject()
-    state.phases.set('f1', phase({ id: 'f1', budget: 1_000_000, status: 'in_progress', progressManual: 40 }))
-    const amounts = [10_000, 90_000, 50_000, 70_000, 30_000, 60_000]
+    state.phases.set('f1', phase({ id: 'f1', budget: 100_000_000n, status: 'in_progress', progressManual: 40 }))
+    const amounts = [1_000_000n, 9_000_000n, 5_000_000n, 7_000_000n, 3_000_000n, 6_000_000n]
     amounts.forEach((amount, i) => {
       txn({ id: `tx${i}`, amount, note: i % 2 === 0 ? `Note ${i}` : null, date: new Date(`2026-02-0${i + 1}T10:00:00Z`) })
     })
@@ -403,9 +403,9 @@ describe('per-phase rows — variance, progress and top transactions', () => {
 
   it('variancePct: budget 0 → 0 (no divide-by-zero noise), otherwise rounded', async () => {
     seedProject()
-    state.phases.set('f1', phase({ id: 'f1', budget: 0, status: 'in_progress', progressManual: 10 }))
-    state.phases.set('f2', phase({ id: 'f2', budget: 30_000, status: 'in_progress', progressManual: 10 }))
-    txn({ amount: 10_000 })
+    state.phases.set('f1', phase({ id: 'f1', budget: 0n, status: 'in_progress', progressManual: 10 }))
+    state.phases.set('f2', phase({ id: 'f2', budget: 3_000_000n, status: 'in_progress', progressManual: 10 }))
+    txn({ amount: 1_000_000n })
     const r = await buildBudgetVarianceReport(P1)
     const byId = new Map(r!.phases.map((f) => [f.id, f]))
     expect(byId.get('f1')!.variancePct).toBe(0) // zero budget — honest 0
@@ -415,8 +415,8 @@ describe('per-phase rows — variance, progress and top transactions', () => {
 
   it('a project with transactions but NO phases keeps the flat spend and emits no phase rows', async () => {
     seedProject()
-    txn({ amount: 10_000 })
-    txn({ amount: 20_000 })
+    txn({ amount: 1_000_000n })
+    txn({ amount: 2_000_000n })
     const r = await buildBudgetVarianceReport(P1)
     expect(r!.phases).toEqual([])
     expect(r!.project.spent).toBe(30_000)
@@ -440,9 +440,9 @@ describe('categories — the honest Transaction.type rollup', () => {
 
   it('an unknown type keeps its raw key as the label; shares round; no txns → no categories', async () => {
     seedProject()
-    state.phases.set('f1', phase({ id: 'f1', budget: 100, status: 'in_progress', progressManual: 10 }))
-    txn({ type: 'custom_kind', amount: 2 })
-    txn({ type: 'material', amount: 1 })
+    state.phases.set('f1', phase({ id: 'f1', budget: 10_000n, status: 'in_progress', progressManual: 10 }))
+    txn({ type: 'custom_kind', amount: 200n })
+    txn({ type: 'material', amount: 100n })
     const r = await buildBudgetVarianceReport(P1)
     expect(r!.categories).toEqual([
       { key: 'custom_kind', label: 'custom_kind', spent: 2, txCount: 1, share: 67 },
@@ -451,16 +451,16 @@ describe('categories — the honest Transaction.type rollup', () => {
 
     state.reset()
     seedProject()
-    state.phases.set('f1', phase({ id: 'f1', budget: 100, status: 'in_progress', progressManual: 10 }))
+    state.phases.set('f1', phase({ id: 'f1', budget: 10_000n, status: 'in_progress', progressManual: 10 }))
     const empty = await buildBudgetVarianceReport(P1)
     expect(empty!.categories).toEqual([])
   })
 
   it('every documented type label maps (material/wage/transport/other/invoice/milestone/payment_request)', async () => {
     seedProject()
-    state.phases.set('f1', phase({ id: 'f1', budget: 1_000_000, status: 'in_progress', progressManual: 10 }))
+    state.phases.set('f1', phase({ id: 'f1', budget: 100_000_000n, status: 'in_progress', progressManual: 10 }))
     for (const type of ['material', 'wage', 'transport', 'other', 'invoice', 'milestone', 'payment_request']) {
-      txn({ type, amount: 1 })
+      txn({ type, amount: 100n })
     }
     const r = await buildBudgetVarianceReport(P1)
     const labels = new Map(r!.categories.map((c) => [c.key, c.label]))

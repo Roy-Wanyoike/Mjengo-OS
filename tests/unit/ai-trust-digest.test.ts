@@ -409,18 +409,19 @@ const RELEASES = [
 function seedBaseFixture() {
   state.projects.set(P1, {
     id: P1, shareToken: 'tok-1', name: 'Nyumba Yangu', client: 'Amina', clientType: 'diaspora',
-    location: 'Karen', budget: 6_000_000, startDate: new Date('2026-01-05'), targetDate: new Date('2026-12-01'),
+    location: 'Karen', budget: 600_000_000n, startDate: new Date('2026-01-05'), targetDate: new Date('2026-12-01'),
     status: 'active', createdAt: new Date('2026-01-01'),
   })
   state.projects.set(P2, {
     id: P2, shareToken: 'tok-2', name: 'Other House', client: 'Buba', clientType: 'diaspora',
-    location: 'Runda', budget: 4_000_000, startDate: new Date('2026-01-06'), targetDate: new Date('2026-12-01'),
+    location: 'Runda', budget: 400_000_000n, startDate: new Date('2026-01-06'), targetDate: new Date('2026-12-01'),
     status: 'active', createdAt: new Date('2026-01-02'),
   })
   for (const r of RELEASES) {
     state.drawPacks.set(r.id, {
       id: r.id, milestoneId: `m-${r.id}`, projectId: P1, milestoneName: r.milestoneName,
-      amount: r.amount, currency: 'KES', ledgerRef: r.ledgerRef, ledgerTxnId: `lt-${r.id}`,
+      amount: BigInt(r.amount) * 100n, // DB row: KSh fixture -> cents (#122)
+      currency: 'KES', ledgerRef: r.ledgerRef, ledgerTxnId: `lt-${r.id}`,
       evidencePhotoIds: '[]', variationsOpen: '[]', attendanceSummary: '{}', mjengoScore: null,
       contentHash: 'a'.repeat(64), schemaVersion: 1, createdAt: r.createdAt,
     })
@@ -428,7 +429,7 @@ function seedBaseFixture() {
   // A release OUTSIDE the 7-day window — must not appear in the digest.
   state.drawPacks.set('dp-old', {
     id: 'dp-old', milestoneId: 'm-old', projectId: P1, milestoneName: 'Site clearing',
-    amount: 90_000, currency: 'KES', ledgerRef: 'LX-OLD1', ledgerTxnId: 'lt-old',
+    amount: 9_000_000n, currency: 'KES', ledgerRef: 'LX-OLD1', ledgerTxnId: 'lt-old',
     evidencePhotoIds: '[]', variationsOpen: '[]', attendanceSummary: '{}', mjengoScore: null,
     contentHash: 'b'.repeat(64), schemaVersion: 1, createdAt: new Date('2026-02-01T09:00:00Z'),
   })
@@ -444,11 +445,11 @@ function seedBaseFixture() {
   state.aiInsights.set('ai-2', { id: 'ai-2', projectId: P1, targetType: 'draw_pack', targetId: 'dp-2', packId: 'dp-2', kind: 'phase_mismatch', source: 'vision', severity: 'warning', detail: '{}', confidence: 'low', createdAt: new Date('2026-03-15T11:00:00Z') })
   state.aiInsights.set('ai-old', { id: 'ai-old', projectId: P1, targetType: 'site_photo', targetId: 'ph-9', packId: null, kind: 'duplicate', source: 'dhash', severity: 'warning', detail: '{}', confidence: null, createdAt: new Date('2026-02-10T09:00:00Z') })
   state.aiReviewNotes.set('arn-1', { id: 'arn-1', drawPackId: 'dp-1', projectId: P1, providerId: 'zai', modelLabel: 'Z AI', ruleVersion: 1, verdict: 'advisory', summary: '', confidence: 'low', findings: '[]', inputsHash: 'c'.repeat(64), reviewedBy: null, reviewedAt: null, decisionNote: null, createdAt: new Date('2026-03-14T16:00:00Z') })
-  for (const [id, amount] of [['t-1', 650_000], ['t-2', 1_200_000], ['t-3', 120_000], ['t-4', 880_000]] as const) {
+  for (const [id, amount] of [['t-1', 65_000_000n], ['t-2', 120_000_000n], ['t-3', 12_000_000n], ['t-4', 88_000_000n]] as const) {
     state.transactions.set(id, { id, projectId: P1, amount })
   }
-  state.phases.set('f-1', { id: 'f-1', projectId: P1, name: 'Foundation', order: 1, budget: 900_000, progressManual: 100, tasks: [] })
-  state.phases.set('f-2', { id: 'f-2', projectId: P1, name: 'Walling', order: 2, budget: 2_100_000, progressManual: 40, tasks: [] })
+  state.phases.set('f-1', { id: 'f-1', projectId: P1, name: 'Foundation', order: 1, budget: 90_000_000n, progressManual: 100, tasks: [] })
+  state.phases.set('f-2', { id: 'f-2', projectId: P1, name: 'Walling', order: 2, budget: 210_000_000n, progressManual: 40, tasks: [] })
 }
 
 /** Flip the ai flag (and drop the 30s flag cache) — the documented admin toggle. */
@@ -514,7 +515,7 @@ describe('deterministic text — same rows, byte-identical', () => {
     const before = await buildTrustDigest(P1, { lang: 'en', now: NOW })
     state.drawPacks.set('dp-3', {
       id: 'dp-3', milestoneId: 'm-3', projectId: P1, milestoneName: 'Roof structure',
-      amount: 950_000, currency: 'KES', ledgerRef: 'LX-GHI789', ledgerTxnId: 'lt-3',
+      amount: 95_000_000n, currency: 'KES', ledgerRef: 'LX-GHI789', ledgerTxnId: 'lt-3',
       evidencePhotoIds: '[]', variationsOpen: '[]', attendanceSummary: '{}', mjengoScore: null,
       contentHash: 'd'.repeat(64), schemaVersion: 1, createdAt: new Date('2026-03-16T08:00:00Z'),
     })
@@ -750,7 +751,7 @@ describe('audio is the bonus, text is the product', () => {
       const id = `dp-long-${i}`
       state.drawPacks.set(id, {
         id, milestoneId: `m-long-${i}`, projectId: P1, milestoneName: `${longName} ${i}`,
-        amount: 100_000 + i, currency: 'KES', ledgerRef: `LX-L${i}`, ledgerTxnId: `lt-l${i}`,
+        amount: BigInt(100_000 + i) * 100n, currency: 'KES', ledgerRef: `LX-L${i}`, ledgerTxnId: `lt-l${i}`,
         evidencePhotoIds: '[]', variationsOpen: '[]', attendanceSummary: '{}', mjengoScore: null,
         contentHash: 'e'.repeat(64), schemaVersion: 1, createdAt: new Date('2026-03-13T08:00:00Z'),
       })
@@ -992,7 +993,7 @@ describe('i18n parity + migration shape', () => {
 
   it('migration 8_trust_digest is ONE CREATE TABLE, additive-only, and matches the Prisma model', () => {
     const sql = readFileSync(
-      fileURLToPath(new URL('../../prisma/migrations/8_trust_digest/migration.sql', import.meta.url)),
+      fileURLToPath(new URL('../../prisma/migrations/08_trust_digest/migration.sql', import.meta.url)),
       'utf8',
     )
     // Strip line comments BEFORE splitting on ';' (a ';' inside a comment

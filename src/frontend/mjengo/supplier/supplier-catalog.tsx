@@ -12,13 +12,13 @@ import { Pencil, Check, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useT } from '@/frontend/i18n/provider'
 import { fmtQty, formatKes } from '@/frontend/mjengo/finder/sections/requests/bits'
-import type { CatalogItem } from '@prisma/client'
+import type { CatalogItemKes } from '@/backend/modules/supply/types'
 import type { SupplierDispatch } from './supplier-portal'
 
 export function SupplierCatalog({
   catalog, dispatch, busy, supplierId, projectId,
 }: {
-  catalog: CatalogItem[]
+  catalog: CatalogItemKes[]
   dispatch: SupplierDispatch
   busy: boolean
   supplierId: string
@@ -32,13 +32,13 @@ export function SupplierCatalog({
   const [price, setPrice] = useState('')
   const [stock, setStock] = useState('')
 
-  function startEdit(item: CatalogItem) {
+  function startEdit(item: CatalogItemKes) {
     setEditing(item.id)
     setPrice(String(item.unitPrice))
     setStock(String(item.stockQty))
   }
 
-  async function save(item: CatalogItem, projectId: string | undefined) {
+  async function save(item: CatalogItemKes, projectId: string | undefined) {
     const p = Number(price)
     const s = Number(stock)
     if (!Number.isFinite(p) || p < 0 || !Number.isFinite(s) || s < 0) {

@@ -177,7 +177,7 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
     .map((t) => ({
       id: t.id,
       title: t.reference ?? (t.note ? t.note.slice(0, 40) : `${t.type} transaction`),
-      sub: `${t.type} · KSh ${Math.round(t.amount).toLocaleString('en-KE')}${t.note ? ` · ${t.note.slice(0, 50)}` : ''}`,
+      sub: `${t.type} · KSh ${Math.round(Number(t.amount) / 100).toLocaleString('en-KE')}${t.note ? ` · ${t.note.slice(0, 50)}` : ''}`,
       project: t.project.name,
       target: 'transaction',
     }))
@@ -189,7 +189,7 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
     .map((i) => ({
       id: i.id,
       title: i.invoiceCode,
-      sub: `${i.status} · KSh ${Math.round(i.total).toLocaleString('en-KE')}`,
+      sub: `${i.status} · KSh ${Math.round(Number(i.total) / 100).toLocaleString('en-KE')}`,
       project: i.project.name,
       target: 'invoice',
     }))

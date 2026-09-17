@@ -225,7 +225,7 @@ function stubFetch() {
 function seedCallbackFixtures() {
   state.paymentRequests.set(PR_ID, {
     id: PR_ID, requestCode: 'PR-2026-000009', projectId: 'proj-1',
-    description: 'Allowlist fixture payment', amount: 1500,
+    description: 'Allowlist fixture payment', amount: 150000n,
     payee: '254708374149', method: 'mpesa', status: 'approved',
     paidAt: null, paidTxnId: null,
   })

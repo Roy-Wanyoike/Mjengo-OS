@@ -64,7 +64,7 @@ const h = vi.hoisted(() => ({
 
 // ---------------------------------------------------------------- db stub
 
-type EntryRow = { id: string; txnId: string; accountId: string; side: 'debit' | 'credit'; amount: number; memo: string | null }
+type EntryRow = { id: string; txnId: string; accountId: string; side: 'debit' | 'credit'; amount: bigint; memo: string | null }
 type TxnRow = { id: string; ref: string; description: string; occurredAt: Date; status: string; postedBy: string; postedRole: string; entries: EntryRow[] }
 type AccountRow = { id: string; code: string; ownerType: string; ownerId: string }
 type DbState = {
@@ -271,7 +271,7 @@ const ACCOUNTS: AccountRow[] = [
   { id: 'la-wages', code: 'WAGES:LABOR', ownerType: 'expense', ownerId: '' },
 ]
 
-type Leg = [accountId: string, side: 'debit' | 'credit', amount: number, memo: string | null]
+type Leg = [accountId: string, side: 'debit' | 'credit', amount: bigint, memo: string | null]
 const TX = (id: string, ref: string, description: string, occurredAt: string, legs: Leg[]): TxnRow => ({
   id, ref, description, occurredAt: new Date(occurredAt), status: 'posted', postedBy: 'Finance', postedRole: 'finance',
   entries: legs.map(([accountId, side, amount, memo], i) => ({ id: `le-${id}-${i}`, txnId: id, accountId, side, amount, memo })),
@@ -284,24 +284,24 @@ const TX = (id: string, ref: string, description: string, occurredAt: string, le
  */
 const TXN_ROWS: TxnRow[] = [
   TX('lt-1', 'LT-0001', 'Wallet W-0001 deposit', '2026-01-10T10:00:00Z', [
-    ['la-mpesa', 'debit', 500, 'M-Pesa top-up'],
-    ['la-1', 'credit', 500, null],
+    ['la-mpesa', 'debit', 50_000n, 'M-Pesa top-up'],
+    ['la-1', 'credit', 50_000n, null],
   ]),
   TX('lt-2', 'LT-0002', 'Wallet W-0002 deposit', '2026-01-11T10:00:00Z', [
-    ['la-mpesa', 'debit', 90, null],
-    ['la-2', 'credit', 90, null],
+    ['la-mpesa', 'debit', 9_000n, null],
+    ['la-2', 'credit', 9_000n, null],
   ]),
   TX('lt-3', 'LT-0003', 'Wallet W-0001 withdrawal', '2026-01-12T10:00:00Z', [
-    ['la-1', 'debit', 300, 'Fuel'],
-    ['la-mpesa', 'credit', 300, null],
+    ['la-1', 'debit', 30_000n, 'Fuel'],
+    ['la-mpesa', 'credit', 30_000n, null],
   ]),
   TX('lt-4', 'LT-0004', 'Wages paid from W-0001', '2026-01-12T10:00:00Z', [
-    ['la-1', 'debit', 200, 'Wages'],
-    ['la-wages', 'credit', 200, null],
+    ['la-1', 'debit', 20_000n, 'Wages'],
+    ['la-wages', 'credit', 20_000n, null],
   ]),
   TX('lt-5', 'LT-0005', 'Wallet W-0001 bank deposit', '2026-01-14T10:00:00Z', [
-    ['la-bank', 'debit', 750, 'Bank transfer in'],
-    ['la-1', 'credit', 750, null],
+    ['la-bank', 'debit', 75_000n, 'Bank transfer in'],
+    ['la-1', 'credit', 75_000n, null],
   ]),
 ]
 
@@ -775,8 +775,8 @@ describe('GET /api/v1/wallets/:id/transactions — keyset pagination (the unboun
     // A brand-new head txn arrives between the two fetches.
     state().txnRows.push(
       TX('lt-6', 'LT-0006', 'Wallet W-0001 deposit', '2026-01-20T10:00:00Z', [
-        ['la-mpesa', 'debit', 60, null],
-        ['la-1', 'credit', 60, null],
+        ['la-mpesa', 'debit', 6_000n, null],
+        ['la-1', 'credit', 6_000n, null],
       ]),
     )
     const page2 = await bodyOf(await walletTxnsGet(req('w-1', `?limit=2&cursor=${token}`), ctx('w-1')))
@@ -1001,10 +1001,10 @@ describe('POST /api/v1/wallets/:id/withdraw — debit into a cash rail', () => {
 
   it('insufficient funds → honest 400 with the service message passed through', async () => {
     sessionFor('finance')
-    svc.withdrawWallet.mockRejectedValueOnce(new Error('Insufficient wallet balance: 900 < 1000'))
+    svc.withdrawWallet.mockRejectedValueOnce(new Error('Insufficient wallet balance: KSh 900.00 < KSh 1,000.00'))
     const res = await walletWithdrawPost(jsonReq(url, 'POST', { amount: 1_000 }), ctx('w-1'))
     expect(res.status).toBe(400)
-    expect(await bodyOf(res)).toEqual({ error: 'Insufficient wallet balance: 900 < 1000' })
+    expect(await bodyOf(res)).toEqual({ error: 'Insufficient wallet balance: KSh 900.00 < KSh 1,000.00' })
   })
 
   it('body validation: destination enum + amount bounds, before the service', async () => {

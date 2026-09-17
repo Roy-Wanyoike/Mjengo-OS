@@ -18,7 +18,8 @@
 // Score rule version '1' — bump SCORE_RULE_VERSION when any threshold below
 // changes so persisted history rows stay interpretable.
 
-import { overallProgress, type RiskPhase } from './engine'
+import { overallProgress, pctOf, type RiskPhase } from './engine'
+import { sumCents, type Cents } from '@/backend/lib/money'
 
 export const SCORE_RULE_VERSION = '1'
 
@@ -41,7 +42,7 @@ export interface ScoreAttendance {
 export interface ScoreVariation {
   title: string
   status: string // 'submitted' | 'approved' | 'rejected'
-  budgetImpact: number // KES, + increase / − saving
+  budgetImpact: Cents // + increase / − saving (issue #122)
 }
 
 /** One delivery row (R3 inputs). */
@@ -64,9 +65,9 @@ export interface MjengoScoreInput {
   /** Phases (with tasks) — R1 budget_pace + overall progress reuse. */
   phases: RiskPhase[]
   /** Transactions (spend) — R1 budget_pace reuse. */
-  transactions: Array<{ amount: number }>
-  /** Project.budget (KES) — the variation-impact denominator. */
-  projectBudget: number
+  transactions: Array<{ amount: Cents }>
+  /** Project.budget in CENTS — the variation-impact denominator (issue #122). */
+  projectBudget: Cents
   /** Variation orders on the project. */
   variations: ScoreVariation[]
   /** Order deliveries with their lines — R3 discrepancy inputs. */
@@ -158,8 +159,8 @@ export const MIN_COMPONENTS_FOR_SCORE = 2
 /** Deliveries that have LANDED (evidence exists either way) — the honest denominator. */
 export const LANDED_DELIVERY_STATUSES = ['received', 'discrepancy'] as const
 
-function kes(n: number): string {
-  return `KSh ${Math.round(n).toLocaleString('en-KE')}`
+function kes(nCents: Cents): string {
+  return `KSh ${Math.round(Number(nCents) / 100).toLocaleString('en-KE')}`
 }
 
 function pct1(n: number): string {
@@ -238,10 +239,12 @@ export function computeMjengoScore(input: MjengoScoreInput): MjengoScoreResult {
   // minus overall progress%. A 30-point lead is R1's critical line and deducts
   // the full weight. Under-spending (negative lead) deducts nothing.
   {
-    const budgetTotal = phases.reduce((s, p) => s + p.budget, 0)
-    if (budgetTotal > 0) {
-      const spent = transactions.reduce((s, t) => s + t.amount, 0)
-      const spentPct = (spent / budgetTotal) * 100
+    const budgetTotal = sumCents(phases.map((p) => p.budget))
+    if (budgetTotal > 0n) {
+      const spent = sumCents(transactions.map((t) => t.amount))
+      // 2-dp exact (bigint basis points): the lead's fraction decides the
+      // deduction — an integer-rounded percent would lose it (44.44 → 44).
+      const spentPct = Number((spent * 10000n) / budgetTotal) / 100
       const progressPct = overallProgress(phases)
       const lead = spentPct - progressPct
       components.push({
@@ -267,10 +270,11 @@ export function computeMjengoScore(input: MjengoScoreInput): MjengoScoreResult {
   // measure); approved variations totalling 15%+ of the budget deducts the
   // full weight.
   {
-    if (projectBudget > 0 && variations.length > 0) {
+    if (projectBudget > 0n && variations.length > 0) {
       const approved = variations.filter((v) => v.status === 'approved')
-      const approvedImpact = Math.max(0, approved.reduce((s, v) => s + v.budgetImpact, 0))
-      const ratio = approvedImpact / projectBudget
+      const impactRaw = sumCents(approved.map((v) => v.budgetImpact))
+      const approvedImpact = impactRaw > 0n ? impactRaw : 0n
+      const ratio = Number(approvedImpact) / Number(projectBudget)
       components.push({
         key: 'variation_discipline',
         label: 'Variation discipline',

@@ -12,6 +12,7 @@
 // value shown is always the latest computation, traceable to computedAt.
 
 import { db } from '@/backend/lib/db'
+import { sumCents } from '@/backend/lib/money'
 import { OPEN_REQUEST_STATUSES, OPEN_ORDER_STATUSES, overallProgress } from './engine'
 import { parseRiskFindings, HEALTH_INPUTS, HEALTH_DIMENSION_LABELS, type HealthDimension, type HealthGrade, type HealthSnapshot } from './types'
 
@@ -25,8 +26,8 @@ export function gradeFor(score: number): HealthGrade {
   return 'poor'
 }
 
-function kes(n: number): string {
-  return `KSh ${Math.round(n).toLocaleString('en-KE')}`
+function kes(nCents: import('@/backend/lib/money').Cents): string {
+  return `KSh ${Math.round(Number(nCents) / 100).toLocaleString('en-KE')}`
 }
 
 function clamp(n: number, lo = 0, hi = 100): number {
@@ -73,18 +74,18 @@ export async function computeHealth(projectId: string): Promise<HealthSnapshot> 
     `${progressPct}% complete — ${phasesDone}/${phases.length} phases done, ${openTasks.length} of ${allTasks.length} tasks still open.`)
 
   // ---- Budget: spend pace vs linear plan + committed on open POs ----
-  const budgetTotal = phases.reduce((s, p) => s + p.budget, 0)
-  const spent = transactions.reduce((s, t) => s + t.amount, 0)
+  const budgetTotal = sumCents(phases.map((p) => p.budget))
+  const spent = sumCents(transactions.map((t) => t.amount))
   const dayCount = Math.max(1, Math.ceil((now.getTime() - project.startDate.getTime()) / DAY_MS))
   const totalDays = Math.max(
     dayCount,
     Math.ceil((project.targetDate.getTime() - project.startDate.getTime()) / DAY_MS),
   )
-  const plannedPct = budgetTotal ? Math.round((dayCount / totalDays) * 100) : 0
-  const spentPct = budgetTotal ? Math.round((spent / budgetTotal) * 100) : 0
+  const plannedPct = Math.round((dayCount / totalDays) * 100)
+  const spentPct = budgetTotal ? Math.round(Number((spent * 10000n) / budgetTotal) / 100) : 0
   const openOrders = orders.filter((o) => (OPEN_ORDER_STATUSES as readonly string[]).includes(o.status))
-  const committed = openOrders.reduce((s, o) => s + o.total, 0)
-  const committedPct = budgetTotal ? Math.round((committed / budgetTotal) * 100) : 0
+  const committed = sumCents(openOrders.map((o) => o.total))
+  const committedPct = budgetTotal ? Math.round(Number((committed * 10000n) / budgetTotal) / 100) : 0
   const lead = spentPct - plannedPct
   const overCommit = Math.max(0, spentPct + committedPct - 100)
   const budgetScore = budgetTotal

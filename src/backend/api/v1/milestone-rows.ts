@@ -16,6 +16,8 @@
 //   · Milestone has NO updatedAt and NO offline-sync version column — those
 //     fields are deliberately absent here (no fabricated data).
 
+import { centsToKes } from '@/backend/lib/money'
+
 const iso = (v: Date | null): string | null => (v ? v.toISOString() : null)
 
 /** Fields every milestone DTO carries (list item = detail head, structural). */
@@ -24,7 +26,7 @@ export interface MilestoneRow {
   projectId: string
   phaseId: string | null
   name: string
-  amount: number
+  amount: number | bigint
   status: string
   evidencePhotoIds: string
   requestedAt: Date | null
@@ -56,7 +58,7 @@ export function milestoneSummary(m: MilestoneRow, phaseName: string | null) {
     phaseId: m.phaseId,
     phaseName,
     name: m.name,
-    amount: m.amount,
+    amount: typeof m.amount === 'bigint' ? centsToKes(m.amount) : m.amount,
     status: m.status,
     evidencePhotoCount: parseEvidencePhotoIds(m.evidencePhotoIds).length,
     requestedAt: iso(m.requestedAt),

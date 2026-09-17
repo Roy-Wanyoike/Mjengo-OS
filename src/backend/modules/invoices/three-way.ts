@@ -11,6 +11,7 @@
 // AI/system recommends; an authorized human decides.
 
 import type { LedgerCheck, MatchIssue, MatchLine, ThreeWayReport } from './types'
+import { centsToKes, snapCents, sumCents } from '@/backend/lib/money'
 
 // ---------------- shared input shapes (plain, prisma-free) ----------------
 
@@ -108,7 +109,11 @@ export function matchThreeWay(input: {
       // fee line → reconcile against the PO delivery fee by amount
       if (isFeeLine(inv.name)) {
         lines.push({ name: inv.name, poQty: null, invQty: inv.qty, deliveredQty: null, feeLine: true })
-        if (order.deliveryFee > 0 && Math.abs(inv.lineTotal - order.deliveryFee) > 0.5) {
+        // Exact cents comparison (issue #122): inputs are ≤2-dp KSh numbers;
+        // a one-cent difference between the billed fee and the PO fee is a
+        // real discrepancy worth human review (the old 0.5 KSh float
+        // tolerance silently absorbed sub-half differences).
+        if (order.deliveryFee > 0 && snapCents(inv.lineTotal) !== snapCents(order.deliveryFee)) {
           mismatches.push({
             name: inv.name,
             po: null,
@@ -292,25 +297,27 @@ export function computeLedgerConsistency(input: {
   const milestoneRows = input.transactions.filter((t) => t.type === 'milestone')
   const invoiceRows = input.transactions.filter((t) => t.type === 'invoice')
 
-  const releases = milestoneRows.reduce((s, t) => s + t.amount, 0)
-  const walletInvoicePayments = invoiceRows
-    .filter((t) => (t.method ?? '').toLowerCase() === 'wallet')
-    .reduce((s, t) => s + t.amount, 0)
-  const externalInvoicePayments = invoiceRows
-    .filter((t) => (t.method ?? '').toLowerCase() !== 'wallet')
-    .reduce((s, t) => s + t.amount, 0)
+  // Cents-exact accumulation (issue #122): every amount is snapped to its
+  // integer-cents value and summed in bigint — float drift is impossible.
+  const releases = centsToKes(sumCents(milestoneRows.map((t) => snapCents(t.amount))))
+  const walletInvoicePayments = centsToKes(
+    sumCents(invoiceRows.filter((t) => (t.method ?? '').toLowerCase() === 'wallet').map((t) => snapCents(t.amount))),
+  )
+  const externalInvoicePayments = centsToKes(
+    sumCents(invoiceRows.filter((t) => (t.method ?? '').toLowerCase() !== 'wallet').map((t) => snapCents(t.amount))),
+  )
 
   const releasedTails = new Set(input.releasedMilestoneIds.map((id) => id.slice(-6)))
   const paidRefs = new Set(input.paidInvoiceReferences.filter(Boolean))
 
-  const unreconciled: number[] = []
+  const unreconciled: import('@/backend/lib/money').Cents[] = []
   let unreconciledCount = 0
 
   // milestone rows: reference MJP-<tail> must match a released milestone
   for (const t of milestoneRows) {
     const tail = (t.reference ?? '').replace(/^MJP-/i, '')
     if (!t.reference || !releasedTails.has(tail)) {
-      unreconciled.push(t.amount)
+      unreconciled.push(snapCents(t.amount))
       unreconciledCount++
     }
   }
@@ -327,15 +334,16 @@ export function computeLedgerConsistency(input: {
     const matched = ref && paidRefs.has(ref)
     if (!matched) {
       // ledger money with no paid invoice behind it — phantom payment record
-      for (const t of rows) { unreconciled.push(t.amount); unreconciledCount++ }
+      for (const t of rows) { unreconciled.push(snapCents(t.amount)); unreconciledCount++ }
     } else if (count > 1) {
       // same payment reference paying twice — double count
-      for (const t of rows.slice(1)) { unreconciled.push(t.amount); unreconciledCount++ }
+      for (const t of rows.slice(1)) { unreconciled.push(snapCents(t.amount)); unreconciledCount++ }
     }
   }
 
-  const drift = Math.round(unreconciled.reduce((s, a) => s + a, 0))
-  const consistent = Math.abs(drift) < 1 && input.walletBalance >= 0
+  const driftCents = sumCents(unreconciled)
+  const drift = centsToKes(driftCents)
+  const consistent = driftCents === 0n && input.walletBalance >= 0
   return {
     consistent,
     drift,

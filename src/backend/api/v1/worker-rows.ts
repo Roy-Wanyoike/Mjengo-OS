@@ -21,6 +21,8 @@
 //     "today", trailing 7 calendar days) — recomputed identically here so the
 //     detail route (a direct read) can never disagree with the webapp read.
 
+import { centsToKes, sumCents } from '@/backend/lib/money'
+
 const iso = (v: Date | null): string | null => (v ? v.toISOString() : null)
 
 /** Fields every worker DTO head carries (list item = detail head, structural). */
@@ -30,7 +32,7 @@ export interface WorkerRow {
   name: string
   role: string
   phone: string
-  dailyRate: number
+  dailyRate: number | bigint // cents when straight from a db row — converted in workerSummary
   active: boolean
   idNumber: string | null
   employmentType: string | null
@@ -77,7 +79,7 @@ export interface AttendanceRow {
   checkIn: Date | null
   checkOut: Date | null
   method: string
-  wage: number
+  wage: bigint // cents (issue #122)
   paid: boolean
   verification: string
   exceptionReason: string | null
@@ -109,7 +111,7 @@ export function todayStatusOf(attendances: AttendanceRow[]): TodayStatus {
     checkIn: iso(t?.checkIn ?? null),
     checkOut: iso(t?.checkOut ?? null),
     method: t?.method ?? null,
-    wage: t?.wage ?? 0,
+    wage: t ? centsToKes(t.wage) : 0,
     paid: t?.paid ?? false,
     verification: t?.verification ?? null,
     exceptionReason: t?.exceptionReason ?? null,
@@ -120,9 +122,9 @@ export function todayStatusOf(attendances: AttendanceRow[]): TodayStatus {
 export function weekEarningsOf(attendances: AttendanceRow[]): number {
   const weekAgo = new Date()
   weekAgo.setDate(weekAgo.getDate() - 6)
-  return attendances
-    .filter((a) => new Date(a.date) >= weekAgo)
-    .reduce((s, a) => s + a.wage, 0)
+  return centsToKes(
+    sumCents(attendances.filter((a) => new Date(a.date) >= weekAgo).map((a) => a.wage)),
+  )
 }
 
 /** The worker summary (list item): identity + the payload's attendance rollup. */
@@ -137,7 +139,7 @@ export function workerSummary(
     name: w.name,
     role: w.role,
     phone: w.phone,
-    dailyRate: w.dailyRate,
+    dailyRate: typeof w.dailyRate === 'bigint' ? centsToKes(w.dailyRate) : w.dailyRate,
     active: w.active,
     employmentType: w.employmentType,
     skills: parseSkills(w.skills),

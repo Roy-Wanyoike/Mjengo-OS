@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client'
+import { mulQtyCents } from '@/backend/lib/money'
 import { seedProfessionals } from './seed-extras/professionals'
 import { seedLand } from './seed-extras/land'
 import { seedSupply } from './seed-extras/supply'
@@ -75,7 +76,7 @@ async function main() {
       client: 'Amina & Yusuf (Diaspora · Boston)',
       clientType: 'diaspora',
       location: 'Kitengela, Kajiado County',
-      budget: 4500000,
+      budget: 450000000n,
       startDate: daysAgo(46),
       targetDate: daysAgo(-104),
       status: 'active',
@@ -84,31 +85,31 @@ async function main() {
   })
 
   // ---------- Phases & tasks ----------
-  const phaseDefs: Array<{ name: string; budget: number; status: string; progressManual: number; tasks: Array<[string, string, number]> }> = [
-    { name: 'Site Prep & Foundation', budget: 900000, status: 'done', progressManual: 100, tasks: [
+  const phaseDefs: Array<{ name: string; budget: bigint; status: string; progressManual: number; tasks: Array<[string, string, number]> }> = [
+    { name: 'Site Prep & Foundation', budget: 90000000n, status: 'done', progressManual: 100, tasks: [
       ['Site clearing & setting out', 'done', 100],
       ['Excavation of foundation trenches', 'done', 100],
       ['Blinding & foundation walls', 'done', 100],
       ['Backfilling & compaction', 'done', 100],
       ['Damp proof membrane (DPM)', 'done', 100],
     ]},
-    { name: 'Walling', budget: 1200000, status: 'in_progress', progressManual: 62, tasks: [
+    { name: 'Walling', budget: 120000000n, status: 'in_progress', progressManual: 62, tasks: [
       ['Stone walling — courses 1-8', 'done', 100],
       ['Window & door lintels', 'done', 100],
       ['Stone walling — courses 9-14', 'in_progress', 60],
       ['Ring beam shuttering & casting', 'pending', 0],
     ]},
-    { name: 'Roofing', budget: 800000, status: 'pending', progressManual: 0, tasks: [
+    { name: 'Roofing', budget: 80000000n, status: 'pending', progressManual: 0, tasks: [
       ['Roof trusses & purlins', 'pending', 0],
       ['Mabati (iron sheets) installation', 'pending', 0],
       ['Ridge caps & fascia board', 'pending', 0],
     ]},
-    { name: 'Plumbing & Electrical', budget: 600000, status: 'pending', progressManual: 0, tasks: [
+    { name: 'Plumbing & Electrical', budget: 60000000n, status: 'pending', progressManual: 0, tasks: [
       ['Conduit & sleeve pipe installation', 'pending', 0],
       ['Plumbing rough-in', 'pending', 0],
       ['Electrical wiring', 'pending', 0],
     ]},
-    { name: 'Finishing', budget: 1000000, status: 'pending', progressManual: 0, tasks: [
+    { name: 'Finishing', budget: 100000000n, status: 'pending', progressManual: 0, tasks: [
       ['Plastering (inside & outside)', 'pending', 0],
       ['Floor screed & tiling', 'pending', 0],
       ['Painting & fittings', 'pending', 0],
@@ -138,14 +139,14 @@ async function main() {
   }
 
   // ---------- Workers (fundis) ----------
-  const workerDefs: Array<[string, string, string, number]> = [
-    ['Mwangi Kariuki', 'Foreman (Mkuu wa Site)', '0722456781', 2000],
-    ['Otieno Odhiambo', 'Fundi wa Mawe (Mason)', '0733112233', 1500],
-    ['Kevin Mutiso', 'Fundi wa Chuma (Steel Fixer)', '0714556677', 1400],
-    ['Bernard Kimani', 'Fundi wa Mbao (Carpenter)', '0720998877', 1400],
-    ['Ali Hassan', 'Plumber', '0790443322', 1600],
-    ['Joseph Mwenda', 'Mtumishi (Labourer)', '0757889900', 800],
-    ['Peter Ochieng', 'Mtumishi (Labourer)', '0719221144', 800],
+  const workerDefs: Array<[string, string, string, bigint]> = [
+    ['Mwangi Kariuki', 'Foreman (Mkuu wa Site)', '0722456781', 200000n],
+    ['Otieno Odhiambo', 'Fundi wa Mawe (Mason)', '0733112233', 150000n],
+    ['Kevin Mutiso', 'Fundi wa Chuma (Steel Fixer)', '0714556677', 140000n],
+    ['Bernard Kimani', 'Fundi wa Mbao (Carpenter)', '0720998877', 140000n],
+    ['Ali Hassan', 'Plumber', '0790443322', 160000n],
+    ['Joseph Mwenda', 'Mtumishi (Labourer)', '0757889900', 80000n],
+    ['Peter Ochieng', 'Mtumishi (Labourer)', '0719221144', 80000n],
   ]
   const workers: Record<string, string> = {}
   for (const [name, role, phone, rate] of workerDefs) {
@@ -212,7 +213,7 @@ async function main() {
       ['Kevin Mutiso', 'present', 'geofence'],
     ],
   }
-  const rates: Record<string, number> = Object.fromEntries(workerDefs.map(w => [w[0], w[3]]))
+  const rates: Record<string, bigint> = Object.fromEntries(workerDefs.map(w => [w[0], w[3]]))
   for (const [dayStr, entries] of Object.entries(attendancePlan)) {
     const day = Number(dayStr)
     for (const [name, status, method] of entries) {
@@ -225,46 +226,46 @@ async function main() {
           checkOut: status === 'absent' ? null : daysAgo(day, 17, 15),
           status,
           method,
-          wage: status === 'present' ? rates[name] : status === 'half_day' ? rates[name] * 0.5 : 0,
+          wage: status === 'present' ? rates[name] : status === 'half_day' ? rates[name] / 2n : 0n,
         },
       })
     }
   }
 
   // ---------- Materials (GLOBAL catalog — shared across projects) ----------
-  const materialDefs: Array<[string, string, number]> = [
-    ['Cement (32.5N)', 'bag', 780],
-    ['Ballast', 'tonne', 2800],
-    ['Sand', 'tonne', 1800],
-    ['Machine cut stones 9"', 'piece', 58],
-    ['Steel bar Y10 (12m)', 'piece', 980],
-    ['Binding wire', 'roll', 850],
-    ['Timber 2x4 (12ft)', 'piece', 380],
-    ['Masonry nails', 'kg', 260],
-    ['DPC membrane', 'roll', 4200],
-    ['Concrete mix wood shuttering', 'piece', 150],
+  const materialDefs: Array<[string, string, bigint]> = [
+    ['Cement (32.5N)', 'bag', 78000n],
+    ['Ballast', 'tonne', 280000n],
+    ['Sand', 'tonne', 180000n],
+    ['Machine cut stones 9"', 'piece', 5800n],
+    ['Steel bar Y10 (12m)', 'piece', 98000n],
+    ['Binding wire', 'roll', 85000n],
+    ['Timber 2x4 (12ft)', 'piece', 38000n],
+    ['Masonry nails', 'kg', 26000n],
+    ['DPC membrane', 'roll', 420000n],
+    ['Concrete mix wood shuttering', 'piece', 15000n],
   ]
-  const materials: Record<string, { id: string; unitPrice: number }> = {}
+  const materials: Record<string, { id: string; unitPrice: bigint }> = {}
   for (const [name, unit, unitPrice] of materialDefs) {
     const m = await db.material.create({ data: { name, unit, unitPrice } })
     materials[name] = { id: m.id, unitPrice }
   }
 
   // ---------- Deliveries ----------
-  const deliveryDefs: Array<[string, number, number, string, number, string, string?]> = [
+  const deliveryDefs: Array<[string, number, bigint, string, number, string, string?]> = [
     // [material, qty, unitCost, supplier, daysAgo, source, transcript]
-    ['Cement (32.5N)', 120, 760, 'Karioke Hardware', 40, 'manual'],
-    ['Sand', 30, 1750, 'Mwangaza Suppliers', 39, 'manual'],
-    ['Ballast', 20, 2700, 'Mwangaza Suppliers', 39, 'manual'],
-    ['Machine cut stones 9"', 4500, 55, 'Ndarugu Quarry', 38, 'manual'],
-    ['Cement (32.5N)', 100, 775, 'Karioke Hardware', 24, 'voice', 'Nimepokea mia moja ya cement kutoka Karioke Hardware'],
-    ['Steel bar Y10 (12m)', 90, 960, 'Devki Steel', 20, 'manual'],
-    ['Binding wire', 12, 840, 'Devki Steel', 20, 'manual'],
-    ['Timber 2x4 (12ft)', 120, 370, 'Timsales Yard', 12, 'manual'],
-    ['Cement (32.5N)', 80, 790, 'Karioke Hardware', 6, 'voice', 'Amepata bags themanini za cement, Karioke tena'],
-    ['Machine cut stones 9"', 2000, 56, 'Ndarugu Quarry', 5, 'manual'],
-    ['Masonry nails', 25, 250, 'Karioke Hardware', 5, 'manual'],
-    ['DPC membrane', 8, 4100, 'Kingsway Builders', 3, 'manual'],
+    ['Cement (32.5N)', 120, 76000n, 'Karioke Hardware', 40, 'manual'],
+    ['Sand', 30, 175000n, 'Mwangaza Suppliers', 39, 'manual'],
+    ['Ballast', 20, 270000n, 'Mwangaza Suppliers', 39, 'manual'],
+    ['Machine cut stones 9"', 4500, 5500n, 'Ndarugu Quarry', 38, 'manual'],
+    ['Cement (32.5N)', 100, 77500n, 'Karioke Hardware', 24, 'voice', 'Nimepokea mia moja ya cement kutoka Karioke Hardware'],
+    ['Steel bar Y10 (12m)', 90, 96000n, 'Devki Steel', 20, 'manual'],
+    ['Binding wire', 12, 84000n, 'Devki Steel', 20, 'manual'],
+    ['Timber 2x4 (12ft)', 120, 37000n, 'Timsales Yard', 12, 'manual'],
+    ['Cement (32.5N)', 80, 79000n, 'Karioke Hardware', 6, 'voice', 'Amepata bags themanini za cement, Karioke tena'],
+    ['Machine cut stones 9"', 2000, 5600n, 'Ndarugu Quarry', 5, 'manual'],
+    ['Masonry nails', 25, 25000n, 'Karioke Hardware', 5, 'manual'],
+    ['DPC membrane', 8, 410000n, 'Kingsway Builders', 3, 'manual'],
   ]
   for (const [name, qty, unitCost, supplier, ago, source, transcript] of deliveryDefs) {
     await db.delivery.create({
@@ -273,7 +274,7 @@ async function main() {
         materialId: materials[name].id,
         quantity: qty,
         unitCost: unitCost,
-        totalCost: qty * unitCost,
+        totalCost: mulQtyCents(qty, unitCost),
         supplier,
         date: daysAgo(ago, 11),
         source,
@@ -309,20 +310,20 @@ async function main() {
   }
 
   // ---------- Transactions ----------
-  const txDefs: Array<[string, number, string, string, string, number]> = [
-    ['material', 91200, 'mpesa', 'QGH7X2LM90', 'Cement 120 bags — Karioke Hardware', 40],
-    ['material', 52500, 'mpesa', 'QGH8K1PP21', 'Sand 30t — Mwangaza Suppliers', 39],
-    ['material', 54000, 'mpesa', 'QGH9M3QR45', 'Ballast 20t — Mwangaza Suppliers', 39],
-    ['material', 247500, 'bank', 'FT2291KQ0', 'Machine cut stones 4500pcs — Ndarugu', 38],
-    ['wage', 8900, 'mpesa', 'SB01AAA110', 'Week 7 wages — 7 fundis', 34],
-    ['wage', 8900, 'mpesa', 'SB01BBB220', 'Week 8 wages — 7 fundis', 27],
-    ['material', 77500, 'mpesa', 'QGK2T5VX78', 'Cement 100 bags — Karioke Hardware', 24],
-    ['material', 86400, 'bank', 'FT2311LM02', 'Y10 steel 90pcs — Devki Steel', 20],
-    ['wage', 8600, 'mpesa', 'SB01CCC330', 'Week 9 wages', 20],
-    ['transport', 12000, 'mpesa', 'QGL4W8YZ11', 'Tipper hire — stones haulage', 5],
-    ['material', 63200, 'mpesa', 'QGM5X1AB34', 'Cement 80 bags — Karioke Hardware', 6],
-    ['wage', 8400, 'mpesa', 'SB01DDD440', 'Week 10 wages', 6],
-    ['wage', 8100, 'mpesa', 'SB01EEE550', 'Week 11 wages', 0],
+  const txDefs: Array<[string, bigint, string, string, string, number]> = [
+    ['material', 9120000n, 'mpesa', 'QGH7X2LM90', 'Cement 120 bags — Karioke Hardware', 40],
+    ['material', 5250000n, 'mpesa', 'QGH8K1PP21', 'Sand 30t — Mwangaza Suppliers', 39],
+    ['material', 5400000n, 'mpesa', 'QGH9M3QR45', 'Ballast 20t — Mwangaza Suppliers', 39],
+    ['material', 24750000n, 'bank', 'FT2291KQ0', 'Machine cut stones 4500pcs — Ndarugu', 38],
+    ['wage', 890000n, 'mpesa', 'SB01AAA110', 'Week 7 wages — 7 fundis', 34],
+    ['wage', 890000n, 'mpesa', 'SB01BBB220', 'Week 8 wages — 7 fundis', 27],
+    ['material', 7750000n, 'mpesa', 'QGK2T5VX78', 'Cement 100 bags — Karioke Hardware', 24],
+    ['material', 8640000n, 'bank', 'FT2311LM02', 'Y10 steel 90pcs — Devki Steel', 20],
+    ['wage', 860000n, 'mpesa', 'SB01CCC330', 'Week 9 wages', 20],
+    ['transport', 1200000n, 'mpesa', 'QGL4W8YZ11', 'Tipper hire — stones haulage', 5],
+    ['material', 6320000n, 'mpesa', 'QGM5X1AB34', 'Cement 80 bags — Karioke Hardware', 6],
+    ['wage', 840000n, 'mpesa', 'SB01DDD440', 'Week 10 wages', 6],
+    ['wage', 810000n, 'mpesa', 'SB01EEE550', 'Week 11 wages', 0],
   ]
   for (const [type, amount, method, reference, note, ago] of txDefs) {
     await db.transaction.create({
@@ -373,7 +374,7 @@ async function main() {
       client: 'Mwenda Family',
       clientType: 'local',
       location: 'Kiambu Road, Nairobi',
-      budget: 8500000,
+      budget: 850000000n,
       startDate: daysAgo(12),
       targetDate: daysAgo(-128),
       status: 'active',
@@ -383,11 +384,11 @@ async function main() {
 
   // Duplex-template phases (22 / 22 / 14 / 16 / 26) — only Phase 1 in progress
   const p2PhaseDefs = [
-    { name: 'Site Prep & Foundation', budget: 1870000, status: 'in_progress', progressManual: 35 },
-    { name: 'Walling', budget: 1870000, status: 'pending', progressManual: null },
-    { name: 'Roofing', budget: 1190000, status: 'pending', progressManual: null },
-    { name: 'Plumbing & Electrical', budget: 1360000, status: 'pending', progressManual: null },
-    { name: 'Finishing', budget: 2210000, status: 'pending', progressManual: null },
+    { name: 'Site Prep & Foundation', budget: 187000000n, status: 'in_progress', progressManual: 35 },
+    { name: 'Walling', budget: 187000000n, status: 'pending', progressManual: null },
+    { name: 'Roofing', budget: 119000000n, status: 'pending', progressManual: null },
+    { name: 'Plumbing & Electrical', budget: 136000000n, status: 'pending', progressManual: null },
+    { name: 'Finishing', budget: 221000000n, status: 'pending', progressManual: null },
   ]
   const p2Phases: Record<string, { id: string }> = {}
   for (let i = 0; i < p2PhaseDefs.length; i++) {
@@ -418,14 +419,14 @@ async function main() {
   }
 
   // 4 fundis
-  const p2Workers: Array<[string, string, string, number]> = [
-    ['Joseph Kimani', 'Foreman (Mkuu wa Site)', '0722001100', 1500],
-    ['Peter Otieno', 'Fundi wa Mawe (Mason)', '0733445566', 1200],
-    ['Brian Mwangi', 'Mtumishi (Labourer)', '0714778899', 800],
-    ['Sarah Wanjiru', 'Fundi wa Maji (Plumber)', '0790223344', 1000],
+  const p2Workers: Array<[string, string, string, bigint]> = [
+    ['Joseph Kimani', 'Foreman (Mkuu wa Site)', '0722001100', 150000n],
+    ['Peter Otieno', 'Fundi wa Mawe (Mason)', '0733445566', 120000n],
+    ['Brian Mwangi', 'Mtumishi (Labourer)', '0714778899', 80000n],
+    ['Sarah Wanjiru', 'Fundi wa Maji (Plumber)', '0790223344', 100000n],
   ]
   const p2WorkerIds: Record<string, string> = {}
-  const p2Rates: Record<string, number> = {}
+  const p2Rates: Record<string, bigint> = {}
   for (const [name, role, phone, rate] of p2Workers) {
     const w = await db.worker.create({ data: { projectId: p2.id, name, role, phone, dailyRate: rate } })
     p2WorkerIds[name] = w.id
@@ -460,7 +461,7 @@ async function main() {
           checkOut: status === 'absent' ? null : daysAgo(ago, 17, 10),
           status,
           method: p2Methods[name],
-          wage: status === 'present' ? p2Rates[name] : status === 'half_day' ? p2Rates[name] * 0.5 : 0,
+          wage: status === 'present' ? p2Rates[name] : status === 'half_day' ? p2Rates[name] / 2n : 0n,
           paid: d >= 6, // older days paid out, the 2 most recent unpaid
         },
       })
@@ -468,12 +469,12 @@ async function main() {
   }
 
   // 4 deliveries + matching transactions
-  const p2Deliveries: Array<[string, number, number, string, number, string, string]> = [
+  const p2Deliveries: Array<[string, number, bigint, string, number, string, string]> = [
     // [material, qty, unitCost, supplier, daysAgo, txReference, txNote]
-    ['Cement (32.5N)', 100, 780, 'Kiambu Hardware Depot', 10, 'QKR1C100KT', 'Cement 100 bags — Kiambu Hardware Depot'],
-    ['Ballast', 7, 2800, 'Mwangaza Suppliers', 9, 'QKR2B007MS', 'Ballast 7t — Mwangaza Suppliers'],
-    ['Sand', 10, 1800, 'Mwangaza Suppliers', 9, 'QKR3S010MS', 'Sand 10t — Mwangaza Suppliers'],
-    ['Steel bar Y10 (12m)', 40, 960, 'Devki Steel', 5, 'QKR4R040DS', 'Y10 rebar 40pcs — Devki Steel'],
+    ['Cement (32.5N)', 100, 78000n, 'Kiambu Hardware Depot', 10, 'QKR1C100KT', 'Cement 100 bags — Kiambu Hardware Depot'],
+    ['Ballast', 7, 280000n, 'Mwangaza Suppliers', 9, 'QKR2B007MS', 'Ballast 7t — Mwangaza Suppliers'],
+    ['Sand', 10, 180000n, 'Mwangaza Suppliers', 9, 'QKR3S010MS', 'Sand 10t — Mwangaza Suppliers'],
+    ['Steel bar Y10 (12m)', 40, 96000n, 'Devki Steel', 5, 'QKR4R040DS', 'Y10 rebar 40pcs — Devki Steel'],
   ]
   for (const [name, qty, unitCost, supplier, ago, reference, note] of p2Deliveries) {
     await db.delivery.create({
@@ -482,7 +483,7 @@ async function main() {
         materialId: materials[name].id,
         quantity: qty,
         unitCost,
-        totalCost: qty * unitCost,
+        totalCost: mulQtyCents(qty, unitCost),
         supplier,
         date: daysAgo(ago, 11),
         source: 'manual',
@@ -492,7 +493,7 @@ async function main() {
       data: {
         projectId: p2.id,
         type: 'material',
-        amount: qty * unitCost,
+        amount: mulQtyCents(qty, unitCost),
         method: 'mpesa',
         reference,
         note,
@@ -559,7 +560,7 @@ async function main() {
       client: 'Aisha & Omar (Diaspora · London)',
       clientType: 'diaspora',
       location: 'Diani, Kwale County',
-      budget: 2800000,
+      budget: 280000000n,
       startDate: daysAgo(240),
       targetDate: daysAgo(60),
       status: 'completed',
@@ -569,11 +570,11 @@ async function main() {
 
   // Bungalow-template phases (25 / 20 / 15 / 15 / 25) — all done
   const p3PhaseDefs = [
-    { name: 'Site Prep & Foundation', budget: 700000 },
-    { name: 'Walling', budget: 560000 },
-    { name: 'Roofing', budget: 420000 },
-    { name: 'Plumbing & Electrical', budget: 420000 },
-    { name: 'Finishing', budget: 700000 },
+    { name: 'Site Prep & Foundation', budget: 70000000n },
+    { name: 'Walling', budget: 56000000n },
+    { name: 'Roofing', budget: 42000000n },
+    { name: 'Plumbing & Electrical', budget: 42000000n },
+    { name: 'Finishing', budget: 70000000n },
   ]
   for (let i = 0; i < p3PhaseDefs.length; i++) {
     await db.phase.create({
@@ -589,13 +590,13 @@ async function main() {
   }
 
   // 3 fundis (historical crew)
-  const p3Workers: Array<[string, string, string, number]> = [
-    ['Mwakideu Chengo', 'Fundi wa Mawe (Mason)', '0721556677', 1300],
-    ['Athman Salim', 'Mtumishi (Labourer)', '0733889900', 700],
-    ['Neema Mwakembe', 'Fundi wa Malazi (Finisher)', '0791772200', 1100],
+  const p3Workers: Array<[string, string, string, bigint]> = [
+    ['Mwakideu Chengo', 'Fundi wa Mawe (Mason)', '0721556677', 130000n],
+    ['Athman Salim', 'Mtumishi (Labourer)', '0733889900', 70000n],
+    ['Neema Mwakembe', 'Fundi wa Malazi (Finisher)', '0791772200', 110000n],
   ]
   const p3WorkerIds: Record<string, string> = {}
-  const p3Rates: Record<string, number> = {}
+  const p3Rates: Record<string, bigint> = {}
   for (const [name, role, phone, rate] of p3Workers) {
     const w = await db.worker.create({ data: { projectId: p3.id, name, role, phone, dailyRate: rate } })
     p3WorkerIds[name] = w.id
@@ -619,7 +620,7 @@ async function main() {
           checkOut: status === 'absent' ? null : daysAgo(ago, 17, 0),
           status,
           method: 'geofence',
-          wage: status === 'present' ? p3Rates[name] : status === 'half_day' ? p3Rates[name] * 0.5 : 0,
+          wage: status === 'present' ? p3Rates[name] : status === 'half_day' ? p3Rates[name] / 2n : 0n,
           paid: true,
         },
       })
@@ -627,11 +628,11 @@ async function main() {
   }
 
   // Transactions ≈ 95% of budget (2,660,000 of 2,800,000)
-  const p3TxDefs: Array<[string, number, string, string, string, number]> = [
-    ['material', 1540000, 'bank', 'FT8821DK01', 'Materials — full renovation (cement, mabati, finishes)', 230],
-    ['transport', 120000, 'mpesa', 'QDN7Y2PL44', 'Lorry hire — materials haulage to Diani', 100],
-    ['other', 280000, 'bank', 'FT8844DK09', 'Paint, fittings & fixtures', 80],
-    ['wage', 720000, 'mpesa', 'SB99ZZZ990', 'Crew wages — 16 weeks (3 fundis)', 70],
+  const p3TxDefs: Array<[string, bigint, string, string, string, number]> = [
+    ['material', 154000000n, 'bank', 'FT8821DK01', 'Materials — full renovation (cement, mabati, finishes)', 230],
+    ['transport', 12000000n, 'mpesa', 'QDN7Y2PL44', 'Lorry hire — materials haulage to Diani', 100],
+    ['other', 28000000n, 'bank', 'FT8844DK09', 'Paint, fittings & fixtures', 80],
+    ['wage', 72000000n, 'mpesa', 'SB99ZZZ990', 'Crew wages — 16 weeks (3 fundis)', 70],
   ]
   for (const [type, amount, method, reference, note, ago] of p3TxDefs) {
     await db.transaction.create({

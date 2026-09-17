@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    "target": "ES2020", // ES2020 for BigInt literals — integer-cents money (issue #122)
     "lib": [
       "dom",
       "dom.iterable",
