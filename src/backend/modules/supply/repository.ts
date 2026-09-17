@@ -21,17 +21,25 @@ const toCatalogKes = (c: import('@prisma/client').CatalogItem) => ({ ...c, unitP
 const toQuoteKes = (
   q: import('@prisma/client').Quote & { lines: import('@prisma/client').QuoteLine[] },
   names: { supplierName: string; requestCode: string },
-): QuoteDetail => ({
-  ...q,
-  supplierName: names.supplierName,
-  requestCode: names.requestCode,
-  unitPrice: centsToKes(q.unitPrice),
-  deliveryFee: centsToKes(q.deliveryFee),
-  transportFee: centsToKes(q.transportFee),
-  fees: centsToKes(q.fees),
-  totalLanded: centsToKes(q.totalLanded),
-  lines: q.lines.map((l) => ({ ...l, unitPrice: centsToKes(l.unitPrice), lineTotal: centsToKes(l.lineTotal) })),
-})
+): QuoteDetail => {
+  // issue #122: the raw supplier relation (pulled by the include at
+  // runtime, absent from the static type) carries BigInt money fields —
+  // deleted here (supplierName is the contract); a spread-through would
+  // crash JSON serialization of the whole project payload.
+  const dto = {
+    ...q,
+    supplierName: names.supplierName,
+    requestCode: names.requestCode,
+    unitPrice: centsToKes(q.unitPrice),
+    deliveryFee: centsToKes(q.deliveryFee),
+    transportFee: centsToKes(q.transportFee),
+    fees: centsToKes(q.fees),
+    totalLanded: centsToKes(q.totalLanded),
+    lines: q.lines.map((l) => ({ ...l, unitPrice: centsToKes(l.unitPrice), lineTotal: centsToKes(l.lineTotal) })),
+  } as QuoteDetail & { supplier?: unknown }
+  delete dto.supplier
+  return dto
+}
 
 export async function loadSupplySlice(projectId: string): Promise<SupplySlice> {
   const [suppliers, requests, approvalRules, approvals, quotes, orders, savedSuppliers] = await Promise.all([
@@ -107,16 +115,24 @@ export async function loadSupplySlice(projectId: string): Promise<SupplySlice> {
     toQuoteKes(q, { supplierName: q.supplier.businessName, requestCode: q.request.requestCode }),
   )
 
-  const orderRows: OrderWithDetail[] = orders.map((o) => ({
-    ...o,
-    subtotal: centsToKes(o.subtotal),
-    deliveryFee: centsToKes(o.deliveryFee),
-    total: centsToKes(o.total),
-    supplierName: o.supplier.businessName,
-    requestCode: o.request?.requestCode ?? null,
-    deliveries: o.deliveries,
-    lines: o.lines.map((l) => ({ ...l, unitPrice: centsToKes(l.unitPrice), lineTotal: centsToKes(l.lineTotal) })),
-  }))
+  const orderRows: OrderWithDetail[] = orders.map((o) => {
+    // issue #122: raw supplier/request relations (runtime includes) carry
+    // BigInt money — deleted here (supplierName/requestCode are the
+    // contract), same as the quote DTO above.
+    const dto = {
+      ...o,
+      subtotal: centsToKes(o.subtotal),
+      deliveryFee: centsToKes(o.deliveryFee),
+      total: centsToKes(o.total),
+      supplierName: o.supplier.businessName,
+      requestCode: o.request?.requestCode ?? null,
+      deliveries: o.deliveries,
+      lines: o.lines.map((l) => ({ ...l, unitPrice: centsToKes(l.unitPrice), lineTotal: centsToKes(l.lineTotal) })),
+    } as OrderWithDetail & { supplier?: unknown; request?: unknown }
+    delete dto.supplier
+    delete dto.request
+    return dto
+  })
 
   return {
     suppliers: supplierRows,
