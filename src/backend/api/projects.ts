@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { logAudit, summarizeAction } from '@/backend/lib/audit'
 import { getProjectPayload, getProjectsList } from '@/backend/lib/mjengo'
+import { ownerReadScope } from '@/backend/lib/membership-scope'
 import { route, safeError, genericError } from '@/backend/lib/route-kit'
 import { shareTokenExpiryFromNow } from '@/backend/lib/share-token'
 
@@ -50,13 +51,21 @@ export const GET = route(
     // W5-3 supplier sessions see an EMPTY list — never the portfolio (the same
     // honest empty answer a client without a pinned project gets; the supplier
     // surface is /api/supplier, which scopes to their own rows).
+    // SEC-6 (issue #174): supervisor/procurement/qs/finance see EXACTLY their
+    // ProjectMembership projects — fail closed on zero rows (the same honest
+    // empty answer); contractor/admin keep the explicit portfolio grant.
     const scoped =
       session.user.role === 'client' && session.user.projectId
         ? projects.filter((p) => p.id === session.user.projectId)
         : session.user.role === 'supplier'
           ? []
           : projects
-    return NextResponse.json({ ok: true, projects: scoped })
+    const ownerScope = await ownerReadScope(session)
+    const membershipScoped =
+      ownerScope.kind === 'memberships'
+        ? scoped.filter((p) => ownerScope.projectIds.includes(p.id))
+        : scoped
+    return NextResponse.json({ ok: true, projects: membershipScoped })
   },
 )
 

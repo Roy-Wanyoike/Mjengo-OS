@@ -1,5 +1,6 @@
 import { route } from '@/backend/lib/route-kit'
 import { getProjectsList } from '@/backend/lib/mjengo'
+import { ownerReadScope } from '@/backend/lib/membership-scope'
 import { projectsListQuery, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Ok, V1_READ_LIMIT } from './respond'
 
@@ -12,9 +13,12 @@ import { mapServiceError, pageOfKind, v1Ok, V1_READ_LIMIT } from './respond'
  * budgetTotal = Σ Phase.budget, budgetSpent = Σ Transaction.amount,
  * progressPct = budget-weighted phase progress).
  *
- * ROLE SCOPING mirrors the webapp guard (api/projects GET): every signed-in
- * role sees the portfolio; a CLIENT-role session sees exactly its own project
- * (a client without a pinned project sees an empty list — never the
+ * ROLE SCOPING mirrors the webapp guard (api/projects GET): contractor/admin
+ * see the portfolio (the explicit SEC-6 grant, issue #174); a CLIENT-role
+ * session sees exactly its own project (a client without a pinned project
+ * sees an empty list — never the portfolio). SEC-6 (issue #174):
+ * supervisor/procurement/qs/finance see EXACTLY their ProjectMembership
+ * projects — zero rows = the honest empty list (fail closed, never the
  * portfolio). No role allowlist beyond the session itself.
  *
  * NO FEATURE FLAG gates this resource: none of the five flags (ai_progress,
@@ -56,6 +60,15 @@ export const GET = route(
     // families, which row-pin to their supplierId.
     if (session.user.role === 'supplier') {
       projects = []
+    }
+    // SEC-6 (issue #174): the site-team membership scope — supervisor /
+    // procurement / qs / finance see EXACTLY their ProjectMembership
+    // projects (fail closed on zero rows: the honest empty list, the
+    // client-without-a-project precedent). contractor/admin keep the
+    // portfolio (the explicit grant — no membership row is consulted).
+    const ownerScope = await ownerReadScope(session)
+    if (ownerScope.kind === 'memberships') {
+      projects = projects.filter((p) => ownerScope.projectIds.includes(p.id))
     }
     if (q.data.status) {
       projects = projects.filter((p) => p.status === q.data.status)

@@ -1,7 +1,7 @@
 /**
  * One-command full demo seed — `bun run seed` (from a migrated/`db push`-ed DB).
  *
- * Chains prisma/seed.ts + the six standalone seed-extras in the dependency
+ * Chains prisma/seed.ts + the seven standalone seed-extras in the dependency
  * order the scripts themselves declare (each header documents what it needs
  * and what it wipes):
  *
@@ -11,20 +11,25 @@
  *                       professionals → land → supply → invoices → intel
  *   2. users.ts         7 demo login accounts (wipes ONLY User; needs the
  *                       base projects)
- *   3. tasks.ts         task v2 depth — priorities, assignees, blockers
+ *   3. memberships.ts   SEC-6 (#174) site-team project grants — every
+ *                       supervisor/procurement/qs/finance user on every
+ *                       project (wipes ONLY ProjectMembership; needs users
+ *                       + projects; the single-org accepted-risk posture,
+ *                       see SECURITY.md)
+ *   4. tasks.ts         task v2 depth — priorities, assignees, blockers
  *                       (looks up base rows by NAME)
- *   4. domain.ts        worker depth, delivery driver leg, team roster
+ *   5. domain.ts        worker depth, delivery driver leg, team roster
  *                       (needs workers + PO-2026-000009 from the base seed)
- *   5. evidence.ts      zones, photo comments, notifications, audit events
- *   6. money.ts         escrow, milestones, variation orders, ledger,
+ *   6. evidence.ts      zones, photo comments, notifications, audit events
+ *   7. money.ts         escrow, milestones, variation orders, ledger,
  *                       payment requests — wipes ALL notifications (it owns
  *                       the money kinds), so it runs AFTER evidence
- *   7. intel.ts         RE-RUN: money wiped every notification, and intel
+ *   8. intel.ts         RE-RUN: money wiped every notification, and intel
  *                       wipes ONLY its own 4 kinds (approval.requested,
  *                       delivery.discrepancy, invoice.submitted, price.alert)
  *                       — re-running restores those while leaving money's
  *                       milestone/variation notifications in place
- *   8. trust.ts         fundi attendance trust history + kiosk PINs (touches
+ *   9. trust.ts         fundi attendance trust history + kiosk PINs (touches
  *                       only Attendance + Worker.pin — safe to run last)
  *
  * Every script is still standalone-runnable for partial re-seeds; each wipes
@@ -54,6 +59,11 @@ const steps: Array<{ script: string; note: string; wipes: string }> = [
     script: 'prisma/seed-extras/users.ts',
     note: '7 demo login accounts',
     wipes: 'User (all login accounts)',
+  },
+  {
+    script: 'prisma/seed-extras/memberships.ts',
+    note: 'SEC-6 (#174) site-team project grants (single-org posture)',
+    wipes: 'ProjectMembership (all grant rows)',
   },
   {
     script: 'prisma/seed-extras/tasks.ts',

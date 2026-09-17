@@ -1,5 +1,6 @@
 import { db } from '@/backend/lib/db'
 import { centsToKes, sumCents } from '@/backend/lib/money'
+import { maySeeWorkerPii } from '@/backend/lib/membership-scope'
 import { route } from '@/backend/lib/route-kit'
 import { validateQuery, workerDetailQuery, workerIdRef } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
@@ -32,6 +33,17 @@ type Ctx = { params: Promise<{ id: string }> }
  * client-role session must be pinned to the worker's own project (else 403
  * 'Not permitted for this project'). Unknown worker → 404. W5-3: supplier
  * sessions are not project readers — uniform 403.
+ *
+ * WORKER PII (SEC-6, issue #174): idNumber / emergencyContactName /
+ * emergencyContactPhone are served ONLY to membership-holders of the
+ * worker's project, contractor/admin (the portfolio grant) and the
+ * project's own client — every other reader (a supervisor/procurement/qs/
+ * finance session WITHOUT a membership row on that project) still gets the
+ * worker's roster + attendance data but the three PII fields read as NULLS.
+ * The null is byte-identical to a worker with no PII recorded (the OpenAPI
+ * schema is ['string','null'] either way), so the strip is not an oracle;
+ * the field SHAPE never changes for the legit readers (issue #174: changing
+ * what fields appear must not change shapes for the legit cases).
  *
  * DATA (honest seam note): the workforce module has no public single-worker
  * read (the webapp reads workers through the whole-project payload), so the
@@ -70,6 +82,9 @@ export const GET = route(
     // Raw CENTS rows — the worker-rows helpers convert at their boundaries.
     const attendances: AttendanceRow[] = worker.attendances
     const workerRow: WorkerRow = { ...worker, dailyRate: centsToKes(worker.dailyRate) }
+    // SEC-6 (issue #174): the PII gate — resolved once, applied to the three
+    // fields below (nulls for everyone else, the honest no-PII shape).
+    const pii = await maySeeWorkerPii(session, worker.projectId)
     const present = attendances.filter((a) => a.status === 'present')
     const absent = attendances.filter((a) => a.status === 'absent')
     const halfDay = attendances.filter((a) => a.status === 'half_day')
@@ -81,9 +96,12 @@ export const GET = route(
 
     return v1Ok({
       ...workerSummary(workerRow, todayStatusOf(attendances), weekEarningsOf(attendances)),
-      idNumber: worker.idNumber,
-      emergencyContactName: worker.emergencyContactName,
-      emergencyContactPhone: worker.emergencyContactPhone,
+      // SEC-6 (issue #174): PII only for membership-holders of this
+      // worker's project (+ contractor/admin, + the project's own client) —
+      // nulls otherwise, indistinguishable from a worker with no PII on file.
+      idNumber: pii ? worker.idNumber : null,
+      emergencyContactName: pii ? worker.emergencyContactName : null,
+      emergencyContactPhone: pii ? worker.emergencyContactPhone : null,
       attendanceSummary: {
         records: attendances.length,
         present: present.length,

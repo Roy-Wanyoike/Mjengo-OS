@@ -8,7 +8,7 @@
  *   1. SCHEMA COMPLETENESS — every Prisma model has exactly one
  *      create-table in 0001_schema.sql (68/68, parsed live from
  *      prisma/schema.prisma so the design cannot drift from the model);
- *   2. RLS COVERAGE — every table (68 + profiles = 69) has RLS enabled and
+ *   2. RLS COVERAGE — every table (69 + profiles = 70) has RLS enabled and
  *      at least one policy; anon is revoked everywhere;
  *   3. MONEY TYPING — every money column is numeric(18,2), every quantity
  *      numeric(18,3) (the Float-money defect class stays fixed);
@@ -240,8 +240,8 @@ const QUANTITY_COLUMNS: Array<[string, string]> = [
 // ---------------------------------------------------------------- tests
 
 describe('1. schema completeness (design tracks the Prisma model)', () => {
-  it('parses the full model list from prisma/schema.prisma (68 models)', () => {
-    expect(PRISMA_MODELS.length).toBe(68)
+  it('parses the full model list from prisma/schema.prisma (69 models)', () => {
+    expect(PRISMA_MODELS.length).toBe(69)
   })
 
   it('every Prisma model has exactly one create-table in 0001_schema.sql', () => {
@@ -303,8 +303,8 @@ describe('2. RLS coverage (fail-closed posture)', () => {
     policyTables.set(m[1], (policyTables.get(m[1]) ?? 0) + 1)
   }
 
-  it('RLS is enabled + anon revoked for exactly the 69 tables (68 + profiles)', () => {
-    expect(new Set(rlsEnabled).size).toBe(69)
+  it('RLS is enabled + anon revoked for exactly the 70 tables (69 + profiles)', () => {
+    expect(new Set(rlsEnabled).size).toBe(70)
     expect(new Set(rlsEnabled)).toEqual(new Set(allTables))
   })
 

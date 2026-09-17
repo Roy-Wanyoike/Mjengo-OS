@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { getProjectPayload } from '@/backend/lib/mjengo'
+import { MEMBERSHIP_ROLES, ownerReadScope } from '@/backend/lib/membership-scope'
 import { publicRoute, genericError } from '@/backend/lib/route-kit'
 import { unauthorized, forbidden } from '@/backend/lib/guard'
 import { findLiveProjectByShareToken } from '@/backend/lib/share-token'
@@ -177,14 +178,39 @@ export const GET = publicRoute(
     if (!shareProject && session?.user.role === 'client' && !session.user.projectId) {
       return NextResponse.json({ error: 'No project assigned to this account' }, { status: 403 })
     }
-    const projectId = shareProject
+    let projectId = shareProject
       ? shareProject.id
       : session?.user.role === 'client'
         ? session.user.projectId
         : queryProjectId
+    // SEC-6 (issue #174): the site-team membership scope — supervisor /
+    // procurement / qs /finance read only their ProjectMembership projects.
+    // The no-?projectId DEFAULT becomes their FIRST membership (their own
+    // load path, mirroring the fresh-contractor first-project default);
+    // zero rows → fail closed exactly like the unpinned client above, never
+    // the portfolio first-project fallback inside getProjectPayload.
+    let membershipIds: string[] | null = null
+    if (session && (MEMBERSHIP_ROLES as readonly string[]).includes(session.user.role)) {
+      const scope = await ownerReadScope(session)
+      membershipIds = scope.kind === 'memberships' ? scope.projectIds : null
+      if (membershipIds && !projectId) {
+        if (membershipIds.length === 0) {
+          return NextResponse.json({ error: 'No project membership for this account' }, { status: 403 })
+        }
+        projectId = membershipIds[0]
+      }
+    }
     const payload = await getProjectPayload(projectId)
     if (!payload) {
       return NextResponse.json({ error: projectId ? 'Project not found' : 'No project found' }, { status: 404 })
+    }
+    // SEC-6 (issue #174): resolve-then-pin — an unknown id kept its honest
+    // 404 above; a KNOWN project outside the session's membership set gets
+    // the same uniform 403 body the v1 membership pin serves (no membership
+    // or role oracle). Contractor/admin never reach this check (portfolio
+    // grant); client/supplier were pinned before the payload read.
+    if (membershipIds && !membershipIds.includes(payload.project.id)) {
+      return NextResponse.json({ error: 'Not permitted for this project' }, { status: 403 })
     }
     // B4-INTEL: the §57 unified timeline rides along as an ADDITIVE key — the
     // rest of the payload is byte-identical to getProjectPayload's output.

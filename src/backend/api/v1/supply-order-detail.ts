@@ -4,7 +4,7 @@ import { route } from '@/backend/lib/route-kit'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { orderRef, supplyOrderDetailQuery, validateQuery } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied, supplierSessionId } from './scope'
+import { clientProjectDenied, membershipProjectDenied, supplierSessionId } from './scope'
 import { deliveryRecord, supplyOrderSummary } from './supply-rows'
 
 // /api/v1/supply/orders/:id (Phase B, read-only) —
@@ -68,6 +68,13 @@ export const GET = route(
     if (!order) return v1Err(404, 'Order not found')
     const denied = clientProjectDenied(session, order.projectId)
     if (denied) return denied
+    // SEC-6 (issue #174): the site-team membership pin — supervisor /
+    // procurement / qs / finance read only the projects they hold a
+    // ProjectMembership row on (fail closed on zero rows); contractor/admin
+    // keep the explicit portfolio-wide grant. Same uniform 403 body as the
+    // client pin, after the resolve (resolve-then-pin, the v1 precedent).
+    const membershipDenied = await membershipProjectDenied(session, order.projectId)
+    if (membershipDenied) return membershipDenied
     // W5-3 supplier row pin: a foreign supplier's order answers EXACTLY like
     // an unknown id (same 404 body) — the probe is indistinguishable from a
     // miss. No link → fail-closed 403.

@@ -67,5 +67,59 @@ Recruiters and reviewers can verify: per-route rate limiting + login lockout
 password hashing (`src/backend/lib/auth.ts`), error redaction on public
 routes, zod-validated inputs, `Idempotency-Key` dedupe on money routes,
 crypto-random 96-bit share tokens, fail-closed role guards
-(`src/backend/lib/guard.ts`) mirrored client-side, and PR-only `main` with CI
-quality gates.
+(`src/backend/lib/guard.ts`) mirrored client-side, project-membership read
+scoping for the site team (`src/backend/lib/membership-scope.ts`, issue
+#174 / SEC-6), and PR-only `main` with CI quality gates.
+
+## Accepted risk: single-org membership posture (SEC-6, issue #174)
+
+**Status:** accepted (2026-09-17, issue #174) · **Owner:** repo maintainer ·
+**Review trigger:** see below
+
+Issue #174 introduced the `ProjectMembership` model and membership-scoped
+reads: `supervisor`, `procurement`, `qs` and `finance` sessions read only the
+projects they hold a membership row on (fail closed on zero rows — the honest
+empty portfolio, never everything), while `contractor`/`admin` keep an
+explicit code-level portfolio-wide grant. Worker PII (`idNumber`,
+`emergencyContactName`, `emergencyContactPhone`) is served only to
+membership-holders of that worker's project, contractor/admin, and the
+project's own client; every other reader gets nulls.
+
+**The accepted risk:** MjengoOS today is a single-org deployment — one
+contractor's business, one site team, employees known to each other. The seed
+(`prisma/seed-extras/memberships.ts`) therefore plants **every site-team
+persona on every project**, so the demo journeys keep working and a fresh
+deploy is not accidentally locked out. That blanket grant is only honest
+under the single-org assumption; it is recorded here so nobody mistakes it
+for a security boundary.
+
+**Known gaps in the same posture (recorded, deliberately out of #174's read
+scope):**
+
+- **Mutations are not membership-gated.** `POST /api/actions` and the
+  `/api/sync` outbox apply items to any project for any site-team role,
+  exactly as before #174 (the issue was about reads). The `/api/sync`
+  payload *refresh* IS membership-scoped.
+- **Grant/revoke tooling does not exist yet.** Membership rows are written by
+  the seed; revoking or granting access means editing the table directly
+  (unaudited). Until tooling lands, treat membership rows as
+  operator-controlled data.
+- Other owner surfaces not named by #174 (the notifications center default,
+  the admin-only audit feed is already admin-gated) still follow their
+  pre-#174 contracts for site-team roles.
+
+**Trigger conditions for revisiting (any one of these):**
+
+1. **Multi-tenant / multi-org onboarding** — more than one contractor
+   business (or franchise) shares an instance. The blanket seed grant must
+   become per-project intent, and grant/revoke tooling (audited, admin-only)
+   must ship before the first external org is onboarded.
+2. **External professionals get accounts** — surveyors, architects or QS
+   consultants who are NOT employees of the org. Their accounts must ship
+   with narrow memberships from day one, never the blanket grant.
+3. **Worker PII compliance obligations arrive** (Kenya Data Protection Act
+   enforcement guidance covering employee identity data): revisit the PII
+   grant list and add field-level audit logging of PII reads.
+
+Out of scope here: the share-link surface (a share token is the project
+client's own bearer capability — unchanged by design).

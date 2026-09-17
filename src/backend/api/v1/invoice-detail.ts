@@ -3,7 +3,7 @@ import { route } from '@/backend/lib/route-kit'
 import { threeWayCheck } from '@/backend/modules/invoices/service'
 import { invoiceDetailQuery, invoiceRef, validateQuery } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied, supplierSessionId } from './scope'
+import { clientProjectDenied, membershipProjectDenied, supplierSessionId } from './scope'
 
 // /api/v1/invoices/:id (Phase C, read-only — the money-governance family) —
 // src/app/api/v1/invoices/[id]/route.ts is the shim.
@@ -67,6 +67,13 @@ export const GET = route(
     if (!invoice) return v1Err(404, 'Invoice not found')
     const denied = clientProjectDenied(session, invoice.projectId)
     if (denied) return denied
+    // SEC-6 (issue #174): the site-team membership pin — supervisor /
+    // procurement / qs / finance read only the projects they hold a
+    // ProjectMembership row on (fail closed on zero rows); contractor/admin
+    // keep the explicit portfolio-wide grant. Same uniform 403 body as the
+    // client pin, after the resolve (resolve-then-pin, the v1 precedent).
+    const membershipDenied = await membershipProjectDenied(session, invoice.projectId)
+    if (membershipDenied) return membershipDenied
     // W5-3 supplier row pin: a foreign supplier's invoice answers EXACTLY like
     // an unknown id (same 404 body). No link → fail-closed 403.
     const supplierId = supplierSessionId(session)
