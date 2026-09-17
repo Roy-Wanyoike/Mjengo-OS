@@ -38,6 +38,7 @@
 //     honestly ignored (only Body.stkCallback shapes are processed).
 
 import { db } from '@/backend/lib/db'
+import { centsToKes, fmtKes } from '@/backend/lib/money'
 import { cashAccountForMethod, postLedgerTransactionInTx } from '@/backend/modules/ledger/service'
 import { notify } from '@/backend/modules/notify/service'
 import { phaseIdForMilestonePayment } from './service'
@@ -427,9 +428,9 @@ async function completeVerifiedIntent(
   }
 
   // Untrusted-body reconciliation log (metadata amount vs posted amount).
-  if (cb.amount !== undefined && cb.amount !== result.amount) {
+  if (cb.amount !== undefined && cb.amount !== centsToKes(result.amount)) {
     console.warn(
-      `[daraja-callback] checkout ${checkoutRequestID}: callback metadata amount ${cb.amount} differs from the approved ${intent.requestCode} amount ${result.amount} — posted the approved amount; finance should reconcile`,
+      `[daraja-callback] checkout ${checkoutRequestID}: callback metadata amount ${cb.amount} KSh differs from the approved ${intent.requestCode} amount ${fmtKes(result.amount)} — posted the approved amount; finance should reconcile`,
     )
   }
 
@@ -442,7 +443,7 @@ async function completeVerifiedIntent(
         key: `${DARAJA_CALLBACK_KEY_PREFIX}${checkoutRequestID}`,
         scope: CALLBACK_SCOPE,
         projectId: intent.projectId,
-        responseBody: JSON.stringify({ checkoutRequestID, origin, ...result }),
+        responseBody: JSON.stringify({ checkoutRequestID, origin, ...result, amount: centsToKes(result.amount) }),
       },
     })
   } catch {
@@ -455,7 +456,7 @@ async function completeVerifiedIntent(
     await notify(
       intent.projectId,
       `Payment ${intent.requestCode} recorded`,
-      `KSh ${result.amount.toLocaleString()} to ${intent.payee} — M-Pesa ${originLabel} verified against the query API, ledger ${result.ledgerRef}`,
+      `${fmtKes(result.amount)} to ${intent.payee} — M-Pesa ${originLabel} verified against the query API, ledger ${result.ledgerRef}`,
       { kind: 'payment.paid' },
     )
   } catch (e) {
@@ -465,7 +466,7 @@ async function completeVerifiedIntent(
   return {
     ok: true,
     action: 'credited',
-    detail: `Posted ledger ${result.ledgerRef} for ${intent.requestCode} (KSh ${result.amount}) — callback verified, request marked paid`,
+    detail: `Posted ledger ${result.ledgerRef} for ${intent.requestCode} (${fmtKes(result.amount)}) — callback verified, request marked paid`,
   }
 }
 

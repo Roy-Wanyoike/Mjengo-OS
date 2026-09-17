@@ -1142,7 +1142,7 @@ describe('append-only: no update/delete path exists for PhotoHash/AiInsight', ()
     }
     // The migrations declare the decision columns NULLABLE (present-but-null).
     const sql = readFileSync(
-      fileURLToPath(new URL('../../prisma/migrations/7_ai_insight/migration.sql', import.meta.url)),
+      fileURLToPath(new URL('../../prisma/migrations/07_ai_insight/migration.sql', import.meta.url)),
       'utf8',
     )
     for (const col of ['"decidedBy"', '"decision"', '"decidedAt"']) {
@@ -1209,8 +1209,8 @@ describe('migrations are additive-only (one CREATE TABLE each)', () => {
   const readSql = (dir: string) =>
     readFileSync(fileURLToPath(new URL(`../../prisma/migrations/${dir}/migration.sql`, import.meta.url)), 'utf8')
 
-  it('6_photo_hash: exactly one CREATE TABLE + one unique index, no mutation statements', () => {
-    const sql = readSql('6_photo_hash')
+  it('06_photo_hash: exactly one CREATE TABLE + one unique index, no mutation statements', () => {
+    const sql = readSql('06_photo_hash')
     const body = sql.replace(/--[^\n]*/g, '') // comments stripped (prose may say UPDATE)
     const statements = body.split(';').map((s) => s.trim()).filter(Boolean)
     expect(statements).toHaveLength(2)
@@ -1225,8 +1225,8 @@ describe('migrations are additive-only (one CREATE TABLE each)', () => {
     expect(sql).toContain('"packId" TEXT')
   })
 
-  it('7_ai_insight: exactly one CREATE TABLE statement, no mutations (the FK ON DELETE CASCADE is a reference, not a touch)', () => {
-    const sql = readSql('7_ai_insight')
+  it('07_ai_insight: exactly one CREATE TABLE statement, no mutations (the FK ON DELETE CASCADE is a reference, not a touch)', () => {
+    const sql = readSql('07_ai_insight')
     const body = sql.replace(/--[^\n]*/g, '')
     const statements = body.split(';').map((s) => s.trim()).filter(Boolean)
     expect(statements).toHaveLength(1)

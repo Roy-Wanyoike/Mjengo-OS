@@ -1,10 +1,11 @@
 import { db } from '@/backend/lib/db'
+import { centsToKes, sumCents } from '@/backend/lib/money'
 import { route } from '@/backend/lib/route-kit'
 import { validateQuery, workerDetailQuery, workerIdRef } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, supplierProjectDenied } from './scope'
 import {
-  todayStatusOf, weekEarningsOf, workerSummary, type AttendanceRow,
+  todayStatusOf, weekEarningsOf, workerSummary, type AttendanceRow, type WorkerRow,
 } from './worker-rows'
 
 // /api/v1/workers/:id (Phase D, read-only — the site-workforce family) —
@@ -66,7 +67,9 @@ export const GET = route(
     const supplierDenied = supplierProjectDenied(session)
     if (supplierDenied) return supplierDenied
 
-    const attendances = worker.attendances as AttendanceRow[]
+    // Raw CENTS rows — the worker-rows helpers convert at their boundaries.
+    const attendances: AttendanceRow[] = worker.attendances
+    const workerRow: WorkerRow = { ...worker, dailyRate: centsToKes(worker.dailyRate) }
     const present = attendances.filter((a) => a.status === 'present')
     const absent = attendances.filter((a) => a.status === 'absent')
     const halfDay = attendances.filter((a) => a.status === 'half_day')
@@ -77,7 +80,7 @@ export const GET = route(
     const unpaid = attendances.filter((a) => !a.paid)
 
     return v1Ok({
-      ...workerSummary(worker, todayStatusOf(attendances), weekEarningsOf(attendances)),
+      ...workerSummary(workerRow, todayStatusOf(attendances), weekEarningsOf(attendances)),
       idNumber: worker.idNumber,
       emergencyContactName: worker.emergencyContactName,
       emergencyContactPhone: worker.emergencyContactPhone,
@@ -90,8 +93,10 @@ export const GET = route(
         verified: verified.length,
         reported: reported.length,
         exception: exception.length,
-        paidWages: attendances.reduce((s, a) => s + a.wage, 0) - unpaid.reduce((s, a) => s + a.wage, 0),
-        unpaidWages: unpaid.reduce((s, a) => s + a.wage, 0),
+        // Cents-exact (issue #122): rows carry wage in cents — sum exactly,
+        // convert once at the boundary.
+        paidWages: centsToKes(sumCents(attendances.map((a) => a.wage)) - sumCents(unpaid.map((a) => a.wage))),
+        unpaidWages: centsToKes(sumCents(unpaid.map((a) => a.wage))),
         unpaidRecords: unpaid.length,
         firstDate: attendances.length ? attendances[attendances.length - 1].date : null,
         lastDate: attendances.length ? attendances[0].date : null,
@@ -103,7 +108,7 @@ export const GET = route(
         checkIn: a.checkIn ? a.checkIn.toISOString() : null,
         checkOut: a.checkOut ? a.checkOut.toISOString() : null,
         method: a.method,
-        wage: a.wage,
+        wage: centsToKes(a.wage),
         paid: a.paid,
         verification: a.verification,
         exceptionReason: a.exceptionReason,

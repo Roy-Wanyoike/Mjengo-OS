@@ -71,15 +71,15 @@ vi.mock('@/backend/lib/db', () => {
     // demo fallback (pin: null); w-3 is inactive (active:false filter).
     state.workers.set('w-1', {
       id: 'w-1', projectId: 'p-1', name: 'Kamau Mwangi', role: 'Fundi wa Mawe',
-      phone: '0722111222', pin: '1234', dailyRate: 1500, active: true,
+      phone: '0722111222', pin: '1234', dailyRate: 150000n, active: true,
     })
     state.workers.set('w-2', {
       id: 'w-2', projectId: 'p-1', name: 'Achieng Odhiambo', role: 'Foreman',
-      phone: '0733444555', pin: null, dailyRate: 1200, active: true,
+      phone: '0733444555', pin: null, dailyRate: 120000n, active: true,
     })
     state.workers.set('w-3', {
       id: 'w-3', projectId: 'p-1', name: 'Mgonjwa Fundi', role: 'Labourer',
-      phone: '0799888777', pin: null, dailyRate: 800, active: false,
+      phone: '0799888777', pin: null, dailyRate: 80000n, active: false,
     })
   }
   state.reset()
@@ -150,7 +150,7 @@ vi.mock('@/backend/lib/db', () => {
       },
       async aggregate({ where }: { where: Row }) {
         const rows = [...state.attendance.values()].filter((r) => matches(r, where))
-        const wage = rows.reduce((s, r) => s + (Number(r.wage) || 0), 0)
+        const wage = rows.reduce((s, r) => s + ((r.wage as bigint) ?? 0n), 0n)
         return { _sum: { wage } }
       },
       async count({ where }: { where: Row }) {
@@ -224,7 +224,7 @@ function ussdReq(
 function seedAttendance(workerId: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   const row = {
     id: `att-${workerId}`, workerId, projectId: 'p-1', date: TODAY,
-    status: 'present', wage: 750, checkIn: new Date('2026-02-14T07:00:00Z'), checkOut: null,
+    status: 'present', wage: 75000n, checkIn: new Date('2026-02-14T07:00:00Z'), checkOut: null,
     method: 'app', verification: 'verified', recordedBy: 'App', paid: false,
     version: 1, overrideLog: '[]', evidence: null, exceptionReason: null, exceptionNote: null,
     ...over,
@@ -290,14 +290,14 @@ describe('POST /api/ussd — menu grammar (real applyAction path)', () => {
     expect(reply).toContain('Kamau Mwangi — ABSENT. Asante!')
     const row = [...state.attendance.values()][0]
     expect(row.status).toBe('absent')
-    expect(row.wage).toBe(0)
+    expect(row.wage).toBe(0n)
     expect(row.verification).toBe('reported')
     expect(row.recordedBy).toBe('USSD *384#')
   })
 
   it('balance via kiosk pin → unpaid wage reply (read-only, zero rows)', async () => {
-    seedAttendance('w-1', { wage: 1500 })
-    seedAttendance('w-1', { id: 'att-w-1-b', wage: 750, status: 'half_day' })
+    seedAttendance('w-1', { wage: 150000n })
+    seedAttendance('w-1', { id: 'att-w-1-b', wage: 75000n, status: 'half_day' })
     const res = await ussdPost(ussdReq(KAMAU, '*384#*2*1234'))
     const reply = await res.text()
     expect(reply).toContain('Kamau Mwangi')

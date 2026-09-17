@@ -9,7 +9,10 @@
 import { TrendingDown, TrendingUp } from 'lucide-react'
 import { Badge } from '@/frontend/ui/badge'
 import { priceDelta } from '@/backend/modules/supply/insights'
-import type { PricePoint } from '@prisma/client'
+import type { IntelSlice } from '@/backend/modules/intel/types'
+
+/** KSh price points as the payload ships them (cents→KSh at the slice — #122). */
+type PricePoint = IntelSlice['pricePoints'][number]
 
 export function PriceAlertChip({ pricePoints }: { pricePoints: PricePoint[] }) {
   // recordedAt arrives as an ISO string over the payload API (JSON) — normalize

@@ -422,13 +422,13 @@ const TODAY = dayOffset(0)
 function seedProject(id = P1, shareToken = 'tok-1', client = 'Amina (Client)') {
   state.projects.set(id, {
     id, name: id === P1 ? 'Nyumba Yangu' : 'Kiambu Road Duplex', client,
-    clientType: 'diaspora', location: 'Karen', budget: 4_500_000, status: 'active',
+    clientType: 'diaspora', location: 'Karen', budget: 450_000_000n, status: 'active',
     shareToken, startDate: new Date('2026-01-05T09:00:00Z'), targetDate: new Date('2026-08-01T09:00:00Z'),
     createdAt: new Date('2026-01-05T09:00:00Z'), updatedAt: new Date('2026-01-05T09:00:00Z'),
   })
 }
 
-function seedReleaseRequested(id = 'm1', evidence = '["ph-1","ph-2"]', amount = 800_000) {
+function seedReleaseRequested(id = 'm1', evidence = '["ph-1","ph-2"]', amount = 80_000_000n) {
   state.milestones.set(id, {
     id, projectId: P1, phaseId: 'ph-1', name: 'Foundation complete', amount,
     status: 'release_requested', evidencePhotoIds: evidence,
@@ -441,7 +441,7 @@ function seedWorld() {
   seedProject()
   seedProject(P2, 'tok-2', 'David (Client)')
   state.phases.set('ph-1', { id: 'ph-1', projectId: P1, name: 'Site Prep & Foundation', order: 1, budget: 900_000, status: 'in_progress', createdAt: REQ })
-  state.escrowWallets.set(P1, { id: 'ew-1', projectId: P1, balance: 1_500_000, ledgerAccountId: null, createdAt: REQ, updatedAt: REQ })
+  state.escrowWallets.set(P1, { id: 'ew-1', projectId: P1, balance: 150_000_000n, ledgerAccountId: null, createdAt: REQ, updatedAt: REQ })
   seedReleaseRequested()
   // evidence photos on project 1 + one on the foreign project
   state.sitePhotos.set('ph-1', { id: 'ph-1', projectId: P1, phaseId: 'ph-1', url: '/uploads/foundation-1.jpg', caption: 'Foundation rebar', createdAt: REQ })
@@ -453,7 +453,7 @@ function seedWorld() {
   state.variations.set('v3', { id: 'v3', projectId: P1, phaseId: null, title: 'Granite upgrade', description: 'counter upgrade', budgetImpact: 95_000, status: 'submitted', submittedBy: 'Site Manager', createdAt: new Date('2026-01-30T09:00:00Z') })
   // attendance relative to TODAY (the action's window is request→now)
   const att = (id: string, k: number, status: string, verification: string) => {
-    state.attendances.set(id, { id, workerId: `w-${id}`, projectId: P1, date: dayOffset(k), status, method: 'geofence', wage: 500, paid: true, verification, createdAt: REQ })
+    state.attendances.set(id, { id, workerId: `w-${id}`, projectId: P1, date: dayOffset(k), status, method: 'geofence', wage: 50_000n, paid: true, verification, createdAt: REQ })
   }
   att('a-out1', -4, 'present', 'verified') // before the request day → OUT
   att('a-in1', -2, 'present', 'verified') // IN
@@ -470,14 +470,14 @@ function pureInput() {
   return {
     milestoneId: 'm1',
     milestoneName: 'Foundation complete',
-    amount: 800_000,
+    amount: 80_000_000n,
     ledgerRef: 'LX-2026-000001-424',
     ledgerTxnId: 'lt_1',
     evidencePhotoIds: ['ph-1', 'ph-2'],
     variations: [
-      { id: 'v1', title: 'Black cotton soil', budgetImpact: 180_000, status: 'submitted', createdAt: new Date('2026-01-28T09:00:00Z') },
-      { id: 'v2', title: 'Approved extra', budgetImpact: 50_000, status: 'approved', createdAt: new Date('2026-01-29T09:00:00Z') },
-      { id: 'v3', title: 'Granite upgrade', budgetImpact: 95_000, status: 'submitted', createdAt: new Date('2026-01-30T09:00:00Z') },
+      { id: 'v1', title: 'Black cotton soil', budgetImpact: 18_000_000n, status: 'submitted', createdAt: new Date('2026-01-28T09:00:00Z') },
+      { id: 'v2', title: 'Approved extra', budgetImpact: 5_000_000n, status: 'approved', createdAt: new Date('2026-01-29T09:00:00Z') },
+      { id: 'v3', title: 'Granite upgrade', budgetImpact: 9_500_000n, status: 'submitted', createdAt: new Date('2026-01-30T09:00:00Z') },
     ],
     attendanceRows: [
       { date: '2026-01-31', status: 'present', verification: 'verified' }, // out
@@ -526,7 +526,7 @@ describe('DrawPack content builder — determinism + canonical hash', () => {
       mutate(c)
       return hashDrawPackContent(c)
     }
-    expect(bump((c) => { c.amount = 801_000 })).not.toBe(h)
+    expect(bump((c) => { c.amount = 801_000 })).not.toBe(h) // content carries KSh (portable artifact)
     expect(bump((c) => { c.evidencePhotoIds = ['ph-1'] })).not.toBe(h)
     expect(bump((c) => { c.variationsOpen = [] })).not.toBe(h)
     expect(bump((c) => { c.mjengoScore = null })).not.toBe(h)
@@ -591,7 +591,7 @@ describe('createDrawPackForRelease — one immutable pack, projection only', () 
   const releaseInput = () => ({
     milestoneId: 'm1',
     milestoneName: 'Foundation complete',
-    amount: 800_000,
+    amount: 80_000_000n,
     evidencePhotoIds: ['ph-1', 'ph-2'],
     requestedAt: new Date(Date.now() - 3 * 86_400_000),
     decidedAt: new Date(),
@@ -805,7 +805,7 @@ describe('GET /api/share?token&drawPack — packs ride the EXISTING token gate',
     expect(body.pack.mjengoScore).toMatchObject({ score: 90, confidence: 'high' })
 
     // no score computed at all → explicit null (the "not computed" copy is pinned in i18n)
-    seedReleaseRequested('m2', '["ph-1"]', 100_000)
+    seedReleaseRequested('m2', '["ph-1"]', 10_000_000n)
     state.drawPacks.clear()
     state.mjengoScores.clear()
     await applyAction('milestone.decide', { id: 'm2', decision: 'approve' }, P1)
@@ -968,7 +968,7 @@ describe('immutability: no update path exists anywhere', () => {
   })
 
   it('the migration is additive-only: one CREATE TABLE + its unique index, nothing else', () => {
-    const sql = readFileSync(fileURLToPath(new URL('../../prisma/migrations/2_draw_pack/migration.sql', import.meta.url)), 'utf8')
+    const sql = readFileSync(fileURLToPath(new URL('../../prisma/migrations/02_draw_pack/migration.sql', import.meta.url)), 'utf8')
     // Comments stripped — comment text can legitimately say the word UPDATE.
     const body = sql.replace(/--[^\n]*/g, '')
     const statements = body.split(';').map((s) => s.trim()).filter(Boolean)
@@ -983,7 +983,7 @@ describe('immutability: no update path exists anywhere', () => {
   })
 
   it('the SQL columns match the Prisma model fields, mjengoScore nullable', () => {
-    const sql = readFileSync(fileURLToPath(new URL('../../prisma/migrations/2_draw_pack/migration.sql', import.meta.url)), 'utf8')
+    const sql = readFileSync(fileURLToPath(new URL('../../prisma/migrations/02_draw_pack/migration.sql', import.meta.url)), 'utf8')
     for (const col of [
       'id', 'milestoneId', 'projectId', 'milestoneName', 'amount', 'currency', 'ledgerRef',
       'ledgerTxnId', 'evidencePhotoIds', 'variationsOpen', 'attendanceSummary', 'mjengoScore',

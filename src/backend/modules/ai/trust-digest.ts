@@ -86,6 +86,7 @@
 
 import { createHash } from 'node:crypto'
 import { db } from '@/backend/lib/db'
+import { centsToKes, sumCents, type Cents } from '@/backend/lib/money'
 import { canonicalJson } from '@/backend/modules/drawpack/service'
 import { getFlags } from '@/backend/modules/intel/flags'
 import { resolveAiProvider } from './provider'
@@ -106,6 +107,10 @@ export const MAX_DIGEST_WINDOW_DAYS = 90
  * documented deterministic derivation of rows — sums, the score delta, the
  * budget/progress ratios). `v` pins the rule version into the hash input so
  * a template change can never collide with an old hash.
+ *
+ * Money in the facts is KSh NUMBERS (issue #122 rule 11: portable JSON
+ * artifacts carry KSh; DB rows are Cents and convert once, at build —
+ * bigint must never reach canonicalJson/the templates).
  */
 export interface DigestFacts {
   v: number
@@ -174,21 +179,26 @@ export async function loadDigestFacts(
       }),
     ])
 
-  const spent = txnRows.reduce((s, t) => s + t.amount, 0)
+  // All money math runs in CENTS (issue #122) and converts once, at the
+  // facts boundary below — KSh never feeds a sum or a ratio.
+  const spentCents = sumCents(txnRows.map((t) => t.amount))
   // Budget-weighted overall progress — mirrors lib/mjengo overallProgress()
   // (importing it here would create a module cycle through actions/ai.ts;
   // the rule is 3 lines and this comment is the drift contract).
-  const totalBudget = phaseRows.reduce((s, p) => s + p.budget, 0)
+  const totalBudgetCents = sumCents(phaseRows.map((p) => p.budget))
   const phasePct = (p: { progressManual: number | null; tasks: Array<{ progress: number }> }) =>
     p.progressManual !== null && p.progressManual !== undefined
       ? p.progressManual
       : p.tasks.length
         ? Math.round(p.tasks.reduce((s, t) => s + t.progress, 0) / p.tasks.length)
         : 0
+  // Σ pct·budget (percent·cents) over Σ budget — exact in bigint, half-up.
+  // NOTE: this is a RATIO of percent-weighted cents, not part/whole×100 —
+  // pctOf() would inflate it ×100 because `weighted` already carries percent
+  // units (pre-#122 this was round(Σ(pct/100)·budget / Σbudget · 100)).
+  const weighted = phaseRows.reduce((s, p) => s + BigInt(phasePct(p)) * p.budget, 0n)
   const progressPct =
-    totalBudget > 0
-      ? Math.round((phaseRows.reduce((s, p) => s + (phasePct(p) / 100) * p.budget, 0) / totalBudget) * 100)
-      : 0
+    totalBudgetCents > 0n ? Number((weighted * 2n + totalBudgetCents) / (totalBudgetCents * 2n)) : 0
 
   const score = scoreRows[0]?.score ?? null
   const prev = scoreRows[1]?.score ?? null
@@ -200,7 +210,7 @@ export async function loadDigestFacts(
       name: project.name,
       client: project.client,
       location: project.location,
-      budget: project.budget,
+      budget: centsToKes(project.budget),
     },
     window: {
       start: windowStart.toISOString(),
@@ -209,7 +219,7 @@ export async function loadDigestFacts(
     },
     releases: packRows.map((p) => ({
       milestoneName: p.milestoneName,
-      amount: p.amount,
+      amount: centsToKes(p.amount),
       currency: p.currency,
       ledgerRef: p.ledgerRef,
     })),
@@ -220,12 +230,22 @@ export async function loadDigestFacts(
         : { score, prev, delta: score !== null && prev !== null ? score - prev : null },
     aiFlags: { insights: insightRows.length, reviewNotes: noteRows.length },
     budget: {
-      spent,
+      spent: centsToKes(spentCents),
       transactions: txnRows.length,
-      pacePct: project.budget > 0 ? Math.round((spent / project.budget) * 100) : 0,
+      pacePct: pctOf(spentCents, project.budget),
     },
     progressPct,
   }
+}
+
+/**
+ * Half-up integer percent of one Cents total over another (issue #122):
+ * round(part/whole × 100) computed entirely in bigint — no float, no
+ * tolerance. whole ≤ 0 → 0 (an empty budget has no pace).
+ */
+function pctOf(part: Cents, whole: Cents): number {
+  if (whole <= 0n) return 0
+  return Number((part * 200n + whole) / (whole * 2n))
 }
 
 /** SHA-256 hex over the canonical JSON of the digest facts (deterministic). */

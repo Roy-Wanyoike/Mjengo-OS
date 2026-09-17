@@ -33,6 +33,7 @@
  */
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { centsToKes } from '@/backend/lib/money'
 
 // The session the mocked guard resolves — set per test.
 const h = vi.hoisted(() => ({
@@ -52,7 +53,7 @@ const d = (iso: string) => new Date(iso)
 const WORKERS = [
   {
     id: 'wrk-00000001', projectId: 'p-1', name: 'Amina Njeri', role: 'Fundi wa Mawe (Mason)', phone: '+254712000001',
-    dailyRate: 1500, active: true, employmentType: 'casual', skills: '["masonry","plastering"]',
+    dailyRate: 150000n, active: true, employmentType: 'casual', skills: '["masonry","plastering"]',
     idNumber: '28491022', emergencyContactName: 'Njeri Mwangi', emergencyContactPhone: '+254722000009',
     todayStatus: {
       status: 'present', checkIn: '2026-02-14T04:30:00.000Z', checkOut: '2026-02-14T12:30:00.000Z',
@@ -62,7 +63,7 @@ const WORKERS = [
   },
   {
     id: 'wrk-00000002', projectId: 'p-1', name: 'Baraka Otieno', role: 'Foreman', phone: '+254712000002',
-    dailyRate: 2000, active: true, employmentType: null, skills: null,
+    dailyRate: 200000n, active: true, employmentType: null, skills: null,
     idNumber: null, emergencyContactName: null, emergencyContactPhone: null,
     todayStatus: {
       status: null, checkIn: null, checkOut: null, method: null, wage: 0, paid: false,
@@ -73,7 +74,7 @@ const WORKERS = [
   {
     // malformed stored skills JSON — must parse to [], never a 500
     id: 'wrk-00000003', projectId: 'p-1', name: 'Chelu Mwangi', role: 'Mtumishi (Labourer)', phone: '+254712000003',
-    dailyRate: 800, active: false, employmentType: 'contract', skills: 'not-json',
+    dailyRate: 80000n, active: false, employmentType: 'contract', skills: 'not-json',
     idNumber: null, emergencyContactName: null, emergencyContactPhone: null,
     todayStatus: {
       status: 'absent', checkIn: null, checkOut: null, method: 'manager', wage: 0, paid: true,
@@ -88,28 +89,28 @@ const W1_ATTENDANCES = [
   {
     id: 'att-00000001', workerId: 'wrk-00000001', projectId: 'p-1', date: '2026-02-14',
     status: 'present', checkIn: d('2026-02-14T04:30:00Z'), checkOut: d('2026-02-14T12:30:00Z'),
-    method: 'kiosk_pin', wage: 1500, paid: true, synced: true, verification: 'verified',
+    method: 'kiosk_pin', wage: 150000n, paid: true, synced: true, verification: 'verified',
     evidence: '["pin","gps"]', exceptionReason: null, exceptionNote: null, overrideLog: null,
     recordedBy: 'Kiosk (site device)', createdAt: d('2026-02-14T07:30:00Z'), version: 1,
   },
   {
     id: 'att-00000002', workerId: 'wrk-00000001', projectId: 'p-1', date: '2026-02-13',
     status: 'present', checkIn: d('2026-02-13T04:35:00Z'), checkOut: null,
-    method: 'geofence', wage: 1500, paid: false, synced: true, verification: 'reported',
+    method: 'geofence', wage: 150000n, paid: false, synced: true, verification: 'reported',
     evidence: '["supervisor"]', exceptionReason: null, exceptionNote: null, overrideLog: '[]',
     recordedBy: 'Joe (Foreman)', createdAt: d('2026-02-13T18:00:00Z'), version: 1,
   },
   {
     id: 'att-00000003', workerId: 'wrk-00000001', projectId: 'p-1', date: '2026-02-12',
     status: 'absent', checkIn: null, checkOut: null,
-    method: 'manager', wage: 0, paid: true, synced: true, verification: 'reported',
+    method: 'manager', wage: 0n, paid: true, synced: true, verification: 'reported',
     evidence: null, exceptionReason: null, exceptionNote: null, overrideLog: '[]',
     recordedBy: 'Joe (Foreman)', createdAt: d('2026-02-12T18:00:00Z'), version: 1,
   },
   {
     id: 'att-00000004', workerId: 'wrk-00000001', projectId: 'p-1', date: '2026-02-11',
     status: 'half_day', checkIn: d('2026-02-11T04:30:00Z'), checkOut: d('2026-02-11T09:00:00Z'),
-    method: 'app', wage: 750, paid: false, synced: true, verification: 'exception',
+    method: 'app', wage: 75000n, paid: false, synced: true, verification: 'exception',
     // malformed stored evidence JSON — must count 0, never a 500
     evidence: 'not-json', exceptionReason: 'forgot', exceptionNote: 'Left phone at home.',
     overrideLog: '[{"at":"2026-02-12T10:00:00.000Z","by":"Joe (Foreman)","from":"present","to":"half_day","reason":"Left site at noon"}]',
@@ -118,7 +119,7 @@ const W1_ATTENDANCES = [
   {
     id: 'att-00000005', workerId: 'wrk-00000001', projectId: 'p-1', date: '2026-02-10',
     status: 'excused', checkIn: null, checkOut: null,
-    method: 'manager', wage: 0, paid: true, synced: true, verification: 'reported',
+    method: 'manager', wage: 0n, paid: true, synced: true, verification: 'reported',
     evidence: '["supervisor"]', exceptionReason: 'emergency', exceptionNote: null, overrideLog: '[]',
     recordedBy: 'Joe (Foreman)', createdAt: d('2026-02-10T18:00:00Z'), version: 1,
   },
@@ -126,7 +127,7 @@ const W1_ATTENDANCES = [
     // outside the trailing-7-day window (weekEarnings must exclude it)
     id: 'att-00000006', workerId: 'wrk-00000001', projectId: 'p-1', date: '2026-01-20',
     status: 'present', checkIn: d('2026-01-20T04:30:00Z'), checkOut: d('2026-01-20T12:30:00Z'),
-    method: 'ussd', wage: 1500, paid: true, synced: true, verification: 'verified',
+    method: 'ussd', wage: 150000n, paid: true, synced: true, verification: 'verified',
     evidence: '["ussd"]', exceptionReason: null, exceptionNote: null, overrideLog: '[]',
     recordedBy: 'Amina Njeri', createdAt: d('2026-01-20T18:00:00Z'), version: 1,
   },
@@ -390,7 +391,7 @@ describe('GET /api/v1/workers/:id — the full attendance summary', () => {
         id: a.id, date: a.date, status: a.status,
         checkIn: a.checkIn ? a.checkIn.toISOString() : null,
         checkOut: a.checkOut ? a.checkOut.toISOString() : null,
-        method: a.method, wage: a.wage, paid: a.paid, verification: a.verification,
+        method: a.method, wage: centsToKes(a.wage), paid: a.paid, verification: a.verification,
         exceptionReason: a.exceptionReason, version: a.version,
         createdAt: a.createdAt.toISOString(),
       })),

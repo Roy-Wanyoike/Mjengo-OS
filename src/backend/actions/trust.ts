@@ -5,6 +5,7 @@
 
 import { db } from '@/backend/lib/db'
 import type { Attendance, Worker } from '@prisma/client'
+import { centsToKes, sumCents, type Cents } from '@/backend/lib/money'
 
 export const TRUST_ACTIONS = [
   'attendance.record', // bulk muster roll { records: [{workerId,status}] | JSON string, verification?, recordedBy? }
@@ -28,8 +29,9 @@ function isIsoDate(v: unknown): v is string {
 const STATUSES = ['present', 'absent', 'half_day', 'excused'] as const
 const EXCEPTION_REASONS = ['phone_damaged', 'battery_dead', 'network', 'forgot', 'new_worker', 'emergency', 'other'] as const
 
-function wageFor(status: string, dailyRate: number): number {
-  return status === 'present' ? dailyRate : status === 'half_day' ? dailyRate * 0.5 : 0
+/** Wage for a status, in Cents (issue #122). Half-day halves exact cents. */
+function wageFor(status: string, dailyRate: Cents): Cents {
+  return status === 'present' ? dailyRate : status === 'half_day' ? dailyRate / 2n : 0n
 }
 
 function parseJsonArray(raw: string | null | undefined): string[] {
@@ -183,7 +185,7 @@ export async function applyTrustAction(type: string, payload: any, projectId: st
 
       const data: Partial<Attendance> = {
         status: to,
-        wage: wageFor(to, worker?.dailyRate ?? 0),
+        wage: wageFor(to, worker?.dailyRate ?? 0n),
         overrideLog: JSON.stringify(overrideLog), // full history + new entry
         version: att.version + 1, // entity version (outbox conflict metadata)
       }
@@ -194,7 +196,7 @@ export async function applyTrustAction(type: string, payload: any, projectId: st
         data.recordedBy = typeof by === 'string' && by.trim() ? by.trim() : 'Site Manager'
       }
       const updated = await db.attendance.update({ where: { id: att.id }, data })
-      return { id: updated.id, status: updated.status, wage: updated.wage }
+      return { id: updated.id, status: updated.status, wage: centsToKes(updated.wage) }
     }
 
     // THE GATE — payroll for a date (default today). Refuses to pay while any
@@ -209,11 +211,11 @@ export async function applyTrustAction(type: string, payload: any, projectId: st
         where.workerId = { in: payload.workerIds.map(String) }
       }
       const rows = await db.attendance.findMany({ where })
-      const unpaid = rows.filter((r) => r.status !== 'absent' && r.status !== 'excused' && r.wage > 0)
+      const unpaid = rows.filter((r) => r.status !== 'absent' && r.status !== 'excused' && r.wage > 0n)
       if (unpaid.length === 0) return { blocked: false, paid: 0, amount: 0 }
 
       const exceptions = unpaid.filter((r) => r.verification === 'exception')
-      const total = unpaid.reduce((s, u) => s + u.wage, 0)
+      const total = sumCents(unpaid.map((u) => u.wage))
 
       if (exceptions.length > 0 && !force) {
         // Blocked — return the review payload (no throw: the UI needs the list)
@@ -226,8 +228,8 @@ export async function applyTrustAction(type: string, payload: any, projectId: st
             name: reviewWorkers.find((w) => w.id === e.workerId)?.name ?? 'Unknown',
             reason: e.exceptionReason,
           })),
-          amount: total, // payroll on hold
-          reviewAmount: exceptions.reduce((s, e) => s + e.wage, 0), // exception wages only
+          amount: centsToKes(total), // payroll on hold (KSh for the payload)
+          reviewAmount: centsToKes(sumCents(exceptions.map((e) => e.wage))), // exception wages only
         }
       }
 
@@ -252,7 +254,7 @@ export async function applyTrustAction(type: string, payload: any, projectId: st
       return {
         blocked: false,
         paid: unpaid.length,
-        amount: total,
+        amount: centsToKes(total),
         forced: force && exceptions.length > 0,
       }
     }

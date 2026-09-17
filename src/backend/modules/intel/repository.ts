@@ -9,6 +9,7 @@
 // itself. Feature flags (§81) are global and ride along on every load.
 
 import { db } from '@/backend/lib/db'
+import { centsToKes } from '@/backend/lib/money'
 import { computeSuggestions, type SuggestionDoc } from './engine'
 import { priceTrends, openProcurementDocs, reliabilityBreakdowns } from './service'
 import { computeHealth } from './health'
@@ -47,5 +48,15 @@ export async function loadIntelSlice(projectId: string): Promise<IntelSlice> {
   const trackedMaterials = Array.from(new Set(trends.map((t) => t.materialName)))
   const suggestions = computeSuggestions(trackedMaterials, docs as SuggestionDoc[])
 
-  return { risk, score, digests, pricePoints, priceTrends: trends, suggestions, reliability, health, flags }
+  return {
+    risk,
+    score,
+    digests,
+    pricePoints: pricePoints.map((p) => ({ ...p, unitPrice: centsToKes(p.unitPrice) })),
+    priceTrends: trends,
+    suggestions,
+    reliability,
+    health,
+    flags,
+  }
 }

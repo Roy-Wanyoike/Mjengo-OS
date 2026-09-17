@@ -7,6 +7,7 @@
 // Rule version '1' — bump RULE_VERSION when a rule changes so history rows
 // stay interpretable.
 
+import { centsToKes, fmtKes, sumCents, type Cents } from '@/backend/lib/money'
 import type {
   FindingSeverity, PriceTrendRow, ProcurementSuggestion, SupplierReliability, ReliabilityComponent,
   SupplierLike,
@@ -25,14 +26,15 @@ const TERMINAL_ORDER_STATUSES = ['delivered', 'closed', 'cancelled'] as const
 // ---------------- risk engine (5 rules) ----------------
 
 export interface RiskTask { title: string; status: string; progress: number; dueDate: Date | null }
-export interface RiskPhase { name: string; status: string; budget: number; progressManual: number | null; tasks: RiskTask[] }
+/** Phase budget is CENTS (issue #122) — budget-weighted math runs in bigint. */
+export interface RiskPhase { name: string; status: string; budget: Cents; progressManual: number | null; tasks: RiskTask[] }
 export interface RiskDelivery { status: string; dispatchedAt: Date | null; receivedAt: Date | null; lines: Array<{ qtyOrdered: number; qtyReceived: number }> }
 export interface RiskOrder { orderCode: string; status: string; createdAt: Date; deliveries: RiskDelivery[] }
 export interface RiskInput {
   now: Date
   project: { location: string; targetDate: Date }
   phases: RiskPhase[]
-  transactions: Array<{ amount: number }>
+  transactions: Array<{ amount: Cents }>
   orders: RiskOrder[]
   priceTrends: PriceTrendRow[]
   attendances: Array<{ date: string; status: string }> // rows from the last 10 days only
@@ -54,16 +56,47 @@ function phaseProgress(p: RiskPhase): number {
   return Math.round(p.tasks.reduce((s, t) => s + t.progress, 0) / p.tasks.length)
 }
 
-/** Mirrors overallProgress() in lib/mjengo.ts (local copy avoids a circular import). */
+/**
+ * Mirrors overallProgress() in lib/mjengo.ts (local copy avoids a circular
+ * import). Exact in CENTS (issue #122): Σ pct·budget over Σ budget, half-up,
+ * all in bigint — no float anywhere in the money weighting.
+ */
 export function overallProgress(phases: RiskPhase[]): number {
-  const totalBudget = phases.reduce((s, p) => s + p.budget, 0)
-  if (!totalBudget) return 0
-  return Math.round(
-    (phases.reduce((s, p) => s + (phaseProgress(p) / 100) * p.budget, 0) / totalBudget) * 100,
-  )
+  const totalBudget = sumCents(phases.map((p) => p.budget))
+  if (totalBudget <= 0n) return 0
+  // weighted = Σ(progress% × budget) in percent-cents; the percent itself is
+  // round-half-up(weighted / totalBudget) — NOT pctOf (that would rescale ×100).
+  const weighted = phases.reduce((s, p) => s + BigInt(phaseProgress(p)) * p.budget, 0n)
+  return Number((weighted * 2n + totalBudget) / (totalBudget * 2n))
 }
 
-function kes(n: number): string {
+/**
+ * Half-up integer percent of one Cents total over another (issue #122):
+ * round(part/whole × 100) computed entirely in bigint — no float, no
+ * tolerance. whole ≤ 0 → 0. Exported for the sibling engines (score, jobs,
+ * health) so every money ratio in the intel module shares ONE exact rule.
+ */
+export function pctOf(part: Cents, whole: Cents): number {
+  if (whole <= 0n) return 0
+  return Number((part * 200n + whole) / (whole * 2n))
+}
+
+/**
+ * Half-up percent to a tenth: round(part/whole × 1000)/10 — the 1-dp trend
+ * deltas. Exact in bigint.
+ */
+export function pctTenthsOf(part: Cents, whole: Cents): number {
+  if (whole <= 0n) return 0
+  return Number((part * 2000n + whole) / (whole * 2n)) / 10
+}
+
+/** KSh display for a CENTS amount (issue #122 — never bigint.toLocaleString). */
+function kes(c: Cents): string {
+  return fmtKes(c)
+}
+
+/** KSh display for an already-converted KSh number (PriceTrendRow fields). */
+function kesNum(n: number): string {
   return `KSh ${Math.round(n).toLocaleString('en-KE')}`
 }
 
@@ -87,11 +120,11 @@ export function computeRiskFindings(input: RiskInput): { findings: EngineFinding
   const { now, project, phases, transactions, orders, priceTrends, attendances } = input
   const findings: EngineFinding[] = []
 
-  // ---- R1 budget_pace ----
-  const budgetTotal = phases.reduce((s, p) => s + p.budget, 0)
-  const spent = transactions.reduce((s, t) => s + t.amount, 0)
-  if (budgetTotal > 0) {
-    const spentPct = (spent / budgetTotal) * 100
+  // ---- R1 budget_pace (exact in cents — issue #122) ----
+  const budgetTotal = sumCents(phases.map((p) => p.budget))
+  const spent = sumCents(transactions.map((t) => t.amount))
+  if (budgetTotal > 0n) {
+    const spentPct = pctOf(spent, budgetTotal)
     const progressPct = overallProgress(phases)
     const lead = spentPct - progressPct
     if (lead > 30) {
@@ -208,7 +241,7 @@ export function computeRiskFindings(input: RiskInput): { findings: EngineFinding
         findings.push({
           rule: 'price_trend', severity: 'warning',
           title: `Cement price up ${row.deltaPct.toFixed(1)}%`,
-          message: `Cement in ${row.region} moved from ${kes(row.previous ?? 0)} to ${kes(row.current)} per unit over the last ~30 days (more than +5%). Consider scheduling orders early — this is a market trend, not a prediction.`,
+          message: `Cement in ${row.region} moved from ${kesNum(row.previous ?? 0)} to ${kesNum(row.current)} per unit over the last ~30 days (more than +5%). Consider scheduling orders early — this is a market trend, not a prediction.`,
           evidence: `${row.materialName} · ${row.region} · ${row.pointCount} price points`,
           score: SEVERITY_WEIGHTS.warning,
         })
@@ -369,18 +402,18 @@ export type CostCategory = 'materials' | 'labour' | 'transport' | 'professional_
 export interface BoqEstimate {
   version: number
   status: string
-  estTotal: number // KES, Σ BoqLine.qty × estUnitPrice
+  estTotal: Cents // Σ BoqLine.qty × estUnitPrice (cents — issue #122)
 }
 
 export interface CostVarianceInput {
   /** Overall phase progress 0–100 (same basis as risk rule R1). */
   progressPct: number
-  /** Σ Phase.budget — the budget source of truth (mirrors the wallet rollup). */
-  phaseBudgetTotal: number
-  /** Latest BOQ estimate if one exists (BoqLine.estUnitPrice is on file). */
+  /** Σ Phase.budget — the budget source of truth (mirrors the wallet rollup). CENTS. */
+  phaseBudgetTotal: Cents
+  /** Latest BOQ estimate if one exists (BoqLine.estUnitPrice is on file). CENTS. */
   boq: BoqEstimate | null
-  /** Spend grouped into the 5 §29 categories, from Transaction rows. */
-  spendByCategory: Record<CostCategory, number>
+  /** Spend grouped into the 5 §29 categories, from Transaction rows. CENTS. */
+  spendByCategory: Record<CostCategory, Cents>
 }
 
 const CATEGORY_BUDGET_BASIS = {
@@ -412,24 +445,27 @@ const CATEGORY_BUDGET_BASIS = {
 export function computeCostVarianceFindings(input: CostVarianceInput): EngineFinding[] {
   const { progressPct, phaseBudgetTotal, spendByCategory } = input
   const findings: EngineFinding[] = []
-  if (phaseBudgetTotal <= 0) return findings
+  if (phaseBudgetTotal <= 0n) return findings
 
-  const boqEst = input.boq !== null && input.boq.estTotal > 0 ? input.boq : null
-  const progressFactor = Math.max(0, Math.min(100, progressPct)) / 100
-  const materialsBudget = boqEst ? boqEst.estTotal : phaseBudgetTotal * progressFactor
+  const boqEst = input.boq !== null && input.boq.estTotal > 0n ? input.boq : null
+  // Pro-rate the budget slices by progress, exactly in cents (half-up).
+  const progressClamped = Math.max(0, Math.min(100, Math.round(progressPct)))
+  const prorated = (total: Cents): Cents =>
+    progressClamped === 0 ? 0n : (total * BigInt(progressClamped) + 50n) / 100n
+  const materialsBudget = boqEst ? boqEst.estTotal : prorated(phaseBudgetTotal)
   const nonMaterialsAllowance = boqEst
-    ? Math.max(0, phaseBudgetTotal - boqEst.estTotal) * progressFactor
-    : phaseBudgetTotal * progressFactor
+    ? prorated(phaseBudgetTotal - boqEst.estTotal > 0n ? phaseBudgetTotal - boqEst.estTotal : 0n)
+    : prorated(phaseBudgetTotal)
   const basisBoq = boqEst
     ? `budget basis: BOQ v${boqEst.version} (${boqEst.status}) materials estimate ${kes(boqEst.estTotal)} (Σ BoqLine qty × estUnitPrice)`
     : `budget basis: no BOQ on file — phase budgets ${kes(phaseBudgetTotal)} pro-rated by ${Math.round(progressPct)}% progress`
 
   for (const category of Object.keys(spendByCategory) as CostCategory[]) {
-    const spent = spendByCategory[category] ?? 0
-    if (spent <= 0) continue
+    const spent = spendByCategory[category] ?? 0n
+    if (spent <= 0n) continue
     const budget = category === 'materials' ? materialsBudget : nonMaterialsAllowance
-    if (budget <= 0) continue
-    const pct = (spent / budget) * 100
+    if (budget <= 0n) continue
+    const pct = pctOf(spent, budget)
     if (pct > 110) {
       const basis =
         category === 'materials'
@@ -453,14 +489,15 @@ export function computeCostVarianceFindings(input: CostVarianceInput): EngineFin
 export interface DuplicateOrderRow {
   orderCode: string
   createdAt: Date
-  total: number // KES, PO.total
+  total: Cents // PO.total (cents — issue #122)
   status: string
   /** True when the order is terminal (delivered/closed) or a delivery was received. */
   delivered: boolean
-  lines: Array<{ name: string; lineTotal: number }>
+  lines: Array<{ name: string; lineTotal: Cents }>
 }
 
-const DUPLICATE_MIN_TOTAL = 10_000 // both POs must exceed KES 10,000
+/** Both POs must exceed KES 10,000 — the cents form of the rule threshold. */
+const DUPLICATE_MIN_TOTAL: Cents = 1_000_000n
 const DUPLICATE_WINDOW_DAYS = 7 // ordered within 7 days of each other
 const DUPLICATE_MAX_FINDINGS = 3 // cap so one noisy material cannot spam the alert feed
 
@@ -509,7 +546,8 @@ export function computeDuplicatePurchaseFindings(orders: DuplicateOrderRow[]): E
 
 // ---------------- price trend engine ----------------
 
-export interface PricePointLike { materialName: string; region: string; unitPrice: number; recordedAt: Date; source: string }
+/** unitPrice is CENTS (issue #122); trend rows convert to KSh numbers at the output. */
+export interface PricePointLike { materialName: string; region: string; unitPrice: Cents; recordedAt: Date; source: string }
 
 /**
  * Group price points by material+region and compute the trend rows:
@@ -531,14 +569,17 @@ export function computePriceTrends(points: PricePointLike[], now: Date): PriceTr
     const latest = chronological[chronological.length - 1]
     // "previous" = the most recent point recorded at least 30 days ago
     const prevPoint = [...chronological].reverse().find((p) => p.recordedAt.getTime() <= cutoff.getTime())
-    const deltaPct = prevPoint && prevPoint.unitPrice > 0 ? ((latest.unitPrice - prevPoint.unitPrice) / prevPoint.unitPrice) * 100 : null
+    // Exact cents delta (issue #122): (latest − previous)/previous in bigint,
+    // half-up to a tenth of a percent; KSh numbers only in the output row.
+    const deltaPct =
+      prevPoint && prevPoint.unitPrice > 0n ? pctTenthsOf(latest.unitPrice - prevPoint.unitPrice, prevPoint.unitPrice) : null
     rows.push({
       materialName: latest.materialName,
       region: latest.region,
-      current: latest.unitPrice,
-      previous: prevPoint ? prevPoint.unitPrice : null,
-      deltaPct: deltaPct === null ? null : Math.round(deltaPct * 10) / 10,
-      points: chronological.slice(-12).map((p) => ({ t: p.recordedAt.toISOString(), price: p.unitPrice })),
+      current: centsToKes(latest.unitPrice),
+      previous: prevPoint ? centsToKes(prevPoint.unitPrice) : null,
+      deltaPct,
+      points: chronological.slice(-12).map((p) => ({ t: p.recordedAt.toISOString(), price: centsToKes(p.unitPrice) })),
       lastRecordedAt: latest.recordedAt.toISOString(),
       source: latest.source,
       pointCount: chronological.length,

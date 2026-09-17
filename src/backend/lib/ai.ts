@@ -1,5 +1,6 @@
 import ZAI from 'z-ai-web-dev-sdk'
 import { db } from '@/backend/lib/db'
+import { centsToKes, sumCents } from '@/backend/lib/money'
 import { overallProgress } from '@/backend/lib/mjengo'
 import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 
@@ -181,9 +182,9 @@ export async function buildProjectDigest(projectId?: string | null) {
     crew: workers.map((w) => ({ name: w.name, role: w.role, dailyRateKES: w.dailyRate })),
     attendanceLastDays: attendances.map((a) => ({
       worker: workers.find((w) => w.id === a.workerId)?.name,
-      date: a.date, status: a.status, wageKES: a.wage, paid: a.paid,
+      date: a.date, status: a.status, wageKES: centsToKes(a.wage), paid: a.paid,
     })),
-    materialsCatalog: materials.map((m) => ({ id: m.id, name: m.name, unit: m.unit, unitPriceKES: m.unitPrice })),
+    materialsCatalog: materials.map((m) => ({ id: m.id, name: m.name, unit: m.unit, unitPriceKES: centsToKes(m.unitPrice) })),
     deliveries: deliveries.map((d) => ({
       material: mat(d.materialId)?.name, qty: d.quantity, unit: mat(d.materialId)?.unit,
       totalKES: d.totalCost, supplier: d.supplier, daysAgo: Math.round((Date.now() - d.date.getTime()) / 86400000), source: d.source,
@@ -193,9 +194,9 @@ export async function buildProjectDigest(projectId?: string | null) {
       phase: c.phaseName, daysAgo: Math.round((Date.now() - c.date.getTime()) / 86400000), note: c.note,
     })),
     spend: {
-      totalKES: transactions.reduce((s, t) => s + t.amount, 0),
-      wagesKES: transactions.filter((t) => t.type === 'wage').reduce((s, t) => s + t.amount, 0),
-      materialsKES: transactions.filter((t) => t.type === 'material').reduce((s, t) => s + t.amount, 0),
+      totalKES: centsToKes(sumCents(transactions.map((t) => t.amount))),
+      wagesKES: centsToKes(sumCents(transactions.filter((t) => t.type === 'wage').map((t) => t.amount))),
+      materialsKES: centsToKes(sumCents(transactions.filter((t) => t.type === 'material').map((t) => t.amount))),
     },
     recentAlerts: alerts.map((a) => ({ type: a.type, severity: a.severity, title: a.title })),
     projectId: project.id,

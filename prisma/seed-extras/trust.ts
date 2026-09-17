@@ -8,6 +8,7 @@
  * Only Attendance rows for these projects are touched (+ Worker.pin updates).
  */
 import { PrismaClient } from '@prisma/client'
+import { fmtKes } from '@/backend/lib/money'
 
 const db = new PrismaClient()
 
@@ -32,8 +33,8 @@ function at(date: string, hour: number, minute: number): Date {
   return new Date(`${date}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00Z`)
 }
 
-function wageFor(status: string, dailyRate: number): number {
-  return status === 'present' ? dailyRate : status === 'half_day' ? dailyRate * 0.5 : 0
+function wageFor(status: string, dailyRate: bigint): bigint {
+  return status === 'present' ? dailyRate : status === 'half_day' ? dailyRate / 2n : 0n
 }
 
 function evidenceFor(method: string): string {
@@ -54,7 +55,7 @@ type Cell = {
 interface WorkerSeed {
   id: string
   name: string
-  dailyRate: number
+  dailyRate: bigint
 }
 
 async function insertAttendance(
@@ -240,7 +241,7 @@ async function main() {
       _count: { _all: true },
       _sum: { wage: true },
     })
-    const parts = rows.map((r) => `${r.verification}: ${r._count._all} rows / KSh ${r._sum.wage ?? 0}`).join(' · ')
+    const parts = rows.map((r) => `${r.verification}: ${r._count._all} rows / ${fmtKes(r._sum.wage ?? 0n)}`).join(' · ')
     const today = eatToday()
     const todayRows = await db.attendance.findMany({ where: { projectId: p.id, date: today } })
     const todayParts = ['verified', 'reported', 'exception']

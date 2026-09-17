@@ -81,9 +81,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
         operatingHours: 'Mon-Sat 07:00-18:00',
         warehouseLocation: 'Godown 12, Kiambu Road, near ABC Place',
         deliveryZones: 'Nairobi,Kiambu,Kajiado',
-        deliveryFeeBase: 2500,
-        freeDeliveryOver: 100000,
-        minimumOrder: 10000,
+        deliveryFeeBase: 250000n,
+        freeDeliveryOver: 10000000n,
+        minimumOrder: 1000000n,
         verificationState: 4,
         reliabilityScore: 86,
         responseHours: 6,
@@ -102,9 +102,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
         operatingHours: 'Mon-Fri 08:00-17:30 · Sat 08:30-13:00',
         warehouseLocation: 'Shed 7, Popo Lane, Industrial Area',
         deliveryZones: 'Nairobi,Kiambu,Machakos,Kajiado',
-        deliveryFeeBase: 3500,
-        freeDeliveryOver: 150000,
-        minimumOrder: 15000,
+        deliveryFeeBase: 350000n,
+        freeDeliveryOver: 15000000n,
+        minimumOrder: 1500000n,
         verificationState: 3,
         reliabilityScore: 74,
         responseHours: 12,
@@ -123,9 +123,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
         operatingHours: 'Mon-Sat 06:30-17:00',
         warehouseLocation: 'Mombasa Road yard, past Machakos junction',
         deliveryZones: 'Machakos,Makueni,Kitui',
-        deliveryFeeBase: 4500,
-        freeDeliveryOver: 200000,
-        minimumOrder: 20000,
+        deliveryFeeBase: 450000n,
+        freeDeliveryOver: 20000000n,
+        minimumOrder: 2000000n,
         verificationState: 2,
         reliabilityScore: 62,
         responseHours: 24,
@@ -144,9 +144,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
         operatingHours: 'Mon-Sat 07:30-17:00 · Sun closed',
         warehouseLocation: 'Karen Road, opposite Hardy shopping centre',
         deliveryZones: 'Nairobi,Kajiado',
-        deliveryFeeBase: 1800,
-        freeDeliveryOver: 60000,
-        minimumOrder: 5000,
+        deliveryFeeBase: 180000n,
+        freeDeliveryOver: 6000000n,
+        minimumOrder: 500000n,
         verificationState: 4,
         reliabilityScore: 80,
         responseHours: 4,
@@ -159,7 +159,7 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   interface CatalogItem {
     name: string
     unit: string
-    unitPrice: number
+    unitPrice: bigint
     stockQty: number
     minOrderQty: number
     category: string
@@ -168,52 +168,52 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   }
   const catalogs: Array<[string, CatalogItem[]]> = [
     [kiambuRoad.id, [
-      { name: 'Cement 50kg (32.5N)', unit: 'bag', unitPrice: 760, stockQty: 1200, minOrderQty: 50, category: 'cement', brand: 'Simba', specification: '32.5N 50kg bag' },
-      { name: 'Steel bar Y12 (12m length)', unit: 'length', unitPrice: 9800, stockQty: 240, minOrderQty: 10, category: 'steel', brand: 'Devki', specification: 'Y12 deformed bar, 12m' },
-      { name: 'Ballast (screened)', unit: 'tonne', unitPrice: 1800, stockQty: 90, minOrderQty: 10, category: 'ballast', specification: 'screened 3/4 inch' },
-      { name: 'River sand', unit: 'tonne', unitPrice: 2200, stockQty: 60, minOrderQty: 5, category: 'sand', specification: 'river sand, unwashed' },
-      { name: 'Binding wire (25kg roll)', unit: 'roll', unitPrice: 4850, stockQty: 40, minOrderQty: 2, category: 'steel', specification: 'annealed tie wire, 25kg roll' },
-      { name: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', unitPrice: 1050, stockQty: 300, minOrderQty: 20, category: 'roofing', brand: 'Mabati Rolling Mills', specification: 'box profile 30G, 2m, pre-painted' },
-      { name: 'Steel bar D10 (12m length)', unit: 'length', unitPrice: 4650, stockQty: 180, minOrderQty: 10, category: 'steel', brand: 'Devki', specification: 'D10 deformed bar, 12m' },
-      { name: 'PVC solvent cement 500ml', unit: 'tin', unitPrice: 850, stockQty: 150, minOrderQty: 2, category: 'plumbing', brand: 'Plasco', specification: 'heavy-duty solvent cement' },
-      { name: 'Ceramic wall tiles 300×600mm (m²)', unit: 'm²', unitPrice: 1150, stockQty: 500, minOrderQty: 15, category: 'tiles', brand: 'Goodwill', specification: 'glossy white wall tile' },
+      { name: 'Cement 50kg (32.5N)', unit: 'bag', unitPrice: 76000n, stockQty: 1200, minOrderQty: 50, category: 'cement', brand: 'Simba', specification: '32.5N 50kg bag' },
+      { name: 'Steel bar Y12 (12m length)', unit: 'length', unitPrice: 980000n, stockQty: 240, minOrderQty: 10, category: 'steel', brand: 'Devki', specification: 'Y12 deformed bar, 12m' },
+      { name: 'Ballast (screened)', unit: 'tonne', unitPrice: 180000n, stockQty: 90, minOrderQty: 10, category: 'ballast', specification: 'screened 3/4 inch' },
+      { name: 'River sand', unit: 'tonne', unitPrice: 220000n, stockQty: 60, minOrderQty: 5, category: 'sand', specification: 'river sand, unwashed' },
+      { name: 'Binding wire (25kg roll)', unit: 'roll', unitPrice: 485000n, stockQty: 40, minOrderQty: 2, category: 'steel', specification: 'annealed tie wire, 25kg roll' },
+      { name: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', unitPrice: 105000n, stockQty: 300, minOrderQty: 20, category: 'roofing', brand: 'Mabati Rolling Mills', specification: 'box profile 30G, 2m, pre-painted' },
+      { name: 'Steel bar D10 (12m length)', unit: 'length', unitPrice: 465000n, stockQty: 180, minOrderQty: 10, category: 'steel', brand: 'Devki', specification: 'D10 deformed bar, 12m' },
+      { name: 'PVC solvent cement 500ml', unit: 'tin', unitPrice: 85000n, stockQty: 150, minOrderQty: 2, category: 'plumbing', brand: 'Plasco', specification: 'heavy-duty solvent cement' },
+      { name: 'Ceramic wall tiles 300×600mm (m²)', unit: 'm²', unitPrice: 115000n, stockQty: 500, minOrderQty: 15, category: 'tiles', brand: 'Goodwill', specification: 'glossy white wall tile' },
     ]],
     [nairobiHardware.id, [
-      { name: 'Cement 50kg (32.5N)', unit: 'bag', unitPrice: 795, stockQty: 2000, minOrderQty: 100, category: 'cement', brand: 'Bamburi', specification: '32.5N 50kg bag' },
-      { name: 'Steel bar Y12 (12m length)', unit: 'length', unitPrice: 10200, stockQty: 320, minOrderQty: 10, category: 'steel', brand: 'Doshi', specification: 'Y12 deformed bar, 12m' },
-      { name: 'Ballast (screened)', unit: 'tonne', unitPrice: 1950, stockQty: 120, minOrderQty: 10, category: 'ballast', specification: 'screened 3/4 inch' },
-      { name: 'River sand', unit: 'tonne', unitPrice: 2300, stockQty: 85, minOrderQty: 5, category: 'sand', specification: 'river sand, unwashed' },
-      { name: 'Binding wire (25kg roll)', unit: 'roll', unitPrice: 5100, stockQty: 55, minOrderQty: 2, category: 'steel', specification: 'annealed tie wire, 25kg roll' },
-      { name: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', unitPrice: 1120, stockQty: 500, minOrderQty: 20, category: 'roofing', brand: 'Mabati Rolling Mills', specification: 'box profile 30G, 2m, pre-painted' },
-      { name: 'Machine-cut stones (9")', unit: 'piece', unitPrice: 55, stockQty: 8000, minOrderQty: 500, category: 'blocks', specification: '9-inch machine-cut stone' },
-      { name: 'Waterproofing membrane (1m roll)', unit: 'roll', unitPrice: 1850, stockQty: 120, minOrderQty: 5, category: 'finishes', specification: 'torch-on APP membrane, 1m roll' },
-      { name: 'PVC pipe 4" (3m length)', unit: 'length', unitPrice: 1250, stockQty: 400, minOrderQty: 10, category: 'plumbing', brand: 'Plasco', specification: 'Class B, solvent weld' },
-      { name: 'Electrical cable 2.5mm² (100m roll)', unit: 'roll', unitPrice: 5400, stockQty: 60, minOrderQty: 2, category: 'electrical', brand: 'Ozone', specification: 'twin & earth, copper' },
-      { name: 'Gloss paint 4L — white', unit: 'tin', unitPrice: 3200, stockQty: 90, minOrderQty: 2, category: 'paint', brand: 'Crown', specification: 'silk acrylic, interior' },
-      { name: 'Ceramic floor tiles 600×600mm (m²)', unit: 'm²', unitPrice: 1350, stockQty: 800, minOrderQty: 20, category: 'tiles', brand: 'Goodwill', specification: 'vitrified, matte grey' },
-      { name: 'Concrete blocks (6" hollow)', unit: 'block', unitPrice: 75, stockQty: 3000, minOrderQty: 100, category: 'blocks', specification: '6-inch hollow, machine-vibrated' },
-      { name: 'Tools rental — concrete vibrator (day)', unit: 'day', unitPrice: 3500, stockQty: 3, minOrderQty: 1, category: 'tools', specification: 'petrol poker vibrator, with operator' },
+      { name: 'Cement 50kg (32.5N)', unit: 'bag', unitPrice: 79500n, stockQty: 2000, minOrderQty: 100, category: 'cement', brand: 'Bamburi', specification: '32.5N 50kg bag' },
+      { name: 'Steel bar Y12 (12m length)', unit: 'length', unitPrice: 1020000n, stockQty: 320, minOrderQty: 10, category: 'steel', brand: 'Doshi', specification: 'Y12 deformed bar, 12m' },
+      { name: 'Ballast (screened)', unit: 'tonne', unitPrice: 195000n, stockQty: 120, minOrderQty: 10, category: 'ballast', specification: 'screened 3/4 inch' },
+      { name: 'River sand', unit: 'tonne', unitPrice: 230000n, stockQty: 85, minOrderQty: 5, category: 'sand', specification: 'river sand, unwashed' },
+      { name: 'Binding wire (25kg roll)', unit: 'roll', unitPrice: 510000n, stockQty: 55, minOrderQty: 2, category: 'steel', specification: 'annealed tie wire, 25kg roll' },
+      { name: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', unitPrice: 112000n, stockQty: 500, minOrderQty: 20, category: 'roofing', brand: 'Mabati Rolling Mills', specification: 'box profile 30G, 2m, pre-painted' },
+      { name: 'Machine-cut stones (9")', unit: 'piece', unitPrice: 5500n, stockQty: 8000, minOrderQty: 500, category: 'blocks', specification: '9-inch machine-cut stone' },
+      { name: 'Waterproofing membrane (1m roll)', unit: 'roll', unitPrice: 185000n, stockQty: 120, minOrderQty: 5, category: 'finishes', specification: 'torch-on APP membrane, 1m roll' },
+      { name: 'PVC pipe 4" (3m length)', unit: 'length', unitPrice: 125000n, stockQty: 400, minOrderQty: 10, category: 'plumbing', brand: 'Plasco', specification: 'Class B, solvent weld' },
+      { name: 'Electrical cable 2.5mm² (100m roll)', unit: 'roll', unitPrice: 540000n, stockQty: 60, minOrderQty: 2, category: 'electrical', brand: 'Ozone', specification: 'twin & earth, copper' },
+      { name: 'Gloss paint 4L — white', unit: 'tin', unitPrice: 320000n, stockQty: 90, minOrderQty: 2, category: 'paint', brand: 'Crown', specification: 'silk acrylic, interior' },
+      { name: 'Ceramic floor tiles 600×600mm (m²)', unit: 'm²', unitPrice: 135000n, stockQty: 800, minOrderQty: 20, category: 'tiles', brand: 'Goodwill', specification: 'vitrified, matte grey' },
+      { name: 'Concrete blocks (6" hollow)', unit: 'block', unitPrice: 7500n, stockQty: 3000, minOrderQty: 100, category: 'blocks', specification: '6-inch hollow, machine-vibrated' },
+      { name: 'Tools rental — concrete vibrator (day)', unit: 'day', unitPrice: 350000n, stockQty: 3, minOrderQty: 1, category: 'tools', specification: 'petrol poker vibrator, with operator' },
     ]],
     [machakosAgg.id, [
-      { name: 'Cement 50kg (32.5N)', unit: 'bag', unitPrice: 810, stockQty: 800, minOrderQty: 50, category: 'cement', brand: 'Devki', specification: '32.5N 50kg bag' },
-      { name: 'Steel bar Y12 (12m length)', unit: 'length', unitPrice: 10050, stockQty: 160, minOrderQty: 10, category: 'steel', brand: 'Devki', specification: 'Y12 deformed bar, 12m' },
-      { name: 'Ballast (screened)', unit: 'tonne', unitPrice: 1750, stockQty: 200, minOrderQty: 10, category: 'ballast', specification: 'screened 3/4 inch' },
-      { name: 'River sand', unit: 'tonne', unitPrice: 2100, stockQty: 150, minOrderQty: 5, category: 'sand', specification: 'river sand, unwashed' },
-      { name: 'Binding wire (25kg roll)', unit: 'roll', unitPrice: 4600, stockQty: 30, minOrderQty: 2, category: 'steel', specification: 'annealed tie wire, 25kg roll' },
-      { name: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', unitPrice: 1220, stockQty: 240, minOrderQty: 20, category: 'roofing', brand: 'Mabati Rolling Mills', specification: 'box profile 30G, 2m, pre-painted' },
-      { name: 'Undercoat paint 20L', unit: 'tin', unitPrice: 8900, stockQty: 40, minOrderQty: 2, category: 'paint', brand: 'Duracoat', specification: 'alkyd primer, exterior' },
-      { name: 'Waterproofing compound 20L', unit: 'tin', unitPrice: 6500, stockQty: 30, minOrderQty: 2, category: 'finishes', specification: 'acrylic waterproofing slurry' },
+      { name: 'Cement 50kg (32.5N)', unit: 'bag', unitPrice: 81000n, stockQty: 800, minOrderQty: 50, category: 'cement', brand: 'Devki', specification: '32.5N 50kg bag' },
+      { name: 'Steel bar Y12 (12m length)', unit: 'length', unitPrice: 1005000n, stockQty: 160, minOrderQty: 10, category: 'steel', brand: 'Devki', specification: 'Y12 deformed bar, 12m' },
+      { name: 'Ballast (screened)', unit: 'tonne', unitPrice: 175000n, stockQty: 200, minOrderQty: 10, category: 'ballast', specification: 'screened 3/4 inch' },
+      { name: 'River sand', unit: 'tonne', unitPrice: 210000n, stockQty: 150, minOrderQty: 5, category: 'sand', specification: 'river sand, unwashed' },
+      { name: 'Binding wire (25kg roll)', unit: 'roll', unitPrice: 460000n, stockQty: 30, minOrderQty: 2, category: 'steel', specification: 'annealed tie wire, 25kg roll' },
+      { name: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', unitPrice: 122000n, stockQty: 240, minOrderQty: 20, category: 'roofing', brand: 'Mabati Rolling Mills', specification: 'box profile 30G, 2m, pre-painted' },
+      { name: 'Undercoat paint 20L', unit: 'tin', unitPrice: 890000n, stockQty: 40, minOrderQty: 2, category: 'paint', brand: 'Duracoat', specification: 'alkyd primer, exterior' },
+      { name: 'Waterproofing compound 20L', unit: 'tin', unitPrice: 650000n, stockQty: 30, minOrderQty: 2, category: 'finishes', specification: 'acrylic waterproofing slurry' },
     ]],
     [karenTimber.id, [
-      { name: 'Cement 50kg (32.5N)', unit: 'bag', unitPrice: 745, stockQty: 450, minOrderQty: 20, category: 'cement', brand: 'Simba', specification: '32.5N 50kg bag' },
-      { name: 'Steel bar Y12 (12m length)', unit: 'length', unitPrice: 9950, stockQty: 120, minOrderQty: 5, category: 'steel', brand: 'Doshi', specification: 'Y12 deformed bar, 12m' },
-      { name: 'Ballast (screened)', unit: 'tonne', unitPrice: 1850, stockQty: 40, minOrderQty: 5, category: 'ballast', specification: 'screened 3/4 inch' },
-      { name: 'River sand', unit: 'tonne', unitPrice: 2250, stockQty: 25, minOrderQty: 5, category: 'sand', specification: 'river sand, unwashed' },
-      { name: 'Binding wire (25kg roll)', unit: 'roll', unitPrice: 5150, stockQty: 20, minOrderQty: 2, category: 'steel', specification: 'annealed tie wire, 25kg roll' },
-      { name: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', unitPrice: 1080, stockQty: 180, minOrderQty: 10, category: 'roofing', brand: 'Mabati Rolling Mills', specification: 'box profile 30G, 2m, pre-painted' },
-      { name: 'Steel bar D8 (12m length)', unit: 'length', unitPrice: 3050, stockQty: 90, minOrderQty: 5, category: 'steel', brand: 'Doshi', specification: 'D8 deformed bar, 12m' },
-      { name: 'Timber — cypress 2"×4" (4.8m)', unit: 'piece', unitPrice: 320, stockQty: 600, minOrderQty: 50, category: 'timber', specification: 'sawn cypress 50×100mm × 4.8m' },
-      { name: 'Plywood sheet 18mm (8ft × 4ft)', unit: 'sheet', unitPrice: 3900, stockQty: 120, minOrderQty: 5, category: 'timber', specification: 'BWP 18mm shuttering ply' },
+      { name: 'Cement 50kg (32.5N)', unit: 'bag', unitPrice: 74500n, stockQty: 450, minOrderQty: 20, category: 'cement', brand: 'Simba', specification: '32.5N 50kg bag' },
+      { name: 'Steel bar Y12 (12m length)', unit: 'length', unitPrice: 995000n, stockQty: 120, minOrderQty: 5, category: 'steel', brand: 'Doshi', specification: 'Y12 deformed bar, 12m' },
+      { name: 'Ballast (screened)', unit: 'tonne', unitPrice: 185000n, stockQty: 40, minOrderQty: 5, category: 'ballast', specification: 'screened 3/4 inch' },
+      { name: 'River sand', unit: 'tonne', unitPrice: 225000n, stockQty: 25, minOrderQty: 5, category: 'sand', specification: 'river sand, unwashed' },
+      { name: 'Binding wire (25kg roll)', unit: 'roll', unitPrice: 515000n, stockQty: 20, minOrderQty: 2, category: 'steel', specification: 'annealed tie wire, 25kg roll' },
+      { name: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', unitPrice: 108000n, stockQty: 180, minOrderQty: 10, category: 'roofing', brand: 'Mabati Rolling Mills', specification: 'box profile 30G, 2m, pre-painted' },
+      { name: 'Steel bar D8 (12m length)', unit: 'length', unitPrice: 305000n, stockQty: 90, minOrderQty: 5, category: 'steel', brand: 'Doshi', specification: 'D8 deformed bar, 12m' },
+      { name: 'Timber — cypress 2"×4" (4.8m)', unit: 'piece', unitPrice: 32000n, stockQty: 600, minOrderQty: 50, category: 'timber', specification: 'sawn cypress 50×100mm × 4.8m' },
+      { name: 'Plywood sheet 18mm (8ft × 4ft)', unit: 'sheet', unitPrice: 390000n, stockQty: 120, minOrderQty: 5, category: 'timber', specification: 'BWP 18mm shuttering ply' },
     ]],
   ]
   let catalogCount = 0
@@ -229,12 +229,12 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   // ---------------- approval rules (Finder spec §11, project 1) ----------------
   await db.approvalRule.createMany({
     data: [
-      { projectId: p1.id, minAmount: 0, maxAmount: 10000, approverRole: 'supervisor', priority: 10 },
-      { projectId: p1.id, minAmount: 10000, maxAmount: 50000, approverRole: 'contractor', priority: 20 },
-      { projectId: p1.id, minAmount: 50000, maxAmount: 250000, approverRole: 'client', priority: 30 },
+      { projectId: p1.id, minAmount: 0n, maxAmount: 1000000n, approverRole: 'supervisor', priority: 10 },
+      { projectId: p1.id, minAmount: 1000000n, maxAmount: 5000000n, approverRole: 'contractor', priority: 20 },
+      { projectId: p1.id, minAmount: 5000000n, maxAmount: 25000000n, approverRole: 'client', priority: 30 },
       // >250k: client AND finance both sign off (chained)
-      { projectId: p1.id, minAmount: 250000, maxAmount: null, approverRole: 'client', priority: 40 },
-      { projectId: p1.id, minAmount: 250000, maxAmount: null, approverRole: 'finance', priority: 41 },
+      { projectId: p1.id, minAmount: 25000000n, maxAmount: null, approverRole: 'client', priority: 40 },
+      { projectId: p1.id, minAmount: 25000000n, maxAmount: null, approverRole: 'finance', priority: 41 },
     ],
   })
 
@@ -343,11 +343,11 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
     data: {
       requestId: mr1042.id,
       supplierId: karenTimber.id,
-      unitPrice: 745,
-      deliveryFee: 1800,
-      transportFee: 0,
-      fees: 250, // offloading fee
-      totalLanded: 138800, // 50×745 + 10×9950 + 1800 + 250
+      unitPrice: 74500n,
+      deliveryFee: 180000n,
+      transportFee: 0n,
+      fees: 25000n, // offloading fee
+      totalLanded: 13880000n, // 50×745 + 10×9950 + 1800 + 250
       deliveryEta: 'same day',
       validUntil: daysAhead(21, 17),
       terms: '50% on delivery, 50% after 14 days · prices hold 21 days',
@@ -358,8 +358,8 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   })
   await db.quoteLine.createMany({
     data: [
-      { quoteId: karenQuote.id, name: 'Cement 50kg (32.5N)', unit: 'bag', qty: 50, unitPrice: 745, lineTotal: 37250 },
-      { quoteId: karenQuote.id, name: 'Steel bar Y12 (12m length)', unit: 'length', qty: 10, unitPrice: 9950, lineTotal: 99500 },
+      { quoteId: karenQuote.id, name: 'Cement 50kg (32.5N)', unit: 'bag', qty: 50, unitPrice: 74500n, lineTotal: 3725000n },
+      { quoteId: karenQuote.id, name: 'Steel bar Y12 (12m length)', unit: 'length', qty: 10, unitPrice: 995000n, lineTotal: 9950000n },
     ],
   })
   await db.quote.createMany({
@@ -367,11 +367,11 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
       {
         requestId: mr1042.id,
         supplierId: kiambuRoad.id,
-        unitPrice: 760, // cement (primary line)
-        deliveryFee: 2500,
-        transportFee: 500,
-        fees: 0,
-        totalLanded: 139000, // 50×760 + 10×9800 + 2500 + 500
+        unitPrice: 76000n, // cement (primary line)
+        deliveryFee: 250000n,
+        transportFee: 50000n,
+        fees: 0n,
+        totalLanded: 13900000n, // 50×760 + 10×9800 + 2500 + 500
         deliveryEta: '2 days',
         validUntil: daysAhead(14, 17),
         terms: 'Payment on delivery · 14-day validity',
@@ -382,11 +382,11 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
       {
         requestId: mr1042.id,
         supplierId: nairobiHardware.id,
-        unitPrice: 795,
-        deliveryFee: 3500,
-        transportFee: 0,
-        fees: 0,
-        totalLanded: 145250, // 50×795 + 10×10200 + 3500
+        unitPrice: 79500n,
+        deliveryFee: 350000n,
+        transportFee: 0n,
+        fees: 0n,
+        totalLanded: 14525000n, // 50×795 + 10×10200 + 3500
         deliveryEta: 'next day',
         validUntil: daysAgo(1, 17), // EXPIRED — demo of the greyed/expired row (§32)
         stockOk: true,
@@ -398,8 +398,8 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   // MR-1043: 2 quotes REQUESTED (awaiting supplier response)
   await db.quote.createMany({
     data: [
-      { requestId: mr1043.id, supplierId: nairobiHardware.id, unitPrice: 0, deliveryFee: 0, transportFee: 0, fees: 0, totalLanded: 0, status: 'requested', createdAt: daysAgo(2, 10) },
-      { requestId: mr1043.id, supplierId: machakosAgg.id, unitPrice: 0, deliveryFee: 0, transportFee: 0, fees: 0, totalLanded: 0, status: 'requested', createdAt: daysAgo(2, 10) },
+      { requestId: mr1043.id, supplierId: nairobiHardware.id, unitPrice: 0n, deliveryFee: 0n, transportFee: 0n, fees: 0n, totalLanded: 0n, status: 'requested', createdAt: daysAgo(2, 10) },
+      { requestId: mr1043.id, supplierId: machakosAgg.id, unitPrice: 0n, deliveryFee: 0n, transportFee: 0n, fees: 0n, totalLanded: 0n, status: 'requested', createdAt: daysAgo(2, 10) },
     ],
   })
 
@@ -411,9 +411,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
       projectId: p1.id,
       requestId: null, // direct order (no material request)
       supplierId: nairobiHardware.id,
-      subtotal: 59250, // 50 cement ×795 + 10 ballast ×1950
-      deliveryFee: 3500,
-      total: 62750,
+      subtotal: 5925000n, // 50 cement ×795 + 10 ballast ×1950
+      deliveryFee: 350000n,
+      total: 6275000n,
       status: 'delivered',
       paymentSource: 'client',
       createdByRole: 'contractor',
@@ -422,10 +422,10 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
     },
   })
   const po9Cement = await db.purchaseOrderLine.create({
-    data: { orderId: po9.id, name: 'Cement 50kg (32.5N)', unit: 'bag', qty: 50, unitPrice: 795, lineTotal: 39750 },
+    data: { orderId: po9.id, name: 'Cement 50kg (32.5N)', unit: 'bag', qty: 50, unitPrice: 79500n, lineTotal: 3975000n },
   })
   const po9Ballast = await db.purchaseOrderLine.create({
-    data: { orderId: po9.id, name: 'Ballast (screened)', unit: 'tonne', qty: 10, unitPrice: 1950, lineTotal: 19500 },
+    data: { orderId: po9.id, name: 'Ballast (screened)', unit: 'tonne', qty: 10, unitPrice: 195000n, lineTotal: 1950000n },
   })
   await db.approval.create({
     data: {
@@ -468,9 +468,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
       projectId: p1.id,
       requestId: mr1042.id, // converted from MR-1042
       supplierId: kiambuRoad.id,
-      subtotal: 136000, // 50 cement ×760 + 10 Y12 ×9800
-      deliveryFee: 2500,
-      total: 138500,
+      subtotal: 13600000n, // 50 cement ×760 + 10 Y12 ×9800
+      deliveryFee: 250000n,
+      total: 13850000n,
       status: 'delivering',
       paymentSource: 'client',
       createdByRole: 'contractor',
@@ -480,8 +480,8 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   })
   await db.purchaseOrderLine.createMany({
     data: [
-      { orderId: po12.id, name: 'Cement 50kg (32.5N)', unit: 'bag', qty: 50, unitPrice: 760, lineTotal: 38000 },
-      { orderId: po12.id, name: 'Steel bar Y12 (12m length)', unit: 'length', qty: 10, unitPrice: 9800, lineTotal: 98000 },
+      { orderId: po12.id, name: 'Cement 50kg (32.5N)', unit: 'bag', qty: 50, unitPrice: 76000n, lineTotal: 3800000n },
+      { orderId: po12.id, name: 'Steel bar Y12 (12m length)', unit: 'length', qty: 10, unitPrice: 980000n, lineTotal: 9800000n },
     ],
   })
   await db.approval.create({
@@ -507,9 +507,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
       projectId: p1.id,
       requestId: null, // direct order (no material request)
       supplierId: nairobiHardware.id,
-      subtotal: 181500, // 3000 stones ×55 + 200 blocks ×75
-      deliveryFee: 3500,
-      total: 185000,
+      subtotal: 18150000n, // 3000 stones ×55 + 200 blocks ×75
+      deliveryFee: 350000n,
+      total: 18500000n,
       status: 'sent',
       paymentSource: 'client',
       createdByRole: 'contractor',
@@ -519,8 +519,8 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   })
   await db.purchaseOrderLine.createMany({
     data: [
-      { orderId: po13.id, name: 'Machine-cut stones (9")', unit: 'piece', qty: 3000, unitPrice: 55, lineTotal: 165000 },
-      { orderId: po13.id, name: 'Concrete blocks (6" hollow)', unit: 'block', qty: 200, unitPrice: 75, lineTotal: 15000 },
+      { orderId: po13.id, name: 'Machine-cut stones (9")', unit: 'piece', qty: 3000, unitPrice: 5500n, lineTotal: 16500000n },
+      { orderId: po13.id, name: 'Concrete blocks (6" hollow)', unit: 'block', qty: 200, unitPrice: 7500n, lineTotal: 1500000n },
     ],
   })
 
@@ -536,13 +536,13 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   })
   await db.boqLine.createMany({
     data: [
-      { boqId: boqV1.id, materialName: 'Cement 50kg (32.5N)', unit: 'bag', qty: 200, estUnitPrice: 760, category: 'structural' },
-      { boqId: boqV1.id, materialName: 'Ballast (screened)', unit: 'tonne', qty: 30, estUnitPrice: 1800, category: 'structural' },
-      { boqId: boqV1.id, materialName: 'River sand', unit: 'tonne', qty: 20, estUnitPrice: 2200, category: 'structural' },
-      { boqId: boqV1.id, materialName: 'Steel bar Y12 (12m length)', unit: 'length', qty: 30, estUnitPrice: 9800, category: 'structural' },
-      { boqId: boqV1.id, materialName: 'Machine-cut stones (9")', unit: 'piece', qty: 3000, estUnitPrice: 55, category: 'walling' },
-      { boqId: boqV1.id, materialName: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', qty: 60, estUnitPrice: 1050, category: 'roofing' },
-      { boqId: boqV1.id, materialName: 'Ceramic floor tiles 600×600mm (m²)', unit: 'm²', qty: 45, estUnitPrice: 1350, category: 'finishes' },
+      { boqId: boqV1.id, materialName: 'Cement 50kg (32.5N)', unit: 'bag', qty: 200, estUnitPrice: 76000n, category: 'structural' },
+      { boqId: boqV1.id, materialName: 'Ballast (screened)', unit: 'tonne', qty: 30, estUnitPrice: 180000n, category: 'structural' },
+      { boqId: boqV1.id, materialName: 'River sand', unit: 'tonne', qty: 20, estUnitPrice: 220000n, category: 'structural' },
+      { boqId: boqV1.id, materialName: 'Steel bar Y12 (12m length)', unit: 'length', qty: 30, estUnitPrice: 980000n, category: 'structural' },
+      { boqId: boqV1.id, materialName: 'Machine-cut stones (9")', unit: 'piece', qty: 3000, estUnitPrice: 5500n, category: 'walling' },
+      { boqId: boqV1.id, materialName: 'Roofing sheet — box profile 30G (2m)', unit: 'sheet', qty: 60, estUnitPrice: 105000n, category: 'roofing' },
+      { boqId: boqV1.id, materialName: 'Ceramic floor tiles 600×600mm (m²)', unit: 'm²', qty: 45, estUnitPrice: 135000n, category: 'finishes' },
     ],
   })
   const boqV2 = await db.boq.create({
@@ -556,9 +556,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   })
   await db.boqLine.createMany({
     data: [
-      { boqId: boqV2.id, materialName: 'Gloss paint 4L — white', unit: 'tin', qty: 6, estUnitPrice: 3200, category: 'finishes' },
-      { boqId: boqV2.id, materialName: 'Undercoat paint 20L', unit: 'tin', qty: 2, estUnitPrice: 8900, category: 'finishes' },
-      { boqId: boqV2.id, materialName: 'Ceramic wall tiles 300×600mm (m²)', unit: 'm²', qty: 18, estUnitPrice: 1150, category: 'finishes' },
+      { boqId: boqV2.id, materialName: 'Gloss paint 4L — white', unit: 'tin', qty: 6, estUnitPrice: 320000n, category: 'finishes' },
+      { boqId: boqV2.id, materialName: 'Undercoat paint 20L', unit: 'tin', qty: 2, estUnitPrice: 890000n, category: 'finishes' },
+      { boqId: boqV2.id, materialName: 'Ceramic wall tiles 300×600mm (m²)', unit: 'm²', qty: 18, estUnitPrice: 115000n, category: 'finishes' },
     ],
   })
 
@@ -592,7 +592,7 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
     quantity: number,
     when: Date,
     recordedBy: string,
-    unitCost: number | null = null,
+    unitCost: bigint | null = null,
     reference: string | null = null,
     note: string | null = null,
   ) {
@@ -604,8 +604,8 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   // Cement — opening + received (48 of 50, PO-2026-000009) + damaged (4 bags
   // set by rain) + consumed + transfer to the Slab store
   const cement = await item('Cement 50kg (32.5N)', 'bag', nairobi?.id ?? null)
-  await move(cement.id, 'opening', 20, daysAgo(12, 8), foreman, 760, null, 'Opening count at handover')
-  await move(cement.id, 'received', 48, daysAgo(8, 14), foreman, 795, po9Ref?.orderCode ?? 'PO-2026-000009', '48 of 50 — 2 missing, flagged for review')
+  await move(cement.id, 'opening', 20, daysAgo(12, 8), foreman, 76000n, null, 'Opening count at handover')
+  await move(cement.id, 'received', 48, daysAgo(8, 14), foreman, 79500n, po9Ref?.orderCode ?? 'PO-2026-000009', '48 of 50 — 2 missing, flagged for review')
   await move(cement.id, 'damaged', 4, daysAgo(6, 9), storekeeper, null, po9Ref?.orderCode ?? 'PO-2026-000009', '4 bags set by rain')
   await move(cement.id, 'consumed', 15, daysAgo(4, 17), foreman, null, null, 'Foundation mortar, courses 1-8')
   await move(cement.id, 'transferred_out', 10, daysAgo(4, 17, 30), storekeeper, null, null, '→ Slab store: ring beam pour staging')
@@ -614,18 +614,18 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
 
   // Ballast — opening + received (PO-2026-000009) + consumed
   const ballast = await item('Ballast (screened)', 'tonne', nairobi?.id ?? null)
-  await move(ballast.id, 'opening', 5, daysAgo(12, 8), foreman, 1800, null, 'Blinding stock from the access road works')
-  await move(ballast.id, 'received', 10, daysAgo(8, 14), foreman, 1950, po9Ref?.orderCode ?? 'PO-2026-000009', 'Delivered in full')
+  await move(ballast.id, 'opening', 5, daysAgo(12, 8), foreman, 180000n, null, 'Blinding stock from the access road works')
+  await move(ballast.id, 'received', 10, daysAgo(8, 14), foreman, 195000n, po9Ref?.orderCode ?? 'PO-2026-000009', 'Delivered in full')
   await move(ballast.id, 'consumed', 8, daysAgo(3, 16), foreman, null, null, 'Slab hardcore backfill')
 
   // River sand — opening + consumed (now LOW: 1 of 3 left)
   const sand = await item('River sand', 'tonne', kiambu?.id ?? null)
-  await move(sand.id, 'opening', 3, daysAgo(12, 8), foreman, 2200, null, null)
+  await move(sand.id, 'opening', 3, daysAgo(12, 8), foreman, 220000n, null, null)
   await move(sand.id, 'consumed', 2, daysAgo(5, 11), foreman, null, null, 'Screed batch A')
 
   // Steel — opening + consumed
   const steel = await item('Steel bar Y12 (12m length)', 'length', kiambu?.id ?? null)
-  await move(steel.id, 'opening', 12, daysAgo(11, 9), foreman, 9800, null, 'Delivered with the starter pack')
+  await move(steel.id, 'opening', 12, daysAgo(11, 9), foreman, 980000n, null, 'Delivered with the starter pack')
   await move(steel.id, 'consumed', 6, daysAgo(2, 15), foreman, null, null, 'Column starters + lintel cage')
 
   // Standalone re-run: rebuild the invoices that reference these fresh POs

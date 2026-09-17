@@ -1,4 +1,5 @@
 import { db } from '@/backend/lib/db'
+import { centsToKes, sumCents, type Cents } from '@/backend/lib/money'
 import { overallProgress } from '@/backend/lib/mjengo'
 import type { Phase, Task, Transaction } from '@prisma/client'
 
@@ -160,8 +161,9 @@ export async function buildBudgetVarianceReport(projectId: string): Promise<Budg
   ])
 
   // ---- project rollup (same math as lib/mjengo.ts ProjectSummary) ----
-  const budgetTotal = phases.reduce((s, f) => s + f.budget, 0)
-  const spent = transactions.reduce((s, t) => s + t.amount, 0)
+  // CENTS internally (issue #122); the report contract converts to KSh at return.
+  const budgetTotal = sumCents(phases.map((f) => f.budget))
+  const spent = sumCents(transactions.map((t) => t.amount))
 
   // ---- step 1: REAL phase cost-codes (issue #39, tier 1) ----
   // A stored phaseId counts DIRECTLY, but only when it references one of
@@ -188,36 +190,36 @@ export async function buildBudgetVarianceReport(projectId: string): Promise<Budg
   // to the phase furthest BELOW its budget-share target (min deficit, ties
   // keep phase order) — Σ phase.spent == project spent, always.
   const assigned = new Map<string, Transaction[]>(phases.map((f) => [f.id, []]))
-  const assignedTotal = new Map<string, number>(phases.map((f) => [f.id, 0]))
-  const codedPerPhase = new Map<string, number>(phases.map((f) => [f.id, 0]))
+  const assignedTotal = new Map<string, Cents>(phases.map((f) => [f.id, 0n]))
+  const codedPerPhase = new Map<string, Cents>(phases.map((f) => [f.id, 0n]))
   const codedCountPerPhase = new Map<string, number>(phases.map((f) => [f.id, 0]))
-  let codedSpent = 0
+  let codedSpent = 0n
   let codedTxnCount = 0
-  let milestoneDerivedSpent = 0
+  let milestoneDerivedSpent = 0n
   let milestoneDerivedTxnCount = 0
-  let estimatedSpent = 0
+  let estimatedSpent = 0n
   let estimatedTxnCount = 0
 
   let started = phases.filter((f) => f.status !== 'pending' || phaseProgress(f) > 0)
   if (started.length === 0) started = phases // spend recorded before any phase started
-  const startedBudget = started.reduce((s, f) => s + f.budget, 0)
+  const startedBudget = sumCents(started.map((f) => f.budget))
   // Directly attributed (coded or legacy-derived) spend leaves the estimate
   // pool — precedence: a stored code supersedes the milestone derivation.
-  const exactTotal = transactions.reduce(
-    (s, t) => s + (codedPhase(t) || phaseIdByTxnId.has(t.id) ? t.amount : 0),
-    0,
+  const exactTotal = sumCents(
+    transactions.filter((t) => codedPhase(t) || phaseIdByTxnId.has(t.id)).map((t) => t.amount),
   )
   const pool = spent - exactTotal // uncoded total to spread across started phases
-  const target = new Map<string, number>(
-    started.map((f) => [f.id, startedBudget ? (f.budget / startedBudget) * pool : 0]),
+  // Budget-share targets in exact cents: (budget × pool) / startedBudget.
+  const target = new Map<string, Cents>(
+    started.map((f) => [f.id, startedBudget ? (f.budget * pool) / startedBudget : 0n]),
   )
 
   for (const t of transactions) {
     const coded = codedPhase(t)
     if (coded) {
       assigned.get(coded)?.push(t)
-      assignedTotal.set(coded, (assignedTotal.get(coded) ?? 0) + t.amount)
-      codedPerPhase.set(coded, (codedPerPhase.get(coded) ?? 0) + t.amount)
+      assignedTotal.set(coded, (assignedTotal.get(coded) ?? 0n) + t.amount)
+      codedPerPhase.set(coded, (codedPerPhase.get(coded) ?? 0n) + t.amount)
       codedCountPerPhase.set(coded, (codedCountPerPhase.get(coded) ?? 0) + 1)
       codedSpent += t.amount
       codedTxnCount += 1
@@ -226,7 +228,7 @@ export async function buildBudgetVarianceReport(projectId: string): Promise<Budg
     const derived = phaseIdByTxnId.get(t.id)
     if (derived) {
       assigned.get(derived)?.push(t)
-      assignedTotal.set(derived, (assignedTotal.get(derived) ?? 0) + t.amount)
+      assignedTotal.set(derived, (assignedTotal.get(derived) ?? 0n) + t.amount)
       milestoneDerivedSpent += t.amount
       milestoneDerivedTxnCount += 1
       continue
@@ -237,46 +239,46 @@ export async function buildBudgetVarianceReport(projectId: string): Promise<Budg
     // Pick the started phase with the largest deficit (assigned − target);
     // strict < keeps the earliest phase on ties → deterministic output.
     let best = started[0]
-    let bestDeficit = (assignedTotal.get(best.id) ?? 0) - (target.get(best.id) ?? 0)
+    let bestDeficit = (assignedTotal.get(best.id) ?? 0n) - (target.get(best.id) ?? 0n)
     for (const f of started.slice(1)) {
-      const deficit = (assignedTotal.get(f.id) ?? 0) - (target.get(f.id) ?? 0)
+      const deficit = (assignedTotal.get(f.id) ?? 0n) - (target.get(f.id) ?? 0n)
       if (deficit < bestDeficit) {
         best = f
         bestDeficit = deficit
       }
     }
     assigned.get(best.id)?.push(t)
-    assignedTotal.set(best.id, (assignedTotal.get(best.id) ?? 0) + t.amount)
+    assignedTotal.set(best.id, (assignedTotal.get(best.id) ?? 0n) + t.amount)
   }
 
   // ---- phase rows (contract order: budget, spent, variance, …) ----
   const phasesOut: BudgetVariancePhase[] = phases.map((f) => {
     const rows = assigned.get(f.id) ?? []
-    const phaseSpent = rows.reduce((s, t) => s + t.amount, 0)
+    const phaseSpent = sumCents(rows.map((t) => t.amount))
     const variance = f.budget - phaseSpent
     const top = [...rows]
-      .sort((a, b) => b.amount - a.amount)
+      .sort((a, b) => (a.amount < b.amount ? 1 : a.amount > b.amount ? -1 : 0))
       .slice(0, 5)
-      .map((t) => ({ id: t.id, note: t.note ?? '', amount: t.amount, date: t.date.toISOString() }))
+      .map((t) => ({ id: t.id, note: t.note ?? '', amount: centsToKes(t.amount), date: t.date.toISOString() }))
     return {
       id: f.id,
       name: f.name,
-      budget: f.budget,
-      spent: phaseSpent,
-      variance,
-      variancePct: f.budget ? Math.round((variance / f.budget) * 100) : 0,
+      budget: centsToKes(f.budget),
+      spent: centsToKes(phaseSpent),
+      variance: centsToKes(variance),
+      variancePct: f.budget ? Number(((variance * 200n) + f.budget) / (f.budget * 2n)) : 0,
       progressPct: phaseProgress(f),
       txCount: rows.length,
-      codedSpent: codedPerPhase.get(f.id) ?? 0,
+      codedSpent: centsToKes(codedPerPhase.get(f.id) ?? 0n),
       codedTxnCount: codedCountPerPhase.get(f.id) ?? 0,
       topTransactions: top,
     }
   })
 
   // ---- categories: group by Transaction.type (see honest note above) ----
-  const byType = new Map<string, { spent: number; txCount: number }>()
+  const byType = new Map<string, { spent: Cents; txCount: number }>()
   for (const t of transactions) {
-    const g = byType.get(t.type) ?? { spent: 0, txCount: 0 }
+    const g = byType.get(t.type) ?? { spent: 0n, txCount: 0 }
     g.spent += t.amount
     g.txCount += 1
     byType.set(t.type, g)
@@ -285,11 +287,11 @@ export async function buildBudgetVarianceReport(projectId: string): Promise<Budg
     .map(([key, g]) => ({
       key,
       label: TYPE_LABELS[key] ?? key,
-      spent: g.spent,
       txCount: g.txCount,
-      share: pct(g.spent, spent),
+      spent: centsToKes(g.spent),
+      share: spent ? Math.round(Number((g.spent * 10000n) / spent) / 100) : 0,
     }))
-    .sort((a, b) => b.spent - a.spent || a.key.localeCompare(b.key))
+    .sort((a, b) => (a.spent < b.spent ? 1 : a.spent > b.spent ? -1 : 0) || a.key.localeCompare(b.key))
 
   // ---- honest mode statement (issue #39): which attribution produced the
   // numbers — codedSpent + milestoneDerivedSpent + estimatedSpent == spent.
@@ -307,21 +309,21 @@ export async function buildBudgetVarianceReport(projectId: string): Promise<Budg
     project: {
       id: project.id,
       name: project.name,
-      budgetTotal,
-      spent,
-      remaining: budgetTotal - spent,
-      spentPct: pct(spent, budgetTotal),
+      budgetTotal: centsToKes(budgetTotal),
+      spent: centsToKes(spent),
+      remaining: centsToKes(budgetTotal - spent),
+      spentPct: budgetTotal ? Math.round(Number((spent * 10000n) / budgetTotal) / 100) : 0,
       progressPct: overallProgress(phases),
     },
     phases: phasesOut,
     categories,
     phaseAttribution: {
       mode,
-      codedSpent,
+      codedSpent: centsToKes(codedSpent),
       codedTxnCount,
-      milestoneDerivedSpent,
+      milestoneDerivedSpent: centsToKes(milestoneDerivedSpent),
       milestoneDerivedTxnCount,
-      estimatedSpent,
+      estimatedSpent: centsToKes(estimatedSpent),
       estimatedTxnCount,
     },
   }

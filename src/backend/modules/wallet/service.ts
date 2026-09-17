@@ -15,6 +15,7 @@
 
 import { db } from '@/backend/lib/db'
 import { parseMoneyAmount, MONEY_AMOUNT_ERROR } from '@/backend/lib/money-bounds'
+import { centsToKes, fmtKes, parseMoneyCents, sumCents, assertMoneyCents, type Cents } from '@/backend/lib/money'
 import {
   postLedgerTransaction,
   postLedgerTransactionInTx,
@@ -174,7 +175,7 @@ export async function spendExternalInTx(
   tx: TxClient,
   projectId: string,
   input: {
-    amount: number
+    amount: Cents
     method: string
     description: string
     postedBy: string
@@ -205,13 +206,13 @@ export async function spendEscrowInTx(
   tx: TxClient,
   projectId: string,
   input: {
-    amount: number
+    amount: Cents
     description: string
     postedBy: string
     postedRole: string
     idempotencyKey?: string
   },
-): Promise<{ ledgerTxnId: string; ledgerRef: string; balance: number }> {
+): Promise<{ ledgerTxnId: string; ledgerRef: string; balance: Cents }> {
   const wallet = await tx.escrowWallet.findUnique({ where: { projectId } })
   if (!wallet || wallet.balance < input.amount) {
     throw new Error('Insufficient escrow balance — top up first')
@@ -243,11 +244,11 @@ export async function spendEscrowInTx(
 export async function releaseMilestoneAtomic(
   projectId: string,
   input: {
-    milestone: { id: string; name: string; amount: number; phaseId?: string | null }
+    milestone: { id: string; name: string; amount: Cents; phaseId?: string | null }
     decider: DeciderIdentity
     note: string | null
   },
-): Promise<{ balance: number; ledgerRef: string; ledgerTxnId: string; transactionId: string }> {
+): Promise<{ balance: Cents; ledgerRef: string; ledgerTxnId: string; transactionId: string }> {
   const { milestone, decider } = input
   return db.$transaction(async (tx) => {
     const now = new Date()
@@ -296,7 +297,7 @@ export async function releaseMilestoneAtomic(
 // ---- Payment requests (spec §36/§59) ----
 
 export async function createPaymentRequest(projectId: string, p: any) {
-  const amount = parseMoneyAmount(p.amount)
+  const amount = parseMoneyCents(p.amount)
   if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
   // Requester identity from the session when one exists (payload is the fallback)
   const actor = await currentActor()
@@ -314,8 +315,8 @@ export async function createPaymentRequest(projectId: string, p: any) {
       relatedEntityId: p.relatedEntityId ?? null,
     },
   })
-  await notify(projectId, `Payment request ${request.requestCode} awaiting approval`, `KSh ${amount.toLocaleString()} to ${request.payee} — ${request.description}`, { kind: 'approval.requested', audienceRole: 'client' })
-  return { id: request.id, requestCode: request.requestCode, amount: request.amount }
+  await notify(projectId, `Payment request ${request.requestCode} awaiting approval`, `${fmtKes(amount)} to ${request.payee} — ${request.description}`, { kind: 'approval.requested', audienceRole: 'client' })
+  return { id: request.id, requestCode: request.requestCode, amount: centsToKes(request.amount) }
 }
 
 export async function decidePaymentRequest(projectId: string, p: any) {
@@ -338,7 +339,7 @@ export async function decidePaymentRequest(projectId: string, p: any) {
   await notify(
     projectId,
     `Payment request ${request.requestCode} ${decision}`,
-    `KSh ${request.amount.toLocaleString()} to ${request.payee} — decided by ${decider.name} (${decider.role})${p.note ? ` — ${p.note}` : ''}`,
+    `${fmtKes(request.amount)} to ${request.payee} — decided by ${decider.name} (${decider.role})${p.note ? ` — ${p.note}` : ''}`,
     { kind: decision === 'approved' ? 'payment.approved' : 'payment.rejected' },
   )
   return { id: updated.id, status: updated.status, decidedBy: decider.name }
@@ -390,7 +391,7 @@ export async function payPaymentRequest(projectId: string, p: any) {
   const provider = getProvider(method)
   const reference = String(p.reference ?? '').trim() || `${request.requestCode}`
   const initiation = await provider.initiatePayment({
-    amount: request.amount,
+    amount: centsToKes(request.amount),
     currency: 'KES',
     method,
     payee: request.payee,
@@ -409,7 +410,7 @@ export async function payPaymentRequest(projectId: string, p: any) {
         paymentRequestId: request.id,
         requestCode: request.requestCode,
         projectId,
-        amount: request.amount,
+        amount: centsToKes(request.amount),
         payee: request.payee,
         method,
         reference,
@@ -456,7 +457,7 @@ export async function payPaymentRequest(projectId: string, p: any) {
           paymentRequestId: request.id,
           requestCode: request.requestCode,
           projectId,
-          amount: request.amount,
+          amount: centsToKes(request.amount),
           payee: request.payee,
           method,
           reference,
@@ -534,7 +535,7 @@ export async function payPaymentRequest(projectId: string, p: any) {
   await notify(
     projectId,
     `Payment ${request.requestCode} recorded`,
-    `KSh ${request.amount.toLocaleString()} to ${request.payee} via ${method} — ledger ${result.ledgerRef} (${provider.integrationNote})`,
+    `${fmtKes(request.amount)} to ${request.payee} via ${method} — ledger ${result.ledgerRef} (${provider.integrationNote})`,
     { kind: 'payment.paid' },
   )
   return { id: request.id, status: 'paid', transactionId: result.transactionId, ledgerRef: result.ledgerRef, balance: result.balance, providerNote: provider.integrationNote }
@@ -566,7 +567,7 @@ export async function createWallet(projectId: string, p: any) {
   })
   const accountCode = `WALLET:${wallet.code}`
   const balance = await derivedBalance(accountCode)
-  return { id: wallet.id, code: wallet.code, ledgerAccount: accountCode, balance }
+  return { id: wallet.id, code: wallet.code, ledgerAccount: accountCode, balance: centsToKes(balance) }
 }
 
 async function resolveWallet(projectId: string | null | undefined, idOrCode: any) {
@@ -590,7 +591,7 @@ export async function walletWithBalance(projectId: string, idOrCode: any) {
 }
 
 export async function depositWallet(projectId: string, p: any) {
-  const amount = parseMoneyAmount(p.amount)
+  const amount = parseMoneyCents(p.amount)
   if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
   // BE-2 (issue #103): wallet money movements are finance/admin actions —
   // gated at the service seam BEFORE any wallet/ledger read, so a refused
@@ -625,11 +626,11 @@ export async function depositWallet(projectId: string, p: any) {
     // so the returned balance reflects this deposit (liability: credits − debits).
     const account = await ensureAccountTx(tx, `WALLET:${wallet.code}`)
     const entries = await tx.ledgerEntry.findMany({ where: { accountId: account.id } })
-    const debit = entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0)
-    const credit = entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0)
+    const debit = sumCents(entries.filter((e) => e.side === 'debit').map((e) => e.amount))
+    const credit = sumCents(entries.filter((e) => e.side === 'credit').map((e) => e.amount))
     return { ledgerRef: ledgerTxn.ref, balance: credit - debit }
   })
-  return { walletCode: wallet.code, ledgerRef, balance }
+  return { walletCode: wallet.code, ledgerRef, balance: centsToKes(balance) }
 }
 
 /**
@@ -649,13 +650,13 @@ export async function depositWallet(projectId: string, p: any) {
  */
 function withdrawNaturalKey(
   wallet: { id: string; currency: string },
-  amount: number,
+  amount: Cents,
   p: any,
   actorName: string,
 ): string {
   return `wallet.withdraw:${JSON.stringify([
     wallet.id,
-    amount,
+    amount.toString(), // cents — key format changed with #122
     wallet.currency,
     String(p.destination ?? 'mpesa'),
     String(p.note ?? ''),
@@ -664,7 +665,7 @@ function withdrawNaturalKey(
 }
 
 export async function withdrawWallet(projectId: string, p: any) {
-  const amount = parseMoneyAmount(p.amount)
+  const amount = parseMoneyCents(p.amount)
   if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
   // BE-2 (issue #103): finance/admin only, BEFORE any wallet/ledger read.
   const actor = await requireMoneyActor({
@@ -683,8 +684,8 @@ export async function withdrawWallet(projectId: string, p: any) {
     // Balance re-checked INSIDE the transaction — no overdraft race.
     const account = await ensureAccountTx(tx, `WALLET:${wallet.code}`)
     const entries = await tx.ledgerEntry.findMany({ where: { accountId: account.id } })
-    const debit = entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0)
-    const credit = entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0)
+    const debit = sumCents(entries.filter((e) => e.side === 'debit').map((e) => e.amount))
+    const credit = sumCents(entries.filter((e) => e.side === 'credit').map((e) => e.amount))
     const current = credit - debit // liability account
     // Replay check BEFORE the balance check: a retried withdrawal that
     // (nearly) emptied the wallet must return the ORIGINAL result, not
@@ -693,7 +694,7 @@ export async function withdrawWallet(projectId: string, p: any) {
       ? await tx.ledgerTransaction.findUnique({ where: { idempotencyKey } })
       : null
     if (prior) return { ledgerRef: prior.ref, balance: current }
-    if (current < amount) throw new Error(`Insufficient wallet balance: ${current} < ${amount}`)
+    if (current < amount) throw new Error(`Insufficient wallet balance: ${fmtKes(current)} < ${fmtKes(amount)}`)
     const ledgerTxn = await postLedgerTransactionInTx(tx, {
       projectId: ledgerProjectId,
       description: `Wallet ${wallet.code} withdrawal${p.note ? ` — ${p.note}` : ''}`,
@@ -708,21 +709,21 @@ export async function withdrawWallet(projectId: string, p: any) {
     })
     return { ledgerRef: ledgerTxn.ref, balance: current - amount }
   })
-  return { walletCode: wallet.code, ledgerRef, balance }
+  return { walletCode: wallet.code, ledgerRef, balance: centsToKes(balance) }
 }
 
 /** Transfer-key twin of withdrawNaturalKey — from/to wallets + amount + content. */
 function transferNaturalKey(
   from: { id: string; currency: string },
   to: { id: string },
-  amount: number,
+  amount: Cents,
   p: any,
   actorName: string,
 ): string {
   return `wallet.transfer:${JSON.stringify([
     from.id,
     to.id,
-    amount,
+    amount.toString(), // cents — key format changed with #122
     from.currency,
     String(p.note ?? ''),
     actorName,
@@ -730,7 +731,7 @@ function transferNaturalKey(
 }
 
 export async function transferWallet(projectId: string, p: any) {
-  const amount = parseMoneyAmount(p.amount)
+  const amount = parseMoneyCents(p.amount)
   if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
   // BE-2 (issue #103): finance/admin only, BEFORE any wallet/ledger read.
   const actor = await requireMoneyActor({
@@ -745,15 +746,15 @@ export async function transferWallet(projectId: string, p: any) {
   const { ledgerRef } = await db.$transaction(async (tx) => {
     const account = await ensureAccountTx(tx, `WALLET:${from.code}`)
     const entries = await tx.ledgerEntry.findMany({ where: { accountId: account.id } })
-    const debit = entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0)
-    const credit = entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0)
+    const debit = sumCents(entries.filter((e) => e.side === 'debit').map((e) => e.amount))
+    const credit = sumCents(entries.filter((e) => e.side === 'credit').map((e) => e.amount))
     const current = credit - debit
     // Replay check BEFORE the balance check (same rule as withdraw).
     const prior = idempotencyKey
       ? await tx.ledgerTransaction.findUnique({ where: { idempotencyKey } })
       : null
     if (prior) return { ledgerRef: prior.ref }
-    if (current < amount) throw new Error(`Insufficient wallet balance: ${current} < ${amount}`)
+    if (current < amount) throw new Error(`Insufficient wallet balance: ${fmtKes(current)} < ${fmtKes(amount)}`)
     const ledgerTxn = await postLedgerTransactionInTx(tx, {
       projectId: ledgerProjectId,
       description: `Wallet transfer ${from.code} → ${to.code}`,
@@ -891,8 +892,8 @@ export async function reverseTransaction(projectId: string, p: any) {
     const escrowCode = `ESCROW:${projectId}`
     const escrowLegs = ledgerTxn.entries.filter((e) => e.account.code === escrowCode)
     if (escrowLegs.length > 0) {
-      const delta = escrowLegs.reduce((sum, e) => sum + (e.side === 'debit' ? e.amount : -e.amount), 0)
-      if (delta !== 0) {
+      const delta = escrowLegs.reduce((sum, e) => sum + (e.side === 'debit' ? e.amount : -e.amount), 0n)
+      if (delta !== 0n) {
         const escrowAccount = await ensureAccountTx(tx, escrowCode)
         await tx.escrowWallet.upsert({
           where: { projectId },
@@ -943,7 +944,7 @@ export async function postJournal(projectId: string, p: any) {
   const lines = (p.lines ?? []).map((l: any) => ({
     accountCode: String(l.accountCode),
     side: String(l.side) as 'debit' | 'credit',
-    amount: Number(l.amount),
+    amount: assertMoneyCents(l.amount, 'lines.amount'),
     memo: l.memo,
   }))
   const txn = await postLedgerTransaction({
@@ -968,10 +969,10 @@ export async function postJournal(projectId: string, p: any) {
  */
 export async function postEscrowTopup(
   projectId: string,
-  amount: number,
+  amount: Cents,
   by: string,
   opts: { reference?: string; method?: string; role?: string } = {},
-): Promise<{ ledgerRef: string; balance: number }> {
+): Promise<{ ledgerRef: string; balance: Cents }> {
   const method = opts.method ?? 'mpesa'
   const cashCode = cashAccountForMethod(method)
   return db.$transaction(async (tx) => {
@@ -1012,8 +1013,8 @@ export async function listWallets(projectId?: string) {
   const accounts = await db.ledgerAccount.findMany({ where: { ownerType: 'wallet' }, include: { entries: true } })
   return wallets.map((w) => {
     const account = accounts.find((a) => a.ownerId === w.id)
-    const debit = account?.entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0) ?? 0
-    const credit = account?.entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0) ?? 0
+    const debit = account ? sumCents(account.entries.filter((e) => e.side === 'debit').map((e) => e.amount)) : 0n
+    const credit = account ? sumCents(account.entries.filter((e) => e.side === 'credit').map((e) => e.amount)) : 0n
     return {
       id: w.id,
       code: w.code,
@@ -1023,7 +1024,7 @@ export async function listWallets(projectId?: string) {
       currency: w.currency,
       status: w.status,
       ledgerAccountCode: account?.code ?? null,
-      balance: credit - debit, // liability account: we owe the owner this
+      balance: centsToKes(credit - debit), // liability account: we owe the owner this
       createdAt: w.createdAt.toISOString(),
     }
   })
@@ -1044,7 +1045,7 @@ export async function walletLedgerTransactions(projectId: string, idOrCode: any)
   })
   return {
     wallet: { code: wallet.code, label: wallet.label, ledgerAccount: account.code },
-    balance,
+    balance: centsToKes(balance),
     transactions: txns.map((t) => ({
       id: t.id,
       ref: t.ref,
@@ -1056,10 +1057,10 @@ export async function walletLedgerTransactions(projectId: string, idOrCode: any)
       entries: t.entries.map((e) => ({
         accountCode: e.account.code,
         side: e.side,
-        amount: e.amount,
+        amount: centsToKes(e.amount),
         memo: e.memo,
       })),
-      total: t.entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0),
+      total: centsToKes(sumCents(t.entries.filter((e) => e.side === 'debit').map((e) => e.amount))),
     })),
   }
 }

@@ -99,7 +99,7 @@ export interface DeliveryRow {
  * §26 driver leg, per-line ordered vs received vs rejected counts with
  * inspection condition, and evidence-photo refs as ATTACHMENT IDS ONLY.
  */
-export function deliveryRecord(d: DeliveryRow, order: { orderCode: string; lines: PurchaseOrderLine[] }) {
+export function deliveryRecord(d: DeliveryRow, order: { orderCode: string; lines: Array<Omit<PurchaseOrderLine, 'unitPrice' | 'lineTotal'> & { unitPrice: number; lineTotal: number }> }) {
   const orderLine = (orderLineId: string) => order.lines.find((l) => l.id === orderLineId)
   const short = (l: DeliveryRow['lines'][number]) => l.qtyReceived < l.qtyOrdered
   return {

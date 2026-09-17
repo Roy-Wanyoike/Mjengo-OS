@@ -25,6 +25,7 @@
 // call fails its row with a timeout lastError instead of stalling the drain.
 
 import { db } from '@/backend/lib/db'
+import { centsToKes, fmtKes, mulQtyCents, sumCents } from '@/backend/lib/money'
 import { buildProjectDigest, llm } from '@/backend/lib/ai'
 import { emit } from '@/backend/modules/events/service'
 import { generateDigest } from '@/backend/modules/intel/service'
@@ -128,13 +129,13 @@ async function runDeterministicScanRules(projectId: string): Promise<EngineFindi
   }
 
   // §29 spend grouped into the 5 categories from the Transaction ledger.
-  const spendByCategory: Record<CostCategory, number> = {
-    materials: 0, labour: 0, transport: 0, professional_fees: 0, other: 0,
+  const spendByCategory: Record<CostCategory, import('@/backend/lib/money').Cents> = {
+    materials: 0n, labour: 0n, transport: 0n, professional_fees: 0n, other: 0n,
   }
   for (const t of transactions) spendByCategory[costCategoryOf(t.type, t.costCode)] += t.amount
 
   // Overall progress + phase budget total on the SAME basis as risk rule R1.
-  const phaseBudgetTotal = phases.reduce((s, p) => s + p.budget, 0)
+  const phaseBudgetTotal = sumCents(phases.map((p) => p.budget))
   const progressPct = overallProgress(
     phases.map((p) => ({
       name: '',
@@ -148,12 +149,12 @@ async function runDeterministicScanRules(projectId: string): Promise<EngineFindi
   // Budget basis: the latest APPROVED BOQ (a draft revision with partial lines
   // is not a budget); falls back to the newest version when none is approved.
   const boqRow =
-    boq.find((b) => b.status === 'approved' && b.lines.some((l) => l.qty * l.estUnitPrice > 0)) ?? boq[0] ?? null
+    boq.find((b) => b.status === 'approved' && b.lines.some((l) => mulQtyCents(l.qty, l.estUnitPrice) > 0n)) ?? boq[0] ?? null
   const boqEstimate = boqRow
     ? {
       version: boqRow.version,
       status: boqRow.status,
-      estTotal: boqRow.lines.reduce((s, l) => s + l.qty * l.estUnitPrice, 0),
+      estTotal: sumCents(boqRow.lines.map((l) => mulQtyCents(l.qty, l.estUnitPrice))),
     }
     : null
 
@@ -374,7 +375,7 @@ Format: plain text WhatsApp message, 5-8 short lines, using the actual bullets/e
 - Day ${digest.project.day} of build "${digest.project.name}" (${digest.project.location})
 - Overall progress: ${digest.overallProgressPct}%
 - Crew today: ${todayAttendance.length} workers (${todayAttendance.map((a) => `${a.worker?.split(' ')[0]} (${a.status})`).join(', ') || 'no check-ins yet'})
-- Wages today: KES ${todayAttendance.reduce((s, a) => s + a.wageKES, 0)}
+- Wages today: KES ${Math.round(todayAttendance.reduce((s, a) => s + a.wageKES, 0)).toLocaleString('en-KE')}
 - Deliveries today: ${todayDeliveries.length ? todayDeliveries.map((d) => `${d.qty} ${d.unit} ${d.material}`).join('; ') : 'none'}
 - Total spend: KES ${digest.spend.totalKES.toLocaleString()} of KES ${digest.project.budgetKES.toLocaleString()} budget
 - Open alerts: ${digest.recentAlerts.filter((a) => a.severity !== 'info').map((a) => a.title).join('; ') || 'none'}
@@ -425,11 +426,11 @@ export async function runReconciliation(projectId?: string | null): Promise<Reco
   ])
 
   const check = computeLedgerConsistency({
-    walletBalance: wallet?.balance ?? 0,
+    walletBalance: centsToKes(wallet?.balance ?? 0n),
     transactions: transactions.map((t) => ({
       type: t.type,
       method: t.method,
-      amount: t.amount,
+      amount: centsToKes(t.amount),
       reference: t.reference,
     })),
     releasedMilestoneIds: milestones.filter((m) => m.status === 'released').map((m) => m.id),
@@ -551,22 +552,22 @@ export async function runBudgetCheck(projectId?: string | null): Promise<BudgetC
   ])
   if (!project) throw new Error('Project not found')
 
-  const spent = agg._sum.amount ?? 0
+  const spent = agg._sum.amount ?? 0n
   const budget = project.budget
-  const pacePct = budget > 0 ? Math.round((spent / budget) * 1000) / 10 : 0
+  const pacePct = budget > 0n ? Math.round(Number((spent * 10000n) / budget) / 1000) / 10 : 0
   const level: BudgetCheckResult['level'] = pacePct > 100 ? 'over' : pacePct > 90 ? 'watch' : 'ok'
 
   if (level !== 'ok') {
     await emit(pid, 'budget.alert', {
       pct: pacePct,
       level,
-      note: `Spend KSh ${Math.round(spent).toLocaleString('en-KE')} of KSh ${Math.round(budget).toLocaleString('en-KE')} budget (${pacePct}%).${level === 'over' ? ' Budget is already exceeded — review expenses before more commitments.' : ' Above 90% — remaining spend should go through approval bands.'}`,
-      spent,
-      budget,
+      note: `Spend ${fmtKes(spent)} of ${fmtKes(budget)} budget (${pacePct}%).${level === 'over' ? ' Budget is already exceeded — review expenses before more commitments.' : ' Above 90% — remaining spend should go through approval bands.'}`,
+      spent: centsToKes(spent),
+      budget: centsToKes(budget),
     })
   }
 
-  return { projectId: pid, spent, budget, pacePct, level }
+  return { projectId: pid, spent: centsToKes(spent), budget: centsToKes(budget), pacePct, level }
 }
 
 // ---------------- registry ----------------

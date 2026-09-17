@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
+import { centsToKes } from '@/backend/lib/money'
 import { route, genericError } from '@/backend/lib/route-kit'
 import { forbidden, sessionSupplierId } from '@/backend/lib/guard'
-import type { CatalogItem, Supplier } from '@prisma/client'
-import type { QuoteDetail, OrderWithDetail } from '@/backend/modules/supply/types'
+import type { QuoteDetail, OrderWithDetail, CatalogItemKes, SupplierWithCatalog } from '@/backend/modules/supply/types'
 import type { InvoiceWithLines } from '@/backend/modules/invoices/types'
 
 // Supplier portal payload — src/app/api/supplier/route.ts is the shim.
@@ -47,8 +47,9 @@ export interface SupplierInvoiceRow extends InvoiceWithLines {
 
 /** The full supplier-portal payload (GET /api/supplier). */
 export interface SupplierPortalPayload {
-  supplier: Supplier
-  catalog: CatalogItem[]
+  /** KSh at the boundary (issue #122) — raw supplier rows carry BigInt cents. */
+  supplier: SupplierWithCatalog
+  catalog: CatalogItemKes[]
   quotes: SupplierQuoteRow[]
   orders: SupplierOrderRow[]
   invoices: SupplierInvoiceRow[]
@@ -110,6 +111,16 @@ export async function getSupplierPortalPayload(supplierId: string): Promise<Supp
 
   const quoteRows: SupplierQuoteRow[] = quotes.map((q) => ({
     ...q,
+    // issue #122: the raw supplier relation carries BigInt money fields —
+    // supplierName is the contract; a spread-through would crash JSON and
+    // leak cents. Undefined keys drop out of the JSON body.
+    supplier: undefined,
+    unitPrice: centsToKes(q.unitPrice),
+    deliveryFee: centsToKes(q.deliveryFee),
+    transportFee: centsToKes(q.transportFee),
+    fees: centsToKes(q.fees),
+    totalLanded: centsToKes(q.totalLanded),
+    lines: q.lines.map((l) => ({ ...l, unitPrice: centsToKes(l.unitPrice), lineTotal: centsToKes(l.lineTotal) })),
     supplierName: q.supplier.businessName,
     requestCode: q.request.requestCode,
     projectId: q.request.project.id,
@@ -126,15 +137,30 @@ export async function getSupplierPortalPayload(supplierId: string): Promise<Supp
 
   const orderRows: SupplierOrderRow[] = orders.map((o) => ({
     ...o,
+    // issue #122: raw supplier relation carries BigInt money — dropped;
+    // supplierName is the contract.
+    supplier: undefined,
+    subtotal: centsToKes(o.subtotal),
+    deliveryFee: centsToKes(o.deliveryFee),
+    total: centsToKes(o.total),
     supplierName: o.supplier.businessName,
     requestCode: o.request?.requestCode ?? null,
     projectId: o.project.id,
     projectName: o.project.name,
     deliveries: o.deliveries,
+    lines: o.lines.map((l) => ({ ...l, unitPrice: centsToKes(l.unitPrice), lineTotal: centsToKes(l.lineTotal) })),
   }))
 
   const invoiceRows: SupplierInvoiceRow[] = invoices.map((i) => ({
     ...i,
+    // issue #122: raw supplier/order relations carry BigInt money — dropped;
+    // supplierName/orderCode are the contract.
+    supplier: undefined,
+    order: undefined,
+    subtotal: centsToKes(i.subtotal),
+    tax: centsToKes(i.tax),
+    total: centsToKes(i.total),
+    lines: i.lines.map((l) => ({ ...l, unitPrice: centsToKes(l.unitPrice), lineTotal: centsToKes(l.lineTotal) })),
     supplierName: i.supplier?.businessName ?? null,
     orderCode: i.order?.orderCode ?? null,
     projectId: i.project.id,
@@ -149,9 +175,20 @@ export async function getSupplierPortalPayload(supplierId: string): Promise<Supp
     ? await db.project.findMany({ where: { id: { in: projectIds } }, select: { id: true, name: true, client: true } })
     : []
 
+  // KSh at the boundary (issue #122): the supplier row's money fields and
+  // catalog prices are BigInt cents in the DB — a raw row would crash JSON
+  // serialization and leak cents to the portal contract.
+  const supplierRow: SupplierWithCatalog = {
+    ...supplier,
+    deliveryFeeBase: centsToKes(supplier.deliveryFeeBase),
+    freeDeliveryOver: supplier.freeDeliveryOver === null ? null : centsToKes(supplier.freeDeliveryOver),
+    minimumOrder: centsToKes(supplier.minimumOrder),
+    catalogItems: supplier.catalogItems.map((c) => ({ ...c, unitPrice: centsToKes(c.unitPrice) })),
+  }
+
   return {
-    supplier,
-    catalog: supplier.catalogItems,
+    supplier: supplierRow,
+    catalog: supplierRow.catalogItems,
     quotes: quoteRows,
     orders: orderRows,
     invoices: invoiceRows,

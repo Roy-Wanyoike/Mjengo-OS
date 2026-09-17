@@ -7,6 +7,7 @@
  * Run: bun prisma/seed-extras/evidence.ts
  */
 import { PrismaClient } from '@prisma/client'
+import { fmtKes } from '@/backend/lib/money'
 
 const db = new PrismaClient()
 
@@ -114,7 +115,7 @@ async function main() {
   await db.notification.create({
     data: {
       projectId: p1.id, kind: 'milestone', title: 'Milestone release requested — awaiting client approval',
-      body: 'Site Manager requested release of the Walling milestone (KSh 1,200,000). Review the attached proof-of-work photos.',
+      body: `Site Manager requested release of the Walling milestone (${fmtKes(120_000_000n)}). Review the attached proof-of-work photos.`,
       channel: 'in_app', recipient: 'Amina (Client)', read: false, createdAt: daysAgo(1, 12),
     },
   })

@@ -1,4 +1,5 @@
 import { db } from '@/backend/lib/db'
+import { centsToKes } from '@/backend/lib/money'
 import { route } from '@/backend/lib/route-kit'
 import { derivedBalance } from '@/backend/modules/ledger/service'
 import { projectEscrowQuery, projectIdRef, validateQuery } from './schemas'
@@ -65,7 +66,7 @@ export const GET = route(
     return v1Ok({
       projectId: id,
       currency: 'KES', // MjengoOS money is KES-only today (same honesty as the wallet family)
-      balance,
+      balance: centsToKes(balance), // cents → KSh at the boundary (issue #122)
       ledgerAccountCode,
       derivation:
         'ledger entries (credits − debits on the ESCROW:<projectId> liability account) — derived, never the stored EscrowWallet.balance projection',

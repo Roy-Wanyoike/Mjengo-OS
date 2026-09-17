@@ -19,8 +19,8 @@ export interface TimelineEvent {
   projectId: string
 }
 
-function kes(n: number): string {
-  return `KSh ${Math.round(n).toLocaleString('en-KE')}`
+function kes(nCents: bigint): string {
+  return `KSh ${Math.round(Number(nCents) / 100).toLocaleString('en-KE')}`
 }
 
 /**

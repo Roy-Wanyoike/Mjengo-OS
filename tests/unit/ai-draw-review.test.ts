@@ -36,7 +36,7 @@
  *     share read, the viewer/money-tab display wiring, the audit kind map and
  *     the i18n display strings; the MUTATING modules stay note-blind; no
  *     code path anywhere calls aiReviewNote.update/delete/upsert.
- *   · MIGRATION: 5_ai_review_note is ONE CREATE TABLE, additive-only, and
+ *   · MIGRATION: 05_ai_review_note is ONE CREATE TABLE, additive-only, and
  *     its columns match the Prisma model.
  *   · I18N: every aiReview.* key exists in BOTH dictionaries, non-empty.
  */
@@ -370,14 +370,14 @@ async function seedReleasedPack(photoCount = 2) {
     state.sitePhotos.set(id, { id, projectId: P1, phaseId: null, url: `/photos/${key}`, caption: null, createdAt: new Date() })
   }
   state.milestones.set(M1, {
-    id: M1, projectId: P1, phaseId: 'f-1', name: 'Foundation complete', amount: 650_000,
+    id: M1, projectId: P1, phaseId: 'f-1', name: 'Foundation complete', amount: 65_000_000n,
     status: 'released', evidencePhotoIds: JSON.stringify(photoIds), requestedAt: new Date('2026-02-01'),
     decidedAt: new Date('2026-02-04'), decidedBy: 'Amina', decisionNote: null, releasedAt: new Date('2026-02-04'),
     createdAt: new Date('2026-01-20'),
   })
   const attendance = { windowStart: '2026-02-01', windowEnd: '2026-02-04', rows: 4, present: 3, halfDay: 0, absent: 1, excused: 0, verified: 2 }
   const pack = {
-    id: 'dp-1', milestoneId: M1, projectId: P1, milestoneName: 'Foundation complete', amount: 650_000,
+    id: 'dp-1', milestoneId: M1, projectId: P1, milestoneName: 'Foundation complete', amount: 65_000_000n,
     currency: 'KES', ledgerRef: 'LX-ABC123', ledgerTxnId: 'lt-1',
     evidencePhotoIds: JSON.stringify(photoIds),
     variationsOpen: JSON.stringify([{ id: 'vo-1', title: 'Extra hardcore filling', budgetImpact: 40_000, submittedAt: '2026-02-03T09:00:00.000Z' }]),
@@ -386,13 +386,13 @@ async function seedReleasedPack(photoCount = 2) {
     contentHash: 'a'.repeat(64), schemaVersion: 1, createdAt: new Date('2026-02-04T12:00:00Z'),
   }
   state.drawPacks.set('dp-1', pack)
-  state.phases.set('f-1', { id: 'f-1', projectId: P1, name: 'Foundation', order: 1, budget: 900_000 })
-  state.transactions.set('t-1', { id: 't-1', projectId: P1, amount: 650_000 })
+  state.phases.set('f-1', { id: 'f-1', projectId: P1, name: 'Foundation', order: 1, budget: 90_000_000n })
+  state.transactions.set('t-1', { id: 't-1', projectId: P1, amount: 65_000_000n })
   state.invoices.set('inv-1', {
     id: 'inv-1', invoiceCode: 'INV-2026-000031', projectId: P1, orderId: null, supplierId: null,
-    status: 'approved', subtotal: 120_000, tax: 0, total: 120_000, createdAt: new Date('2026-02-02'),
+    status: 'approved', subtotal: 12_000_000n, tax: 0n, total: 12_000_000n, createdAt: new Date('2026-02-02'),
   })
-  state.invoiceLines.set('il-1', { id: 'il-1', invoiceId: 'inv-1', name: 'Cement 50kg', qty: 200, unitPrice: 600, lineTotal: 120_000 })
+  state.invoiceLines.set('il-1', { id: 'il-1', invoiceId: 'inv-1', name: 'Cement 50kg', qty: 200, unitPrice: 60_000n, lineTotal: 12_000_000n })
   return 'dp-1'
 }
 
@@ -400,7 +400,7 @@ async function seedReleasedPack(photoCount = 2) {
 function seedProjects() {
   state.projects.set(P1, {
     id: P1, shareToken: 'tok-1', name: 'Nyumba Yangu', client: 'Amina', clientType: 'diaspora',
-    location: 'Karen', budget: 6_000_000, startDate: new Date('2026-01-05'), targetDate: new Date('2026-12-01'),
+    location: 'Karen', budget: 600_000_000n, startDate: new Date('2026-01-05'), targetDate: new Date('2026-12-01'),
     status: 'active', createdAt: new Date('2026-01-01'),
   })
   state.projects.set(P2, { ...state.projects.get(P1)!, id: P2, shareToken: 'tok-2', name: 'Other', client: 'Buba', location: 'Runda', createdAt: new Date('2026-01-02') })
@@ -908,9 +908,9 @@ describe('append-only: no code path updates or deletes a note', () => {
 
 // ================================================================ migration
 
-describe('migration 5_ai_review_note is additive-only (existing rows untouched)', () => {
+describe('migration 05_ai_review_note is additive-only (existing rows untouched)', () => {
   const sql = readFileSync(
-    fileURLToPath(new URL('../../prisma/migrations/5_ai_review_note/migration.sql', import.meta.url)),
+    fileURLToPath(new URL('../../prisma/migrations/05_ai_review_note/migration.sql', import.meta.url)),
     'utf8',
   )
   // Comments stripped — comment text may legitimately say the word UPDATE.

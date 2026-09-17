@@ -19,7 +19,7 @@
  *     and the score section (grep-level walk over src/); score.recompute is
  *     role-checked exactly like risk.recompute (contractor/admin, never
  *     clients/share links); no job or background path recomputes it.
- *   · MIGRATION — prisma/migrations/1_mjengo_score is additive-only: exactly
+ *   · MIGRATION — prisma/migrations/01_mjengo_score is additive-only: exactly
  *     one CREATE TABLE, no ALTER/DROP/UPDATE/DELETE/INSERT anywhere.
  *   · I18N — every score.* key exists in BOTH dictionaries; every t('score.…')
  *     literal in the section resolves.
@@ -231,7 +231,7 @@ const TODAY = new Date().toISOString().slice(0, 10)
 
 // ---------------- fixtures ----------------
 
-function seedProject(id = P1, budget = 4_500_000) {
+function seedProject(id = P1, budget = 450_000_000n) {
   state.projects.set(id, {
     id, name: 'Nyumba Yangu', client: 'Amina', clientType: 'diaspora', location: 'Karen',
     budget, status: 'active', shareToken: 'tok-1',
@@ -241,12 +241,12 @@ function seedProject(id = P1, budget = 4_500_000) {
 }
 
 function seedPhases() {
-  const defs: Array<[string, number, number]> = [
-    ['Site Prep & Foundation', 900_000, 100],
-    ['Walling', 1_200_000, 62],
-    ['Roofing', 800_000, 0],
-    ['Plumbing & Electrical', 600_000, 0],
-    ['Finishing', 1_000_000, 0],
+  const defs: Array<[string, bigint, number]> = [
+    ['Site Prep & Foundation', 90_000_000n, 100],
+    ['Walling', 120_000_000n, 62],
+    ['Roofing', 80_000_000n, 0],
+    ['Plumbing & Electrical', 60_000_000n, 0],
+    ['Finishing', 100_000_000n, 0],
   ]
   for (const [name, budget, progress] of defs) {
     state.phases.set(state._id('f'), {
@@ -261,7 +261,7 @@ function seedFullProject() {
   seedProject()
   seedPhases()
   // spend 2,000,000 → spentPct 44.4% vs progress 37% → lead 7.44 pts
-  for (const [id, amount] of [['t1', 1_200_000], ['t2', 800_000]] as const) {
+  for (const [id, amount] of [['t1', 120_000_000n], ['t2', 80_000_000n]] as const) {
     state.transactions.set(id, {
       id, projectId: P1, type: 'material', amount, method: 'mpesa',
       reference: null, costCode: null, ledgerTxnId: null, note: null,
@@ -269,21 +269,21 @@ function seedFullProject() {
     })
   }
   // 2 released milestones: one with 2 evidence photos, one with none
-  state.milestones.set('m1', { id: 'm1', projectId: P1, phaseId: 'f-Foundation', name: 'Foundation complete', amount: 800_000, status: 'released', evidencePhotoIds: '["ph1","ph2"]', createdAt: NOW })
-  state.milestones.set('m2', { id: 'm2', projectId: P1, phaseId: 'f-Walling', name: 'Walling to ring beam', amount: 650_000, status: 'released', evidencePhotoIds: '[]', createdAt: NOW })
-  state.milestones.set('m3', { id: 'm3', projectId: P1, phaseId: 'f-Roofing', name: 'Roofing package', amount: 500_000, status: 'locked', evidencePhotoIds: '[]', createdAt: NOW })
+  state.milestones.set('m1', { id: 'm1', projectId: P1, phaseId: 'f-Foundation', name: 'Foundation complete', amount: 80_000_000n, status: 'released', evidencePhotoIds: '["ph1","ph2"]', createdAt: NOW })
+  state.milestones.set('m2', { id: 'm2', projectId: P1, phaseId: 'f-Walling', name: 'Walling to ring beam', amount: 65_000_000n, status: 'released', evidencePhotoIds: '[]', createdAt: NOW })
+  state.milestones.set('m3', { id: 'm3', projectId: P1, phaseId: 'f-Roofing', name: 'Roofing package', amount: 50_000_000n, status: 'locked', evidencePhotoIds: '[]', createdAt: NOW })
   // 10 attendance rows: 8 verified, 2 reported
   for (let i = 0; i < 10; i++) {
     state.attendances.set(`att${i}`, {
       id: `att${i}`, workerId: `w${i}`, projectId: P1, date: TODAY,
-      status: 'present', method: 'geofence', wage: 500, paid: true,
+      status: 'present', method: 'geofence', wage: 50_000n, paid: true,
       verification: i < 8 ? 'verified' : 'reported',
       createdAt: NOW,
     })
   }
   // 2 variations: 1 approved (+180k), 1 submitted (+95k)
-  state.variations.set('v1', { id: 'v1', projectId: P1, phaseId: 'f-Foundation', title: 'Black cotton soil', description: 'deeper foundation', budgetImpact: 180_000, status: 'approved', createdAt: NOW })
-  state.variations.set('v2', { id: 'v2', projectId: P1, phaseId: 'f-Finishing', title: 'Granite upgrade', description: 'counter upgrade', budgetImpact: 95_000, status: 'submitted', createdAt: NOW })
+  state.variations.set('v1', { id: 'v1', projectId: P1, phaseId: 'f-Foundation', title: 'Black cotton soil', description: 'deeper foundation', budgetImpact: 18_000_000n, status: 'approved', createdAt: NOW })
+  state.variations.set('v2', { id: 'v2', projectId: P1, phaseId: 'f-Finishing', title: 'Granite upgrade', description: 'counter upgrade', budgetImpact: 9_500_000n, status: 'submitted', createdAt: NOW })
   // 8 landed deliveries: 7 received, 1 discrepancy
   state.orders.set('po1', { id: 'po1', projectId: P1, orderCode: 'PO-2026-000009', status: 'delivered', createdAt: NOW })
   for (let i = 0; i < 8; i++) {
@@ -319,17 +319,17 @@ function fullInput(): MjengoScoreInput {
       ...Array.from({ length: 2 }, () => ({ verification: 'reported' })),
     ],
     phases: [
-      { name: 'Foundation', status: 'done', budget: 900_000, progressManual: 100, tasks: [] },
-      { name: 'Walling', status: 'in_progress', budget: 1_200_000, progressManual: 62, tasks: [] },
-      { name: 'Roofing', status: 'pending', budget: 800_000, progressManual: 0, tasks: [] },
-      { name: 'Plumbing', status: 'pending', budget: 600_000, progressManual: 0, tasks: [] },
-      { name: 'Finishing', status: 'pending', budget: 1_000_000, progressManual: 0, tasks: [] },
+      { name: 'Foundation', status: 'done', budget: 90_000_000n, progressManual: 100, tasks: [] },
+      { name: 'Walling', status: 'in_progress', budget: 120_000_000n, progressManual: 62, tasks: [] },
+      { name: 'Roofing', status: 'pending', budget: 80_000_000n, progressManual: 0, tasks: [] },
+      { name: 'Plumbing', status: 'pending', budget: 60_000_000n, progressManual: 0, tasks: [] },
+      { name: 'Finishing', status: 'pending', budget: 100_000_000n, progressManual: 0, tasks: [] },
     ],
-    transactions: [{ amount: 1_200_000 }, { amount: 800_000 }],
-    projectBudget: 4_500_000,
+    transactions: [{ amount: 120_000_000n }, { amount: 80_000_000n }],
+    projectBudget: 450_000_000n,
     variations: [
-      { title: 'Black cotton soil', status: 'approved', budgetImpact: 180_000 },
-      { title: 'Granite upgrade', status: 'submitted', budgetImpact: 95_000 },
+      { title: 'Black cotton soil', status: 'approved', budgetImpact: 18_000_000n },
+      { title: 'Granite upgrade', status: 'submitted', budgetImpact: 9_500_000n },
     ],
     deliveries: [
       { status: 'discrepancy', lines: [{ qtyOrdered: 50, qtyReceived: 48 }] },
@@ -408,7 +408,7 @@ describe('MjengoScore engine — component formulas (traceable thresholds)', () 
     // at the R1 critical line (30 pts ahead) the full weight deducts
     const critical = computeMjengoScore({
       ...input,
-      transactions: [{ amount: 4_495_000 }], // ~99.9% spent, 37% progress → lead > 30
+      transactions: [{ amount: 449_500_000n }], // ~99.9% spent, 37% progress → lead > 30
     })
     const cc = componentByKey(critical.components, 'budget_discipline')
     expect(cc.deduction).toBe(20)
@@ -424,7 +424,7 @@ describe('MjengoScore engine — component formulas (traceable thresholds)', () 
     expect(c.evidence).toContain('1 of 2 approved')
     expect(c.evidence).toContain('4.0%')
     // at 15% of the budget the full weight deducts
-    const maxed = computeMjengoScore({ ...fullInput(), variations: [{ title: 'Big', status: 'approved', budgetImpact: 675_000 }] })
+    const maxed = computeMjengoScore({ ...fullInput(), variations: [{ title: 'Big', status: 'approved', budgetImpact: 67_500_000n }] })
     expect(componentByKey(maxed.components, 'variation_discipline').deduction).toBe(15)
   })
 
@@ -464,11 +464,11 @@ describe('MjengoScore engine — each fixture moves its component and ONLY it', 
     },
     {
       key: 'budget_discipline', label: 'spend another 500,000 (R1 lead grows)',
-      mutate: (i) => ({ ...i, transactions: [...i.transactions, { amount: 500_000 }] }),
+      mutate: (i) => ({ ...i, transactions: [...i.transactions, { amount: 50_000_000n }] }),
     },
     {
       key: 'variation_discipline', label: 'approve another +200,000 variation',
-      mutate: (i) => ({ ...i, variations: [...i.variations, { title: 'Extra works', status: 'approved', budgetImpact: 200_000 }] }),
+      mutate: (i) => ({ ...i, variations: [...i.variations, { title: 'Extra works', status: 'approved', budgetImpact: 20_000_000n }] }),
     },
     {
       key: 'delivery_discrepancy', label: 'one received delivery closes discrepant',
@@ -531,8 +531,8 @@ describe('MjengoScore engine — score aggregation + confidence', () => {
       ...fullInput(),
       releasedMilestones: [{ id: 'm1', name: 'No evidence', evidencePhotoCount: 0 }],
       attendances: fullInput().attendances.map(() => ({ verification: 'reported' })),
-      transactions: [{ amount: 4_495_000 }],
-      variations: [{ title: 'Big', status: 'approved', budgetImpact: 675_000 }],
+      transactions: [{ amount: 449_500_000n }],
+      variations: [{ title: 'Big', status: 'approved', budgetImpact: 67_500_000n }],
       deliveries: [{ status: 'discrepancy', lines: [{ qtyOrdered: 50, qtyReceived: 10 }] }],
       invoices: [{ status: 'disputed' }],
     })
@@ -669,7 +669,7 @@ describe('recomputeScore — persistence (append-only history)', () => {
     for (let i = 0; i < 3; i++) {
       state.attendances.set(`old${i}`, {
         id: `old${i}`, workerId: `ow${i}`, projectId: P1, date: '2020-01-01',
-        status: 'present', method: 'geofence', wage: 500, paid: true, verification: 'verified', createdAt: NOW,
+        status: 'present', method: 'geofence', wage: 50_000n, paid: true, verification: 'verified', createdAt: NOW,
       })
     }
     const result = await recomputeScore(P1)
@@ -824,7 +824,7 @@ describe('non-influence: score rows change no action outcomes anywhere', () => {
 
 describe('Prisma migration is additive-only (existing rows untouched)', () => {
   const sql = readFileSync(
-    fileURLToPath(new URL('../../prisma/migrations/1_mjengo_score/migration.sql', import.meta.url)),
+    fileURLToPath(new URL('../../prisma/migrations/01_mjengo_score/migration.sql', import.meta.url)),
     'utf8',
   )
   // Comments stripped, statement list = SQL split on ';' (comment text can

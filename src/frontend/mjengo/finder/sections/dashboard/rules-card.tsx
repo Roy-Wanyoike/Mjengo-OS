@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/frontend/ui/switch'
 import { Loader2, Pencil, Plus, Settings2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { ApprovalRule } from '@prisma/client'
+import type { ApprovalRuleKes } from '@/backend/modules/supply/types'
 import { formatKes, roleLabel } from './helpers'
 
 interface RuleDraft {
@@ -35,7 +35,7 @@ export function RulesCard({ canManage }: { canManage: boolean }) {
   const { data, dispatch, online, outbox, actionBusy } = useMjengo()
   const { data: session } = useSession()
   const [edit, setEdit] = useState<RuleDraft | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<ApprovalRule | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ApprovalRuleKes | null>(null)
   const busy = actionBusy !== null
   const rules = data?.supply.approvalRules ?? []
   const offlineNote = `Saved on-device — queued (${outbox.length})`
@@ -48,7 +48,7 @@ export function RulesCard({ canManage }: { canManage: boolean }) {
     setEdit({ id: null, minAmount: '', maxAmount: '', approverRole: 'supervisor', priority: '50', active: true })
   }
 
-  function openEdit(rule: ApprovalRule) {
+  function openEdit(rule: ApprovalRuleKes) {
     setEdit({
       id: rule.id,
       minAmount: String(rule.minAmount),
