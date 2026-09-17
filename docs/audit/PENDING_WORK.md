@@ -80,3 +80,26 @@ Every P0/P1 engineering item is either **fixed on a green branch** (§1) or
 **carries a proposed issue with owner-ready body** (§2). External items (§3)
 document blocker + workaround. Remaining P2/P3 are explicitly listed, not
 hidden.
+
+---
+
+# Wave 3 addendum (2026-09-17) — the three P1 gates CLOSED
+
+| P1 | Status | Branch | Evidence |
+|---|---|---|---|
+| #122 integer-cents money (DB-1) | **FIXED — verified branch** | `fix/122-integer-cents-money` (c518181, stacked on chore) | 90 files / 2,135 tests ✅ · tsc ✅ · lint ✅ · fresh `migrate deploy` ✅ · drift ✅ · payload JSON zero-BigInt-leak probe ✅ · E2E green against the seeded app |
+| #174 project-membership authz (SEC-6) | **FIXED — verified branch** | `fix/174-project-membership-authz` (96b084d, stacked on #122) | 91 files / 2,161 tests ✅ · tsc ✅ · lint ✅ · fresh deploy (14 migrations) ✅ |
+| #182 Playwright E2E (TEST-1) | **FIXED — verified branch** | `feat/182-playwright-e2e` (aeaa46f, on main) | **7/7 persona golden paths passed (35.3s)** against the real dev server + seeded DB · unit gates unchanged ✅ |
+
+Wave-3 findings fixed along the way (all evidence in worklog.md):
+- **P0**: fresh `prisma migrate deploy` was BROKEN (lexicographic migration order — `12_` before `2_draw_pack`). Fixed by zero-padding 00–09.
+- **P0**: whole `/api/project` payload crashed JSON serialization (BigInt money riding raw supplier relations in supply-slice DTOs) + `/api/projects` 500 (BigInt/number mix in list+summary math) — found BY the new E2E suite.
+- **P1-grade**: supply write paths (catalog/supplier/quote-receive/rules) stored raw KSh into BigInt-cent columns — 100× read-back corruption.
+- Hygiene: chore branch (dead-code removal) + docs branch; chore branch corrected to keep the test-referenced policy matrices.
+
+**GitHub write remains BLOCKED (no token).** One-command sync when a token exists:
+`bash scripts/github-sync-wave3.sh` (labels + issue + pushes + PRs, idempotent), then `--merge`.
+Offline transfer: `mjengo-wave3.bundle` (verified complete history; `git clone mjengo-wave3.bundle`).
+Dev DB: rebuilt on the renamed migration set + reseeded (`bun run seed`).
+
+Next wave candidates from the register (P2): #124 DB-enforced ledger invariants · #144 SQL SUM aggregation · #154/#155 bounded reads · #156 webhook residual · #194 stock reconciliation · #199 backups · #202/#204 observability · #183 offline conflict matrix · #184 real-SQLite harness · #212 escrow drift alarm.
