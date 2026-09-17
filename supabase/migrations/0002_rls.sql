@@ -106,6 +106,7 @@ begin
     'consumptions','site_zones','site_photos','alerts','transactions','recaps',
     'audit_events','escrow_wallets','milestones','variation_orders','draw_packs',
     'photo_comments','notifications','users','push_subscriptions','project_team',
+    'project_memberships',
     'land_parcels','parcel_documents','title_searches','professionals',
     'credential_checks','parcel_assignments','suppliers','catalog_items',
     'material_requests','material_request_lines','approval_rules','approvals',
@@ -593,6 +594,17 @@ create policy project_team_insert on public.project_team for insert to authentic
 create policy project_team_update on public.project_team for update to authenticated
   using (public.can_write_project(project_id)) with check (public.can_write_project(project_id));
 create policy project_team_delete on public.project_team for delete to authenticated
+  using (public.is_staff());
+
+-- Issue #174 (SEC-6): the site-team read-scope grant rows — staff-managed
+-- (the SQLite path's seed + future grant tooling writes them; the app reads).
+create policy project_memberships_select on public.project_memberships for select to authenticated
+  using (public.can_read_project(project_id));
+create policy project_memberships_insert on public.project_memberships for insert to authenticated
+  with check (public.is_staff());
+create policy project_memberships_update on public.project_memberships for update to authenticated
+  using (public.is_staff()) with check (public.is_staff());
+create policy project_memberships_delete on public.project_memberships for delete to authenticated
   using (public.is_staff());
 
 -- §E3. Land & property --------------------------------------------------------

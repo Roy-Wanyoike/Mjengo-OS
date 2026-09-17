@@ -1,11 +1,13 @@
 // /api/v1 Phase B — client-role tenant pin (shared by the projects + supply
-// resources) + the W5-3 supplier-role pins (project-scope deny / row pins).
+// resources) + the W5-3 supplier-role pins (project-scope deny / row pins)
+// + the SEC-6 membership pin (issue #174).
 // Mirrors the v1 payments precedent (payments.ts resolves the request first,
 // then 403s a client whose session is not pinned to its project) and the
 // webapp's project guard (/api/project pins a client-role session to
 // session.user.projectId, ignoring any client-supplied scope).
 
 import type { NextResponse } from 'next/server'
+import { MEMBERSHIP_ROLES, membershipHeld, type ScopedSession } from '@/backend/lib/membership-scope'
 import { v1Err } from './respond'
 
 /**
@@ -58,4 +60,31 @@ export function supplierSessionId(
   if (session.user.role !== 'supplier') return null
   const id = session.user.supplierId
   return typeof id === 'string' && id.trim() ? id.trim() : null
+}
+
+/**
+ * v1 membership pin (SEC-6, issue #174) — the site-team tenant scope.
+ * supervisor/procurement/qs/finance sessions may read a project ONLY where
+ * they hold a ProjectMembership row (src/backend/lib/membership-scope.ts,
+ * fail closed on zero rows); contractor/admin keep the explicit
+ * portfolio-wide grant; client/supplier/unknown roles answer NULL here —
+ * their pins are the helpers above, which callers run first.
+ *
+ * Deny shape: the SAME 403 'Not permitted for this project' body the client
+ * pin produces — uniform for every denied project and every pinned role, so
+ * the response never says WHY (no role or membership oracle). Runs AFTER
+ * the resolve step (resolve-then-pin, the v1 payments precedent): an
+ * unknown project keeps its honest 404, a known-but-foreign one gets the
+ * 403 — the exact posture the client pin has had since Phase B.
+ */
+export async function membershipProjectDenied(
+  session: ScopedSession,
+  projectId: string,
+): Promise<NextResponse | null> {
+  // Only the membership-ROLES are pinned here: contractor/admin hold the
+  // portfolio grant, client/supplier/unknown roles pin through the helpers
+  // above (which the callers run first) — all of them answer null.
+  if (!(MEMBERSHIP_ROLES as readonly string[]).includes(session.user.role)) return null
+  const held = await membershipHeld(session, projectId)
+  return held ? null : v1Err(403, 'Not permitted for this project')
 }

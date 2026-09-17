@@ -3,7 +3,7 @@ import { getProjectPayload } from '@/backend/lib/mjengo'
 import { procurementTotals } from '@/backend/modules/supply/insights'
 import { projectDetailQuery, projectIdRef, validateQuery } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied, supplierProjectDenied } from './scope'
+import { clientProjectDenied, membershipProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/projects/:id (Phase B, read-only) — src/app/api/v1/projects/[id]/route.ts
 // is the shim.
@@ -17,7 +17,10 @@ type Ctx = { params: Promise<{ id: string }> }
  * ROLE SCOPING mirrors the webapp project guard (/api/project): client-role
  * sessions are pinned to their own project (a foreign id → 403 'Not
  * permitted for this project', the v1 payments precedent — resolve first,
- * pin second); every other signed-in role may read any project. Unknown id →
+ * pin second); contractor/admin read any project (the explicit SEC-6
+ * portfolio-wide grant, issue #174); supervisor/procurement/qs/finance read
+ * only the projects they hold a ProjectMembership row on (the SEC-6
+ * membership pin — same 403 body, fail closed on zero rows). Unknown id →
  * 404. No feature flag gates this resource (none of the five flags names the
  * projects surface).
  *
@@ -53,6 +56,13 @@ export const GET = route(
     if (!payload) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, payload.project.id)
     if (denied) return denied
+    // SEC-6 (issue #174): the site-team membership pin — supervisor /
+    // procurement / qs / finance read only the projects they hold a
+    // ProjectMembership row on (fail closed on zero rows); contractor/admin
+    // keep the explicit portfolio-wide grant. Same uniform 403 body as the
+    // client pin, after the resolve (resolve-then-pin, the v1 precedent).
+    const membershipDenied = await membershipProjectDenied(session, payload.project.id)
+    if (membershipDenied) return membershipDenied
     // W5-3: supplier sessions are not project readers (their surface is the
     // supplier-owned rows). Uniform 403 — no project data is returned.
     const supplierDenied = supplierProjectDenied(session)

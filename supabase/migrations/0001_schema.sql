@@ -474,6 +474,21 @@ create table public.project_team (
 
 create index project_team_project_idx on public.project_team (project_id);
 
+-- Issue #174 (SEC-6): the site-team read-scope grant rows — which users work
+-- on which projects (mirrors the SQLite path's ProjectMembership model; the
+-- membership-ROLES resolve their readable projects through these rows).
+create table public.project_memberships (
+  id         text primary key,
+  user_id    text not null references public.users (id) on delete cascade,
+  project_id text not null references public.projects (id) on delete cascade,
+  role       text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, project_id)
+);
+
+create index project_memberships_project_idx on public.project_memberships (project_id);
+create index project_memberships_user_idx on public.project_memberships (user_id);
+
 -- ---------------------------------------------------------------------------
 -- 3. Land & property
 -- ---------------------------------------------------------------------------

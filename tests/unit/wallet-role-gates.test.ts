@@ -198,6 +198,18 @@ vi.mock('@/backend/lib/db', () => {
 
   const db = {
     __state: state,
+    projectMembership: {
+      // Single-org posture (the SEC-6 seed's blanket grant): the
+      // membership-role sessions this suite uses (supervisor/finance)
+      // hold a row on the fixture project — the scoping contract itself
+      // is pinned by membership-scope.test.ts (issue #174).
+      async findMany({ where }: { where?: { userId?: string } }) {
+        return [{ userId: where?.userId ?? 'u', projectId: 'p-1', role: 'member', createdAt: new Date(0) }]
+      },
+      async findUnique({ where }: { where: { userId_projectId: { userId: string; projectId: string } } }) {
+        return { userId: where.userId_projectId.userId, projectId: where.userId_projectId.projectId, role: 'member', createdAt: new Date(0) }
+      },
+    },
     featureFlag: {
       async upsert() { /* rows exist; lazy creation is a no-op here */ },
       async findMany({ where }: { where?: { key?: { in?: string[] } } }) {
