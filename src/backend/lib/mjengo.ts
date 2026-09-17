@@ -295,7 +295,9 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
       deliveredCost: centsToKes(sumCents(md.map((d) => d.totalCost))),
       consumedQty,
       onSiteQty,
-      stockValue: centsToKes(mulQtyCents(onSiteQty, m.unitPrice)),
+      // mulQtyCents refuses qty ≤ 0 by design (line totals must move) — a
+      // material with nothing on site has an honest zero stock value.
+      stockValue: onSiteQty > 0 ? centsToKes(mulQtyCents(onSiteQty, m.unitPrice)) : 0,
       deliveries: md.map(toDeliveryKes),
     }
   })
