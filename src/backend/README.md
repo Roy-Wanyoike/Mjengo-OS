@@ -7,7 +7,9 @@ frontend tabs use `import type { ProjectPayload } from '@/backend/lib/mjengo'`).
 ```
 src/backend/
   lib/        # server libraries: mjengo (payload + dispatcher), auth, guard,
-              # audit, rate-limit, db (Prisma), ai (provider seam)
+              # audit, rate-limit, db (Prisma), ai (provider seam), log
+              # (structured logger, #204), error-redaction + errors/sink
+              # (opt-in error sink, #202)
   actions/    # server action modules (thin routing over module services)
   modules/    # domain modules (fat services, policy, repositories, types)
 ```
@@ -27,6 +29,9 @@ here. See the route list below.
 | `lib/rate-limit.ts` | Token-bucket per principal (session email else IP) + `enforceAiRoutePolicy` for the AI routes. |
 | `lib/db.ts` | Prisma client singleton (SQLite at `db/custom.db`). |
 | `lib/ai.ts` | AI provider seam (z-ai SDK today): vision messages, JSON extraction, transcripts parsing, project digest, recap. Results always labeled with confidence and applied by humans, never auto-written. |
+| `lib/log.ts` | The ONE logging seam (#204): `log.error/warn/info(scope, msg, fields?)`, JSON in production / text elsewhere, requestId propagation via `withRequestLogging`, drain-run ids for job drains. |
+| `lib/error-redaction.ts` | The S-SEC internal-error rule (`isInternalError`), extracted as a leaf so both guard.ts (client bodies) and the error sink (external payloads) consume ONE canonical rule. |
+| `lib/errors/sink.ts` | The opt-in, fail-open error sink (#202): `captureError(err, ctx)` — a no-op (one warning per process) when `ERROR_SINK_URL` is unset; otherwise ONE fire-and-forget redacted JSON POST per captured error (5s bound, no retries, never throws/blocks). |
 
 ## actions/ — server action modules
 

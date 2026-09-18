@@ -55,6 +55,7 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `JOBS_HANDLER_TIMEOUT_MS` | jobs: optional | Per-handler timeout for ONE background-job invocation during a `POST /api/jobs/run` drain — default `30000` (30 s: generous for the TTS/AI handlers, far below the route's own duration budget, so one hung handler fails its own `JobRecord` row instead of stalling the whole drain). Read at drain time, not import time — a change applies to the next drain without a restart. Invalid, zero or unset values fall back to the default (never 0 — a zero cap would fail every handler instantly). A handler that exceeds the cap is marked `failed` **terminally** (no retry — it already hung a full window and would re-hang; re-enqueue after investigating). |
 | `RECONCILIATION_CHECK_INTERVAL_MIN` | jobs: optional | Cadence of the scheduled reconciliation check (A-1-lite debit backing + the escrow projection drift alarm, issue #212) — default `1440` (daily). The `POST /api/jobs/run` callee seeds a fresh `reconciliation` job row whenever the newest one is older than this, so whatever drains that endpoint (compose `jobs-tick`, systemd timer, cron) also maintains the cadence. Never stacks rows (a queued/retrying row blocks the seed — a manual run and the schedule cannot double-book). Invalid values warn once and fall back to the daily default. See §7.3. |
 | `ESCROW_DRIFT_ALERT_CENTS` | finance alarm: optional | Alert threshold for the escrow projection drift check, in **integer cents** — default `1` (the Money-tab chip's exact-equality convention, issue #122: a one-cent drift is a drift). `|derived ledger sum − EscrowWallet.balance| ≥ threshold` emits an `escrow.drift` domain event + in-app notifications to the **finance and contractor** audiences on the drifted project. Raise it only to tolerate a KNOWN projection quirk while it is being fixed — sub-threshold drift is still recorded (un-alerted) in the job's result JSON. Invalid (non-integer / < 1) values warn once and fall back to `1`. See §7.3. |
+| `ERROR_SINK_URL` | observability: optional | The error sink gate (issue #202, audit OBS-1): when set, every captured error (route-kit error path, job-handler failures, webhook catch blocks) additionally makes ONE fire-and-forget JSON POST to this endpoint — `{ ts, service, environment?, scope, requestId?, route?, method?, error: { class, message, stack?, internal }, context? }` — with a 5s abort bound, no retries, and Prisma/framework internals redacted before the wire (the `safeErrorMessage` discipline; stacks omitted on internal errors). **Unset (the default) = journal-only: nothing external is contacted and `captureError()` is a no-op that warns once per process** — exactly the behavior of every prior release. Secret-class (a bearer capability into your collector); `ERROR_SINK_TOKEN` adds an optional Authorization header; `ERROR_SINK_ENV` is a non-secret deployment tag (falls back to `NODE_ENV`). See §10. |
 | `NOTIFY_SMS_WEBHOOK_URL` / `_TOKEN` | notifications: optional | The SMS webhook relay: when the URL is set, notify calls that pass `opts.sms` additionally POST JSON `{ to, text, metadata }` to it (the optional token rides as a bearer header). Credentials stay in YOUR gateway — nothing SMS-related lives in this app. Rows honestly record `sent`/`failed` + delivery detail. |
 | `AT_API_KEY` + `AT_USERNAME` (+ `AT_SENDER_ID`, `AT_ENV`) | notifications: alternative to the webhook | Direct **Africa's Talking** provider: with both values set (a partial pair is ignored, fail-closed) and no webhook URL configured, notify calls AT's REST v1 messaging endpoint directly and records the real `messageId` as `providerRef`. The API key can send and bill SMS on your AT account — keep the env file uncommitted and narrowly readable. `AT_ENV=sandbox` targets AT's sandbox host for wiring tests without billing. **Webhook wins if both are configured; with neither, nothing external is called** (rows stay `logged`). |
 | `DARAJA_RECONCILE_AFTER_MIN` / `_INTERVAL_MIN` / `_MAX_AGE_MIN` | Daraja sweep: optional | Tuning for the `wallet.reconcile` job (pending STK-intent reconciliation, §7.3): probe intents once they are `AFTER` minutes old (default 2), re-probe every `INTERVAL` minutes (default 5, matching the scheduler tick), stop probing past `MAX_AGE` minutes (default 60 — the intent stays PENDING, never an invented failure/credit). Invalid values warn and fall back to defaults; all-unset = defaults, and with no Daraja env no intents exist so the sweep does nothing. |
@@ -1221,3 +1222,68 @@ honestly means per-host shared state, not global state.
 - `confirm` is **not idempotent**: Attachment rows are append-only evidence
   (same posture as the rest of the app); confirming one key twice records
   two rows pointing at the same object.
+
+## 10. Observability (logs and the error sink)
+
+### 10.1 Structured logs (`LOG_FORMAT`, issue #204)
+
+The backend logs through the ONE seam `src/backend/lib/log.ts` — one line
+per event, `log.error/warn/info(scope, message, fields?)`. Two formats:
+
+| Format | When | Shape |
+|---|---|---|
+| `json` | **production default** (`NODE_ENV=production`) | one JSON object per line — `{"ts","level","scope","msg", "requestId"?, "ip"?, "route"?, "method"?, …fields}` — for `docker logs` / journald / any aggregator |
+| `text` | everywhere else (dev/test) | the historical human line `[scope] message rid=<id>` + raw args |
+
+Override explicitly with `LOG_FORMAT=json|text` (read per emit — no restart
+needed beyond the env change reaching the process). Every request gets a
+requestId: minted or honored from a validated inbound `x-request-id` header,
+echoed on the response, attached to every log line under the request, and
+SHARED with the audit ledger rows (one id per request). Background job
+drains mint their own `drain-<uuid>` so one drain is one greppable unit.
+The client IP is logged only when `TRUST_PROXY` is set (an untrusted
+`x-forwarded-for` is a client-seeded lie — omitted, not logged); query
+strings are never logged (share tokens ride in `?query`).
+
+### 10.2 The error sink (`ERROR_SINK_URL`, issue #202 / audit OBS-1)
+
+**Honest default: UNSET = journal-only.** The current default behavior is
+UNCHANGED by this feature — errors land in the structured log lines (and,
+for jobs, the `JobRecord.lastError` column) and nothing external is
+contacted. `captureError()` is then a no-op that warns ONCE per process
+(never per call) that the sink is inactive.
+
+When `ERROR_SINK_URL` is set, the capture sites wired in v1 — the route-kit
+default error path, the jobs drain failure path (alongside `lastError`), and
+the three webhook route catch blocks (ussd, whatsapp, daraja) — additionally
+POST one JSON payload per error to your collector:
+
+```
+{ "ts": "…", "service": "mjengo-os", "environment": "prod-1",
+  "scope": "api/wallets POST", "requestId": "…", "route": "…", "method": "POST",
+  "error": { "class": "Error", "message": "…", "stack": "…", "internal": false },
+  "context": { "jobType": "wallet.reconcile", "jobId": "…", "attempts": 2 } }
+```
+
+Contracts (all unit-pinned in `tests/unit/error-sink.test.ts`):
+
+- **Fail-open, never-throws, never-blocks** — `captureError` is synchronous
+  and returns before the POST leaves; the POST is detached behind a 5s
+  AbortController bound. A down/hung/slow collector cannot fail or delay a
+  response or a job drain.
+- **No secrets on the wire** — the `safeErrorMessage` discipline extended to
+  the wire: internal errors (Prisma/framework class names, `P####` codes,
+  multi-line messages) ship a redacted placeholder message and **no stack**
+  (stacks leak absolute build paths). The client IP is never sent. Caller
+  context fields are identifiers (`jobType`, `jobId`, …), redact-walked.
+- **No retry storm** — one POST attempt per captured error; failures
+  (non-2xx, timeout, network) warn once in the journal with the error class
+  or HTTP status only (never the URL) and are dropped. The journal line is
+  the durable record either way.
+
+v1 is deliberately provider-agnostic (a plain webhook — point it at a relay
+you own, a Slack/Discord hook bridge, or any HTTP collector); a Sentry-class
+adapter can be built later behind the same seam. **Known limitation:** the
+v1 routes with custom error mappers (the `/api/v1/*` family) and the events
+service's notify-failure catches are not yet wired — they migrate
+mechanically (`captureError(e, { scope })` alongside their `log.error` line).

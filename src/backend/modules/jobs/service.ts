@@ -38,6 +38,7 @@
 // its cadence without new infrastructure.
 
 import { db } from '@/backend/lib/db'
+import { captureError } from '@/backend/lib/errors/sink'
 import { log, mintDrainRunId, withLogContext } from '@/backend/lib/log'
 import { JOB_HANDLERS, JOB_TYPES, type JobType } from './handlers'
 
@@ -297,6 +298,20 @@ export async function runDueJobs(limit = 10): Promise<{ ran: number; results: Jo
             { jobType: job.type, attempts: running.attempts, maxAttempts: running.maxAttempts, error: message },
           )
         }
+        // Issue #202 — the drain failure is also offered to the opt-in error
+        // sink, ALONGSIDE the lastError column below (which stays the durable
+        // dead-letter record). Fire-and-forget; the ambient drain-run id
+        // (withLogContext above) rides along as the payload's requestId.
+        captureError(e, {
+          scope: 'jobs',
+          fields: {
+            jobType: job.type,
+            jobId: job.id,
+            attempts: running.attempts,
+            maxAttempts: running.maxAttempts,
+            terminal,
+          },
+        })
         if (terminal) {
           const row = await db.jobRecord.update({
             where: { id: job.id },

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 // v4's types keep getToken in 'next-auth/jwt' (not the 'next-auth/next' barrel)
 import { getToken } from 'next-auth/jwt'
 import type { MjengoSessionUser } from '@/backend/lib/auth'
+import { isInternalError } from './error-redaction'
 import { devFallbackSecretCandidates } from '@/backend/lib/nextauth-fallback-secret'
 
 export type GuardSession = { user: MjengoSessionUser } | null
@@ -58,24 +59,10 @@ export function forbidden(role?: string) {
 
 // ---------------- internal-error redaction (S-SEC) ----------------
 
-/**
- * True when an exception carries framework internals that must not reach a
- * client body: Prisma client errors (class name `Prisma*`, code `P####`, or
- * the "`` invocation in" validation banner) leak absolute build paths, table
- * shapes and the dev-server chunk map. Multi-line messages are treated as
- * internal too — domain errors thrown by the appliers are single-line.
- */
-export function isInternalError(e: unknown): boolean {
-  if (!(e instanceof Error)) return false
-  const name = e.constructor?.name ?? e.name ?? ''
-  const code = String((e as { code?: unknown }).code ?? '')
-  return (
-    name.startsWith('Prisma') ||
-    /^P\d{4}$/.test(code) ||
-    e.message.includes('` invocation in') ||
-    e.message.includes('\n')
-  )
-}
+// isInternalError moved to the leaf module ./error-redaction.ts (issue #202:
+// the error sink needs the same rule WITHOUT importing the auth machinery);
+// re-exported here so guard.ts stays its historical home for importers.
+export { isInternalError }
 
 /**
  * Honest error message for a response body: the appliers' own single-line

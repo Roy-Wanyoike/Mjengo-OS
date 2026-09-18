@@ -36,6 +36,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { z, ZodIssue, ZodType } from 'zod'
 import { getSessionFromReq, safeErrorMessage, withGuard, type GuardSession } from './guard'
+import { captureError } from './errors/sink'
 import { log, withRequestLogging } from './log'
 import { mutationSafetyDenied } from './mutation-safety'
 import { enforceRateLimit } from './rate-limit'
@@ -269,6 +270,10 @@ async function runPipeline<C>(
   } catch (e) {
     if (opts.onError) return opts.onError(e, opts.scope)
     log.error(opts.scope, 'Request failed', { error: e })
+    // Issue #202 — the same failure is offered to the opt-in error sink
+    // (fire-and-forget, never throws/blocks; a no-op when unconfigured).
+    // Custom onError paths own their logging and stay untouched.
+    captureError(e, { scope: opts.scope })
     return safeError(400, 'Request failed')(e, opts.scope)
   }
 }

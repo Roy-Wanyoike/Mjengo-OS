@@ -111,7 +111,7 @@ All id-taking routes verified (resolve-then-pin or scoped query):
 ## 11. PII & logging — verdict: targeted and honest
 
 - `pii-scrub.ts`: Kenyan phone numbers masked at the two transcript entry boundaries (voice-log ASR output; shared `parseDeliveryTranscript` seam — the LLM prompt itself is scrubbed) (`pii-scrub.ts:48-59`). Names/locations deliberately not masked (documented product decision). Idempotent, boundary-aware regexes pinned by tests.
-- Error redaction: `safeErrorMessage`/`isInternalError` strip Prisma/framework internals from client bodies (`guard.ts:64-83`); v1 uses `mapServiceError` with the same doctrine; s3-compat errors are secret-free by construction.
+- Error redaction: `safeErrorMessage`/`isInternalError` strip Prisma/framework internals from client bodies (`guard.ts`, rule extracted to the leaf `error-redaction.ts` in #202 so the error sink consumes the same one); the error sink (#202) applies the same rule to external payloads (internal errors: redacted message, NO stack, client IP never sent); v1 uses `mapServiceError` with the same doctrine; s3-compat errors are secret-free by construction.
 - Sensitive fields: `Worker.pin` and `project.shareToken` deliberately omitted from v1 (`worker-detail.ts:23-24`, `project-detail.ts:35-36`); audit API serializes ip/userAgent/requestId to **admin only**; audit-context IP comes from the first XFF value (`actions.ts:52`) — spoofable metadata (SEC-12 note), not a control.
 - Health routes expose liveness + coarse counts + version only (`app/api/health/route.ts`, `app/api/route.ts`).
 

@@ -47,6 +47,13 @@ export default defineConfig({
     onConsoleLog(log) {
       if (log.startsWith('[http] ')) return false
       if (log.startsWith('{') && log.includes('"scope":"http"')) return false
+      // Issue #202: the error sink's once-per-process "unconfigured" warning
+      // (fires once in any test file that exercises a wired catch path with
+      // ERROR_SINK_URL unset — the default posture). The warning's CONTRACT
+      // (exactly once, honestly labeled) is pinned in
+      // tests/unit/error-sink.test.ts via console spies, which replace the
+      // method and never reach this hook.
+      if (log.includes('ERROR_SINK_URL is not set')) return false
     },
   },
 })

@@ -15,6 +15,7 @@ import {
   warnIfWebhookSecretUnsetInProduction,
   webhookOpenPostureOptedIn,
 } from '@/backend/lib/webhook-secret-warning'
+import { captureError } from '@/backend/lib/errors/sink'
 import { currentRequestId, log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
@@ -427,6 +428,9 @@ Unpaid balance: KSh ${owed.toLocaleString('en-KE')} (${unpaidRows} day(s)).${USS
     return ussd(MENU_TEXT)
   } catch (e) {
     log.error('api/ussd POST', 'Request failed', { error: e })
+    // Issue #202 — same failure to the opt-in error sink (fire-and-forget;
+    // the requestId context above rides along in the payload).
+    captureError(e, { scope: 'api/ussd POST' })
     // A gateway must get text back even when the domain action failed —
     // honest failure copy, never a JSON stack.
     return ussd(`Could not record — try again or use the app.${USSD_FOOTER}`)
