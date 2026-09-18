@@ -3756,4 +3756,14 @@ export const swDict = {
   'uikit.reassurance': 'Hakuna kilichopotea — sehemu nyingine za MjengoOS zinaendelea kufanya kazi.',
   'uikit.noRows': 'Hakuna matokeo ya kuonyesha',
   'uikit.tableRegion': '{columns} — safu unazoweza kusogeza',
+
+  // --------------------------------------------- #148 · alama ya toleo jipya la SW
+  // Toast ya "programu imesasishwa — pakia upya" (src/frontend/pwa/
+  // sw-update-prompt.tsx), inayoonyeshwa service worker mpya ikimaliza
+  // kusakwa chini ya kichupo kinachoendelea. Maneno mafupi: kichwa + maelezo
+  // huonekana ndani ya toast ya sonner, na vitufe ndani ya safu yake.
+  'sw.update.title': 'Toleo jipya limeandaliwa',
+  'sw.update.body': 'Pakia upya ili kusasisha MjengoOS.',
+  'sw.update.reload': 'Pakia upya',
+  'sw.update.later': 'Baadaye',
 } satisfies Dict

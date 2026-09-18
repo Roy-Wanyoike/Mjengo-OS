@@ -13,6 +13,8 @@ src/frontend/
   i18n/      # English + Kiswahili dictionaries, provider, persisted locale store
   hooks/     # use-mjengo (payload facade + offline outbox), use-toast, use-mobile
   lib/       # client-safe helpers: utils.ts (cn), format.ts (KES / EAT dates)
+  pwa/       # SW registration + the "app updated — reload" staleness cue (#148):
+             # sw-update-watch.ts (dependency-injected, unit-tested) + sw-update-prompt.tsx
 ```
 
 ## The app shell and tabs

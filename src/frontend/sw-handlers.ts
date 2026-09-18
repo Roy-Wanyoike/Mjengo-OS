@@ -169,3 +169,75 @@ export function photoLruEvictions(
     .slice(0, excess)
     .map((e) => e.url)
 }
+
+// ------------- #148 · SW staleness cue (waiting-worker update prompt) ------
+//
+// The app caches the '/' shell in production (v3 strategy above), so a new
+// deploy only reaches a RUNNING tab when the user reloads. The staleness cue:
+// the client watch (src/frontend/pwa/sw-update-watch.ts, wired into the UI by
+// sw-update-prompt.tsx) detects a worker that finished installing under the
+// old page and offers "app updated — reload". Same idiom as the push and
+// offline halves: these pure functions are the canonical, unit-tested
+// statement (tests/unit/sw-update-prompt.test.ts); public/sw.js mirrors the
+// SKIP_WAITING message handling inline, and the watch module mirrors the
+// decisions by CALLING these helpers (never by re-deriving them).
+
+/** The message the Reload action posts to a WAITING worker (see sw.js). */
+export const SKIP_WAITING_MESSAGE_TYPE = 'SKIP_WAITING'
+
+/**
+ * How often focus/visibility may trigger a registration.update() check
+ * (#148 AC: "bounded frequency" — a field user flipping between apps all day
+ * must not hammer the server for sw.js byte-compares; the browser's own
+ * navigation check stays the other update path). One hour.
+ */
+export const UPDATE_CHECK_MIN_INTERVAL_MS = 60 * 60 * 1000
+
+/**
+ * Safety net for the Reload click (#148 AC 2): after posting SKIP_WAITING the
+ * page reloads on controllerchange — but a worker that died mid-activate
+ * never flips the controller, and a click that silently no-ops is a lie. The
+ * grace period reloads anyway. Long enough not to race a healthy activation
+ * (single skipWaiting hop), short enough to feel instant.
+ */
+export const SKIP_WAITING_RELOAD_GRACE_MS = 3000
+
+/**
+ * Is a worker state change the staleness cue (#148 AC 1 + 3)? TRUE only for
+ * a worker that FINISHED INSTALLING (state 'installed' — it now holds the new
+ * version) while this page is already controlled by an older worker. On the
+ * FIRST install there is no controller, so nothing prompts — the page that
+ * registered the SW is loading the new version already.
+ */
+export function shouldShowUpdatePrompt(workerState: string, hasController: boolean): boolean {
+  return workerState === 'installed' && hasController
+}
+
+/**
+ * May a foreground signal (focus / tab visible again) trigger an update check
+ * now (#148 AC 4)? Never-checked → yes; otherwise only once per
+ * UPDATE_CHECK_MIN_INTERVAL_MS. The bound is on ATTEMPTS — a failed check
+ * (offline field tablet) must not retry on every focus either.
+ */
+export function shouldCheckForUpdates(
+  lastCheckedAtMs: number | null,
+  nowMs: number,
+  minIntervalMs: number = UPDATE_CHECK_MIN_INTERVAL_MS,
+): boolean {
+  if (lastCheckedAtMs === null) return true
+  return nowMs - lastCheckedAtMs >= minIntervalMs
+}
+
+/**
+ * Is this message the page's SKIP_WAITING ask? The sw.js message handler
+ * mirrors this check inline (a static script cannot import the module) —
+ * anything else posted at the worker is ignored.
+ */
+export function isSkipWaitingMessage(data: unknown): boolean {
+  return (
+    data !== null &&
+    typeof data === 'object' &&
+    !Array.isArray(data) &&
+    (data as Record<string, unknown>).type === SKIP_WAITING_MESSAGE_TYPE
+  )
+}
