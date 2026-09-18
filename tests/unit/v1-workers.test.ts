@@ -27,8 +27,9 @@
  *
  * Mocks (flags-gating idioms): '@/backend/lib/guard' full fake (session
  * control for route-kit's withGuard), '@/backend/lib/db' (worker.findFirst —
- * the detail route's direct read) and '@/backend/lib/mjengo'
- * (getProjectPayload — the payload's workers read). route-kit, rate-limit,
+ * the detail route's direct read, and since #154 the LIST's direct reads:
+ * worker.findMany with the pushed filter/boundary/take, attendance.findMany
+ * over the rollup window, project.findUnique resolve). route-kit, rate-limit,
  * respond/schemas/worker-rows and the routes themselves stay REAL.
  */
 import { NextRequest } from 'next/server'
@@ -142,6 +143,9 @@ vi.mock('@/backend/lib/db', () => {
       { key: 'marketplace', enabled: true, description: 'Marketplace' },
       { key: 'land_verification', enabled: true, description: 'Land' },
     ],
+    // The LIST route's resolve step (#154): p-1 exists, anything else is a
+    // 404.
+    projects: [{ id: 'p-1', name: 'Nyumba Yangu' }],
   }
   return {
     db: {
@@ -154,14 +158,66 @@ vi.mock('@/backend/lib/db', () => {
         },
         async update() { throw new Error('not used here') },
       },
+      project: {
+        async findUnique({ where }: { where: { id: string } }) {
+          return state.projects.find((p) => p.id === where.id) ?? null
+        },
+      },
       worker: {
-        async findFirst({ where }: { where: { id: string } }) {
+        // Shared by the detail route ({ id }) and the #154 cursor resolution
+        // ({ id, projectId, active? }) — an honest where-filtering twin.
+        async findFirst({ where }: { where: { id: string; projectId?: string; active?: boolean } }) {
           // Deferred fixture references (the vi.mock factory is hoisted — the
           // consts are initialized by the time a request runs).
-          const found = WORKERS.find((w) => w.id === where.id)
+          const found = WORKERS.find(
+            (w) =>
+              w.id === where.id &&
+              (where.projectId === undefined || w.projectId === where.projectId) &&
+              (where.active === undefined || w.active === where.active),
+          )
           if (!found) return null
           const attendances = found.id === 'wrk-00000001' ? W1_ATTENDANCES : []
           return structuredClone({ ...found, attendances: attendances.map((a) => ({ ...a })) })
+        },
+        // The workers LIST direct read (#154): an honest Prisma twin —
+        // where-filtering (projectId + active + the (name, id) keyset
+        // boundary OR), the (name ASC, id ASC) total order and take are all
+        // honored.
+        async findMany({ where, orderBy, take }: { where?: Record<string, unknown>; orderBy?: Array<Record<string, string>>; take?: number }) {
+          const boundary = where?.OR as Array<Record<string, unknown>> | undefined
+          const inBoundary = (w: (typeof WORKERS)[number]) => {
+            if (!boundary) return true
+            return boundary.some((cond) => {
+              const n = cond.name as unknown
+              if (typeof n === 'string') {
+                const id = cond.id as { gt: string }
+                return w.name === n && w.id > id.gt
+              }
+              const gt = (n as { gt: string }).gt
+              return w.name > gt
+            })
+          }
+          const rows = WORKERS.filter((w) => {
+            if (where?.projectId && w.projectId !== where.projectId) return false
+            if (where?.active !== undefined && w.active !== where.active) return false
+            if (!inBoundary(w)) return false
+            return true
+          }).map((w) => ({ ...w }))
+          void orderBy // the fixture is already in (name ASC, id ASC) order
+          return take !== undefined ? rows.slice(0, take) : rows
+        },
+      },
+      attendance: {
+        // The rollup window read (#154): the page's workers over the 8-day
+        // window — the rows todayStatusOf/weekEarningsOf consume.
+        async findMany({ where }: { where?: { projectId?: string; workerId?: { in?: string[] }; date?: { gte?: string } } }) {
+          void where?.projectId // all fixture rows belong to p-1
+          const ids = where?.workerId?.in
+          return W1_ATTENDANCES.filter(
+            (a) =>
+              (!ids || ids.includes(a.workerId)) &&
+              (!where?.date?.gte || a.date >= where.date.gte),
+          ).map((a) => ({ ...a }))
         },
       },
     },
@@ -201,13 +257,10 @@ vi.mock('@/backend/lib/guard', async () => {
   }
 })
 
-// The payload seam the workers LIST reuses (the payload's OWN rollup fields
-// are projected verbatim — controlled here; pinned by the app's own tests).
-const svc = vi.hoisted(() => ({
-  getProjectPayload: vi.fn(),
-}))
-
-vi.mock('@/backend/lib/mjengo', () => svc)
+// The payload seam is gone from this suite (#154): the workers LIST reads
+// the db stub directly and re-derives the rollup with worker-rows (the
+// payload's exact logic, frozen-clock pinned below); the detail route always
+// read the db stub.
 
 import { GET as openapiGet } from '@/app/api/openapi.json/route'
 import { GET as projectWorkersGet } from '@/app/api/v1/projects/[id]/workers/route'
@@ -226,12 +279,7 @@ async function bodyOf(res: { json: () => Promise<unknown> }): Promise<Record<str
   return (await res.json()) as Record<string, unknown>
 }
 
-// ---------------------------------------------------------------- payload fixture
-
-const PAYLOAD = {
-  project: { id: 'p-1', name: 'Nyumba Yangu' },
-  workers: WORKERS.map((w) => ({ ...w })),
-}
+// ---------------------------------------------------------------- fixtures (served by the db stub)
 
 beforeEach(() => {
   // Trusted-proxy fixture (issue #156): these route tests isolate rate-limit
@@ -244,7 +292,6 @@ beforeEach(() => {
   h.session = null
   delete process.env.NEXT_FLAGS_OFF
   invalidateFlagCache()
-  svc.getProjectPayload.mockResolvedValue(PAYLOAD)
 })
 
 afterEach(() => {
@@ -260,7 +307,11 @@ describe('GET /api/v1/projects/:id/workers — the roster with its rollup', () =
   const req = (id: string, qs = '') => getReq(`http://localhost/api/v1/projects/${id}/workers${qs}`)
   const ctx = (id: string) => ({ params: Promise.resolve({ id }) })
 
-  it('200 — every worker, deterministic (name ASC, id ASC) roster order, the payload rollup projected verbatim', async () => {
+  it('200 — every worker, deterministic (name ASC, id ASC) roster order, the payload rollup derived identically', async () => {
+    // Freeze the clock so the route's #154 rollup derivation (worker-rows,
+    // the payload's exact logic — EAT "today", trailing 7 days) reads the
+    // same fixture day the detail-route tests pin: 2026-02-14.
+    vi.useFakeTimers({ now: new Date('2026-02-14T10:00:00Z') })
     sessionFor('contractor')
     const res = await projectWorkersGet(req('p-1'), ctx('p-1'))
     expect(res.status).toBe(200)
@@ -340,7 +391,7 @@ describe('GET /api/v1/projects/:id/workers — the roster with its rollup', () =
   })
 
   it('scoping: unknown project → 404; foreign client → 403; own client → 200; supplier → uniform 403; anonymous → 401', async () => {
-    svc.getProjectPayload.mockResolvedValueOnce(null)
+    // p-x resolves null on the db stub (the #154 direct resolve).
     sessionFor('admin')
     expect((await projectWorkersGet(req('p-x'), ctx('p-x'))).status).toBe(404)
 

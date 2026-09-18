@@ -803,7 +803,7 @@ const milestoneSummarySchema = {
   properties: {
     id: { type: 'string', description: 'Milestone id (cuid) — the pagination cursor value.' },
     phaseId: { type: ['string', 'null'], description: 'The phase this milestone pays progress on, when linked.' },
-    phaseName: { type: ['string', 'null'], description: 'Phase name joined from the payload phases (null when phaseId is null).' },
+    phaseName: { type: ['string', 'null'], description: 'Phase name joined from the project\'s phases (null when phaseId is null).' },
     name: { type: 'string' },
     amount: { type: 'number', description: 'KES released when the milestone completes.' },
     status: {
@@ -1088,11 +1088,13 @@ const workerTodayStatusSchema = {
 const workerSummarySchema = {
   type: 'object',
   description:
-    'One worker of the roster (Doc A §14) — the SAME getProjectPayload() read the webapp Team tab renders ' +
-    '(todayStatus/weekEarnings are the payload\'s derivations, EAT "today" and trailing 7 calendar days). HONEST ' +
+    'One worker of the roster (Doc A §14) — the same rows the webapp Team tab renders (a direct db.worker.findMany ' +
+    'since issue #154); todayStatus/weekEarnings re-derive with the payload\'s exact logic (EAT "today" and ' +
+    'trailing 7 calendar days) over ONE bounded attendance read of the page\'s workers, so the list can never ' +
+    'disagree with the webapp read. HONEST ' +
     'OMISSIONS: Worker.pin (the kiosk PIN — a bearer credential) is never served; Worker has no createdAt/updatedAt ' +
     'columns, so those fields are absent, never fabricated; the LIST carries no total attendance count (the ' +
-    'payload\'s per-worker window is the recent slice — the true counts are on GET /api/v1/workers/{id}).',
+    'true counts are on GET /api/v1/workers/{id}).',
   required: [
     'id', 'projectId', 'name', 'role', 'phone', 'dailyRate', 'active', 'employmentType', 'skills',
     'todayStatus', 'weekEarnings',
@@ -1108,7 +1110,7 @@ const workerSummarySchema = {
     employmentType: { type: ['string', 'null'], enum: ['casual', 'contract', 'full_time', null] },
     skills: { type: 'array', description: 'Parsed from the stored JSON array (malformed stored JSON → [], never a 500).', items: { type: 'string' } },
     todayStatus: workerTodayStatusSchema,
-    weekEarnings: { type: 'number', description: 'KES — Σ wages of the trailing 7 calendar days (the payload\'s derivation).' },
+    weekEarnings: { type: 'number', description: 'KES — Σ wages of the trailing 7 calendar days (the payload\'s exact derivation).' },
   },
 }
 
@@ -2121,9 +2123,10 @@ const spec = {
         summary: 'Task list of a project (cursor-paginated)',
         description:
           'Every task of the project with its phase, priority, assignment, blocker and verification fields. Data comes ' +
-          'from getProjectPayload\'s phases read (phases order ASC, tasks createdAt ASC — the same query the webapp ' +
-          'payload runs); the page is ordered (createdAt ASC, id ASC) for a deterministic keyset. ?status= ' +
-          '(pending|in_progress|done|blocked) filters BEFORE pagination — a cursor that falls out of the filtered ' +
+          'from a DIRECT db.task.findMany scoped to the project\'s phases (issue #154 — the page never materializes the ' +
+          'webapp payload): ?status=, the keyset boundary and take = limit+1 all ride the single query, ordered ' +
+          '(createdAt ASC, id ASC) for a deterministic keyset — the same total order the old in-memory sort produced. ' +
+          'A cursor that falls out of the filtered ' +
           'list → 400. GUARD: any signed-in role; client-role sessions pinned to their own project (foreign → 403); ' +
           'unknown project → 404. No feature flag gates this resource. Rate limit: 120/min per principal.',
         security,
@@ -2259,8 +2262,10 @@ const spec = {
         description:
           'The escrow/milestone release ladder (MjengoPay, spec §28-29): locked → evidence_submitted → ' +
           'release_requested → released | rejected, every rung money-proven by the double-entry ledger. Data comes ' +
-          'from getProjectPayload\'s milestones read (db.milestone.findMany createdAt ASC — the same query the ' +
-          'webapp payload runs); the page is ordered (createdAt ASC, id ASC) for a deterministic keyset. READ-ONLY: ' +
+          'from a DIRECT db.milestone.findMany scoped to the project (issue #154 — the same rows the webapp payload\'s ' +
+          'milestones read returns, without materializing the payload), plus the one related read the summaries need ' +
+          '(the project\'s phase id→name pairs); ?status=, the keyset boundary and take = limit+1 all ride the single ' +
+          'query, ordered (createdAt ASC, id ASC). READ-ONLY: ' +
           'every mutation (milestone.create / evidence / requestRelease / decide) stays on POST /api/actions — v1 ' +
           'never moves escrow. NO FEATURE FLAG (honest boundary, flags.ts): the `wallet` flag gates the user-facing ' +
           'wallet & payment-request surface but deliberately NOT the escrow/milestone governance ladder — "the ' +
@@ -2326,9 +2331,10 @@ const spec = {
         description:
           'The supplier-invoice lifecycle (Finder §13-15): draft → submitted → approved | rejected | disputed → ' +
           'paid, with totals and payment references — disputed and paid states represented exactly as stored. Data ' +
-          'comes from getProjectPayload\'s invoices slice (loadInvoicesSlice, the invoices module\'s public read — ' +
-          'the same rows the Finder invoices section renders); the page is ordered (createdAt DESC, id DESC) for a ' +
-          'deterministic keyset. READ-ONLY: every mutation (invoice.create / update / submit / decide / pay; ' +
+          'comes from a DIRECT db.invoice.findMany scoped to the project (issue #154 — the same rows the invoices ' +
+          'module\'s loadInvoicesSlice returns, with only the line-count/supplier-name/order-code joins the summary ' +
+          'needs; the slice\'s ledgerCheck reads are not paid here); the supplier row pin, ?status=, the keyset ' +
+          'boundary and take = limit+1 all ride the single query, ordered (createdAt DESC, id DESC). READ-ONLY: every mutation (invoice.create / update / submit / decide / pay; ' +
           'disputes ride invoice.update { status: "disputed" }) stays on POST /api/actions — v1 never records ' +
           'payments. NO FEATURE FLAG (honest boundary, flags.ts): the `marketplace` flag gates the supply loop but ' +
           'explicitly NOT invoice.* (its own module sharing the Finder tab), and the wallet flag never applied to ' +
@@ -2420,10 +2426,13 @@ const spec = {
         summary: 'Workforce roster of a project with the attendance rollup (cursor-paginated)',
         description:
           'The project\'s workforce roster (Doc A §14) — identity, trade, terms, and the SAME todayStatus/' +
-          'weekEarnings derivation the webapp Team tab renders (getProjectPayload\'s workers read; EAT "today" and ' +
-          'trailing 7 calendar days, projected verbatim). HONEST: the LIST carries no total attendance count (the ' +
-          'payload\'s per-worker window is the recent slice — the true counts are on GET /api/v1/workers/{id}), and ' +
-          'Worker has no createdAt column, so the deterministic keyset order is the payload\'s own (name ASC, id ASC). ' +
+          'weekEarnings derivation the webapp Team tab renders (a DIRECT db.worker.findMany since issue #154; the ' +
+          'rollup re-derives with the payload\'s exact logic — EAT "today" and trailing 7 calendar days — over ONE ' +
+          'bounded attendance read of the page\'s workers inside an 8-day window, never the project\'s whole ' +
+          'attendance history). HONEST: the LIST carries no total attendance count (the true counts are on GET ' +
+          '/api/v1/workers/{id}), and ' +
+          'Worker has no createdAt column, so the deterministic keyset order is the payload\'s own (name ASC, id ASC) ' +
+          '— pushed into the findMany with take = limit+1. ' +
           'READ-ONLY — worker mutations stay on POST /api/actions (team.* / attendance.*). NO FEATURE FLAG (none of ' +
           'the five flags names the workforce surface — gating it by an unrelated flag would be dishonest, the ' +
           'projects-resource precedent). GUARD: any signed-in role; client-role sessions pinned to their own project ' +
@@ -2572,15 +2581,18 @@ const spec = {
         description:
           'The supplier catalog summary the project\'s procurement sees (Finder §30): the marketplace directory ' +
           'rows with their catalogs plus THIS project\'s relationship marks (savedByProject, orderCount, ' +
-          'orderTotal). HONEST SCOPE: Supplier rows are a GLOBAL directory (loadSupplySlice loads the whole ' +
-          'marketplace table — the same rows the webapp Finder renders for the project); the project relationship ' +
+          'orderTotal). HONEST SCOPE: Supplier rows are a GLOBAL directory (loadSupplierDirectoryBounded — the ' +
+          'supply module\'s bounded directory read, issue #154: take-capped at 200 with the two small ' +
+          'project-scoped reads the relationship marks need — the same rows the webapp Finder renders for the ' +
+          'project, without the request/quote/order network); the project relationship ' +
           'is carried per row, never by silently filtering the directory. FEATURE FLAG: gated by `marketplace` like ' +
           'the rest of the v1 supply family — OFF → 403 for non-admins (admins bypass). GUARD: any signed-in role; ' +
           'client-role sessions pinned to their own project (foreign → 403); supplier-role sessions → uniform 403 ' +
           '(W5-3 — their OWN catalog is the /api/supplier portal surface, never this buyer directory); unknown ' +
           'project → 404. The page is ordered (createdAt ASC, id ASC) — the deterministic keyset (the webapp ' +
           'directory re-sorts by verification state for display). ?q= free-text search on businessName/county/town ' +
-          '(contains, ASCII case-insensitive) filters BEFORE pagination. READ-ONLY — catalog mutations stay on ' +
+          '(contains, ASCII case-insensitive) filters BEFORE pagination over the bounded window (a page beyond the ' +
+          '200-supplier window reports hasMore: false — the documented bound). READ-ONLY — catalog mutations stay on ' +
           'POST /api/actions (catalog.upsert / supplier.*). Rate limit: 120/min per principal.',
         security,
         parameters: [
@@ -2613,8 +2625,10 @@ const spec = {
           'gated by `land_verification` exactly as the webapp is — the flag\'s enforcement map closes "the parcels ' +
           'section of the Land tab", so OFF → 403 for non-admins (admins bypass). GUARD: any signed-in role; ' +
           'client-role sessions pinned to their own project (foreign → 403); supplier-role sessions → uniform 403 ' +
-          '(W5-3); unknown project → 404. Data comes from the payload\'s land slice — loadLandSlice(projectId), ' +
-          'the land module\'s public read. The page is ordered (createdAt ASC, id ASC). ?status= ' +
+          '(W5-3); unknown project → 404. Data comes from a DIRECT db.landParcel.findMany scoped to the project ' +
+          '(issue #154 — the same rows the land module\'s loadLandSlice returns, with only the summary joins: ' +
+          'document ids for the count, the searches newest-first so [0] is the latest, and the assignments with ' +
+          'their professional join). The page is ordered (createdAt ASC, id ASC). ?status= ' +
           '(searching|verified|flagged) filters BEFORE pagination (a cursor that falls out → 400). READ-ONLY — ' +
           'parcel mutations stay on POST /api/actions (parcel.* / search.*). Rate limit: 120/min per principal.',
         security,
@@ -2646,10 +2660,12 @@ const spec = {
           'summary (the project\'s Alert ledger — the rows the anomaly scan writes, with the severity mix and ' +
           'acknowledgement state). HONESTY RULES (the intel module\'s own): the score gates nothing and approves ' +
           'nothing — it describes, humans decide; score is NULL (never a fake 0 or 100) when the project has too ' +
-          'little history; every number is deterministic and traceable to real rows. Data comes from the payload\'s ' +
-          'intel slice — loadIntelSlice(projectId), the module\'s public read (latest-wins rows + the module\'s own ' +
+          'little history; every number is deterministic and traceable to real rows. Data comes from ' +
+          'loadIntelSlice(projectId) directly — the intel ' +
+          'module\'s public read (latest-wins rows + the module\'s own ' +
           'safe JSON parsers, re-used, never re-implemented) plus a route-layer Alert read (the ' +
-          'wallet-transactions precedent). NO FEATURE FLAG gates this READ (ai_progress/ai_voice gate the AI ' +
+          'wallet-transactions precedent) — issue #154: the digest pays only its own module\'s reads, never the ' +
+          'webapp payload\'s other ~19. NO FEATURE FLAG gates this READ (ai_progress/ai_voice gate the AI ' +
           'routes, not the intel reads — the webapp Intel tab renders while flags are off, and v1 mirrors that). ' +
           'GUARD: any signed-in role; client-role sessions pinned to their own project (foreign → 403); ' +
           'supplier-role sessions → uniform 403 (W5-3); unknown project → 404. Recomputations stay on POST ' +

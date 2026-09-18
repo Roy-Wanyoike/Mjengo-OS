@@ -1,7 +1,8 @@
+import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
-import { getProjectPayload } from '@/backend/lib/mjengo'
+import { afterCreatedAtId, cursorRowOr400 } from './keyset'
 import { projectTasksQuery, projectIdRef, validateQuery } from './schemas'
-import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
+import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, membershipProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/projects/:id/tasks (Phase B, read-only) —
@@ -17,13 +18,16 @@ type Ctx = { params: Promise<{ id: string }> }
  * project, foreign → 403; unknown project → 404; no flag gates this
  * resource).
  *
- * DATA: the task rows come from getProjectPayload()'s phases read (phases
- * `order` ASC with tasks `createdAt` ASC — the same query the webapp payload
- * runs). The task set per project is bounded, so pagination is the
- * wallet-list pattern: a deterministic (createdAt ASC, id ASC) total order
- * sliced in the route layer. ?status= (pending|in_progress|done|blocked)
- * filters BEFORE pagination — a cursor that falls out of the filtered list →
- * 400. Rate limit: 120/min per principal.
+ * DATA (issue #154 / audit API-3): DIRECT READ — db.task.findMany scoped
+ * `phase: { projectId }`, with the phase name riding a select join (the only
+ * relation the response needs). The old path materialized the whole ~20-read
+ * getProjectPayload to slice one collection out of it in memory; the page
+ * cost is now O(page), not O(payload): ?status=, the keyset boundary and
+ * take = limit + 1 all ride the single query (the #155 attendance pattern),
+ * ordered (createdAt ASC, id ASC) — the same total order the route's old
+ * in-memory sort produced, so pagination contracts hold. getProjectPayload
+ * stays the webapp's /api/project read, never a v1 building block.
+ * Rate limit: 120/min per principal.
  */
 export const GET = route(
   {
@@ -38,44 +42,69 @@ export const GET = route(
     const q = validateQuery(req, projectTasksQuery)
     if (!q.ok) return q.response
 
-    const payload = await getProjectPayload(id)
-    if (!payload) return v1Err(404, 'Project not found')
-    const denied = clientProjectDenied(session, payload.project.id)
+    // Unknown project → 404 (the attendance/deliveries resolve step — an
+    // honest "nothing here", not an empty page).
+    const project = await db.project.findUnique({ where: { id } })
+    if (!project) return v1Err(404, 'Project not found')
+    const denied = clientProjectDenied(session, id)
     if (denied) return denied
     // SEC-6 (issue #174): the site-team membership pin — supervisor /
     // procurement / qs / finance read only the projects they hold a
     // ProjectMembership row on (fail closed on zero rows); contractor/admin
     // keep the explicit portfolio-wide grant. Same uniform 403 body as the
     // client pin, after the resolve (resolve-then-pin, the v1 precedent).
-    const membershipDenied = await membershipProjectDenied(session, payload.project.id)
+    const membershipDenied = await membershipProjectDenied(session, id)
     if (membershipDenied) return membershipDenied
     // W5-3: supplier sessions are not project readers (their surface is the
     // supplier-owned rows). Uniform 403 — no project data is returned.
     const supplierDenied = supplierProjectDenied(session)
     if (supplierDenied) return supplierDenied
 
-    const phaseNames = new Map(payload.phases.map((ph) => [ph.id, ph.name]))
-    let tasks = payload.phases.flatMap((ph) => ph.tasks)
-    if (q.data.status) {
-      tasks = tasks.filter((t) => t.status === q.data.status)
+    // Keyset cursor (#155 convention): the cursor row resolves by id and
+    // must belong to THIS filtered list (a phase of this project + the
+    // status filter) — unknown, foreign and filtered-out ids all answer
+    // pageOfKind's exact 400.
+    const cursor = q.data.cursor
+    let boundary: { createdAt: Date; id: string } | null = null
+    if (cursor) {
+      const c = await cursorRowOr400(
+        () =>
+          db.task.findFirst({
+            where: {
+              id: cursor,
+              phase: { projectId: id },
+              ...(q.data.status ? { status: q.data.status } : {}),
+            },
+          }),
+        'a task',
+      )
+      if (!c.ok) return c.response
+      boundary = { createdAt: c.row.createdAt, id: c.row.id }
     }
-    // Deterministic keyset order: (createdAt ASC, id ASC).
-    tasks = [...tasks].sort(
-      (a, b) =>
-        a.createdAt.getTime() - b.createdAt.getTime() ||
-        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-    )
 
-    // pageOfKind needs { id } rows; carry the phase name alongside.
-    const rows = tasks.map((t) => ({ id: t.id, t }))
-    const p = pageOfKind(rows, q.data.limit, q.data.cursor, 'a task')
-    if (!p.ok) return p.response
+    // One query: scope + filter + boundary + (createdAt ASC, id ASC) + take
+    // limit+1 — the extra row reveals hasMore without a count (the
+    // audit-route pattern).
+    const rows = await db.task.findMany({
+      where: {
+        phase: { projectId: id },
+        ...(q.data.status ? { status: q.data.status } : {}),
+        ...(boundary ? afterCreatedAtId(boundary, 'asc') : {}),
+      },
+      include: { phase: { select: { id: true, name: true } } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: q.data.limit + 1,
+    })
+
+    const hasMore = rows.length > q.data.limit
+    const tasks = rows.slice(0, q.data.limit)
+    const nextCursor = hasMore ? tasks[tasks.length - 1]?.id ?? null : null
 
     return v1Ok(
-      p.page.items.map(({ t }) => ({
+      tasks.map((t) => ({
         id: t.id,
         phaseId: t.phaseId,
-        phaseName: phaseNames.get(t.phaseId) ?? null,
+        phaseName: t.phase.name,
         title: t.title,
         status: t.status,
         progress: t.progress,
@@ -90,7 +119,7 @@ export const GET = route(
         createdAt: t.createdAt.toISOString(),
         updatedAt: t.updatedAt.toISOString(),
       })),
-      { nextCursor: p.page.nextCursor, hasMore: p.page.hasMore },
+      { nextCursor, hasMore },
     )
   },
 )

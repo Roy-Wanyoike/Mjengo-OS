@@ -14,6 +14,13 @@
 // instead — the orders network alone, take-capped at the DB. The two routes
 // project only order summaries / delivery records, so paying for the
 // supplier directory + request/quote network per page was pure waste.
+//
+// Issue #154 (audit API-3): the v1 supplier DIRECTORY list
+// (/api/v1/projects/:id/suppliers) reads loadSupplierDirectoryBounded()
+// instead of the full slice — the directory with catalogs, plus the two
+// small project-scoped reads its relationship marks need (saved ids and
+// per-supplier order counts/totals). The request/quote/approval network
+// and the per-order delivery includes are pure waste for that page.
 
 import { db } from '@/backend/lib/db'
 import { centsToKes } from '@/backend/lib/money'
@@ -62,6 +69,21 @@ const toQuoteKes = (
  * monotonic axis here is the order count, and that is the capped one.
  */
 export const SUPPLY_ORDERS_LIST_TAKE = 200
+
+/**
+ * DB-level bound for the supplier DIRECTORY list read (issue #154 / audit
+ * API-3), the SUPPLY_ORDERS_LIST_TAKE sibling: 200 suppliers per read —
+ * equal to the v1 list routes' max page, ~2 orders of magnitude above the
+ * seed directory. The free-text ?q= filter and the keyset slice run in the
+ * route layer over this window (contains, ASCII case-insensitive — the
+ * projects-list precedent, not honestly pushable to SQLite), so a filtered
+ * page beyond the window ends with hasMore: false (the same documented
+ * bound the deliveries list carries). The catalog include stays per-row BY
+ * DESIGN: a supplier's catalog is bounded by the supplier's own offering,
+ * not by this table's growth — the monotonic axis here is the directory
+ * breadth, and that is the capped one.
+ */
+export const SUPPLIERS_DIRECTORY_TAKE = 200
 
 /**
  * The orders network of one project — ONE findMany with the exact includes
@@ -121,6 +143,72 @@ export async function loadSupplyOrdersBounded(projectId: string): Promise<OrderW
   return loadOrdersNetwork(projectId, SUPPLY_ORDERS_LIST_TAKE)
 }
 
+/**
+ * The supplier directory row mapper (KSh at the boundary, issue #122) —
+ * shared by the full slice and the bounded directory read below so the
+ * two can never drift apart (the loadOrdersNetwork pattern).
+ */
+function toSupplierWithCatalog(
+  s: import('@prisma/client').Supplier & { catalogItems: import('@prisma/client').CatalogItem[] },
+): SupplierWithCatalog {
+  return {
+    ...s,
+    deliveryFeeBase: centsToKes(s.deliveryFeeBase),
+    freeDeliveryOver: s.freeDeliveryOver === null ? null : centsToKes(s.freeDeliveryOver),
+    minimumOrder: centsToKes(s.minimumOrder),
+    catalogItems: s.catalogItems.map(toCatalogKes),
+  }
+}
+
+/**
+ * The bounded supplier DIRECTORY read for the v1 list surface (issue #154):
+ * exactly the three pieces that route's response needs — the GLOBAL
+ * directory with catalogs (KSh-mapped, the slice's own rows and order), the
+ * project's SavedSupplier ids, and this project's per-supplier order
+ * count/total (built from a supplierId+total projection of the project's
+ * purchase orders — NOT the full orders network the slice loads; totals are
+ * converted per row and summed in the slice's createdAt-DESC order, the
+ * exact arithmetic the old in-payload aggregation performed). No
+ * requests/quotes/approvals are read here.
+ */
+export async function loadSupplierDirectoryBounded(projectId: string): Promise<{
+  suppliers: SupplierWithCatalog[]
+  savedSupplierIds: string[]
+  ordersBySupplier: Map<string, { count: number; total: number }>
+}> {
+  const [suppliers, savedSuppliers, orders] = await Promise.all([
+    db.supplier.findMany({
+      orderBy: [{ verificationState: 'desc' }, { businessName: 'asc' }],
+      include: { catalogItems: { orderBy: { name: 'asc' } } },
+      take: SUPPLIERS_DIRECTORY_TAKE,
+    }),
+    db.savedSupplier.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'desc' },
+      select: { supplierId: true },
+    }),
+    db.purchaseOrder.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'desc' },
+      select: { supplierId: true, total: true },
+    }),
+  ])
+
+  const ordersBySupplier = new Map<string, { count: number; total: number }>()
+  for (const o of orders) {
+    const agg = ordersBySupplier.get(o.supplierId) ?? { count: 0, total: 0 }
+    agg.count += 1
+    agg.total += centsToKes(o.total)
+    ordersBySupplier.set(o.supplierId, agg)
+  }
+
+  return {
+    suppliers: suppliers.map(toSupplierWithCatalog),
+    savedSupplierIds: savedSuppliers.map((s) => s.supplierId),
+    ordersBySupplier,
+  }
+}
+
 export async function loadSupplySlice(projectId: string): Promise<SupplySlice> {
   const [suppliers, requests, approvalRules, approvals, quotes, orders, savedSuppliers] = await Promise.all([
     db.supplier.findMany({
@@ -157,13 +245,7 @@ export async function loadSupplySlice(projectId: string): Promise<SupplySlice> {
     }),
   ])
 
-  const supplierRows: SupplierWithCatalog[] = suppliers.map((s) => ({
-    ...s,
-    deliveryFeeBase: centsToKes(s.deliveryFeeBase),
-    freeDeliveryOver: s.freeDeliveryOver === null ? null : centsToKes(s.freeDeliveryOver),
-    minimumOrder: centsToKes(s.minimumOrder),
-    catalogItems: s.catalogItems.map(toCatalogKes),
-  }))
+  const supplierRows: SupplierWithCatalog[] = suppliers.map(toSupplierWithCatalog)
 
   const requestRows: RequestWithLines[] = requests.map((r) => ({
     ...r,

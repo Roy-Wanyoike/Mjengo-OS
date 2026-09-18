@@ -31,12 +31,14 @@
  *     budget-variance route reuses the existing BudgetVarianceReport).
  *
  * Mocks (flags-gating idioms): '@/backend/lib/guard' full fake (session
- * control), '@/backend/lib/db' (featureFlag rows + alert.findMany — the
- * anomalies read), '@/backend/lib/mjengo' (getProjectPayload — the payload's
- * intel slice) and '@/backend/modules/reports/service'
- * (buildBudgetVarianceReport — controlled here; the derivation math is
- * pinned by reports tests). route-kit, rate-limit, flags, intel/types
- * parsers, respond/schemas and the routes themselves stay REAL.
+ * control), '@/backend/lib/db' (featureFlag rows + project.findUnique — the
+ * #154 resolve step — + alert.findMany — the anomalies read),
+ * '@/backend/modules/intel/repository' (loadIntelSlice — the intel module's
+ * public read, the route's data source since #154) and
+ * '@/backend/modules/reports/service' (buildBudgetVarianceReport —
+ * controlled here; the derivation math is pinned by reports tests).
+ * route-kit, rate-limit, flags, intel/types parsers, respond/schemas and
+ * the routes themselves stay REAL.
  */
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -88,10 +90,18 @@ vi.mock('@/backend/lib/db', () => {
       { key: 'marketplace', enabled: true, description: 'Marketplace' },
       { key: 'land_verification', enabled: true, description: 'Land' },
     ],
+    // The intel route's resolve step (#154): p-1 exists, anything else is a
+    // 404.
+    projects: [{ id: 'p-1', name: 'Nyumba Yangu' }],
   }
   return {
     db: {
       __state: state,
+      project: {
+        async findUnique({ where }: { where: { id: string } }) {
+          return state.projects.find((p) => p.id === where.id) ?? null
+        },
+      },
       featureFlag: {
         async upsert() { /* rows exist; lazy creation is a no-op here */ },
         async findMany({ where }: { where?: { key?: { in?: string[] } } }) {
@@ -143,13 +153,11 @@ vi.mock('@/backend/lib/guard', async () => {
   }
 })
 
-// The payload seam the intel route reuses (the intel slice — controlled
-// here; pinned by the app's own tests).
-const svc = vi.hoisted(() => ({
-  getProjectPayload: vi.fn(),
-}))
-
-vi.mock('@/backend/lib/mjengo', () => svc)
+// The intel module's public read — the intel route's data source since
+// #154 (controlled here; the slice's own derivations are pinned by the
+// module's tests).
+const intelRepo = vi.hoisted(() => ({ loadIntelSlice: vi.fn() }))
+vi.mock('@/backend/modules/intel/repository', () => intelRepo)
 
 // The reports service seam the budget-variance mirror calls (the app route's
 // exact dependency — the derivation math is pinned by reports tests).
@@ -237,11 +245,6 @@ const INTEL_SLICE = {
   },
 }
 
-const PAYLOAD = {
-  project: { id: 'p-1', name: 'Nyumba Yangu' },
-  intel: INTEL_SLICE,
-}
-
 /** A representative BudgetVarianceReport (the app route's contract). */
 const REPORT = {
   project: {
@@ -278,7 +281,7 @@ beforeEach(() => {
   h.session = null
   delete process.env.NEXT_FLAGS_OFF
   invalidateFlagCache()
-  svc.getProjectPayload.mockResolvedValue(PAYLOAD)
+  intelRepo.loadIntelSlice.mockResolvedValue(INTEL_SLICE)
   reports.buildBudgetVarianceReport.mockResolvedValue(REPORT)
 })
 
@@ -380,11 +383,8 @@ describe('GET /api/v1/projects/:id/intel — the digest', () => {
   })
 
   it('never-computed state — score/risk/health/digest all null (honest, never fabricated)', async () => {
-    svc.getProjectPayload.mockResolvedValueOnce({
-      ...PAYLOAD,
-      intel: {
-        ...INTEL_SLICE, risk: null, score: null, digests: [], health: null,
-      },
+    intelRepo.loadIntelSlice.mockResolvedValueOnce({
+      ...INTEL_SLICE, risk: null, score: null, digests: [], health: null,
     })
     sessionFor('admin')
     const body = await bodyOf(await projectIntelGet(req('p-1'), ctx('p-1')))
@@ -394,14 +394,11 @@ describe('GET /api/v1/projects/:id/intel — the digest', () => {
   })
 
   it('malformed stored JSON (components/findings/items) parses to [], never a 500', async () => {
-    svc.getProjectPayload.mockResolvedValueOnce({
-      ...PAYLOAD,
-      intel: {
-        ...INTEL_SLICE,
-        risk: { ...INTEL_SLICE.risk, findings: 'not-json' },
-        score: { ...INTEL_SLICE.score, components: 'nope' },
-        digests: [{ ...INTEL_SLICE.digests[0], items: 'x' }],
-      },
+    intelRepo.loadIntelSlice.mockResolvedValueOnce({
+      ...INTEL_SLICE,
+      risk: { ...INTEL_SLICE.risk, findings: 'not-json' },
+      score: { ...INTEL_SLICE.score, components: 'nope' },
+      digests: [{ ...INTEL_SLICE.digests[0], items: 'x' }],
     })
     sessionFor('contractor')
     const res = await projectIntelGet(req('p-1'), ctx('p-1'))
@@ -414,7 +411,7 @@ describe('GET /api/v1/projects/:id/intel — the digest', () => {
   })
 
   it('scoping: unknown project → 404; foreign client → 403; own client → 200; supplier → uniform 403; anonymous → 401', async () => {
-    svc.getProjectPayload.mockResolvedValueOnce(null)
+    // p-x resolves null on the db stub (the #154 direct resolve).
     sessionFor('admin')
     expect((await projectIntelGet(req('p-x'), ctx('p-x'))).status).toBe(404)
 

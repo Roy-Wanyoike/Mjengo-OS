@@ -1,6 +1,7 @@
 import { route } from '@/backend/lib/route-kit'
-import { getProjectPayload } from '@/backend/lib/mjengo'
+import { loadSupplierDirectoryBounded } from '@/backend/modules/supply/repository'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
+import { db } from '@/backend/lib/db'
 import { projectIdRef, projectSuppliersQuery, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, membershipProjectDenied, supplierProjectDenied } from './scope'
@@ -28,17 +29,29 @@ type Ctx = { params: Promise<{ id: string }> }
  * are not project readers — uniform 403 (their OWN catalog is the
  * /api/supplier portal surface, never this buyer directory).
  *
- * HONEST SCOPE NOTE: Supplier rows are a GLOBAL directory (loadSupplySlice
- * loads the whole marketplace table — the same rows the webapp Finder
- * renders for this project); the project relationship is carried honestly
- * per row (savedByProject, orderCount, orderTotal computed from THIS
- * project's orders/quotes), never by silently filtering the directory.
+ * HONEST SCOPE NOTE: Supplier rows are a GLOBAL directory (the bounded
+ * directory read loads the whole marketplace table — the same rows the
+ * webapp Finder renders for this project); the project relationship is
+ * carried honestly per row (savedByProject, orderCount, orderTotal computed
+ * from THIS project's orders), never by silently filtering the directory.
+ *
+ * DATA (issue #154 / audit API-3): loadSupplierDirectoryBounded(projectId)
+ * — the supply module's bounded directory read (the #155
+ * loadSupplyOrdersBounded pattern): the directory with catalogs
+ * take-capped at the DB (200, the max documented page), plus the two small
+ * project-scoped reads the relationship marks need (saved ids + a
+ * supplierId/total projection of this project's POs — NOT the full orders
+ * network with lines and deliveries the old in-payload slice loaded). The
+ * old path materialized the whole ~20-read getProjectPayload to slice the
+ * directory out of it.
  *
  * QUERY: ?q= free-text search on businessName/county/town (in-memory
  * contains, ASCII case-insensitive — the projects-list precedent) filters
- * BEFORE pagination. Pagination is the wallet-list pattern: a deterministic
- * (createdAt ASC, id ASC) total order sliced in the route layer. Rate limit:
- * 120/min per principal.
+ * BEFORE pagination. Pagination is the wallet-list pattern over the bounded
+ * window: a deterministic (createdAt ASC, id ASC) total order sliced in the
+ * route layer — a filtered page beyond the 200-supplier window ends with
+ * hasMore: false (the documented bound, the search-route MAX_SCAN honesty
+ * convention). Rate limit: 120/min per principal.
  */
 export const GET = route(
   {
@@ -57,33 +70,28 @@ export const GET = route(
     const q = validateQuery(req, projectSuppliersQuery)
     if (!q.ok) return q.response
 
-    const payload = await getProjectPayload(id)
-    if (!payload) return v1Err(404, 'Project not found')
-    const denied = clientProjectDenied(session, payload.project.id)
+    // Unknown project → 404 (the attendance/deliveries resolve step).
+    const project = await db.project.findUnique({ where: { id } })
+    if (!project) return v1Err(404, 'Project not found')
+    const denied = clientProjectDenied(session, id)
     if (denied) return denied
     // SEC-6 (issue #174): the site-team membership pin — supervisor /
     // procurement / qs / finance read only the projects they hold a
     // ProjectMembership row on (fail closed on zero rows); contractor/admin
     // keep the explicit portfolio-wide grant. Same uniform 403 body as the
     // client pin, after the resolve (resolve-then-pin, the v1 precedent).
-    const membershipDenied = await membershipProjectDenied(session, payload.project.id)
+    const membershipDenied = await membershipProjectDenied(session, id)
     if (membershipDenied) return membershipDenied
     // W5-3: supplier sessions are not project readers — uniform 403, no
     // buyer directory data returned.
     const supplierDenied = supplierProjectDenied(session)
     if (supplierDenied) return supplierDenied
 
-    const savedIds = new Set(payload.supply.savedSupplierIds)
-    // The project's OWN order relationship per supplier (this project's POs).
-    const ordersBySupplier = new Map<string, { count: number; total: number }>()
-    for (const o of payload.supply.orders) {
-      const agg = ordersBySupplier.get(o.supplierId) ?? { count: 0, total: 0 }
-      agg.count += 1
-      agg.total += o.total
-      ordersBySupplier.set(o.supplierId, agg)
-    }
+    const directory = await loadSupplierDirectoryBounded(id)
+    const savedIds = new Set(directory.savedSupplierIds)
+    const ordersBySupplier = directory.ordersBySupplier
 
-    let suppliers = payload.supply.suppliers
+    let suppliers = directory.suppliers
     if (q.data.q) {
       const needle = q.data.q.toLowerCase()
       suppliers = suppliers.filter(
