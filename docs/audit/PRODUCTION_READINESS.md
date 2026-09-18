@@ -23,7 +23,7 @@ money, E2E automation, membership authz) — by design, not by accident.
 - **APIs**: 60 paths inventoried; OpenAPI 29/29; no stubs; CSRF gate now default-on (SEC-1 fixed).
 - **Database**: zero drift; unique constraints + hot-path indexes added (DB-6/7/8); inventory atomicity fixed (DB-2); Float money remains the known real-money blocker (DB-1, P1).
 - **Finance**: idempotency strong (re-verified); ledger enforcement service-level (DB-3); simulated rails labeled (#43).
-- **Inventory**: derived stock now validated + atomic (DB-2 fixed); reconciliation thin (register).
+- **Inventory**: derived stock now validated + atomic (DB-2 fixed); reconciliation landed (#194 — count sessions with expectedQty snapshots, variance view, count-linked `adjusted` movements with `count:<id>` lineage, history + CSV; posting refuses doubles and never edits the movement ledger).
 - **Offline**: versioned sync + conflict metadata verified; supplier portal online-only (FE-4, P2).
 - **AI**: provider-gated, never-approves posture verified in code; zero canned responses.
 - **Security**: IDOR sweep pass; 5 findings fixed this wave (SEC-1/2/3/4 + FE-1); remaining: SEC-5/6 + share-link expiry (P2).

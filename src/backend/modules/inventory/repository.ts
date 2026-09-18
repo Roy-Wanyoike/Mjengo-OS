@@ -3,7 +3,7 @@
 
 import { db } from '@/backend/lib/db'
 import { centsToKes, mulQtyCents, sumCents } from '@/backend/lib/money'
-import type { InventorySlice, BoqSlice, StockMovementRow, StockMovementType } from './types'
+import type { InventorySlice, BoqSlice, StockMovementRow, StockMovementType, StockCountRow, StockCountStatus } from './types'
 
 /**
  * Signed quantity for a single movement: out-flows (consumed / damaged /
@@ -23,11 +23,37 @@ export function derivedClosingQty(movements: readonly { type: string; quantity: 
   return movements.reduce((sum, m) => sum + movementDelta(m.type, m.quantity), 0)
 }
 
+/**
+ * Signed variance of a counted line (issue #194): expected − counted.
+ * >0 means the book (derived closing) OVERSTATES the physical stock; <0
+ * means it understates. NOT a stored column — computed here so variance has
+ * exactly one definition, the same discipline as movementDelta. The
+ * adjustment posted from a line is its NEGATION (counted − expected) because
+ * the ledger must move TOWARD the count.
+ */
+export function countVariance(line: { expectedQty: number; countedQty: number }): number {
+  return line.expectedQty - line.countedQty
+}
+
+/** How many count sessions the payload slice carries (bounded read, newest first). */
+const COUNT_HISTORY_TAKE = 20
+
 export async function loadInventorySlice(projectId: string): Promise<InventorySlice> {
-  const items = await db.inventoryItem.findMany({
-    where: { projectId },
-    include: { movements: { orderBy: { createdAt: 'desc' } } },
-  })
+  const [items, counts] = await Promise.all([
+    db.inventoryItem.findMany({
+      where: { projectId },
+      include: { movements: { orderBy: { createdAt: 'desc' } } },
+    }),
+    // Stock reconciliation history (issue #194) — newest first, bounded like
+    // the payload's other take-capped reads (SQLite demo scale: a handful of
+    // sessions, each bounded by the project's own line count).
+    db.stockCount.findMany({
+      where: { projectId },
+      include: { items: { include: { inventoryItem: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: COUNT_HISTORY_TAKE,
+    }),
+  ])
   const rows = items.map((item) => {
     const sum = (type: string) =>
       item.movements.filter((m) => m.type === type).reduce((s, m) => s + m.quantity, 0)
@@ -78,7 +104,52 @@ export async function loadInventorySlice(projectId: string): Promise<InventorySl
     .flatMap((r) => r.movements)
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
   const itemsWithoutMovements = rows.map(({ movements, ...rest }) => rest)
-  return { items: itemsWithoutMovements, movements: allMovements }
+
+  // ---- Stock reconciliation history (issue #194) -----------------------------
+  // Per count: the counted lines (with the COMPUTED variance — one
+  // definition, countVariance) plus the items that were NOT part of the
+  // session, listed separately with their derived closing AS OF countedAt
+  // (the movement log is append-only, so history is queryable — an uncounted
+  // line's "expected at count time" is reconstructable, never invented).
+  const countRows: StockCountRow[] = counts.map((c) => {
+    const countedIds = new Set(c.items.map((line) => line.inventoryItemId))
+    const uncounted = items
+      .filter((item) => !countedIds.has(item.id))
+      .map((item) => ({
+        inventoryItemId: item.id,
+        materialName: item.materialName,
+        unit: item.unit,
+        location: item.location,
+        expectedQty: derivedClosingQty(
+          item.movements.filter((m) => m.createdAt <= c.countedAt),
+        ),
+      }))
+    return {
+      id: c.id,
+      countedBy: c.countedBy,
+      countedAt: c.countedAt.toISOString(),
+      note: c.note,
+      status: c.status as StockCountStatus,
+      postedAt: c.postedAt ? c.postedAt.toISOString() : null,
+      postedBy: c.postedBy,
+      itemCount: c.items.length,
+      items: c.items.map((line) => ({
+        id: line.id,
+        inventoryItemId: line.inventoryItemId,
+        materialName: line.inventoryItem.materialName,
+        unit: line.inventoryItem.unit,
+        location: line.inventoryItem.location,
+        countedQty: line.countedQty,
+        expectedQty: line.expectedQty,
+        variance: countVariance(line),
+        postedQty: line.postedQty,
+      })),
+      uncounted,
+      createdAt: c.createdAt.toISOString(),
+    }
+  })
+
+  return { items: itemsWithoutMovements, movements: allMovements, counts: countRows }
 }
 
 export async function loadBoqSlice(projectId: string): Promise<BoqSlice> {

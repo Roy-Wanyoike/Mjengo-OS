@@ -35,7 +35,10 @@ Next.js 16 (App Router, RSC shell + client app)
         ├── wallet    escrow, payment requests, provider seam (SimulatedProvider
         │            default; Daraja sandbox activates from env, reconcile sweep)
         ├── supply    requests → approvals → quotes → POs → deliveries → site store
-        ├── inventory append-only stock movements, derived closing stock
+        ├── inventory append-only stock movements, derived closing stock;
+        │            stock reconciliation (#194): StockCount sessions with
+        │            expectedQty snapshots → variance view → count-linked
+        │            `adjusted` movements (reference 'count:<id>' lineage)
         ├── invoices  lifecycle, 3-way match (PO ↔ invoice ↔ delivery)
         ├── documents document intelligence: uploads → Attachment rows with
         │            provenance, DRAFT-only extraction (VLM for images, PDF

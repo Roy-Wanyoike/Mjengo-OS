@@ -70,6 +70,7 @@ model Project {
   ledgerTransactions  LedgerTransaction[]
   inventoryItems      InventoryItem[]
   stockMovements      StockMovement[]
+  stockCounts         StockCount[]
   boqs                Boq[]
   savedSuppliers      SavedSupplier[]
   attachments         Attachment[]
@@ -1191,6 +1192,7 @@ model InventoryItem {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
   movements    StockMovement[]
+  countItems   StockCountItem[]
 
   @@unique([projectId, materialName, location])
 }
@@ -1215,6 +1217,55 @@ model StockMovement {
 
   // DB-6: hot path — derived closing stock sums an item's movement log.
   @@index([inventoryItemId])
+}
+
+// Stock reconciliation (issue #194): a physical stock count session per
+// project — ground truth from the site. One row records who counted, when,
+// and the note; the per-item lines live in StockCountItem. expectedQty is
+// SNAPSHOTTED at count time (the derived closing then), so later movements
+// can never rewrite what the system believed when the count happened.
+// variance is NOT a column: it is always expectedQty − countedQty (one
+// definition, modules/inventory/repository.ts). status is the posting gate:
+// 'open' (count recorded, adjustments not yet posted) → 'posted' (the
+// count-linked `adjusted` movements were appended, postedAt/postedBy record
+// the transition). The transition appends movements — it never edits them
+// (the ledger stays append-only, spec §33). Lineage convention: movements
+// posted from a count carry reference = 'count:<countId>' (the same
+// source-link convention StockMovement.reference uses for PO/delivery ids).
+model StockCount {
+  id        String           @id @default(cuid())
+  projectId String
+  project   Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  countedBy String // name/role of whoever ran the physical count
+  countedAt DateTime // when the physical count happened
+  note      String?
+  status    String           @default("open") // open (recorded) | posted (adjustments applied)
+  postedAt  DateTime?
+  postedBy  String?
+  createdAt DateTime         @default(now())
+  items     StockCountItem[]
+
+  // DB-6-style hot path: the reconciliation history read filters projectId
+  // and orders createdAt DESC.
+  @@index([projectId, createdAt])
+}
+
+// One counted line: the physical qty for one InventoryItem (material ×
+// location) inside one count session. countedQty is what the site counted
+// (ground truth); expectedQty is the derived-closing snapshot at count time;
+// postedQty records the adjustment actually posted from this line (null
+// until the count posts; zero-variance lines post 0 and no movement row).
+model StockCountItem {
+  id              String        @id @default(cuid())
+  countId         String
+  count           StockCount    @relation(fields: [countId], references: [id], onDelete: Cascade)
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  countedQty      Float // physical count — ground truth from the site
+  expectedQty     Float // derived closing at count time (snapshot, never rewritten)
+  postedQty       Float? // adjustment posted from this line (counted − expected)
+
+  @@unique([countId, inventoryItemId])
 }
 
 // Bill of Quantities (spec §28 chain head): project + versioned lines. Lines

@@ -60,6 +60,55 @@ export function materialsLedgerCSV(p: ProjectPayload): string {
   return toCSV(rows)
 }
 
+/**
+ * Stock reconciliation history (issue #194): every counted line of every
+ * count session — what the system expected, what the site counted, the
+ * signed variance (expected − counted) and the adjustment posted from the
+ * line. Uncounted inventory lines are listed with their expected qty at
+ * count time and a '—' counted value (same style as materialsLedgerCSV:
+ * header row first, KSh-free quantities, ISO date-only).
+ */
+export function reconciliationCSV(p: ProjectPayload): string {
+  const rows: CSVRow[] = [
+    {
+      'Count ID': 'Count ID', 'Counted At': 'Counted At', 'Counted By': 'Counted By',
+      Status: 'Status', Material: 'Material', Location: 'Location', Unit: 'Unit',
+      'Expected Qty': 'Expected Qty', 'Counted Qty': 'Counted Qty',
+      'Variance (Expected − Counted)': 'Variance (Expected − Counted)',
+      'Posted Adjustment': 'Posted Adjustment',
+    },
+    ...p.inventory.counts.flatMap((c) => [
+      ...c.items.map((line) => ({
+        'Count ID': c.id,
+        'Counted At': isoDateOnly(c.countedAt),
+        'Counted By': c.countedBy,
+        Status: c.status,
+        Material: line.materialName,
+        Location: line.location,
+        Unit: line.unit,
+        'Expected Qty': line.expectedQty,
+        'Counted Qty': line.countedQty,
+        'Variance (Expected − Counted)': line.variance,
+        'Posted Adjustment': line.postedQty,
+      })),
+      ...c.uncounted.map((line) => ({
+        'Count ID': c.id,
+        'Counted At': isoDateOnly(c.countedAt),
+        'Counted By': c.countedBy,
+        Status: c.status,
+        Material: line.materialName,
+        Location: line.location,
+        Unit: line.unit,
+        'Expected Qty': line.expectedQty,
+        'Counted Qty': '—',
+        'Variance (Expected − Counted)': '—',
+        'Posted Adjustment': '—',
+      })),
+    ]),
+  ]
+  return toCSV(rows)
+}
+
 /** Fundi attendance & wages for the current day + week. */
 export function attendanceCSV(p: ProjectPayload): string {
   const statusLabel = (s: string | null): string => {

@@ -11,11 +11,11 @@ import { Label } from '@/frontend/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/frontend/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/frontend/ui/table'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/frontend/ui/tooltip'
-import { Boxes, Truck, PackageMinus, Mic, Camera, Hand, Phone, Plus, PackageSearch, Download, Warehouse, AlertTriangle, ArrowLeftRight, Flame, ClipboardList } from 'lucide-react'
+import { Boxes, Truck, PackageMinus, Mic, Camera, Hand, Phone, Plus, PackageSearch, Download, Warehouse, AlertTriangle, ArrowLeftRight, Flame, ClipboardList, ClipboardCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES, dateShort } from '@/frontend/lib/format'
 import { useT } from '@/frontend/i18n/provider'
-import { downloadCSV, materialsLedgerCSV, projectFilePrefix } from '@/frontend/mjengo/export-utils'
+import { downloadCSV, materialsLedgerCSV, reconciliationCSV, projectFilePrefix } from '@/frontend/mjengo/export-utils'
 import type { InventoryItemRow, StockMovementType } from '@/backend/modules/inventory/types'
 
 function SourceBadge({ source }: { source: string }) {
@@ -444,12 +444,19 @@ function SiteStoreCard() {
   const [mRef, setMRef] = useState('')
   const [mNote, setMNote] = useState('')
   const [mTo, setMTo] = useState('')
+  // Stock reconciliation (issue #194): run-count dialog + reconciliation detail.
+  const [countOpen, setCountOpen] = useState(false)
+  const [countDetailId, setCountDetailId] = useState<string | null>(null)
+  const [countBy, setCountBy] = useState('')
+  const [countNote, setCountNote] = useState('')
+  const [countQtys, setCountQtys] = useState<Record<string, string>>({})
   const busy = actionBusy !== null
 
   if (!data) return null
   const isClient = viewMode === 'client'
   const items = data.inventory.items
   const movements = data.inventory.movements
+  const counts = data.inventory.counts
   const suppliers = data.supply.suppliers
   const incoming = data.supply.orders.filter((o) => o.status === 'delivering')
   const consumedTotal = items.reduce((s, i) => s + i.consumedQty, 0)
@@ -476,6 +483,68 @@ function SiteStoreCard() {
     setMName(''); setMUnit(''); setMLocation('Site Store')
     setMQty(''); setMCost(''); setMRef(''); setMNote(''); setMTo('')
     setMovementOpen(true)
+  }
+
+  // ---- Stock reconciliation (issue #194) ----
+
+  function openCountDialog() {
+    setCountBy('')
+    setCountNote('')
+    setCountQtys({})
+    setCountOpen(true)
+  }
+
+  async function saveCount() {
+    if (!data) return
+    if (!countBy.trim()) { toast.error(t('mat.count.error.noCounter')); return }
+    const countsList: Array<{ inventoryItemId: string; countedQty: number }> = []
+    let badQty = false
+    for (const i of items) {
+      const raw = countQtys[i.id]
+      if (typeof raw !== 'string' || raw.trim() === '') continue // not counted in this session
+      const countedQty = Number(raw)
+      if (!Number.isFinite(countedQty) || countedQty < 0) { badQty = true; continue }
+      countsList.push({ inventoryItemId: i.id, countedQty })
+    }
+    if (badQty) { toast.error(t('mat.count.error.badQty')); return }
+    if (countsList.length === 0) { toast.error(t('mat.count.error.noLines')); return }
+    // countedAt is stamped HERE (count time), not at flush time — an offline
+    // count still snapshots the world the site saw when the bags were counted.
+    const ok = await dispatch('inventory.count', {
+      countedBy: countBy.trim(),
+      countedAt: new Date().toISOString(),
+      note: countNote.trim() || undefined,
+      counts: countsList,
+    }, `Physical stock count: ${countsList.length} lines by ${countBy.trim()}`)
+    if (ok) {
+      toast.success(online ? t('mat.count.saved', { count: countsList.length }) : t('field.savedQueued', { count: outbox.length }))
+      setCountOpen(false)
+    } else {
+      toast.error(t('mat.count.failed'))
+    }
+  }
+
+  function exportReconciliation() {
+    if (!data) return
+    const filename = `${projectFilePrefix(data)}-stock-reconciliation.csv`
+    downloadCSV(filename, reconciliationCSV(data))
+    toast.success(t('field.exported', { file: filename }))
+  }
+
+  async function postAdjustments(countId: string) {
+    // The movement count is derivable client-side: one `adjusted` movement
+    // per non-zero-variance line (zero-variance lines post none).
+    const detail = counts.find((c) => c.id === countId)
+    const toPost = detail ? detail.items.filter((line) => line.variance !== 0).length : 0
+    const ok = await dispatch('inventory.count.post', { countId }, `Posted count-linked adjustments (count ${countId.slice(-6)})`)
+    if (ok) {
+      toast.success(online
+        ? (toPost > 0 ? t('mat.count.posted', { count: toPost }) : t('mat.count.zeroVariance'))
+        : t('field.savedQueued', { count: outbox.length }))
+      setCountDetailId(null)
+    } else {
+      toast.error(t('mat.count.postFailed'))
+    }
   }
 
   async function recordMovement() {
@@ -569,9 +638,14 @@ function SiteStoreCard() {
           </CardDescription>
         </div>
         {!isClient && (
-          <Button size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={openMovementDialog} aria-label={t('mat.store.recordAria')}>
-            <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('mat.store.record')}</span>
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" disabled={busy || items.length === 0} onClick={openCountDialog} aria-label={t('mat.count.runAria')}>
+              <ClipboardCheck className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('mat.count.run')}</span>
+            </Button>
+            <Button size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={openMovementDialog} aria-label={t('mat.store.recordAria')}>
+              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('mat.store.record')}</span>
+            </Button>
+          </div>
         )}
       </CardHeader>
       <CardContent className="space-y-5">
@@ -667,6 +741,55 @@ function SiteStoreCard() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+
+        {/* stock counts — reconciliation history (issue #194) */}
+        <div>
+          <div className="flex items-center justify-between pb-1.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">{t('mat.count.historyTitle')}</p>
+            {counts.length > 0 && (
+              <Button size="sm" variant="ghost" className="h-7 gap-1.5 px-2 text-[11px] text-stone-500" onClick={exportReconciliation} aria-label={t('mat.count.exportAria')}>
+                <Download className="h-3.5 w-3.5" aria-hidden /> {t('mat.count.export')}
+              </Button>
+            )}
+          </div>
+          {counts.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-stone-300 p-4 text-center text-xs text-stone-500">
+              {t('mat.count.empty')}
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {counts.slice(0, 5).map((c) => {
+                const netVariance = c.items.reduce((s, line) => s + line.variance, 0)
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setCountDetailId(c.id)}
+                    className="flex w-full items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white p-3 text-left transition-colors hover:border-amber-300 hover:bg-amber-50/40"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge className={`border-0 text-[10px] hover:opacity-90 ${c.status === 'posted' ? 'bg-teal-100 text-teal-800' : 'bg-amber-100 text-amber-800'}`}>
+                          {c.status === 'posted' ? t('mat.count.status.posted') : t('mat.count.status.open')}
+                        </Badge>
+                        <span className="text-sm font-semibold text-stone-800">{dateShort(c.countedAt)}</span>
+                        <span className="truncate text-xs text-stone-500">{c.countedBy}</span>
+                      </div>
+                      <p className="pt-0.5 text-[11px] text-stone-500">
+                        {t('mat.count.lines', { count: c.itemCount })}
+                        {c.uncounted.length > 0 ? ` · ${t('mat.count.uncountedCount', { count: c.uncounted.length })}` : ''}
+                        {c.note ? ` · ${c.note}` : ''}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 text-xs font-semibold tabular-nums ${netVariance === 0 ? 'text-stone-400' : netVariance > 0 ? 'text-orange-600' : 'text-emerald-600'}`}>
+                      {t('mat.count.varianceTotal', { qty: netVariance > 0 ? `+${netVariance.toLocaleString()}` : netVariance.toLocaleString() })}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>
@@ -768,6 +891,124 @@ function SiteStoreCard() {
               <Plus className="w-4 h-4" aria-hidden /> {t('mat.store.record')}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- run stock count dialog (issue #194) ---- */}
+      <Dialog open={countOpen} onOpenChange={setCountOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-stone-900">{t('mat.count.dialog.title')}</DialogTitle>
+            <DialogDescription>{t('mat.count.dialog.desc')}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-1">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="cnt-by">{t('mat.count.label.countedBy')}</Label>
+                <Input id="cnt-by" value={countBy} onChange={(e) => setCountBy(e.target.value)} placeholder={t('mat.count.ph.countedBy')} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="cnt-note">{t('mat.count.label.note')}</Label>
+                <Input id="cnt-note" value={countNote} onChange={(e) => setCountNote(e.target.value)} placeholder={t('mat.count.ph.noteOptional')} />
+              </div>
+            </div>
+            <div className="max-h-72 space-y-1.5 overflow-y-auto pr-2 -mr-2">
+              {items.map((i) => (
+                <div key={i.id} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 p-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-stone-800">{i.materialName}</p>
+                    <p className="text-[11px] text-stone-500">{t('mat.count.countLine', { name: i.materialName, location: i.location, qty: i.closingQty, unit: i.unit })}</p>
+                  </div>
+                  <Input
+                    aria-label={t('mat.count.col.counted')}
+                    className="h-9 w-28 shrink-0 text-right tabular-nums"
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder={t('mat.count.ph.countedQty')}
+                    value={countQtys[i.id] ?? ''}
+                    onChange={(e) => setCountQtys({ ...countQtys, [i.id]: e.target.value })}
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-stone-400">{t('mat.count.uncounted')}</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCountOpen(false)} disabled={busy}>{t('mat.cancel')}</Button>
+            <Button onClick={() => void saveCount()} disabled={busy || items.length === 0} className="gap-1 bg-amber-600 text-white hover:bg-amber-700">
+              <ClipboardCheck className="w-4 h-4" aria-hidden /> {t('mat.count.record')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- reconciliation detail dialog (variance view + posting) ---- */}
+      <Dialog open={countDetailId !== null} onOpenChange={(open) => { if (!open) setCountDetailId(null) }}>
+        <DialogContent className="sm:max-w-2xl">
+          {(() => {
+            const c = counts.find((x) => x.id === countDetailId)
+            if (!c) return null
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-stone-900">{t('mat.count.detail.title')}</DialogTitle>
+                  <DialogDescription>
+                    {t('mat.count.detail.desc')} — {dateShort(c.countedAt)} · {c.countedBy}{c.note ? ` · ${c.note}` : ''}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="max-h-96 overflow-y-auto pr-2 -mr-2">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>{t('mat.count.col.material')}</TableHead>
+                        <TableHead>{t('mat.count.col.location')}</TableHead>
+                        <TableHead className="text-right">{t('mat.count.col.expected')}</TableHead>
+                        <TableHead className="text-right">{t('mat.count.col.counted')}</TableHead>
+                        <TableHead className="text-right">{t('mat.count.col.variance')}</TableHead>
+                        <TableHead className="text-right">{t('mat.count.col.posted')}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {c.items.map((line) => (
+                        <TableRow key={line.id}>
+                          <TableCell className="font-medium text-stone-800">{line.materialName}</TableCell>
+                          <TableCell className="text-stone-600">{line.location}</TableCell>
+                          <TableCell className="text-right tabular-nums text-stone-600">{line.expectedQty.toLocaleString()}</TableCell>
+                          <TableCell className="text-right tabular-nums font-semibold text-stone-800">{line.countedQty.toLocaleString()}</TableCell>
+                          <TableCell className={`text-right tabular-nums font-semibold ${line.variance === 0 ? 'text-stone-400' : line.variance > 0 ? 'text-orange-600' : 'text-emerald-600'}`}>
+                            {line.variance > 0 ? '+' : ''}{line.variance.toLocaleString()}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-stone-600">{line.postedQty === null ? '—' : line.postedQty.toLocaleString()}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  {c.uncounted.length > 0 && (
+                    <div className="pt-3">
+                      <p className="pb-1 text-[11px] font-semibold uppercase tracking-wide text-stone-400">{t('mat.count.uncounted')}</p>
+                      <div className="space-y-1">
+                        {c.uncounted.map((line) => (
+                          <p key={line.inventoryItemId} className="text-xs text-stone-500">
+                            {t('mat.count.countLine', { name: line.materialName, location: line.location, qty: line.expectedQty, unit: line.unit })}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <DialogFooter>
+                  {c.status === 'open' ? (
+                    <Button onClick={() => void postAdjustments(c.id)} disabled={busy} className="gap-1 bg-teal-600 text-white hover:bg-teal-700">
+                      <ClipboardCheck className="w-4 h-4" aria-hidden /> {t('mat.count.post')}
+                    </Button>
+                  ) : (
+                    <Badge className="border-0 bg-teal-100 text-teal-800 hover:bg-teal-100">{t('mat.count.status.posted')}</Badge>
+                  )}
+                </DialogFooter>
+              </>
+            )
+          })()}
         </DialogContent>
       </Dialog>
     </Card>
