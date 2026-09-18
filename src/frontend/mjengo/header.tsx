@@ -47,8 +47,11 @@ const NOTIFICATION_KINDS: Record<string, { label: string; Icon: LucideIcon; tint
   'quote.received': { label: 'Quote', Icon: FileText, tint: 'text-stone-500' },
   'order.sent': { label: 'Order', Icon: Package, tint: 'text-stone-500' },
   'order.confirmed': { label: 'Order', Icon: Package, tint: 'text-stone-500' },
+  'order.cancelled': { label: 'Order', Icon: X, tint: 'text-rose-600' }, // #206 — PO cancelled (truck turned around / order pulled)
   'delivery.dispatched': { label: 'Delivery', Icon: Truck, tint: 'text-stone-500' },
   'delivery.discrepancy': { label: 'Delivery', Icon: TriangleAlert, tint: 'text-red-600' },
+  'delivery.voided': { label: 'Delivery', Icon: X, tint: 'text-stone-500' }, // #206 — mistaken dispatch voided
+  'request.cancelled': { label: 'Request', Icon: X, tint: 'text-stone-500' }, // #206 — request withdrawn
   'invoice.submitted': { label: 'Invoice', Icon: ReceiptText, tint: 'text-amber-600' },
   'invoice.decided': { label: 'Invoice', Icon: ReceiptText, tint: 'text-amber-600' },
   'invoice.disputed': { label: 'Invoice', Icon: TriangleAlert, tint: 'text-red-600' },
@@ -70,12 +73,12 @@ function kindMeta(kind: string) {
 const KIND_GROUPS: Array<{ key: string; labelKey: string; kinds: string[] }> = [
   { key: 'all', labelKey: 'notif.group.all', kinds: [] },
   { key: 'approvals', labelKey: 'notif.group.approvals', kinds: ['approval.requested', 'approval.decided'] },
-  { key: 'orders', labelKey: 'notif.group.orders', kinds: ['order.sent', 'order.confirmed', 'quote.received'] },
-  { key: 'deliveries', labelKey: 'notif.group.deliveries', kinds: ['delivery.dispatched', 'delivery.discrepancy'] },
+  { key: 'orders', labelKey: 'notif.group.orders', kinds: ['order.sent', 'order.confirmed', 'order.cancelled', 'quote.received'] },
+  { key: 'deliveries', labelKey: 'notif.group.deliveries', kinds: ['delivery.dispatched', 'delivery.discrepancy', 'delivery.voided'] },
   { key: 'invoices', labelKey: 'notif.group.invoices', kinds: ['invoice.submitted', 'invoice.decided', 'invoice.disputed', 'invoice.paid'] },
   { key: 'intel', labelKey: 'notif.group.intel', kinds: ['price.alert', 'digest.weekly', 'risk.flagged', 'trust.digest'] },
   { key: 'money', labelKey: 'notif.group.money', kinds: ['milestone', 'variation', 'payment.orphaned', 'escrow.drift'] },
-  { key: 'site', labelKey: 'notif.group.site', kinds: ['recap', 'comment', 'attendance', 'anomaly', 'share', 'system'] },
+  { key: 'site', labelKey: 'notif.group.site', kinds: ['recap', 'comment', 'attendance', 'anomaly', 'share', 'system', 'request.cancelled'] },
 ]
 
 function groupOf(kind: string): string {

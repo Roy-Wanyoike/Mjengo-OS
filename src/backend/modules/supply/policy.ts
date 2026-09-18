@@ -29,11 +29,11 @@ import type { RuleLike } from './types'
 export type SupplyRole =
   | 'client' | 'contractor' | 'supervisor' | 'procurement' | 'finance' | 'admin' | 'share_client'
 export type SupplyAction =
-  | 'request.create' | 'request.submit' | 'request.decide'
+  | 'request.create' | 'request.submit' | 'request.decide' | 'request.cancel'
   | 'quote.request' | 'quote.receive' | 'quote.decline'
   | 'order.create' | 'order.approve' | 'order.send' | 'order.confirm'
   | 'order.dispatch' | 'order.cancel' | 'order.close'
-  | 'delivery.receive' | 'delivery.dispatch'
+  | 'delivery.receive' | 'delivery.dispatch' | 'delivery.void'
   | 'supplier.upsert' | 'catalog.upsert'
   | 'rule.upsert' | 'rule.delete'
   | 'supply.compare' | 'supply.view'
@@ -86,15 +86,24 @@ export function supplyCan(role: SupplyRole, action: SupplyAction): boolean {
       return true
 
     // 3) PO lifecycle + delivery ground truth — site team (contractor/
-    //    supervisor receive; §1 "confirm delivery")
+    //    supervisor receive; §1 "confirm delivery"). #206 adds the
+    //    cancellation pair: request.cancel (withdrawal settles the approval
+    //    chain — a site-team act, deliberately NOT in the client's §24 seam:
+    //    a client may RAISE requests, but pulling one out of an in-flight
+    //    approval chain is loop management) and delivery.void (voiding a
+    //    mistaken dispatch rewrites the buyer's ground-truth record — the
+    //    supplier portal keeps only order.confirm/order.dispatch, so a
+    //    supplier cannot silently erase its own dispatch).
     case 'order.send':
     case 'order.confirm':
     case 'order.dispatch':
     case 'order.cancel':
     case 'order.close':
     case 'order.approve':
+    case 'request.cancel':
     case 'delivery.receive':
     case 'delivery.dispatch':
+    case 'delivery.void':
       return true
 
     // 4) Suppliers/catalog — contractor manages the network (§1)

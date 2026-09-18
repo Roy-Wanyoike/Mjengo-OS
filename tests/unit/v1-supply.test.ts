@@ -202,6 +202,18 @@ const Dlv3 = {
   lines: [],
   photos: [],
 }
+/** #206: a voided dispatch (order.cancel from delivering / delivery.void). */
+const Dlv4 = {
+  id: 'dlv-4', orderId: 'po-2', status: 'cancelled',
+  dispatchedAt: d('2026-01-09T08:00:00Z'), receivedAt: null, receivedBy: null,
+  note: 'Dispatch voided — recorded against the wrong purchase order',
+  driverName: null, driverPhone: null, vehicleReg: null,
+  etaAt: null, departedAt: d('2026-01-09T08:00:00Z'), arrivedAt: null,
+  gpsLat: null, gpsLng: null, photoCount: 0, photoUrls: '[]',
+  createdAt: d('2026-01-09T08:00:00Z'),
+  lines: [],
+  photos: [],
+}
 
 /** The purchase orders of the slice (createdAt DESC expected: po-3, po-1, po-2). */
 const SLICE = {
@@ -224,7 +236,7 @@ const SLICE = {
       supplierName: 'Nairobi Steel', requestCode: null, subtotal: 60_000, deliveryFee: 2_000,
       total: 62_000, paymentSource: 'project_wallet', createdByRole: 'supervisor', note: null,
       createdAt: d('2026-01-15T10:00:00Z'), updatedAt: d('2026-01-15T10:00:00Z'),
-      lines: [], deliveries: [Dlv3],
+      lines: [], deliveries: [Dlv3, Dlv4],
     },
     {
       id: 'po-3', orderCode: 'PO-2026-000003', projectId: 'p-1', status: 'confirmed', supplierId: 'sup-3',
@@ -286,7 +298,8 @@ describe('GET /api/v1/supply/orders — list', () => {
         id: 'po-2', orderCode: 'PO-2026-000002', status: 'draft', supplierId: 'sup-2',
         supplierName: 'Nairobi Steel', requestCode: null, subtotal: 60_000, deliveryFee: 2_000,
         total: 62_000, paymentSource: 'project_wallet', createdByRole: 'supervisor', note: null,
-        deliveryCount: 1, createdAt: '2026-01-15T10:00:00.000Z', updatedAt: '2026-01-15T10:00:00.000Z',
+        deliveryCount: 2, // dlv-3 (dispatched) + dlv-4 (#206 voided dispatch)
+        createdAt: '2026-01-15T10:00:00.000Z', updatedAt: '2026-01-15T10:00:00.000Z',
       },
     ])
     expect(body.hasMore).toBe(false)
@@ -479,7 +492,7 @@ describe('GET /api/v1/projects/:id/deliveries — delivery verification records'
     const body = await bodyOf(res)
     expect(repo.loadSupplyOrdersBounded).toHaveBeenCalledWith('p-1')
     const items = body.data as Array<Record<string, unknown>>
-    expect(items.map((x) => x.id)).toEqual(['dlv-2', 'dlv-3', 'dlv-1'])
+    expect(items.map((x) => x.id)).toEqual(['dlv-2', 'dlv-3', 'dlv-1', 'dlv-4'])
     expect(items[0]).toEqual({
       id: 'dlv-2', orderId: 'po-1', orderCode: 'PO-2026-000001', status: 'received',
       dispatchedAt: '2026-02-28T08:00:00.000Z', receivedAt: '2026-03-01T14:00:00.000Z',
@@ -499,33 +512,41 @@ describe('GET /api/v1/projects/:id/deliveries — delivery verification records'
     // The discrepancy record keeps its raw counts + the service's auto-summary note.
     expect(items[2]).toMatchObject({ id: 'dlv-1', status: 'discrepancy', shortLines: 1, photoCount: 0 })
     expect((items[2].lines as Array<Record<string, unknown>>)[0]).toMatchObject({ qtyReceived: 150, short: true })
+    // #206: the voided dispatch is a first-class record — cancelled status,
+    // the void reason as its note, nothing received.
+    expect(items[3]).toMatchObject({
+      id: 'dlv-4', orderId: 'po-2', orderCode: 'PO-2026-000002', status: 'cancelled',
+      note: 'Dispatch voided — recorded against the wrong purchase order',
+      receivedAt: null, receivedBy: null, shortLines: 0,
+    })
     expect(body.hasMore).toBe(false)
     expect(body.nextCursor).toBeNull()
   })
 
-  it('?status= filters BEFORE pagination (each of the five documented values)', async () => {
+  it('?status= filters BEFORE pagination (each of the six documented values)', async () => {
     sessionFor('contractor')
     for (const [status, expected] of [
       ['received', ['dlv-2']],
       ['dispatched', ['dlv-3']],
       ['discrepancy', ['dlv-1']],
+      ['cancelled', ['dlv-4']], // #206: the voided-dispatch terminal state filters like any other
     ] as const) {
       const body = await bodyOf(await projectDeliveriesGet(req('p-1', `?status=${status}`), ctx('p-1')))
       expect((body.data as Array<{ id: string }>).map((x) => x.id)).toEqual([...expected])
     }
     const bad = await projectDeliveriesGet(req('p-1', '?status=delivered'), ctx('p-1'))
     expect(bad.status).toBe(400)
-    expect((await bodyOf(bad)).error).toMatch(/status must be one of dispatched, in_transit/)
+    expect((await bodyOf(bad)).error).toMatch(/status must be one of dispatched, in_transit, arrived, received, discrepancy, cancelled/)
   })
 
-  it('cursor pagination: limit=2 → [dlv-2, dlv-3], cursor → [dlv-1]; no overlap', async () => {
+  it('cursor pagination: limit=2 → [dlv-2, dlv-3], cursor → [dlv-1, dlv-4]; no overlap', async () => {
     sessionFor('admin')
     const first = await bodyOf(await projectDeliveriesGet(req('p-1', '?limit=2'), ctx('p-1')))
     expect((first.data as Array<{ id: string }>).map((x) => x.id)).toEqual(['dlv-2', 'dlv-3'])
     expect(first.nextCursor).toBe('dlv-3')
     expect(first.hasMore).toBe(true)
     const second = await bodyOf(await projectDeliveriesGet(req('p-1', '?limit=2&cursor=dlv-3'), ctx('p-1')))
-    expect((second.data as Array<{ id: string }>).map((x) => x.id)).toEqual(['dlv-1'])
+    expect((second.data as Array<{ id: string }>).map((x) => x.id)).toEqual(['dlv-1', 'dlv-4'])
     expect(second.hasMore).toBe(false)
     expect(second.nextCursor).toBeNull()
   })

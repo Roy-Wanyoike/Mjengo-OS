@@ -257,6 +257,12 @@ vi.mock('@/backend/lib/db', () => {
 
   const db = {
     __state: state,
+    // #206: order.dispatch now runs inside db.$transaction with a conditional
+    // PO claim — the stub passes the tx through (no rollback semantics needed
+    // for the supplier happy paths exercised here).
+    async $transaction(fn: (tx: typeof db) => unknown) {
+      return fn(db)
+    },
     featureFlag: {
       async upsert() { /* rows exist; lazy creation is a no-op here */ },
       async findMany({ where }: { where?: { key?: { in?: string[] } } }) {
@@ -353,6 +359,9 @@ vi.mock('@/backend/lib/db', () => {
         }
         return row ? structuredClone(row) : null
       },
+      async findUnique({ where }: { where: Row }) {
+        return orders.find((o) => o.id === where.id) ?? null
+      },
       async findMany({ where, orderBy }: { where?: Row; orderBy?: Row }) {
         state.calls.searchScans++ // /api/search source table #7
         return withOrder(orders.filter((o) => matches(o, where ?? {})), orderBy).map((o) => structuredClone(o))
@@ -361,6 +370,13 @@ vi.mock('@/backend/lib/db', () => {
         const row = orders.find((o) => o.id === where.id) as Row
         Object.assign(row, data)
         return structuredClone(row)
+      },
+      // #206: the dispatch claim — updateMany honors the { in } / { not }
+      // conditions the service's conditional claims send.
+      async updateMany({ where, data }: { where: Row; data: Row }) {
+        const matched = orders.filter((o) => matches(o, where))
+        for (const o of matched) Object.assign(o, data)
+        return { count: matched.length }
       },
     },
     orderDelivery: {
