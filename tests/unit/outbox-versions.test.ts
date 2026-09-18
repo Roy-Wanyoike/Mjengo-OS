@@ -1,6 +1,7 @@
 /**
  * Entity-version conflict invariants of POST /api/sync + the shared appliers
- * (issue "Outbox conflict metadata + entity versions").
+ * (issue "Outbox conflict metadata + entity versions"; #183 completed the
+ * matrix).
  *
  * Task and Attendance rows carry `version`, bumped by EVERY applier that
  * mutates them (online /api/actions, USSD and offline sync flushes share
@@ -20,13 +21,41 @@
  *  · the ONLINE mutation path (applyAction — what /api/actions calls) bumps
  *    the version too, so both paths move the row's version forward.
  *
+ * #183 — the completed matrix:
+ *  · EVERY versioned task type (update/assign/block/unblock/complete/verify)
+ *    runs the full two-client ladder × {stale, fresh, absent, force}
+ *    (task.verify's applier actor is pinned via the wallet/session mock —
+ *    the route session and the applier actor stay consistent);
+ *  · attendance.exception + attendance.override (row-id keyed) stale/fresh/
+ *    absent/force — override additionally pins the append-only overrideLog;
+ *  · §41 semantic pre-checks: attendance status-disagreement → human-decides
+ *    readable reason (force applies); task.complete vs done/blocked server
+ *    rows → human-decides; milestone.decide → server-wins, and force:true
+ *    STILL refuses (money rows are append-only — the only remediation is a
+ *    new correcting action); exact replay of an already-recorded decision is
+ *    a silent ok;
+ *  · a source pin extracts the route's VERSIONED_*_TYPES sets from sync.ts
+ *    and asserts this file's coverage lists include every member — a future
+ *    versioned type without a matrix row fails loudly here.
+ *
  * @/backend/lib/db is swapped for an in-memory stub; route-kit's route() is
  * a pass-through with a fixed contractor session (guard/rate-limit/body are
  * pinned by their own test files); mjengo's payload loaders are stubbed to
  * keep the refresh out of scope while applyAction stays REAL.
  */
 import { NextRequest } from 'next/server'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// task.verify's applier resolves the session actor through wallet/session's
+// currentActor (next/headers — outside a request scope in node it resolves
+// { role: null } and the applier refuses). The route-kit mock below hands the
+// ROUTE a contractor session; this mock keeps the APPLIER's actor consistent
+// with it (wallet-role-gates.test.ts idiom).
+vi.mock('@/backend/modules/wallet/session', () => ({
+  currentActor: vi.fn(async () => ({ role: 'contractor', name: 'Foreman' })),
+}))
 
 vi.mock('@/backend/lib/db', () => {
   type Row = Record<string, unknown>
@@ -38,6 +67,7 @@ vi.mock('@/backend/lib/db', () => {
     tasks: new Map<string, Row>(),
     workers: new Map<string, Row>(),
     attendance: new Map<string, Row>(),
+    milestones: new Map<string, Row>(),
     idempotency: new Map<string, Row>(),
     auditEvents: [] as Row[],
     reset() {
@@ -46,6 +76,7 @@ vi.mock('@/backend/lib/db', () => {
       state.tasks.clear()
       state.workers.clear()
       state.attendance.clear()
+      state.milestones.clear()
       state.idempotency.clear()
       state.auditEvents = []
       state.seq = 0
@@ -122,6 +153,7 @@ vi.mock('@/backend/lib/db', () => {
       },
     },
     attendance: {
+      async findUnique({ where }: { where: Row }) { return state.attendance.get(String(where.id)) ?? null },
       async findFirst({ where, include }: { where: Row; include?: Row }) {
         const row = firstOf(state.attendance, where)
         if (!row) return null
@@ -149,6 +181,11 @@ vi.mock('@/backend/lib/db', () => {
         }
         return { count: rows.length }
       },
+    },
+    milestone: {
+      // §41 financial pre-check read (milestone.decide) — the money appliers
+      // are never reached in these tests (the pre-check decides).
+      async findFirst({ where }: { where: Row }) { return firstOf(state.milestones, where) },
     },
     idempotencyRecord: {
       async findUnique({ where }: { where: Row }) { return state.idempotency.get(String(where.key)) ?? null },
@@ -208,6 +245,7 @@ function stateType() {
     tasks: Map<string, Record<string, unknown>>
     workers: Map<string, Record<string, unknown>>
     attendance: Map<string, Record<string, unknown>>
+    milestones: Map<string, Record<string, unknown>>
     idempotency: Map<string, Record<string, unknown>>
     auditEvents: Record<string, unknown>[]
     reset: () => void
@@ -394,5 +432,367 @@ describe('POST /api/sync — attendance day-rows version the same way', () => {
     const json = await flush([{ id: 'r-3', type: 'attendance.record', payload: { records, verification: 'reported' }, projectId: 'proj-1', force: true }])
     expect(json.results[0]).toMatchObject({ id: 'r-3', ok: true })
     expect(attRow()).toMatchObject({ status: 'absent', version: 3 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #183 — the FULL versioned task-type matrix. Every task type the server
+// versions runs the deterministic two-client ladder × all four arms:
+// stale (baseVersion left behind) → REJECTED; fresh (equal) → applies +
+// bumps; absent (legacy client) → applies; force ('keep-mine') → applies.
+// A source pin at the bottom of this file asserts the table itself covers
+// every member of the route's VERSIONED_TASK_TYPES — a future versioned
+// type without a row here fails loudly.
+// ---------------------------------------------------------------------------
+
+interface TaskMatrixRow {
+  type: string
+  /** Client A's first-mover action — moves the row so B's stamp is stale. */
+  firstMover: { type: string; payload: Record<string, unknown> }
+  /** Client B's payload under test (the runner adds baseVersion). */
+  payload: Record<string, unknown>
+  /** Row state after the first mover — what a stale B must NOT clobber. */
+  assertStaleUntouched: (row: Record<string, unknown>) => void
+  /** Row state after B applied (fresh / absent / force). */
+  assertApplied: (row: Record<string, unknown>) => void
+}
+
+const TASK_MATRIX: TaskMatrixRow[] = [
+  {
+    type: 'task.update',
+    firstMover: { type: 'task.update', payload: { progress: 40 } },
+    payload: { progress: 55 },
+    assertStaleUntouched: (row) => expect(row.progress).toBe(40),
+    assertApplied: (row) => expect(row.progress).toBe(55),
+  },
+  {
+    type: 'task.assign',
+    firstMover: { type: 'task.update', payload: { progress: 40 } },
+    payload: { assignedToId: 'worker-1' },
+    assertStaleUntouched: (row) => expect(row.assignedToId).toBeNull(),
+    assertApplied: (row) => expect(row.assignedToId).toBe('worker-1'),
+  },
+  {
+    type: 'task.block',
+    firstMover: { type: 'task.update', payload: { progress: 40 } },
+    payload: { reason: 'No cement delivery' },
+    assertStaleUntouched: (row) => { expect(row.status).toBe('in_progress'); expect(row.blockedReason).toBeNull() },
+    assertApplied: (row) => { expect(row.status).toBe('blocked'); expect(row.blockedReason).toBe('No cement delivery') },
+  },
+  {
+    type: 'task.unblock',
+    // A blocks the task (v3 → v4, blocked) so B's unblock has a real state to restore.
+    firstMover: { type: 'task.block', payload: { reason: 'Steel delayed' } },
+    payload: {},
+    assertStaleUntouched: (row) => { expect(row.status).toBe('blocked'); expect(row.blockedReason).toBe('Steel delayed') },
+    assertApplied: (row) => { expect(row.status).toBe('in_progress'); expect(row.blockedReason).toBeNull() },
+  },
+  {
+    type: 'task.complete',
+    firstMover: { type: 'task.update', payload: { progress: 40 } },
+    payload: {},
+    assertStaleUntouched: (row) => expect(row.status).toBe('in_progress'),
+    assertApplied: (row) => { expect(row.status).toBe('done'); expect(row.progress).toBe(100) },
+  },
+  {
+    type: 'task.verify',
+    // A completes the task (v3 → v4, done) — only completed work can verify.
+    firstMover: { type: 'task.update', payload: { progress: 100 } },
+    payload: {},
+    assertStaleUntouched: (row) => expect(row.verifiedAt).toBeNull(),
+    assertApplied: (row) => { expect(row.verifiedAt).not.toBeNull(); expect(row.verifiedByName).toBe('Foreman') },
+  },
+]
+
+describe('POST /api/sync — full versioned TASK-type matrix (#183: assign/block/unblock/complete/verify)', () => {
+  for (const c of TASK_MATRIX) {
+    describe(`${c.type}`, () => {
+      // Client A applies its edit (v3 → v4) — the shared ladder prefix.
+      async function firstMoverApplies() {
+        const json = await flush([{
+          id: 'a-1', type: c.firstMover.type,
+          payload: { id: 'task-1', ...c.firstMover.payload, baseVersion: 3 }, projectId: 'proj-1',
+        }])
+        expect(json.results[0]).toMatchObject({ id: 'a-1', ok: true })
+        expect(taskRow().version).toBe(4)
+      }
+
+      it('stale baseVersion → REJECTED stale-version, A\'s write stands, no idempotency row for B', async () => {
+        await firstMoverApplies()
+
+        const json = await flush([{ id: 'b-1', type: c.type, payload: { id: 'task-1', ...c.payload, baseVersion: 3 }, projectId: 'proj-1' }])
+        expect(json.conflicts).toBe(1)
+        expect(json.results[0]).toEqual({
+          id: 'b-1', ok: false, conflict: true, status: 'REJECTED', reason: 'stale-version',
+          rule: 'human-decides', serverVersion: 4, baseVersion: 3, suggestion: 'keep-server',
+        })
+        c.assertStaleUntouched(taskRow())
+        expect(taskRow().version).toBe(4) // B's refusal never moves the row
+        expect(state.idempotency.get('sync:proj-1:b-1')).toBeUndefined()
+      })
+
+      it('fresh baseVersion (re-based onto A\'s write) → applies, version moves on', async () => {
+        await firstMoverApplies()
+
+        const json = await flush([{ id: 'b-2', type: c.type, payload: { id: 'task-1', ...c.payload, baseVersion: 4 }, projectId: 'proj-1' }])
+        expect(json.results[0]).toMatchObject({ id: 'b-2', ok: true })
+        c.assertApplied(taskRow())
+        expect(taskRow().version).toBe(5)
+      })
+
+      it('absent baseVersion applies as today (legacy last-write-wins for clients that never stamp one)', async () => {
+        await firstMoverApplies()
+
+        const json = await flush([{ id: 'b-3', type: c.type, payload: { id: 'task-1', ...c.payload }, projectId: 'proj-1' }])
+        expect(json.results[0]).toMatchObject({ id: 'b-3', ok: true })
+        c.assertApplied(taskRow())
+        expect(taskRow().version).toBe(5)
+      })
+
+      it('force (keep-mine) is the explicit human decision that still applies a stale edit', async () => {
+        await firstMoverApplies()
+
+        const json = await flush([{ id: 'b-4', type: c.type, payload: { id: 'task-1', ...c.payload, baseVersion: 3 }, projectId: 'proj-1', force: true }])
+        expect(json.results[0]).toMatchObject({ id: 'b-4', ok: true })
+        c.assertApplied(taskRow())
+        expect(taskRow().version).toBe(5)
+      })
+    })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// #183 — attendance.exception (workerId, date keyed) + attendance.override
+// (attendance ROW id keyed). The override arm is the server half of the
+// issue's client bug: the client never stamped it, so detectStaleVersion
+// returned null and a stale override applied silently.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/sync — attendance.exception (#183: previously untested)', () => {
+  it('stale baseVersion → REJECTED with the server version, row untouched', async () => {
+    const json = await flush([{
+      id: 'x-1', type: 'attendance.exception',
+      payload: { workerId: 'worker-1', reason: 'forgot', baseVersion: 1 }, projectId: 'proj-1',
+    }])
+    expect(json.conflicts).toBe(1)
+    expect(json.results[0]).toEqual({
+      id: 'x-1', ok: false, conflict: true, status: 'REJECTED', reason: 'stale-version',
+      rule: 'human-decides', serverVersion: 2, baseVersion: 1, suggestion: 'keep-server',
+    })
+    expect(attRow()).toMatchObject({ status: 'present', verification: 'reported', version: 2 })
+    expect(attRow().exceptionReason).toBeNull()
+    expect(state.idempotency.get('sync:proj-1:x-1')).toBeUndefined()
+  })
+
+  it('fresh baseVersion applies: verification exception + reason + version bump (status/wage untouched)', async () => {
+    const json = await flush([{
+      id: 'x-2', type: 'attendance.exception',
+      payload: { workerId: 'worker-1', reason: 'forgot', note: 'phone at the charging kiosk', baseVersion: 2 },
+      projectId: 'proj-1',
+    }])
+    expect(json.results[0]).toMatchObject({ id: 'x-2', ok: true })
+    expect(attRow()).toMatchObject({
+      status: 'present', wage: 80_000n, verification: 'exception',
+      exceptionReason: 'forgot', exceptionNote: 'phone at the charging kiosk', version: 3,
+    })
+  })
+
+  it('force on a stale exception is the human decision and applies (§41 rule 2)', async () => {
+    const json = await flush([{
+      id: 'x-3', type: 'attendance.exception',
+      payload: { workerId: 'worker-1', reason: 'network', baseVersion: 1 }, projectId: 'proj-1', force: true,
+    }])
+    expect(json.results[0]).toMatchObject({ id: 'x-3', ok: true })
+    expect(attRow()).toMatchObject({ verification: 'exception', exceptionReason: 'network', version: 3 })
+  })
+})
+
+describe('POST /api/sync — attendance.override (#183: previously untested + the row-id keying)', () => {
+  it('stale baseVersion → REJECTED (row-id keyed), row untouched — this is the arm the client never stamped', async () => {
+    const json = await flush([{
+      id: 'o-1', type: 'attendance.override',
+      payload: { id: 'att-1', to: 'absent', reason: 'Went home sick', by: 'Site Manager', baseVersion: 1 },
+      projectId: 'proj-1',
+    }])
+    expect(json.conflicts).toBe(1)
+    expect(json.results[0]).toEqual({
+      id: 'o-1', ok: false, conflict: true, status: 'REJECTED', reason: 'stale-version',
+      rule: 'human-decides', serverVersion: 2, baseVersion: 1, suggestion: 'keep-server',
+    })
+    expect(attRow()).toMatchObject({ status: 'present', wage: 80_000n, version: 2 })
+    expect(attRow().overrideLog).toBeNull()
+  })
+
+  it('an override WITHOUT baseVersion applies (legacy path) — exactly why the client not stamping it was a silent last-write-wins bug', async () => {
+    const json = await flush([{
+      id: 'o-2', type: 'attendance.override',
+      payload: { id: 'att-1', to: 'absent', reason: 'Went home sick', by: 'Site Manager' },
+      projectId: 'proj-1',
+    }])
+    expect(json.results[0]).toMatchObject({ id: 'o-2', ok: true })
+    expect(attRow()).toMatchObject({ status: 'absent', version: 3 })
+  })
+
+  it('fresh baseVersion applies: status + wage change, append-only overrideLog entry, version bump', async () => {
+    const json = await flush([{
+      id: 'o-3', type: 'attendance.override',
+      payload: { id: 'att-1', to: 'half_day', reason: 'Left at noon', by: 'Site Manager', baseVersion: 2 },
+      projectId: 'proj-1',
+    }])
+    expect(json.results[0]).toMatchObject({ id: 'o-3', ok: true })
+    expect(attRow()).toMatchObject({ status: 'half_day', wage: 40_000n, version: 3 })
+    // History is append-only, never truncated: the entry records both sides + who.
+    const log = JSON.parse(String(attRow().overrideLog)) as Array<Record<string, unknown>>
+    expect(log).toEqual([
+      expect.objectContaining({ by: 'Site Manager', from: 'present', to: 'half_day', reason: 'Left at noon' }),
+    ])
+  })
+
+  it('force on a stale override applies (§41 human-decides — the field row is theirs to decide)', async () => {
+    const json = await flush([{
+      id: 'o-4', type: 'attendance.override',
+      payload: { id: 'att-1', to: 'excused', reason: 'Family emergency', by: 'Site Manager', baseVersion: 1 },
+      projectId: 'proj-1', force: true,
+    }])
+    expect(json.results[0]).toMatchObject({ id: 'o-4', ok: true })
+    expect(attRow()).toMatchObject({ status: 'excused', wage: 0n, version: 3 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #183 — §41 SEMANTIC conflict pre-checks (detectConflict). These run
+// read-only BEFORE applyAction, independent of baseVersion: field rows get a
+// human decision (keep-server suggested, keep-mine offered via force);
+// FINANCIAL rows are server-wins — and force does NOT override them.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/sync — §41 semantic conflicts (#183: previously untested)', () => {
+  it('attendance status-disagreement → human-decides with the readable both-sides reason', async () => {
+    const json = await flush([{
+      id: 's-1', type: 'attendance.setStatus',
+      payload: { workerId: 'worker-1', status: 'absent' }, projectId: 'proj-1',
+    }])
+    expect(json.conflicts).toBe(1)
+    expect(json.results[0]).toMatchObject({ id: 's-1', ok: false, conflict: true, rule: 'human-decides' })
+    expect(json.results[0].reason).toContain('already recorded today as present for Kamau')
+    expect(json.results[0].reason).toContain('your offline edit records absent')
+    // Read-only pre-check: the row was not touched, no idempotency record.
+    expect(attRow()).toMatchObject({ status: 'present', version: 2 })
+    expect(state.idempotency.get('sync:proj-1:s-1')).toBeUndefined()
+  })
+
+  it('the human decided: force re-sends the attendance disagreement and it applies', async () => {
+    const json = await flush([{
+      id: 's-2', type: 'attendance.setStatus',
+      payload: { workerId: 'worker-1', status: 'absent' }, projectId: 'proj-1', force: true,
+    }])
+    expect(json.results[0]).toMatchObject({ id: 's-2', ok: true })
+    expect(attRow()).toMatchObject({ status: 'absent', wage: 0n, version: 3 })
+  })
+
+  it('task.complete vs a server row already done (and verified) → human-decides readable reason', async () => {
+    state.tasks.set('task-1', {
+      ...state.tasks.get('task-1')!,
+      status: 'done', progress: 100, verifiedAt: new Date(), verifiedByName: 'Amina (QS)',
+    })
+    const json = await flush([{ id: 's-3', type: 'task.complete', payload: { id: 'task-1' }, projectId: 'proj-1' }])
+    expect(json.conflicts).toBe(1)
+    expect(json.results[0]).toMatchObject({ id: 's-3', ok: false, conflict: true, rule: 'human-decides' })
+    expect(json.results[0].reason).toContain('already marked done on the server')
+    expect(json.results[0].reason).toContain('verified by Amina (QS)')
+    expect(taskRow().version).toBe(3) // read-only pre-check — the row never moved
+  })
+
+  it('task.complete vs a server row now blocked → human-decides readable reason carrying the block reason', async () => {
+    state.tasks.set('task-1', {
+      ...state.tasks.get('task-1')!,
+      status: 'blocked', blockedReason: 'Waiting on steel',
+    })
+    const json = await flush([{ id: 's-4', type: 'task.complete', payload: { id: 'task-1' }, projectId: 'proj-1' }])
+    expect(json.conflicts).toBe(1)
+    expect(json.results[0]).toMatchObject({ id: 's-4', ok: false, conflict: true, rule: 'human-decides' })
+    expect(json.results[0].reason).toContain('now blocked on the server')
+    expect(json.results[0].reason).toContain('Waiting on steel')
+    expect(taskRow().version).toBe(3)
+  })
+
+  it('milestone.decide on an already-released milestone → server-wins (the ledger row stands)', async () => {
+    state.milestones.set('ms-1', {
+      id: 'ms-1', projectId: 'proj-1', name: 'Roof payment', status: 'released', decidedBy: 'Mama Njeri',
+    })
+    const json = await flush([{ id: 's-5', type: 'milestone.decide', payload: { id: 'ms-1', decision: 'reject' }, projectId: 'proj-1' }])
+    expect(json.conflicts).toBe(1)
+    expect(json.results[0]).toMatchObject({ id: 's-5', ok: false, conflict: true, rule: 'server-wins' })
+    expect(json.results[0].reason).toContain('server wins')
+    expect(json.results[0].reason).toContain('"Roof payment" was already released by Mama Njeri')
+    expect(json.results[0].reason).toContain('your queued decision "reject" differs')
+    // Money rows are never re-applied by a conflicting flush.
+    expect(state.milestones.get('ms-1')).toMatchObject({ status: 'released' })
+    expect(state.idempotency.get('sync:proj-1:s-5')).toBeUndefined()
+  })
+
+  it('server-wins IGNORES force: a forced milestone.decide STILL refuses (money is append-only — remediate with a correcting action)', async () => {
+    state.milestones.set('ms-1', {
+      id: 'ms-1', projectId: 'proj-1', name: 'Roof payment', status: 'released', decidedBy: 'Mama Njeri',
+    })
+    const json = await flush([{
+      id: 's-6', type: 'milestone.decide',
+      payload: { id: 'ms-1', decision: 'reject' }, projectId: 'proj-1', force: true,
+    }])
+    expect(json.conflicts).toBe(1)
+    expect(json.results[0]).toMatchObject({ id: 's-6', ok: false, conflict: true, rule: 'server-wins' })
+    expect(state.milestones.get('ms-1')).toMatchObject({ status: 'released' })
+  })
+
+  it('an exact replay of the already-recorded decision is a silent ok (§41 rule 3 — the ledger holds exactly this)', async () => {
+    state.milestones.set('ms-1', {
+      id: 'ms-1', projectId: 'proj-1', name: 'Roof payment', status: 'released', decidedBy: 'Mama Njeri',
+    })
+    const json = await flush([{ id: 's-7', type: 'milestone.decide', payload: { id: 'ms-1', decision: 'approve' }, projectId: 'proj-1' }])
+    expect(json.results[0]).toMatchObject({ id: 's-7', ok: true })
+    expect(json.synced).toBe(1)
+    expect(json.conflicts).toBe(0)
+    expect(state.milestones.get('ms-1')).toMatchObject({ status: 'released' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #183 — source pin: this file's matrix must cover EVERY type the route
+// actually versions. The sets are extracted from sync.ts (not duplicated by
+// hand), so adding a versioned type server-side without a matrix row — or
+// without the client stamping it — fails loudly at the next test run.
+// ---------------------------------------------------------------------------
+
+describe('#183 matrix completeness (source pin on the route\'s versioned sets)', () => {
+  const syncSrc = readFileSync(fileURLToPath(new URL('../../src/backend/api/sync.ts', import.meta.url)), 'utf8')
+
+  const setOf = (name: string): string[] => {
+    const body = syncSrc.match(new RegExp(`const ${name} = new Set<string>\\(\\[([^\\]]+)\\]`))?.[1] ?? ''
+    return body.split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
+  }
+
+  it('every VERSIONED_TASK_TYPES member has a two-client matrix row above', () => {
+    const serverTaskTypes = setOf('VERSIONED_TASK_TYPES')
+    expect(serverTaskTypes.length).toBeGreaterThanOrEqual(6)
+    const matrixTypes = TASK_MATRIX.map((c) => c.type)
+    for (const type of serverTaskTypes) {
+      expect(matrixTypes, `#183: server versions "${type}" but the task matrix has no row`).toContain(type)
+    }
+  })
+
+  it('every VERSIONED_ATTENDANCE_TYPES member is exercised somewhere in this file', () => {
+    const serverAttendanceTypes = setOf('VERSIONED_ATTENDANCE_TYPES')
+    expect(serverAttendanceTypes.length).toBeGreaterThanOrEqual(5)
+    // Types exercised across this file's describes (stale + fresh arms each).
+    const covered = [
+      'attendance.setStatus', // two-client describe + §41 semantic describe
+      'attendance.checkin', // attendance day-row describe
+      'attendance.record', // bulk muster describe
+      'attendance.exception', // #183 describe above
+      'attendance.override', // #183 describe above
+    ]
+    for (const type of serverAttendanceTypes) {
+      expect(covered, `#183: server versions "${type}" but no test flushes it`).toContain(type)
+    }
   })
 })
