@@ -855,6 +855,21 @@ export function FundisTab() {
             {t('fundis.gate.resolve')}
           </p>
 
+          {/* #123 (FE-2): the SAME simulated-rails posture copy the Money tab
+              banner carries — shared money.posture.* keys, no divergent
+              duplicate. Payroll posts on the same rails as the wallet. */}
+          <p
+            role="status"
+            className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 leading-relaxed"
+          >
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5" aria-hidden />
+            <span>
+              <strong className="font-semibold">{t('money.posture.title')}</strong>
+              {' — '}
+              {t('money.posture.note')}
+            </span>
+          </p>
+
           <DialogFooter className="flex-col sm:flex-row gap-2">
             <Button
               variant="outline"

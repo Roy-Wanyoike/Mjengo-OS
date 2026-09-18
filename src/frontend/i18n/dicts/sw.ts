@@ -1059,6 +1059,13 @@ export const swDict = {
   'money.escrow.consistentNote': 'Lililokokotolewa {derived} = mrudo {projected} — kila ongezeko na kutoa huweka safu za daftari',
   'money.escrow.drift': 'Tofauti {amount} — ichunguze',
   'money.escrow.driftNote': 'Daftari lililokokotolewa {derived} ≠ mrudo {projected} — daftari ndilo chanzo cha ukweli',
+  // #123 (FE-2): bendera ya hali ya njia za pesa za mfano juu ya kichupo cha
+  // Pesa + mstari wa lango la mishahara la fundis — familia moja ya funguo,
+  // hakuna nakala tofauti. Inaisha na #43 (ona mjengo/wallet-posture.ts).
+  'money.posture.title': 'Njia za pesa za mfano',
+  'money.posture.note': 'Pochi, escrow na mishahara huwekwa kwenye daftari halisi la mara mbili, lakini mtoaji wa malipo ni wa mfano — hakuna pesa halisi inayosogea hadi uunganishaji wa M-Pesa wa uzalishaji ufike (#43).',
+  'money.posture.dismiss': 'Funga',
+  'money.posture.dismissAria': 'Funga taarifa ya njia za pesa za mfano',
   'money.kpiAria': 'KPI za MjengoPay',
   'money.kpi.escrow': 'Kwenye escrow',
   'money.kpi.escrowHeld': 'Inashikiliwa kwa ajili ya {name}',
