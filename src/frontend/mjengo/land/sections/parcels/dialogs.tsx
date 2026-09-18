@@ -3,9 +3,12 @@
 // Land & Property — mutation dialogs (contractor/admin surface; the client
 // view never renders these). Every write goes through the registered LAND
 // actions via the store's dispatch() so it is offline-queued + audited.
+// All copy flows through useT() (land.dlg.* — issue #125); enum labels reuse
+// the land.parcelStatus.* / land.docKind.* families resolved by land/labels.ts.
 
 import { useEffect, useState } from 'react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
+import { useT } from '@/frontend/i18n/provider'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,7 +32,7 @@ import { Input } from '@/frontend/ui/input'
 import { Label } from '@/frontend/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/frontend/ui/select'
 import { Textarea } from '@/frontend/ui/textarea'
-import { PARCEL_STATUSES, PARCEL_STATUS_LABELS, DOC_KIND_LABELS, type ParcelDetail } from '@/backend/modules/land/types'
+import { PARCEL_STATUSES, type ParcelDetail } from '@/backend/modules/land/types'
 import type { TitleSearch } from '@prisma/client'
 import { toast } from 'sonner'
 
@@ -52,6 +55,7 @@ export function NewParcelDialog({
   onCreated?: (parcelId: string) => void
 }) {
   const { dispatch, online, outbox } = useMjengo()
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const [plot, setPlot] = useState('')
   const [county, setCounty] = useState('')
@@ -66,15 +70,15 @@ export function NewParcelDialog({
   })
 
   async function submit() {
-    if (!plot.trim()) { toast.error('Plot number is required (e.g. "LR No. 2090/1234")'); return }
-    if (!county.trim()) { toast.error('County is required'); return }
+    if (!plot.trim()) { toast.error(t('land.dlg.np.toast.plotRequired')); return }
+    if (!county.trim()) { toast.error(t('land.dlg.np.toast.countyRequired')); return }
     const latitude = lat.trim() === '' ? undefined : Number(lat)
     const longitude = lng.trim() === '' ? undefined : Number(lng)
     if (latitude !== undefined && (Number.isNaN(latitude) || latitude < -90 || latitude > 90)) {
-      toast.error('Latitude must be a number between -90 and 90'); return
+      toast.error(t('land.dlg.np.toast.latRange')); return
     }
     if (longitude !== undefined && (Number.isNaN(longitude) || longitude < -180 || longitude > 180)) {
-      toast.error('Longitude must be a number between -180 and 180'); return
+      toast.error(t('land.dlg.np.toast.lngRange')); return
     }
     setBusy(true)
     const ok = await dispatch('parcel.create', {
@@ -85,15 +89,17 @@ export function NewParcelDialog({
       tenureType: tenure.trim() || undefined,
       latitude,
       longitude,
-    }, `Record parcel ${plot.trim()}`)
+    }, t('land.dlg.np.audit.record', { plot: plot.trim() }))
     setBusy(false)
     if (ok) {
-      toast.success(online ? `Parcel ${plot.trim()} recorded — searching` : `Saved on-device — queued (${outbox.length + 1})`)
+      toast.success(online
+        ? t('land.dlg.np.toast.recorded', { plot: plot.trim() })
+        : t('field.savedQueued', { count: outbox.length + 1 }))
       onOpenChange(false)
       const created = useMjengo.getState().data?.land?.parcels?.find((p) => p.plotNumber === plot.trim())
       if (created) onCreated?.(created.id)
     } else {
-      toast.error('Could not record the parcel — check the plot number is not already on file')
+      toast.error(t('land.dlg.np.toast.recordFailed'))
     }
   }
 
@@ -101,52 +107,51 @@ export function NewParcelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Record a new parcel</DialogTitle>
+          <DialogTitle>{t('land.dlg.np.title')}</DialogTitle>
           <DialogDescription>
-            Starts in the honest SEARCHING state — recording a parcel claims nothing until documents and a registry
-            search are attached.
+            {t('land.dlg.np.desc')}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
-            <Label htmlFor="np-plot">Plot number *</Label>
-            <Input id="np-plot" value={plot} onChange={(e) => setPlot(e.target.value)} placeholder="LR No. 2090/1234" />
+            <Label htmlFor="np-plot">{t('land.dlg.np.plot')}</Label>
+            <Input id="np-plot" value={plot} onChange={(e) => setPlot(e.target.value)} placeholder={t('land.dlg.np.plotPh')} />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="np-county">County *</Label>
-              <Input id="np-county" value={county} onChange={(e) => setCounty(e.target.value)} placeholder="Nairobi" />
+              <Label htmlFor="np-county">{t('land.dlg.np.county')}</Label>
+              <Input id="np-county" value={county} onChange={(e) => setCounty(e.target.value)} placeholder={t('land.dlg.np.countyPh')} />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="np-town">Town / area</Label>
-              <Input id="np-town" value={town} onChange={(e) => setTown(e.target.value)} placeholder="Karen" />
+              <Label htmlFor="np-town">{t('land.dlg.np.town')}</Label>
+              <Input id="np-town" value={town} onChange={(e) => setTown(e.target.value)} placeholder={t('land.dlg.np.townPh')} />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="np-area">Approx. area</Label>
-              <Input id="np-area" value={area} onChange={(e) => setArea(e.target.value)} placeholder="0.25 ha (approx)" />
+              <Label htmlFor="np-area">{t('land.dlg.np.area')}</Label>
+              <Input id="np-area" value={area} onChange={(e) => setArea(e.target.value)} placeholder={t('land.dlg.np.areaPh')} />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="np-tenure">Tenure</Label>
-              <Input id="np-tenure" value={tenure} onChange={(e) => setTenure(e.target.value)} placeholder="freehold · leasehold 99 years" />
+              <Label htmlFor="np-tenure">{t('land.dlg.np.tenure')}</Label>
+              <Input id="np-tenure" value={tenure} onChange={(e) => setTenure(e.target.value)} placeholder={t('land.dlg.np.tenurePh')} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="np-lat">Latitude</Label>
-              <Input id="np-lat" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="-1.3197" inputMode="decimal" />
+              <Label htmlFor="np-lat">{t('land.dlg.np.lat')}</Label>
+              <Input id="np-lat" value={lat} onChange={(e) => setLat(e.target.value)} placeholder={t('land.dlg.np.latPh')} inputMode="decimal" />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="np-lng">Longitude</Label>
-              <Input id="np-lng" value={lng} onChange={(e) => setLng(e.target.value)} placeholder="36.7798" inputMode="decimal" />
+              <Label htmlFor="np-lng">{t('land.dlg.np.lng')}</Label>
+              <Input id="np-lng" value={lng} onChange={(e) => setLng(e.target.value)} placeholder={t('land.dlg.np.lngPh')} inputMode="decimal" />
             </div>
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t('land.dlg.cancel')}</Button>
           <Button onClick={submit} disabled={busy} className="bg-stone-900 text-white hover:bg-stone-800">
-            {busy ? 'Recording…' : 'Record parcel'}
+            {busy ? t('land.dlg.np.recording') : t('land.dlg.np.record')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -166,6 +171,7 @@ export function AttachDocumentDialog({
   onOpenChange: (v: boolean) => void
 }) {
   const { dispatch, online, outbox } = useMjengo()
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const [kind, setKind] = useState<string>('title_deed')
   const [fileName, setFileName] = useState('')
@@ -177,21 +183,22 @@ export function AttachDocumentDialog({
   })
 
   async function submit() {
-    if (!fileName.trim()) { toast.error('File name is required'); return }
+    if (!fileName.trim()) { toast.error(t('land.dlg.doc.toast.nameRequired')); return }
     setBusy(true)
+    const kindLabel = t(`land.docKind.${kind}`)
     const ok = await dispatch('parcelDoc.attach', {
       parcelId: parcel.id,
       kind,
       fileName: fileName.trim(),
       extractedText: text.trim() || undefined,
       issuedOn: issuedOn || undefined,
-    }, `Attach ${DOC_KIND_LABELS[kind as keyof typeof DOC_KIND_LABELS] ?? 'document'} to ${parcel.plotNumber}`)
+    }, t('land.dlg.doc.audit.attach', { kind: kindLabel, plot: parcel.plotNumber }))
     setBusy(false)
     if (ok) {
-      toast.success(online ? 'Document attached to the parcel record' : `Saved on-device — queued (${outbox.length + 1})`)
+      toast.success(online ? t('land.dlg.doc.toast.attached') : t('field.savedQueued', { count: outbox.length + 1 }))
       onOpenChange(false)
     } else {
-      toast.error('Could not attach the document')
+      toast.error(t('land.dlg.doc.toast.failed'))
     }
   }
 
@@ -199,47 +206,46 @@ export function AttachDocumentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Attach a document</DialogTitle>
+          <DialogTitle>{t('land.dlg.doc.title')}</DialogTitle>
           <DialogDescription>
-            v1 records the metadata + transcription — the PDF itself is not uploaded. The title-deed transcription
-            powers the registry consistency check.
+            {t('land.dlg.doc.desc')}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
-            <Label htmlFor="doc-kind">Kind *</Label>
+            <Label htmlFor="doc-kind">{t('land.dlg.doc.kind')}</Label>
             <Select value={kind} onValueChange={setKind}>
               <SelectTrigger id="doc-kind"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {Object.entries(DOC_KIND_LABELS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                {(['title_deed', 'search_cert', 'survey_map', 'other'] as const).map((value) => (
+                  <SelectItem key={value} value={value}>{t(`land.docKind.${value}`)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="doc-name">File name *</Label>
-            <Input id="doc-name" value={fileName} onChange={(e) => setFileName(e.target.value)} placeholder="title-deed-2090-1234.pdf" />
+            <Label htmlFor="doc-name">{t('land.dlg.doc.name')}</Label>
+            <Input id="doc-name" value={fileName} onChange={(e) => setFileName(e.target.value)} placeholder={t('land.dlg.doc.namePh')} />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="doc-issued">Issued on</Label>
+            <Label htmlFor="doc-issued">{t('land.dlg.doc.issued')}</Label>
             <Input id="doc-issued" type="date" value={issuedOn} onChange={(e) => setIssuedOn(e.target.value)} />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="doc-text">Extracted text / transcription</Label>
+            <Label htmlFor="doc-text">{t('land.dlg.doc.text')}</Label>
             <Textarea
               id="doc-text"
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder="Paste the deed transcription — e.g. &quot;TITLE DEED — … Registered proprietor: …&quot;. Used by the registry consistency check."
+              placeholder={t('land.dlg.doc.textPh')}
               className="min-h-28"
             />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t('land.dlg.cancel')}</Button>
           <Button onClick={submit} disabled={busy} className="bg-stone-900 text-white hover:bg-stone-800">
-            {busy ? 'Attaching…' : 'Attach document'}
+            {busy ? t('land.dlg.doc.attaching') : t('land.dlg.doc.attach')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -259,6 +265,7 @@ export function RequestSearchDialog({
   onOpenChange: (v: boolean) => void
 }) {
   const { dispatch, online, outbox } = useMjengo()
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const [searchRef, setSearchRef] = useState('')
 
@@ -269,15 +276,15 @@ export function RequestSearchDialog({
     const ok = await dispatch('search.request', {
       parcelId: parcel.id,
       searchRef: searchRef.trim() || undefined,
-    }, `Request registry search for ${parcel.plotNumber}`)
+    }, t('land.dlg.rs.audit.request', { plot: parcel.plotNumber }))
     setBusy(false)
     if (ok) {
       toast.success(online
-        ? 'Registry search requested — record the official result when it arrives'
-        : `Saved on-device — queued (${outbox.length + 1})`)
+        ? t('land.dlg.rs.toast.requested')
+        : t('field.savedQueued', { count: outbox.length + 1 }))
       onOpenChange(false)
     } else {
-      toast.error('Could not request the search — one may already be open on this parcel')
+      toast.error(t('land.dlg.rs.toast.failed'))
     }
   }
 
@@ -285,22 +292,21 @@ export function RequestSearchDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Request a registry search</DialogTitle>
+          <DialogTitle>{t('land.dlg.rs.title')}</DialogTitle>
           <DialogDescription>
-            The request is <span className="font-medium">recorded</span>, not confirmed — MjengoOS has no live registry
-            link. Attach the official search certificate / result summary when it arrives.
+            {t('land.dlg.rs.descA')}<span className="font-medium">{t('land.dlg.rs.recorded')}</span>{t('land.dlg.rs.descB')}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
-            <Label htmlFor="rs-ref">Search reference (optional)</Label>
-            <Input id="rs-ref" value={searchRef} onChange={(e) => setSearchRef(e.target.value)} placeholder="CS/2026/118842 — blank auto-generates" />
+            <Label htmlFor="rs-ref">{t('land.dlg.rs.ref')}</Label>
+            <Input id="rs-ref" value={searchRef} onChange={(e) => setSearchRef(e.target.value)} placeholder={t('land.dlg.rs.refPh')} />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t('land.dlg.cancel')}</Button>
           <Button onClick={submit} disabled={busy} className="bg-stone-900 text-white hover:bg-stone-800">
-            {busy ? 'Requesting…' : 'Request search'}
+            {busy ? t('land.dlg.rs.requesting') : t('land.dlg.rs.request')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -322,6 +328,7 @@ export function ReceiveResultDialog({
   onOpenChange: (v: boolean) => void
 }) {
   const { dispatch, online, outbox } = useMjengo()
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const [summary, setSummary] = useState('')
 
@@ -330,15 +337,15 @@ export function ReceiveResultDialog({
   const deed = parcel.documents.find((d) => d.kind === 'title_deed' && d.extractedText)
 
   async function submit() {
-    if (!summary.trim()) { toast.error('Paste what the registry returned — the result summary is required'); return }
+    if (!summary.trim()) { toast.error(t('land.dlg.rr.toast.summaryRequired')); return }
     setBusy(true)
-    const ok = await dispatch('search.receive', { id: search.id, resultSummary: summary.trim() }, `Receive registry result for ${parcel.plotNumber}`)
+    const ok = await dispatch('search.receive', { id: search.id, resultSummary: summary.trim() }, t('land.dlg.rr.audit.receive', { plot: parcel.plotNumber }))
     setBusy(false)
     if (ok) {
-      toast.success(online ? 'Result recorded — the consistency check ran' : `Saved on-device — queued (${outbox.length + 1})`)
+      toast.success(online ? t('land.dlg.rr.toast.recorded') : t('field.savedQueued', { count: outbox.length + 1 }))
       onOpenChange(false)
     } else {
-      toast.error('Could not record the result')
+      toast.error(t('land.dlg.rr.toast.failed'))
     }
   }
 
@@ -346,27 +353,26 @@ export function ReceiveResultDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Receive the registry result</DialogTitle>
+          <DialogTitle>{t('land.dlg.rr.title')}</DialogTitle>
           <DialogDescription>
-            Search <span className="font-mono text-xs">{search.searchRef}</span> · the result is RECORDED as typed by a
-            person, then compared against the deed transcription.
+            {t('land.dlg.rr.descA')}<span className="font-mono text-xs">{search.searchRef}</span>{t('land.dlg.rr.descB')}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
-            <Label htmlFor="rr-summary">Registry result summary *</Label>
+            <Label htmlFor="rr-summary">{t('land.dlg.rr.summary')}</Label>
             <Textarea
               id="rr-summary"
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
-              placeholder="e.g. Registry record for LR No. 2090/1234: freehold, approx 0.25 ha … registered proprietor recorded as …"
+              placeholder={t('land.dlg.rr.summaryPh')}
               className="min-h-32"
             />
           </div>
           {deed ? (
             <div className="rounded-lg border border-stone-200 bg-stone-50 p-3 min-w-0">
               <p className="text-xs font-medium text-stone-600 mb-1.5">
-                The consistency check will compare against this title-deed transcription:
+                {t('land.dlg.rr.compare')}
               </p>
               <p className="text-xs text-stone-500 max-h-32 overflow-y-auto whitespace-pre-wrap leading-relaxed">
                 {deed.extractedText}
@@ -374,14 +380,14 @@ export function ReceiveResultDialog({
             </div>
           ) : (
             <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 leading-relaxed">
-              No title-deed transcription on file — the check will record as PENDING until one is attached.
+              {t('land.dlg.rr.noDeed')}
             </p>
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t('land.dlg.cancel')}</Button>
           <Button onClick={submit} disabled={busy} className="bg-stone-900 text-white hover:bg-stone-800">
-            {busy ? 'Recording…' : 'Record result'}
+            {busy ? t('land.dlg.rr.recording') : t('land.dlg.rr.record')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -401,6 +407,7 @@ export function EditParcelDialog({
   onOpenChange: (v: boolean) => void
 }) {
   const { dispatch, online, outbox } = useMjengo()
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const [plot, setPlot] = useState('')
   const [county, setCounty] = useState('')
@@ -421,8 +428,8 @@ export function EditParcelDialog({
   })
 
   async function submit() {
-    if (!plot.trim()) { toast.error('Plot number is required'); return }
-    if (!county.trim()) { toast.error('County is required'); return }
+    if (!plot.trim()) { toast.error(t('land.dlg.np.toast.plotRequired')); return }
+    if (!county.trim()) { toast.error(t('land.dlg.np.toast.countyRequired')); return }
     setBusy(true)
     const ok = await dispatch('parcel.update', {
       id: parcel.id,
@@ -433,13 +440,13 @@ export function EditParcelDialog({
       tenureType: tenure.trim(),
       latitude: lat.trim() === '' ? undefined : Number(lat),
       longitude: lng.trim() === '' ? undefined : Number(lng),
-    }, `Update parcel ${plot.trim()}`)
+    }, t('land.dlg.ep.audit.update', { plot: plot.trim() }))
     setBusy(false)
     if (ok) {
-      toast.success(online ? 'Parcel particulars updated' : `Saved on-device — queued (${outbox.length + 1})`)
+      toast.success(online ? t('land.dlg.ep.toast.updated') : t('field.savedQueued', { count: outbox.length + 1 }))
       onOpenChange(false)
     } else {
-      toast.error('Could not update the parcel — the plot number may already be on file')
+      toast.error(t('land.dlg.ep.toast.failed'))
     }
   }
 
@@ -447,49 +454,49 @@ export function EditParcelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Edit parcel particulars</DialogTitle>
-          <DialogDescription>Identity fields only — the record status has its own audited action.</DialogDescription>
+          <DialogTitle>{t('land.dlg.ep.title')}</DialogTitle>
+          <DialogDescription>{t('land.dlg.ep.desc')}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
-            <Label htmlFor="ep-plot">Plot number *</Label>
+            <Label htmlFor="ep-plot">{t('land.dlg.np.plot')}</Label>
             <Input id="ep-plot" value={plot} onChange={(e) => setPlot(e.target.value)} />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="ep-county">County *</Label>
+              <Label htmlFor="ep-county">{t('land.dlg.np.county')}</Label>
               <Input id="ep-county" value={county} onChange={(e) => setCounty(e.target.value)} />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="ep-town">Town / area</Label>
+              <Label htmlFor="ep-town">{t('land.dlg.np.town')}</Label>
               <Input id="ep-town" value={town} onChange={(e) => setTown(e.target.value)} />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="ep-area">Approx. area</Label>
+              <Label htmlFor="ep-area">{t('land.dlg.np.area')}</Label>
               <Input id="ep-area" value={area} onChange={(e) => setArea(e.target.value)} />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="ep-tenure">Tenure</Label>
+              <Label htmlFor="ep-tenure">{t('land.dlg.np.tenure')}</Label>
               <Input id="ep-tenure" value={tenure} onChange={(e) => setTenure(e.target.value)} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="ep-lat">Latitude</Label>
+              <Label htmlFor="ep-lat">{t('land.dlg.np.lat')}</Label>
               <Input id="ep-lat" value={lat} onChange={(e) => setLat(e.target.value)} inputMode="decimal" />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="ep-lng">Longitude</Label>
+              <Label htmlFor="ep-lng">{t('land.dlg.np.lng')}</Label>
               <Input id="ep-lng" value={lng} onChange={(e) => setLng(e.target.value)} inputMode="decimal" />
             </div>
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t('land.dlg.cancel')}</Button>
           <Button onClick={submit} disabled={busy} className="bg-stone-900 text-white hover:bg-stone-800">
-            {busy ? 'Saving…' : 'Save changes'}
+            {busy ? t('land.dlg.ep.saving') : t('land.dlg.ep.save')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -509,6 +516,7 @@ export function SetParcelStatusDialog({
   onOpenChange: (v: boolean) => void
 }) {
   const { dispatch, online, outbox } = useMjengo()
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string>(parcel.status)
   const [note, setNote] = useState('')
@@ -520,17 +528,20 @@ export function SetParcelStatusDialog({
 
   async function submit() {
     setBusy(true)
+    const statusLabel = t(`land.parcelStatus.${status}`)
     const ok = await dispatch('parcel.setStatus', {
       id: parcel.id,
       status,
       note: note.trim() || undefined,
-    }, `Set ${parcel.plotNumber} record status to ${status}`)
+    }, t('land.dlg.ps.audit.setStatus', { plot: parcel.plotNumber, status: statusLabel }))
     setBusy(false)
     if (ok) {
-      toast.success(online ? `Record status set to ${status}` : `Saved on-device — queued (${outbox.length + 1})`)
+      toast.success(online
+        ? t('land.dlg.ps.toast.set', { status: statusLabel })
+        : t('field.savedQueued', { count: outbox.length + 1 }))
       onOpenChange(false)
     } else {
-      toast.error('Could not set the record status')
+      toast.error(t('land.dlg.ps.toast.failed'))
     }
   }
 
@@ -538,33 +549,32 @@ export function SetParcelStatusDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Set record status</DialogTitle>
+          <DialogTitle>{t('land.dlg.ps.title')}</DialogTitle>
           <DialogDescription>
-            Honest record states only: verified means documents + a reviewed, consistent search agree — never
-            &quot;government verified&quot;. The note rides the notification trail.
+            {t('land.dlg.ps.desc')}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
-            <Label htmlFor="ps-status">Status *</Label>
+            <Label htmlFor="ps-status">{t('land.dlg.ps.status')}</Label>
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger id="ps-status"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {PARCEL_STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>{PARCEL_STATUS_LABELS[s]}</SelectItem>
+                  <SelectItem key={s} value={s}>{t(`land.parcelStatus.${s}`)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="ps-note">Note (why?)</Label>
-            <Textarea id="ps-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Advocate advised re-checking the beacon plan before handover" />
+            <Label htmlFor="ps-note">{t('land.dlg.ps.note')}</Label>
+            <Textarea id="ps-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('land.dlg.ps.notePh')} />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t('land.dlg.cancel')}</Button>
           <Button onClick={submit} disabled={busy} className="bg-stone-900 text-white hover:bg-stone-800">
-            {busy ? 'Setting…' : 'Set status'}
+            {busy ? t('land.dlg.ps.setting') : t('land.dlg.ps.set')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -586,6 +596,7 @@ export function FlagSearchConfirmDialog({
   onOpenChange: (v: boolean) => void
 }) {
   const { dispatch, online, outbox } = useMjengo()
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
 
@@ -597,15 +608,15 @@ export function FlagSearchConfirmDialog({
       id: search.id,
       decision: 'flag',
       note: note.trim() || undefined,
-    }, `Flag registry result for ${parcel.plotNumber}`)
+    }, t('land.dlg.flag.audit.flag', { plot: parcel.plotNumber }))
     setBusy(false)
     if (ok) {
       toast.success(online
-        ? 'Reviewed and flagged — parcel set to FLAGGED for follow-up'
-        : `Saved on-device — queued (${outbox.length + 1})`)
+        ? t('land.dlg.flag.toast.flagged')
+        : t('field.savedQueued', { count: outbox.length + 1 }))
       onOpenChange(false)
     } else {
-      toast.error('Could not record the review')
+      toast.error(t('land.dlg.flag.toast.failed'))
     }
   }
 
@@ -613,21 +624,19 @@ export function FlagSearchConfirmDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Flag this registry result for follow-up?</AlertDialogTitle>
+          <AlertDialogTitle>{t('land.dlg.flag.title')}</AlertDialogTitle>
           <AlertDialogDescription>
-            {parcel.plotNumber} · search <span className="font-mono">{search.searchRef}</span>. Flagging records an
-            anomaly for professional follow-up — it is a record state, never an accusation. The parcel will be marked
-            FLAGGED.
+            {t('land.dlg.flag.desc', { plot: parcel.plotNumber, ref: search.searchRef })}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="grid gap-2 py-1">
-          <Label htmlFor="fs-note">Note (optional)</Label>
-          <Textarea id="fs-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Proprietor differs — advocate to obtain the certified official search" />
+          <Label htmlFor="fs-note">{t('land.dlg.flag.note')}</Label>
+          <Textarea id="fs-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('land.dlg.flag.notePh')} />
         </div>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{t('land.dlg.cancel')}</AlertDialogCancel>
           <AlertDialogAction onClick={submit} disabled={busy} className="bg-rose-600 text-white hover:bg-rose-700">
-            {busy ? 'Flagging…' : 'Flag for follow-up'}
+            {busy ? t('land.dlg.flag.flagging') : t('land.dlg.flag.flag')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

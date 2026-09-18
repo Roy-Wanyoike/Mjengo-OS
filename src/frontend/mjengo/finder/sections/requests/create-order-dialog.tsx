@@ -15,17 +15,13 @@ import { Label } from '@/frontend/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/frontend/ui/select'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useT } from '@/frontend/i18n/provider'
 import { materialMatches } from '@/backend/modules/supply/compare'
 import { materialKey } from '@/backend/modules/supply/insights'
 import type { QuoteDetail, RequestWithLines, SupplierWithCatalog } from '@/backend/modules/supply/types'
 import { formatKes } from './bits'
 
-const PAYMENT_SOURCES: Array<{ value: string; label: string }> = [
-  { value: 'client', label: 'Client pays (invoice)' },
-  { value: 'contractor', label: 'Contractor pays' },
-  { value: 'project_wallet', label: 'Project wallet' },
-  { value: 'finance', label: 'Finance' },
-]
+const PAYMENT_SOURCES = ['client', 'contractor', 'project_wallet', 'finance'] as const
 
 export function CreateOrderDialog({
   request, suppliers, open, onOpenChange,
@@ -36,13 +32,14 @@ export function CreateOrderDialog({
   onOpenChange: (v: boolean) => void
 }) {
   const { dispatch, online, outbox, actionBusy } = useMjengo()
+  const t = useT()
   const [supplierId, setSupplierId] = useState('')
   const [quoteId, setQuoteId] = useState('')
   const [paymentSource, setPaymentSource] = useState('client')
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const busy = actionBusy !== null || saving
-  const offlineNote = `Saved on-device — queued (${outbox.length})`
+  const offlineNote = t('field.savedQueued', { count: outbox.length })
 
   const receivedQuotes = (request?.quotes ?? []).filter((q) => q.status === 'received' && q.totalLanded > 0)
   const bestQuote = receivedQuotes.length
@@ -90,7 +87,7 @@ export function CreateOrderDialog({
   }
 
   async function create() {
-    if (!request || !supplierId) { toast.error('Pick a supplier for the purchase order'); return }
+    if (!request || !supplierId) { toast.error(t('finder.po.create.toastPick')); return }
     setSaving(true)
     const ok = await dispatch('order.create', {
       requestId: request.id,
@@ -98,79 +95,79 @@ export function CreateOrderDialog({
       quoteId: quoteId || undefined,
       paymentSource,
       note: note.trim() || undefined,
-    }, `PO created from ${request.requestCode}`)
+    }, t('finder.po.audit.createFrom', { code: request.requestCode }))
     setSaving(false)
     if (ok) {
-      toast.success(online ? 'Purchase order created — it inherits the request approval, send it to the supplier' : offlineNote)
+      toast.success(online ? t('finder.po.create.toastCreated') : offlineNote)
       onOpenChange(false)
       setSupplierId(''); setQuoteId(''); setNote('')
-    } else toast.error('Could not create the PO — check the supplier stocks every line')
+    } else toast.error(t('finder.po.create.toastFailed'))
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Create purchase order — {request?.requestCode}</DialogTitle>
+          <DialogTitle>{t('finder.po.create.title', { code: request?.requestCode ?? '' })}</DialogTitle>
           <DialogDescription>
-            The request is approved, so the PO is born approved. Lines price from the supplier&apos;s catalog (quote price as fallback).
+            {t('finder.po.create.desc')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4">
           <div className="grid gap-1.5">
-            <Label htmlFor="po-supplier">Supplier</Label>
+            <Label htmlFor="po-supplier">{t('finder.inv.col.supplier')}</Label>
             <Select value={supplierId} onValueChange={(v) => { setSupplierId(v); const hit = eligible.find((e) => e.supplier.id === v); setQuoteId(hit?.quote?.id ?? '') }}>
-              <SelectTrigger id="po-supplier"><SelectValue placeholder="Pick a supplier" /></SelectTrigger>
+              <SelectTrigger id="po-supplier"><SelectValue placeholder={t('finder.po.create.supplierPh')} /></SelectTrigger>
               <SelectContent>
                 {eligible.map(({ supplier, quote }) => (
                   <SelectItem key={supplier.id} value={supplier.id}>
                     {supplier.businessName}
-                    {quote ? ` — quote ${formatKes(quote.totalLanded)}` : ' — catalog prices'}
+                    {quote ? t('finder.po.create.quoteSuffix', { amount: formatKes(quote.totalLanded) }) : t('finder.po.create.catalogSuffix')}
                   </SelectItem>
                 ))}
-                {!eligible.length && <p className="px-3 py-2 text-xs text-stone-500">No supplier stocks every line — request quotes first.</p>}
+                {!eligible.length && <p className="px-3 py-2 text-xs text-stone-500">{t('finder.po.create.noSupplier')}</p>}
               </SelectContent>
             </Select>
             {bestQuote && !quoteId && (
-              <p className="text-[11px] text-stone-500">Best quote so far: {bestQuote.supplierName} at {formatKes(bestQuote.totalLanded)}.</p>
+              <p className="text-[11px] text-stone-500">{t('finder.po.create.bestQuote', { name: bestQuote.supplierName, amount: formatKes(bestQuote.totalLanded) })}</p>
             )}
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="po-payment">Payment source</Label>
+            <Label htmlFor="po-payment">{t('finder.po.create.paymentSource')}</Label>
             <Select value={paymentSource} onValueChange={setPaymentSource}>
               <SelectTrigger id="po-payment"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {PAYMENT_SOURCES.map((p) => (
-                  <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                {PAYMENT_SOURCES.map((src) => (
+                  <SelectItem key={src} value={src}>{t(`finder.po.pay.${src}`)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="po-note">Note (optional)</Label>
-            <Input id="po-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Deliver before the ring-beam pour" />
+            <Label htmlFor="po-note">{t('finder.po.create.noteLabel')}</Label>
+            <Input id="po-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('finder.po.create.notePh')} />
           </div>
 
           {preview && (
             <div className="rounded-lg border border-stone-200 bg-stone-50/60 p-3">
-              <p className="pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-stone-400">Preview (server re-prices)</p>
+              <p className="pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-stone-400">{t('finder.po.create.preview')}</p>
               <ul className="space-y-1 text-sm">
                 {preview.lines.map((l) => (
                   <li key={l.name} className="flex justify-between gap-2 tabular-nums">
                     <span className="min-w-0 truncate text-stone-600">{l.name}</span>
                     <span className="shrink-0 text-stone-800">
-                      {l.unitPrice === null ? <span className="text-rose-600">cannot price</span> : `${formatKes(l.unitPrice)} × ${l.qty}`}
+                      {l.unitPrice === null ? <span className="text-rose-600">{t('finder.po.create.cannotPrice')}</span> : `${formatKes(l.unitPrice)} × ${l.qty}`}
                     </span>
                   </li>
                 ))}
               </ul>
               <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 border-t border-stone-200 pt-2 text-sm tabular-nums">
-                <dt className="text-stone-500">Subtotal</dt><dd className="text-right text-stone-800">{formatKes(preview.subtotal)}</dd>
-                <dt className="text-stone-500">Delivery fee{preview.deliveryFee === 0 ? ' (waived)' : ''}</dt><dd className="text-right text-stone-800">{formatKes(preview.deliveryFee)}</dd>
-                <dt className="border-t border-stone-200 pt-1 font-medium text-stone-700">Total</dt>
+                <dt className="text-stone-500">{t('finder.inv.det.subtotal')}</dt><dd className="text-right text-stone-800">{formatKes(preview.subtotal)}</dd>
+                <dt className="text-stone-500">{t('finder.po.create.deliveryFee')}{preview.deliveryFee === 0 ? t('finder.po.create.waived') : ''}</dt><dd className="text-right text-stone-800">{formatKes(preview.deliveryFee)}</dd>
+                <dt className="border-t border-stone-200 pt-1 font-medium text-stone-700">{t('finder.inv.det.total')}</dt>
                 <dd className="border-t border-stone-200 pt-1 text-right text-base font-bold text-stone-900">{formatKes(preview.total)}</dd>
               </dl>
             </div>
@@ -178,9 +175,9 @@ export function CreateOrderDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t('dialog.expense.cancel')}</Button>
           <Button className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700" disabled={busy || !supplierId} onClick={() => void create()}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null} Create PO
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null} {t('finder.po.create.btn')}
           </Button>
         </DialogFooter>
       </DialogContent>

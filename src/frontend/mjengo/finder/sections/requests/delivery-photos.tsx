@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { Badge } from '@/frontend/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/frontend/ui/dialog'
 import { Camera } from 'lucide-react'
+import { useT } from '@/frontend/i18n/provider'
 import type { DeliveryPhotoWithAttachment } from '@/backend/modules/supply/types'
 
 /** Full-photo dialog shared by the grid and the line thumbs. */
@@ -27,18 +28,19 @@ function DeliveryPhotoDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
+  const t = useT()
   const a = photo.attachment
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-stone-900">
-            <Camera className="h-5 w-5 text-amber-600" aria-hidden /> Delivery evidence photo
+            <Camera className="h-5 w-5 text-amber-600" aria-hidden /> {t('finder.dph.dialogTitle')}
           </DialogTitle>
           <DialogDescription>
             {photo.deliveryLineId
-              ? 'Scoped to one inspected line — the discrepancy evidence for that count.'
-              : 'Whole-delivery evidence, recorded with the ground-truth verification.'}
+              ? t('finder.dph.scoped')
+              : t('finder.dph.whole')}
           </DialogDescription>
         </DialogHeader>
         <img
@@ -48,7 +50,7 @@ function DeliveryPhotoDialog({
         />
         <div className="space-y-1.5 text-xs text-stone-600">
           <p className="font-medium text-stone-800">{a.title ?? a.fileName}</p>
-          <p>Uploaded by {a.uploadedBy || 'site team'} · attached by {photo.attachedBy} at verification</p>
+          <p>{t('finder.dph.uploadedBy', { by: a.uploadedBy || t('finder.dph.siteTeam'), attached: photo.attachedBy })}</p>
           <p className="flex items-center gap-2">
             <Badge
               variant="outline"
@@ -58,7 +60,7 @@ function DeliveryPhotoDialog({
                   : 'border-amber-200 bg-amber-50 text-amber-700'
               }
             >
-              {a.reviewStatus === 'approved' ? 'reviewed' : 'unreviewed'}
+              {a.reviewStatus === 'approved' ? t('finder.dph.reviewed') : t('finder.dph.unreviewed')}
             </Badge>
             {a.sizeBytes != null && <span className="text-stone-400">{(a.sizeBytes / 1024).toFixed(0)} KB</span>}
           </p>
@@ -70,13 +72,14 @@ function DeliveryPhotoDialog({
 
 /** Whole-delivery evidence grid — mirrors the site-photo strip markup. */
 export function DeliveryPhotos({ photos }: { photos: DeliveryPhotoWithAttachment[] }) {
+  const t = useT()
   const [openId, setOpenId] = useState<string | null>(null)
   if (photos.length === 0) return null
   const open = openId ? (photos.find((p) => p.id === openId) ?? null) : null
   return (
     <div className="space-y-1.5">
       <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-stone-400">
-        <Camera className="h-3 w-3" aria-hidden /> Evidence photos · {photos.length}
+        <Camera className="h-3 w-3" aria-hidden /> {t('finder.dph.gridTitle', { count: photos.length })}
       </p>
       <div className="grid grid-cols-3 gap-2">
         {photos.map((p) => (
@@ -85,7 +88,7 @@ export function DeliveryPhotos({ photos }: { photos: DeliveryPhotoWithAttachment
             type="button"
             onClick={() => setOpenId(p.id)}
             className="group relative aspect-[4/3] rounded-lg overflow-hidden border border-stone-200 focus:outline-none focus:ring-2 focus:ring-amber-500"
-            aria-label={`Open delivery evidence photo: ${p.attachment.fileName}`}
+            aria-label={t('finder.dph.openAria', { file: p.attachment.fileName })}
           >
             <img
               src={p.attachment.storageKey}
@@ -96,7 +99,7 @@ export function DeliveryPhotos({ photos }: { photos: DeliveryPhotoWithAttachment
               <p className="text-[9px] text-white font-medium truncate">{p.attachment.fileName}</p>
             </div>
             {p.deliveryLineId && (
-              <span className="absolute top-1 left-1 bg-orange-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">line</span>
+              <span className="absolute top-1 left-1 bg-orange-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">{t('finder.dph.lineBadge')}</span>
             )}
           </button>
         ))}
@@ -112,13 +115,14 @@ export function DeliveryPhotos({ photos }: { photos: DeliveryPhotoWithAttachment
  * cells. Clicking opens the same full-photo dialog.
  */
 export function LinePhotoThumbs({ photos, lineName }: { photos: DeliveryPhotoWithAttachment[]; lineName: string }) {
+  const t = useT()
   const [openId, setOpenId] = useState<string | null>(null)
   if (photos.length === 0) return null
   const open = openId ? (photos.find((p) => p.id === openId) ?? null) : null
   return (
     <div className="flex flex-wrap items-center gap-1.5 pt-1">
       <span className="flex items-center gap-1 text-[11px] font-medium text-orange-800">
-        <Camera className="h-3 w-3" aria-hidden /> evidence:
+        <Camera className="h-3 w-3" aria-hidden /> {t('finder.dph.evidence')}
       </span>
       {photos.map((p) => (
         <button
@@ -126,7 +130,7 @@ export function LinePhotoThumbs({ photos, lineName }: { photos: DeliveryPhotoWit
           type="button"
           onClick={() => setOpenId(p.id)}
           className="relative h-10 w-14 shrink-0 overflow-hidden rounded-md border border-orange-200 focus:outline-none focus:ring-2 focus:ring-amber-500"
-          aria-label={`Open evidence photo for ${lineName}: ${p.attachment.fileName}`}
+          aria-label={t('finder.dph.lineAria', { name: lineName, file: p.attachment.fileName })}
         >
           <img src={p.attachment.storageKey} alt={p.attachment.fileName} className="h-full w-full object-cover" />
         </button>

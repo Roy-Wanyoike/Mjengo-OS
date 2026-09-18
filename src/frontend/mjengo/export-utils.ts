@@ -1,9 +1,15 @@
 import type { ProjectPayload } from '@/backend/lib/mjengo'
+import type { TranslateFn } from '@/frontend/i18n/types'
 
 /**
  * Pure CSV export helpers for MjengoOS.
  * KSh amounts are plain rounded numbers (no "KSh" prefix) so Excel can sum them.
  * Dates are ISO date-only strings (YYYY-MM-DD).
+ *
+ * ISSUE #125: header/label rows flow through the caller's t() (csv.* dict
+ * family, en + sw) so exports honor the active locale. Data rows stay verbatim
+ * (names, notes, DB enum values); filenames stay ASCII for download
+ * portability. Fundi attendance statuses reuse the fundis.status.* labels.
  */
 
 export type CSVRow = Record<string, string | number | null>
@@ -39,12 +45,12 @@ function slug(s: string): string {
 }
 
 /** Materials inventory ledger: delivered vs consumed vs on-site stock value. */
-export function materialsLedgerCSV(p: ProjectPayload): string {
+export function materialsLedgerCSV(t: TranslateFn, p: ProjectPayload): string {
   const rows: CSVRow[] = [
     {
-      Material: 'Material', Unit: 'Unit', 'Unit Price': 'Unit Price',
-      'Delivered Qty': 'Delivered Qty', 'Delivered Cost': 'Delivered Cost',
-      'Consumed Qty': 'Consumed Qty', 'On-site Qty': 'On-site Qty', 'Stock Value': 'Stock Value',
+      Material: t('csv.mat.material'), Unit: t('csv.mat.unit'), 'Unit Price': t('csv.mat.unitPrice'),
+      'Delivered Qty': t('csv.mat.deliveredQty'), 'Delivered Cost': t('csv.mat.deliveredCost'),
+      'Consumed Qty': t('csv.mat.consumedQty'), 'On-site Qty': t('csv.mat.onSiteQty'), 'Stock Value': t('csv.mat.stockValue'),
     },
     ...p.materials.map((m) => ({
       Material: m.name,
@@ -68,14 +74,14 @@ export function materialsLedgerCSV(p: ProjectPayload): string {
  * count time and a '—' counted value (same style as materialsLedgerCSV:
  * header row first, KSh-free quantities, ISO date-only).
  */
-export function reconciliationCSV(p: ProjectPayload): string {
+export function reconciliationCSV(t: TranslateFn, p: ProjectPayload): string {
   const rows: CSVRow[] = [
     {
-      'Count ID': 'Count ID', 'Counted At': 'Counted At', 'Counted By': 'Counted By',
-      Status: 'Status', Material: 'Material', Location: 'Location', Unit: 'Unit',
-      'Expected Qty': 'Expected Qty', 'Counted Qty': 'Counted Qty',
-      'Variance (Expected − Counted)': 'Variance (Expected − Counted)',
-      'Posted Adjustment': 'Posted Adjustment',
+      'Count ID': t('csv.rec.countId'), 'Counted At': t('csv.rec.countedAt'), 'Counted By': t('csv.rec.countedBy'),
+      Status: t('csv.rec.status'), Material: t('csv.rec.material'), Location: t('csv.rec.location'), Unit: t('csv.rec.unit'),
+      'Expected Qty': t('csv.rec.expectedQty'), 'Counted Qty': t('csv.rec.countedQty'),
+      'Variance (Expected − Counted)': t('csv.rec.variance'),
+      'Posted Adjustment': t('csv.rec.postedAdjustment'),
     },
     ...p.inventory.counts.flatMap((c) => [
       ...c.items.map((line) => ({
@@ -110,16 +116,13 @@ export function reconciliationCSV(p: ProjectPayload): string {
 }
 
 /** Fundi attendance & wages for the current day + week. */
-export function attendanceCSV(p: ProjectPayload): string {
-  const statusLabel = (s: string | null): string => {
-    if (!s) return '—'
-    return s.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
-  }
+export function attendanceCSV(t: TranslateFn, p: ProjectPayload): string {
+  const statusLabel = (s: string | null): string => (s ? t(`fundis.status.${s}`) : '—')
   const rows: CSVRow[] = [
     {
-      Worker: 'Worker', Role: 'Role', 'Daily Rate': 'Daily Rate',
-      'Today Status': 'Today Status', 'Today Wage': 'Today Wage',
-      Paid: 'Paid', 'Week Earnings': 'Week Earnings',
+      Worker: t('csv.att.worker'), Role: t('csv.att.role'), 'Daily Rate': t('csv.att.dailyRate'),
+      'Today Status': t('csv.att.todayStatus'), 'Today Wage': t('csv.att.todayWage'),
+      Paid: t('csv.att.paid'), 'Week Earnings': t('csv.att.weekEarnings'),
     },
     ...p.workers.map((w) => ({
       Worker: w.name,
@@ -127,7 +130,7 @@ export function attendanceCSV(p: ProjectPayload): string {
       'Daily Rate': Math.round(w.dailyRate),
       'Today Status': statusLabel(w.todayStatus.status),
       'Today Wage': Math.round(w.todayStatus.wage),
-      Paid: w.todayStatus.paid ? 'Yes' : 'No',
+      Paid: w.todayStatus.paid ? t('csv.yes') : t('csv.no'),
       'Week Earnings': Math.round(w.weekEarnings),
     })),
   ]
@@ -135,37 +138,37 @@ export function attendanceCSV(p: ProjectPayload): string {
 }
 
 /** Money trail: every transaction on the project. */
-export function transactionsCSV(p: ProjectPayload): string {
+export function transactionsCSV(t: TranslateFn, p: ProjectPayload): string {
   const rows: CSVRow[] = [
-    { Date: 'Date', Type: 'Type', Amount: 'Amount', Method: 'Method', Reference: 'Reference', Note: 'Note' },
-    ...p.transactions.map((t) => ({
-      Date: isoDateOnly(t.date),
-      Type: t.type,
-      Amount: Math.round(t.amount),
-      Method: t.method,
-      Reference: t.reference ?? '—',
-      Note: t.note ?? '',
+    { Date: t('csv.tx.date'), Type: t('csv.tx.type'), Amount: t('csv.tx.amount'), Method: t('csv.tx.method'), Reference: t('csv.tx.reference'), Note: t('csv.tx.note') },
+    ...p.transactions.map((tr) => ({
+      Date: isoDateOnly(tr.date),
+      Type: tr.type,
+      Amount: Math.round(tr.amount),
+      Method: tr.method,
+      Reference: tr.reference ?? '—',
+      Note: tr.note ?? '',
     })),
   ]
   return toCSV(rows)
 }
 
 /** One-page project snapshot as key,value rows. */
-export function projectSummaryCSV(p: ProjectPayload): string {
+export function projectSummaryCSV(t: TranslateFn, p: ProjectPayload): string {
   const s = p.summary
   const rows: Array<{ key: string; value: string | number }> = [
-    { key: 'key', value: 'value' },
-    { key: 'Project', value: p.project.name },
-    { key: 'Client', value: p.project.client || '—' },
-    { key: 'Location', value: p.project.location || '—' },
-    { key: 'Status', value: p.project.status },
-    { key: 'Day count', value: s.dayCount },
-    { key: 'Progress %', value: s.progressPct },
-    { key: 'Budget total', value: Math.round(s.budgetTotal) },
-    { key: 'Budget spent', value: Math.round(s.budgetSpent) },
-    { key: 'Spend vs plan delta %', value: s.spendVsPlanDelta },
-    { key: 'Fundis today', value: s.fundisToday },
-    { key: 'Unacked alerts', value: s.unackedAlerts },
+    { key: t('csv.sum.key'), value: t('csv.sum.value') },
+    { key: t('csv.sum.project'), value: p.project.name },
+    { key: t('csv.sum.client'), value: p.project.client || '—' },
+    { key: t('csv.sum.location'), value: p.project.location || '—' },
+    { key: t('csv.sum.status'), value: p.project.status },
+    { key: t('csv.sum.dayCount'), value: s.dayCount },
+    { key: t('csv.sum.progress'), value: s.progressPct },
+    { key: t('csv.sum.budgetTotal'), value: Math.round(s.budgetTotal) },
+    { key: t('csv.sum.budgetSpent'), value: Math.round(s.budgetSpent) },
+    { key: t('csv.sum.spendDelta'), value: s.spendVsPlanDelta },
+    { key: t('csv.sum.fundisToday'), value: s.fundisToday },
+    { key: t('csv.sum.unackedAlerts'), value: s.unackedAlerts },
   ]
   return toCSV(rows)
 }

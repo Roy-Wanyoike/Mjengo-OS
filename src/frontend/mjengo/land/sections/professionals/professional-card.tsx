@@ -4,8 +4,12 @@
 // names the body that ISSUES the licence (EBK/LSK/BORAQS), the ladder counts
 // checks recorded INSIDE MjengoOS, and the latest finding is shown verbatim —
 // including unfavourable ones ("licence expired — renewal pending").
+//
+// All copy flows through useT() (land.pros.card.* — issue #125); enum labels
+// reuse the land.proCategory / land.checkMethod families.
 
 import { useState } from 'react'
+import { useT } from '@/frontend/i18n/provider'
 import { Badge } from '@/frontend/ui/badge'
 import { Button } from '@/frontend/ui/button'
 import { Card, CardContent } from '@/frontend/ui/card'
@@ -27,9 +31,6 @@ import {
 import { dateShort } from '@/frontend/lib/format'
 import { cn } from '@/frontend/lib/utils'
 import {
-  CATEGORY_LABELS,
-  CHECK_METHOD_LABELS,
-  type CheckMethod,
   type ProfessionalCategory,
   type ProfessionalWithChecks,
 } from '@/backend/modules/professionals/types'
@@ -45,7 +46,8 @@ const CATEGORY_ICONS: Record<ProfessionalCategory, LucideIcon> = {
 }
 
 function MethodBadge({ method }: { method: string }) {
-  const label = CHECK_METHOD_LABELS[method as CheckMethod] ?? method
+  const t = useT()
+  const label = t(`land.checkMethod.${method}`)
   return (
     <Badge variant="outline" className="text-[10px] font-normal text-stone-600 gap-1">
       <ClipboardCheck className="w-3 h-3" aria-hidden /> {label}
@@ -64,6 +66,7 @@ export function ProfessionalCard({
   onRecordCheck: (p: ProfessionalWithChecks) => void
   onAssign: (p: ProfessionalWithChecks) => void
 }) {
+  const t = useT()
   const [showAllChecks, setShowAllChecks] = useState(false)
   const Icon = CATEGORY_ICONS[professional.category as ProfessionalCategory] ?? Compass
   const checks = professional.credentialChecks
@@ -85,7 +88,7 @@ export function ProfessionalCard({
             )}
             <div className="mt-1.5 flex items-center gap-2 flex-wrap text-[11px] text-stone-500">
               <Badge variant="outline" className="text-[10px] font-medium text-stone-600 border-stone-300">
-                {CATEGORY_LABELS[professional.category as ProfessionalCategory] ?? professional.category}
+                {t(`land.proCategory.${professional.category}`)}
               </Badge>
               {professional.county && (
                 <span className="inline-flex items-center gap-0.5">
@@ -108,11 +111,11 @@ export function ProfessionalCard({
         {professional.licenceNumber || (professional.licenceBody && professional.licenceBody !== 'other') ? (
           <div className="flex items-center gap-1.5 flex-wrap">
             <Badge className="bg-stone-800 text-white border-0 font-mono text-[11px] tracking-tight hover:bg-stone-800">
-              {professional.licenceBody ?? 'OTHER'} · {professional.licenceNumber ?? 'no number on file'}
+              {professional.licenceBody ?? 'OTHER'} · {professional.licenceNumber ?? t('land.pros.card.noNumber')}
             </Badge>
           </div>
         ) : (
-          <p className="text-[11px] text-stone-400">No licence number recorded</p>
+          <p className="text-[11px] text-stone-400">{t('land.pros.card.noLicence')}</p>
         )}
 
         {/* the honest ladder */}
@@ -121,13 +124,15 @@ export function ProfessionalCard({
         {/* reliability + assignment count */}
         <div className="flex items-center justify-between gap-3 text-[11px] text-stone-500">
           <span className="min-w-0">
-            Reliability{' '}
+            {t('land.pros.card.reliability')}{' '}
             <span className="font-semibold text-stone-700 tabular-nums">{professional.reliabilityScore ?? 50}/100</span>
-            <span className="text-stone-400"> · platform history</span>
+            <span className="text-stone-400"> · {t('land.pros.card.platformHistory')}</span>
           </span>
           {professional.assignmentCount > 0 && (
             <Badge variant="outline" className="text-[10px] text-stone-600 shrink-0">
-              {professional.assignmentCount} parcel assignment{professional.assignmentCount === 1 ? '' : 's'}
+              {professional.assignmentCount === 1
+                ? t('land.pros.card.assignmentOne', { count: professional.assignmentCount })
+                : t('land.pros.card.assignmentMany', { count: professional.assignmentCount })}
             </Badge>
           )}
         </div>
@@ -147,7 +152,7 @@ export function ProfessionalCard({
             <div className="flex items-center gap-2 flex-wrap">
               <MethodBadge method={latest.method} />
               <span className="text-[10px] text-stone-500">
-                by {latest.checkedBy} · {dateShort(latest.recordedAt)}
+                {t('land.pros.card.byOn', { by: latest.checkedBy, date: dateShort(latest.recordedAt) })}
               </span>
             </div>
             <p className="mt-1.5 text-xs text-stone-600 leading-relaxed line-clamp-3">{latest.finding}</p>
@@ -158,7 +163,9 @@ export function ProfessionalCard({
                     type="button"
                     className="mt-2 text-[11px] font-medium text-stone-600 hover:text-stone-900 underline underline-offset-2"
                   >
-                    {showAllChecks ? 'Hide' : `Show all ${checks.length} recorded checks`}
+                    {showAllChecks
+                      ? t('land.pros.card.hide')
+                      : t('land.pros.card.showAll', { count: checks.length })}
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
@@ -168,7 +175,7 @@ export function ProfessionalCard({
                         <div className="flex items-center gap-2 flex-wrap">
                           <MethodBadge method={c.method} />
                           <span className="text-[10px] text-stone-500">
-                            by {c.checkedBy} · {dateShort(c.recordedAt)}
+                            {t('land.pros.card.byOn', { by: c.checkedBy, date: dateShort(c.recordedAt) })}
                           </span>
                         </div>
                         <p className="mt-1 leading-relaxed line-clamp-3">{c.finding}</p>
@@ -181,7 +188,7 @@ export function ProfessionalCard({
           </div>
         ) : (
           <p className="text-[11px] text-stone-400 border border-dashed border-stone-200 rounded-lg p-2.5 leading-relaxed">
-            No credential checks recorded yet — level 0 · Unverified.
+            {t('land.pros.card.noChecks')}
           </p>
         )}
 
@@ -201,7 +208,7 @@ export function ProfessionalCard({
               onClick={() => onRecordCheck(professional)}
             >
               <ClipboardCheck className="w-4 h-4 shrink-0" aria-hidden />
-              <span className="truncate">Record credential check</span>
+              <span className="truncate">{t('land.pros.card.recordCheck')}</span>
             </Button>
             <Button
               size="sm"
@@ -210,7 +217,7 @@ export function ProfessionalCard({
               onClick={() => onAssign(professional)}
             >
               <UserPlus className="w-4 h-4 shrink-0" aria-hidden />
-              <span className="truncate">Assign to parcel</span>
+              <span className="truncate">{t('land.pros.card.assign')}</span>
             </Button>
           </div>
         )}

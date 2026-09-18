@@ -1,5 +1,6 @@
 'use client'
 
+import { useT } from '@/frontend/i18n/provider'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,28 +23,32 @@ export interface ProjectSwitcherProps {
   onCreate: () => void
 }
 
-function statusBadge(status: string): { label: string; className: string } {
+function statusBadge(t: ReturnType<typeof useT>, status: string): { label: string; className: string } {
   switch (status) {
     case 'active':
-      return { label: 'active', className: 'bg-amber-500/10 text-amber-700 border-amber-500/30' }
+      return { label: t('switcher.status.active'), className: 'bg-amber-500/10 text-amber-700 border-amber-500/30' }
     case 'completed':
-      return { label: 'completed', className: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30' }
+      return { label: t('switcher.status.completed'), className: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30' }
     default:
-      return { label: status === 'on_hold' ? 'on hold' : status, className: 'bg-stone-100 text-stone-500 border-stone-200' }
+      return {
+        label: status === 'on_hold' ? t('switcher.status.onHold') : status,
+        className: 'bg-stone-100 text-stone-500 border-stone-200',
+      }
   }
 }
 
 export function ProjectSwitcher({ projects, activeId, onSelect, onCreate }: ProjectSwitcherProps) {
+  const t = useT()
   const active = projects.find((p) => p.id === activeId) ?? null
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label={`Switch project — current: ${active?.name ?? 'none'}`}
+        aria-label={t('switcher.aria', { name: active?.name ?? t('switcher.none') })}
         className="flex items-center gap-2 min-w-0 h-9 px-2.5 rounded-lg bg-stone-900 border border-stone-800 text-stone-200 hover:bg-stone-800 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
       >
         <Building2 className="w-4 h-4 text-amber-500 shrink-0" aria-hidden />
-        <span className="text-sm font-medium truncate max-w-[5rem] sm:max-w-44">{active?.name ?? 'Select project'}</span>
+        <span className="text-sm font-medium truncate max-w-[5rem] sm:max-w-44">{active?.name ?? t('switcher.select')}</span>
         <ChevronDown className="w-4 h-4 text-stone-500 shrink-0" aria-hidden />
       </DropdownMenuTrigger>
 
@@ -56,22 +61,22 @@ export function ProjectSwitcher({ projects, activeId, onSelect, onCreate }: Proj
         {/* FE-4 (issue #80): stone-600 on the white dropdown — labels and the
             progress/budget timestamp line were stone-400 (2.31:1). */}
         <DropdownMenuLabel className="px-3 pt-3 pb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-600">
-          Projects · {projects.length}
+          {t('switcher.label', { count: projects.length })}
         </DropdownMenuLabel>
 
         {projects.length === 0 && (
-          <p className="px-3 py-6 text-sm text-stone-600 text-center">No projects yet — create your first one below.</p>
+          <p className="px-3 py-6 text-sm text-stone-600 text-center">{t('switcher.empty')}</p>
         )}
 
         {projects.map((p) => {
           const isActive = p.id === activeId
-          const badge = statusBadge(p.status)
+          const badge = statusBadge(t, p.status)
           return (
             <DropdownMenuItem
               key={p.id}
               onSelect={() => onSelect(p.id)}
               className="flex flex-col items-stretch gap-1 px-3 py-2.5 rounded-lg focus:bg-stone-100 cursor-pointer"
-              aria-label={`Open project ${p.name}, ${p.progressPct}% complete`}
+              aria-label={t('switcher.itemAria', { name: p.name, pct: p.progressPct })}
             >
               <div className="flex items-center gap-2 min-w-0">
                 {isActive ? (
@@ -92,7 +97,7 @@ export function ProjectSwitcher({ projects, activeId, onSelect, onCreate }: Proj
                 {p.unackedAlerts > 0 && (
                   <span
                     className="shrink-0 inline-flex items-center gap-0.5 text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded-md px-1.5 py-0.5"
-                    aria-label={`${p.unackedAlerts} unacknowledged alerts`}
+                    aria-label={t('switcher.alertsAria', { count: p.unackedAlerts })}
                   >
                     <ShieldAlert className="w-3 h-3" aria-hidden />
                     {p.unackedAlerts}
@@ -111,12 +116,12 @@ export function ProjectSwitcher({ projects, activeId, onSelect, onCreate }: Proj
         <DropdownMenuItem
           onSelect={onCreate}
           className="mt-1 mb-1 mx-1 rounded-lg px-3 py-2.5 text-sm font-semibold text-amber-700 focus:bg-amber-50 focus:text-amber-800 cursor-pointer gap-2"
-          aria-label="Create a new project"
+          aria-label={t('switcher.createAria')}
         >
           <span className="w-5 h-5 rounded-md bg-amber-500 text-stone-950 flex items-center justify-center shrink-0" aria-hidden>
             <Plus className="w-3.5 h-3.5" />
           </span>
-          New project
+          {t('switcher.newProject')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

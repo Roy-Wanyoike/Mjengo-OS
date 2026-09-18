@@ -12,9 +12,13 @@
 // HONESTY RULE (module-wide): verificationState counts checks recorded INSIDE
 // MjengoOS. LSK / EBK / BORAQS remain the authoritative registries. The
 // platform does not issue licences and never claims registry confirmation.
+//
+// All copy flows through useT() (land.pros.* — issue #125); the enum label
+// families (land.proCategory.* / land.ladder.*) resolve like land/labels.ts.
 
 import { useMemo, useState } from 'react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
+import { useT } from '@/frontend/i18n/provider'
 import { Badge } from '@/frontend/ui/badge'
 import { Button } from '@/frontend/ui/button'
 import { Card, CardContent } from '@/frontend/ui/card'
@@ -23,10 +27,8 @@ import { Label } from '@/frontend/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/frontend/ui/select'
 import { Search, UserCog, UserPlus, X } from 'lucide-react'
 import {
-  CATEGORY_LABELS,
   PROFESSIONAL_CATEGORIES,
   VERIFICATION_LADDER,
-  type ProfessionalCategory,
   type ProfessionalWithChecks,
 } from '@/backend/modules/professionals/types'
 import { ProfessionalCard } from './professionals/professional-card'
@@ -35,6 +37,7 @@ import { AddProfessionalDialog, AssignDialog, RecordCheckDialog } from './profes
 
 export function ProfessionalsSection() {
   const { data, viewMode } = useMjengo()
+  const t = useT()
   const [category, setCategory] = useState('all')
   const [county, setCounty] = useState('all')
   const [level, setLevel] = useState('all')
@@ -74,23 +77,23 @@ export function ProfessionalsSection() {
   }
 
   return (
-    <section aria-label="Professionals directory" className="space-y-4">
+    <section aria-label={t('land.pros.aria')} className="space-y-4">
       {/* section header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-lg font-bold text-stone-900 flex items-center gap-2">
             <UserCog className="h-5 w-5 text-stone-500" aria-hidden />
-            Professionals directory
+            {t('land.pros.title')}
           </h2>
           <p className="text-sm text-stone-500 mt-0.5">
-            {professionals.length} built-environment professionals
-            {checksTotal > 0 && ` · ${checksTotal} credential check${checksTotal === 1 ? '' : 's'} recorded`}
-            {' '}— checks are platform records, not registry confirmations
+            {checksTotal > 0
+              ? t('land.pros.descChecks', { count: professionals.length, checks: checksTotal })
+              : t('land.pros.desc', { count: professionals.length })}
           </p>
         </div>
         {!isClient && (
           <Button size="sm" className="gap-1.5 bg-stone-900 text-white hover:bg-stone-800" onClick={() => setAddOpen(true)}>
-            <UserPlus className="h-4 w-4" aria-hidden /> Add professional
+            <UserPlus className="h-4 w-4" aria-hidden /> {t('land.pros.add')}
           </Button>
         )}
       </div>
@@ -103,23 +106,23 @@ export function ProfessionalsSection() {
         <CardContent className="p-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <div className="space-y-1.5 min-w-0">
-              <Label htmlFor="pf-category" className="text-[11px] text-stone-500">Category</Label>
+              <Label htmlFor="pf-category" className="text-[11px] text-stone-500">{t('land.pros.f.category')}</Label>
               <Select value={category} onValueChange={setCategory}>
                 <SelectTrigger id="pf-category" className="h-9 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All categories</SelectItem>
+                  <SelectItem value="all">{t('land.pros.f.allCategories')}</SelectItem>
                   {PROFESSIONAL_CATEGORIES.map((c) => (
-                    <SelectItem key={c} value={c}>{CATEGORY_LABELS[c]}</SelectItem>
+                    <SelectItem key={c} value={c}>{t(`land.proCategory.${c}`)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5 min-w-0">
-              <Label htmlFor="pf-county" className="text-[11px] text-stone-500">County</Label>
+              <Label htmlFor="pf-county" className="text-[11px] text-stone-500">{t('land.pros.f.county')}</Label>
               <Select value={county} onValueChange={setCounty}>
                 <SelectTrigger id="pf-county" className="h-9 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All counties</SelectItem>
+                  <SelectItem value="all">{t('land.pros.f.allCounties')}</SelectItem>
                   {counties.map((c) => (
                     <SelectItem key={c} value={c}>{c}</SelectItem>
                   ))}
@@ -127,28 +130,28 @@ export function ProfessionalsSection() {
               </Select>
             </div>
             <div className="space-y-1.5 min-w-0">
-              <Label htmlFor="pf-level" className="text-[11px] text-stone-500">Verification level</Label>
+              <Label htmlFor="pf-level" className="text-[11px] text-stone-500">{t('land.pros.f.level')}</Label>
               <Select value={level} onValueChange={setLevel}>
                 <SelectTrigger id="pf-level" className="h-9 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All levels</SelectItem>
+                  <SelectItem value="all">{t('land.pros.f.allLevels')}</SelectItem>
                   {VERIFICATION_LADDER.map((r) => (
                     <SelectItem key={r.level} value={String(r.level)}>
-                      Level {r.level} · {r.label}
+                      {t('land.pros.f.levelItem', { n: r.level, label: t(`land.ladder.${r.level}.label`) })}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5 min-w-0 col-span-2 lg:col-span-1">
-              <Label htmlFor="pf-search" className="text-[11px] text-stone-500">Search by name</Label>
+              <Label htmlFor="pf-search" className="text-[11px] text-stone-500">{t('land.pros.f.search')}</Label>
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-stone-400 pointer-events-none" aria-hidden />
                 <Input
                   id="pf-search"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="e.g. Wanjiru"
+                  placeholder={t('land.pros.f.searchPh')}
                   className="h-9 pl-8 text-xs"
                 />
               </div>
@@ -156,11 +159,11 @@ export function ProfessionalsSection() {
           </div>
           <div className="mt-3 flex items-center justify-between gap-2">
             <p className="text-xs text-stone-500" aria-live="polite">
-              Showing <span className="font-semibold text-stone-700">{filtered.length}</span> of {professionals.length}
+              {t('land.pros.f.showing', { shown: filtered.length, total: professionals.length })}
             </p>
             {filtersActive && (
               <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs text-stone-500" onClick={clearFilters}>
-                <X className="w-3 h-3" aria-hidden /> Clear filters
+                <X className="w-3 h-3" aria-hidden /> {t('land.pros.f.clear')}
               </Button>
             )}
           </div>
@@ -187,16 +190,16 @@ export function ProfessionalsSection() {
               <Search className="w-6 h-6 text-stone-400" />
             </div>
             <h3 className="text-sm font-semibold text-stone-900">
-              {professionals.length ? 'No professionals match these filters' : 'The directory is empty'}
+              {professionals.length ? t('land.pros.emptyFiltered') : t('land.pros.emptyTitle')}
             </h3>
             <p className="text-sm text-stone-500 max-w-sm leading-relaxed">
               {professionals.length
-                ? 'Try a different category, county, level or name — or clear the filters.'
-                : 'Add the surveyors, advocates and engineers you work with. Entries start unverified and earn their record as checks are recorded.'}
+                ? t('land.pros.emptyFilteredDesc')
+                : t('land.pros.emptyDesc')}
             </p>
             {filtersActive && professionals.length > 0 && (
               <Button size="sm" variant="outline" className="gap-1.5" onClick={clearFilters}>
-                <X className="w-3.5 h-3.5" aria-hidden /> Clear filters
+                <X className="w-3.5 h-3.5" aria-hidden /> {t('land.pros.f.clear')}
               </Button>
             )}
           </CardContent>
@@ -204,30 +207,30 @@ export function ProfessionalsSection() {
       )}
 
       {/* honesty note — the whole claim, stated plainly */}
-      <Card className="border-stone-300 shadow-sm bg-stone-50" aria-label="What the verification levels actually mean">
+      <Card className="border-stone-300 shadow-sm bg-stone-50" aria-label={t('land.pros.honesty.aria')}>
         <CardContent className="p-5 sm:p-6">
           <div className="flex items-center gap-2.5 mb-3">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-stone-200 text-stone-700" aria-hidden>
               <UserCog className="h-4 w-4" />
             </span>
             <div>
-              <h3 className="text-sm font-bold text-stone-900">What the verification levels actually mean</h3>
-              <p className="text-xs text-stone-500">Platform records, plainly labelled</p>
+              <h3 className="text-sm font-bold text-stone-900">{t('land.pros.honesty.title')}</h3>
+              <p className="text-xs text-stone-500">{t('land.pros.honesty.subtitle')}</p>
             </div>
           </div>
           <p className="text-xs text-stone-600 leading-relaxed max-w-3xl">
-            Verification levels reflect the checks recorded <span className="font-medium">inside MjengoOS</span> —
-            document reviews, reference calls and lookups performed by the people using this platform, with their
-            findings kept verbatim. The registries remain the authoritative sources:{' '}
-            <span className="font-medium">LSK</span> for advocates, <span className="font-medium">EBK</span> for
-            engineers and surveyors, <span className="font-medium">BORAQS</span> for architects and quantity
-            surveyors. MjengoOS does not issue licences, confirm registrations, or replace a call to the registry
-            before you contract.
+            {t('land.pros.honesty.bodyA')}
+            <span className="font-medium">LSK</span>
+            {t('land.pros.honesty.bodyB')}
+            <span className="font-medium">EBK</span>
+            {t('land.pros.honesty.bodyC')}
+            <span className="font-medium">BORAQS</span>
+            {t('land.pros.honesty.bodyD')}
           </p>
           <div className="mt-3 flex flex-wrap gap-1.5">
-            <Badge variant="outline" className="text-[10px] text-stone-600">LSK · advocates</Badge>
-            <Badge variant="outline" className="text-[10px] text-stone-600">EBK · engineers &amp; surveyors</Badge>
-            <Badge variant="outline" className="text-[10px] text-stone-600">BORAQS · architects &amp; QS</Badge>
+            <Badge variant="outline" className="text-[10px] text-stone-600">{t('land.pros.honesty.lsk')}</Badge>
+            <Badge variant="outline" className="text-[10px] text-stone-600">{t('land.pros.honesty.ebk')}</Badge>
+            <Badge variant="outline" className="text-[10px] text-stone-600">{t('land.pros.honesty.boraqs')}</Badge>
           </div>
         </CardContent>
       </Card>

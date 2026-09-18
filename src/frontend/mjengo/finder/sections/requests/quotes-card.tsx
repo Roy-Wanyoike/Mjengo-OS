@@ -21,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/frontend/ui/switch'
 import { Loader2, MessageSquareQuote, Trophy, X, CalendarClock, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
+import { useT } from '@/frontend/i18n/provider'
 import type { QuoteDetail, RequestWithLines, SupplierWithCatalog } from '@/backend/modules/supply/types'
 import { formatKes } from './bits'
 
@@ -56,6 +57,7 @@ export function QuotesCard({
   canManage: boolean
 }) {
   const { dispatch, online, outbox, actionBusy } = useMjengo()
+  const t = useT()
   const [requestOpen, setRequestOpen] = useState(false)
   const [receiveTarget, setReceiveTarget] = useState<QuoteDetail | null>(null)
   const [editTarget, setEditTarget] = useState<QuoteDetail | null>(null)
@@ -64,7 +66,7 @@ export function QuotesCard({
   const [validityForm, setValidityForm] = useState({ validUntil: '', terms: '' })
   const [linePrices, setLinePrices] = useState<Record<string, string>>({})
   const busy = actionBusy !== null
-  const offlineNote = `Saved on-device — queued (${outbox.length})`
+  const offlineNote = t('field.savedQueued', { count: outbox.length })
 
   const quotes = request.quotes
   const received = quotes.filter((q) => q.status === 'received' && q.totalLanded > 0)
@@ -82,14 +84,14 @@ export function QuotesCard({
   }
 
   async function sendQuoteRequests() {
-    if (!supplierPicks.length) { toast.error('Pick at least one supplier'); return }
+    if (!supplierPicks.length) { toast.error(t('finder.quotes.toast.pick')); return }
     const ok = await dispatch('quote.request', {
       requestId: request.id, supplierIds: supplierPicks,
-    }, `Quotes requested: ${request.requestCode} → ${supplierPicks.length} suppliers`)
+    }, t('finder.quotes.audit.requested', { code: request.requestCode, count: supplierPicks.length }))
     if (ok) {
-      toast.success(online ? `Quote requests sent to ${supplierPicks.length} supplier(s)` : offlineNote)
+      toast.success(online ? t('finder.quotes.toast.sent', { count: supplierPicks.length }) : offlineNote)
       setRequestOpen(false)
-    } else toast.error('Could not request quotes — those suppliers may already hold one')
+    } else toast.error(t('finder.quotes.toast.sendFailed'))
   }
 
   function openReceive(q: QuoteDetail) {
@@ -116,7 +118,7 @@ export function QuotesCard({
     if (!receiveTarget || !firstLine) return
     if (multiLine) {
       if (request.lines.some((l) => !(Number(linePrices[l.id]) > 0))) {
-        toast.error('Price every line — the quoted unit price must be greater than zero')
+        toast.error(t('finder.quotes.toast.priceLines'))
         return
       }
       const ok = await dispatch('quote.receive', {
@@ -129,19 +131,19 @@ export function QuotesCard({
         ...(validityForm.validUntil ? { validUntil: new Date(validityForm.validUntil).toISOString() } : {}),
         ...(validityForm.terms.trim() ? { terms: validityForm.terms.trim() } : {}),
         lines: request.lines.map((l) => ({ unitPrice: Number(linePrices[l.id]) })),
-      }, `Quote received: ${receiveTarget.supplierName} for ${request.requestCode}`)
+      }, t('finder.quotes.audit.received', { name: receiveTarget.supplierName, code: request.requestCode }))
       if (ok) {
         toast.success(
           online
-            ? `${receiveTarget.supplierName} quote recorded — ${request.lines.length} lines, landed ${formatKes((multiLineProductCost ?? 0) + feeTotal)}`
+            ? t('finder.quotes.toast.multiOk', { name: receiveTarget.supplierName, lines: request.lines.length, amount: formatKes((multiLineProductCost ?? 0) + feeTotal) })
             : offlineNote,
         )
         setReceiveTarget(null)
-      } else toast.error('Could not record the quote — every line needs a price greater than zero')
+      } else toast.error(t('finder.quotes.toast.multiFail'))
       return
     }
     const unitPrice = Number(form.unitPrice)
-    if (!Number.isFinite(unitPrice) || unitPrice <= 0) { toast.error('Quoted unit price must be greater than zero'); return }
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) { toast.error(t('finder.quotes.toast.unitPrice')); return }
     const ok = await dispatch('quote.receive', {
       id: receiveTarget.id,
       unitPrice,
@@ -152,11 +154,11 @@ export function QuotesCard({
       stockOk: form.stockOk,
       ...(validityForm.validUntil ? { validUntil: new Date(validityForm.validUntil).toISOString() } : {}),
       ...(validityForm.terms.trim() ? { terms: validityForm.terms.trim() } : {}),
-    }, `Quote received: ${receiveTarget.supplierName} for ${request.requestCode}`)
+    }, t('finder.quotes.audit.received', { name: receiveTarget.supplierName, code: request.requestCode }))
     if (ok) {
-      toast.success(online ? `${receiveTarget.supplierName} quote recorded — landed ${formatKes(unitPrice * firstLine.qty + feeTotal)}` : offlineNote)
+      toast.success(online ? t('finder.quotes.toast.singleOk', { name: receiveTarget.supplierName, amount: formatKes(unitPrice * firstLine.qty + feeTotal) }) : offlineNote)
       setReceiveTarget(null)
-    } else toast.error('Could not record the quote')
+    } else toast.error(t('finder.quotes.toast.fail'))
   }
 
   async function saveValidity() {
@@ -165,17 +167,17 @@ export function QuotesCard({
       id: editTarget.id,
       validUntil: validityForm.validUntil ? new Date(validityForm.validUntil).toISOString() : null,
       terms: validityForm.terms.trim() || null,
-    }, `Quote updated: ${editTarget.supplierName} for ${request.requestCode}`)
+    }, t('finder.quotes.audit.updated', { name: editTarget.supplierName, code: request.requestCode }))
     if (ok) {
-      toast.success(online ? 'Validity & terms updated' : offlineNote)
+      toast.success(online ? t('finder.quotes.toast.updated') : offlineNote)
       setEditTarget(null)
-    } else toast.error('Could not update the quote')
+    } else toast.error(t('finder.quotes.toast.updateFailed'))
   }
 
   async function decline(quote: QuoteDetail) {
-    const ok = await dispatch('quote.decline', { id: quote.id }, `Quote declined: ${quote.supplierName} for ${request.requestCode}`)
-    if (ok) toast.success(`${quote.supplierName} declined — recorded`)
-    else toast.error('Could not record the decline')
+    const ok = await dispatch('quote.decline', { id: quote.id }, t('finder.quotes.audit.declined', { name: quote.supplierName, code: request.requestCode }))
+    if (ok) toast.success(t('finder.quotes.toast.declined', { name: quote.supplierName }))
+    else toast.error(t('finder.quotes.toast.declineFailed'))
   }
 
   return (
@@ -183,43 +185,43 @@ export function QuotesCard({
       <CardHeader className="flex flex-row items-start justify-between space-y-0">
         <div className="space-y-1.5">
           <CardTitle className="flex items-center gap-2 text-base text-stone-900">
-            <MessageSquareQuote className="h-4 w-4 text-amber-600" aria-hidden /> Supplier quotes
+            <MessageSquareQuote className="h-4 w-4 text-amber-600" aria-hidden /> {t('finder.quotes.title')}
             <Badge variant="outline" className="text-[10px] font-medium text-stone-500">{quotes.length}</Badge>
           </CardTitle>
           <CardDescription>
             {multiLine
-              ? `Multi-line bid: one unit price per line of ${request.requestCode} (quantities fixed from the request), plus delivery + transport + fees.`
+              ? t('finder.quotes.descMulti', { code: request.requestCode })
               : firstLine
-                ? `Quotes are per-request: unit price × ${firstLine.qty} ${firstLine.unit} of ${firstLine.materialName}, plus delivery + transport + fees.`
-                : 'Request quotes to compare landed costs.'}
+                ? t('finder.quotes.descSingle', { qty: firstLine.qty, unit: firstLine.unit, name: firstLine.materialName })
+                : t('finder.quotes.descEmpty')}
           </CardDescription>
         </div>
         {canManage && ['submitted', 'approved', 'converted'].includes(request.status) && (
           <Button size="sm" variant="outline" className="min-h-11 gap-1.5" disabled={busy} onClick={openRequestDialog}>
-            Request quotes
+            {t('finder.quotes.request')}
           </Button>
         )}
       </CardHeader>
       <CardContent>
         {!quotes.length ? (
           <p className="rounded-lg border border-dashed border-stone-300 p-4 text-center text-xs text-stone-500">
-            No quotes yet — request them from the suppliers stocking these materials.
+            {t('finder.quotes.empty')}
           </p>
         ) : (
           <div className="overflow-x-auto rounded-md border border-stone-200">
             <table className="w-full min-w-[680px] text-sm">
-              <caption className="sr-only">Quotes for {request.requestCode}</caption>
+              <caption className="sr-only">{t('finder.quotes.caption', { code: request.requestCode })}</caption>
               <thead>
                 <tr className="border-b border-stone-200 bg-stone-50 text-left text-[11px] uppercase tracking-wide text-stone-400">
-                  <th scope="col" className="px-3 py-2 font-medium">Supplier</th>
-                  <th scope="col" className="px-2 py-2 text-right font-medium">Unit</th>
-                  <th scope="col" className="px-2 py-2 text-right font-medium">Delivery</th>
-                  <th scope="col" className="px-2 py-2 text-right font-medium">Fees</th>
-                  <th scope="col" className="px-2 py-2 text-right font-medium">Landed</th>
-                  <th scope="col" className="px-2 py-2 font-medium">ETA</th>
-                  <th scope="col" className="px-2 py-2 font-medium">Validity</th>
+                  <th scope="col" className="px-3 py-2 font-medium">{t('finder.inv.col.supplier')}</th>
+                  <th scope="col" className="px-2 py-2 text-right font-medium">{t('finder.quotes.col.unit')}</th>
+                  <th scope="col" className="px-2 py-2 text-right font-medium">{t('finder.quotes.col.delivery')}</th>
+                  <th scope="col" className="px-2 py-2 text-right font-medium">{t('finder.quotes.col.fees')}</th>
+                  <th scope="col" className="px-2 py-2 text-right font-medium">{t('finder.quotes.col.landed')}</th>
+                  <th scope="col" className="px-2 py-2 font-medium">{t('finder.quotes.col.eta')}</th>
+                  <th scope="col" className="px-2 py-2 font-medium">{t('finder.quotes.col.validity')}</th>
                   {/* relative anchors the sr-only span (see results-table.tsx note) */}
-                  <th scope="col" className="relative px-3 py-2 text-right font-medium"><span className="sr-only">Actions</span></th>
+                  <th scope="col" className="relative px-3 py-2 text-right font-medium"><span className="sr-only">{t('finder.inv.col.actions')}</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -231,43 +233,43 @@ export function QuotesCard({
                     <tr key={q.id} className={`border-b border-stone-100 last:border-0 transition ${isBest ? 'bg-amber-50/80' : 'hover:bg-stone-50'} ${expired ? 'opacity-50' : ''}`}>
                       <td className="px-3 py-2.5">
                         <span className="font-medium text-stone-800">{q.supplierName}</span>
-                        {isBest && <Badge className="ml-1.5 border-0 gap-1 bg-amber-600 text-[10px] text-white hover:bg-amber-600"><Trophy className="h-3 w-3" aria-hidden /> Best landed</Badge>}
+                        {isBest && <Badge className="ml-1.5 border-0 gap-1 bg-amber-600 text-[10px] text-white hover:bg-amber-600"><Trophy className="h-3 w-3" aria-hidden /> {t('finder.quotes.bestLanded')}</Badge>}
                         {q.lines && q.lines.length > 1 && (
                           <Badge variant="outline" className="ml-1.5 text-[10px] font-normal text-stone-500" title={q.lines.map((l) => `${l.name}: ${formatKes(l.unitPrice)}`).join(' · ')}>
-                            {q.lines.length} lines
+                            {t('finder.quotes.linesCount', { count: q.lines.length })}
                           </Badge>
                         )}
                         <span className="block pt-0.5 text-[10px] text-stone-400">
-                          {q.status === 'received' ? (q.stockOk ? 'stock confirmed' : 'stock short') : q.status}
-                          {q.terms ? ' · terms on file' : ''}
+                          {q.status === 'received' ? (q.stockOk ? t('finder.quotes.stockOk') : t('finder.quotes.stockShort')) : q.status}
+                          {q.terms ? t('finder.quotes.termsOnFile') : ''}
                         </span>
                       </td>
                       <td className="whitespace-nowrap px-2 py-2.5 text-right tabular-nums text-stone-700">{q.status === 'received' ? formatKes(q.unitPrice) : '—'}</td>
                       <td className="whitespace-nowrap px-2 py-2.5 text-right tabular-nums text-stone-700">{q.status === 'received' ? formatKes(q.deliveryFee + q.transportFee) : '—'}</td>
                       <td className="whitespace-nowrap px-2 py-2.5 text-right tabular-nums text-stone-700">{q.status === 'received' ? formatKes(q.fees) : '—'}</td>
                       <td className="whitespace-nowrap px-2 py-2.5 text-right font-semibold tabular-nums text-stone-900">{q.status === 'received' ? formatKes(q.totalLanded) : '—'}</td>
-                      <td className="whitespace-nowrap px-2 py-2.5 text-xs text-stone-600">{q.deliveryEta ?? '—'}</td>
+                      <td className="whitespace-nowrap px-2 py-2.5 text-xs text-stone-600">{q.deliveryEta ? t(`finder.quotes.eta.${q.deliveryEta.replace(/ /g, '_')}`) : '—'}</td>
                       <td className="whitespace-nowrap px-2 py-2.5">
                         {q.status !== 'received' ? (
                           <span className="text-xs text-stone-400">—</span>
                         ) : expired ? (
-                          <Badge className="border-0 gap-1 bg-stone-200 text-[10px] text-stone-600 hover:bg-stone-200">expired</Badge>
+                          <Badge className="border-0 gap-1 bg-stone-200 text-[10px] text-stone-600 hover:bg-stone-200">{t('finder.quotes.expired')}</Badge>
                         ) : left === null ? (
-                          <Button size="sm" variant="ghost" className="h-7 min-h-7 gap-1 px-2 text-[10px] text-stone-500" disabled={busy} onClick={() => openEdit(q)} aria-label={`Set validity and terms for ${q.supplierName}`}>
-                            <Pencil className="h-3 w-3" aria-hidden /> set
+                          <Button size="sm" variant="ghost" className="h-7 min-h-7 gap-1 px-2 text-[10px] text-stone-500" disabled={busy} onClick={() => openEdit(q)} aria-label={t('finder.quotes.setAria', { name: q.supplierName })}>
+                            <Pencil className="h-3 w-3" aria-hidden /> {t('finder.quotes.set')}
                           </Button>
                         ) : (
                           <span className="flex items-center gap-1.5">
                             <Badge variant="outline" className="gap-1 text-[10px] font-medium text-stone-500">
-                              <CalendarClock className="h-3 w-3" aria-hidden /> {left === 0 ? 'expires today' : `expires in ${left}d`}
+                              <CalendarClock className="h-3 w-3" aria-hidden /> {left === 0 ? t('finder.quotes.expiresToday') : t('finder.quotes.expiresIn', { days: left })}
                             </Badge>
                             {canManage && (
                               <button
                                 className="rounded-full p-1 text-stone-400 transition hover:text-amber-700"
                                 disabled={busy}
                                 onClick={() => openEdit(q)}
-                                aria-label={`Edit validity and terms for ${q.supplierName}`}
-                                title="Edit validity & terms"
+                                aria-label={t('finder.quotes.editAria', { name: q.supplierName })}
+                                title={t('finder.quotes.editTitle')}
                               >
                                 <Pencil className="h-3 w-3" aria-hidden />
                               </button>
@@ -281,16 +283,16 @@ export function QuotesCard({
                             <Button
                               size="sm" className="h-8 min-h-8 gap-1 bg-amber-600 px-2 text-xs text-white hover:bg-amber-700" disabled={busy}
                               onClick={() => openReceive(q)}
-                              aria-label={`Simulate ${q.supplierName} quote response`}
+                              aria-label={t('finder.quotes.simulateAria', { name: q.supplierName })}
                             >
-                              Simulate response
+                              {t('finder.quotes.simulate')}
                             </Button>
                             <Button
                               size="sm" variant="ghost" className="h-8 min-h-8 gap-1 px-2 text-xs text-stone-500 hover:text-rose-600" disabled={busy}
                               onClick={() => void decline(q)}
-                              aria-label={`Mark ${q.supplierName} as declined`}
+                              aria-label={t('finder.quotes.declineAria', { name: q.supplierName })}
                             >
-                              <X className="h-3.5 w-3.5" aria-hidden /> Decline
+                              <X className="h-3.5 w-3.5" aria-hidden /> {t('finder.quotes.decline')}
                             </Button>
                           </span>
                         )}
@@ -308,10 +310,10 @@ export function QuotesCard({
       <Dialog open={requestOpen} onOpenChange={setRequestOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Request quotes — {request.requestCode}</DialogTitle>
-            <DialogDescription>Suppliers stocking these materials are pre-picked.</DialogDescription>
+            <DialogTitle>{t('finder.quotes.rqTitle', { code: request.requestCode })}</DialogTitle>
+            <DialogDescription>{t('finder.quotes.rqDesc')}</DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-1 gap-2 max-h-72 overflow-y-auto pr-1" role="group" aria-label="Suppliers to request quotes from">
+          <div className="grid grid-cols-1 gap-2 max-h-72 overflow-y-auto pr-1" role="group" aria-label={t('finder.quotes.rqGroupAria')}>
             {suppliers.map((s) => {
               const picked = supplierPicks.includes(s.id)
               return (
@@ -325,16 +327,16 @@ export function QuotesCard({
                     className="h-5 w-5 shrink-0 accent-amber-600"
                     checked={picked}
                     onChange={() => setSupplierPicks((p) => (picked ? p.filter((x) => x !== s.id) : [...p, s.id]))}
-                    aria-label={`Request a quote from ${s.businessName}`}
+                    aria-label={t('finder.quotes.rqPickAria', { name: s.businessName })}
                   />
                 </label>
               )
             })}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRequestOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setRequestOpen(false)}>{t('dialog.expense.cancel')}</Button>
             <Button className="bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={() => void sendQuoteRequests()}>
-              Request {supplierPicks.length || ''} quote{supplierPicks.length === 1 ? '' : 's'}
+              {t(supplierPicks.length === 1 ? 'finder.quotes.rqOne' : 'finder.quotes.rqMany', { count: supplierPicks.length })}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -344,25 +346,25 @@ export function QuotesCard({
       <Dialog open={Boolean(receiveTarget)} onOpenChange={(v) => !v && setReceiveTarget(null)}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Supplier response — {receiveTarget?.supplierName}</DialogTitle>
+            <DialogTitle>{t('finder.quotes.recvTitle', { name: receiveTarget?.supplierName ?? '' })}</DialogTitle>
             <DialogDescription>
-              Simulated quote entry (no live supplier rail yet).{' '}
+              {t('finder.quotes.recvDesc')}
               {multiLine
-                ? `One unit price per line of ${request.requestCode} — quantities are fixed from the request.`
+                ? t('finder.quotes.recvMulti', { code: request.requestCode })
                 : firstLine
-                  ? `The unit price applies to ${firstLine.qty} ${firstLine.unit} of ${firstLine.materialName}; fees land on top.`
+                  ? t('finder.quotes.recvSingle', { qty: firstLine.qty, unit: firstLine.unit, name: firstLine.materialName })
                   : ''}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             {multiLine ? (
               <div className="space-y-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">Per-line prices</p>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">{t('finder.quotes.perLine')}</p>
                 {request.lines.map((line) => (
                   <div key={line.id} className="grid grid-cols-[1fr_7rem] items-center gap-2 rounded-lg border border-stone-200 px-3 py-2">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-stone-800">{line.materialName}</p>
-                      <p className="text-[11px] text-stone-500">qty fixed · {line.qty} {line.unit}</p>
+                      <p className="text-[11px] text-stone-500">{t('finder.quotes.qtyFixed', { qty: line.qty, unit: line.unit })}</p>
                     </div>
                     <Input
                       type="number"
@@ -371,7 +373,7 @@ export function QuotesCard({
                       value={linePrices[line.id] ?? ''}
                       onChange={(e) => setLinePrices((p) => ({ ...p, [line.id]: e.target.value }))}
                       placeholder="760"
-                      aria-label={`Quoted unit price for ${line.materialName}`}
+                      aria-label={t('finder.quotes.priceAria', { name: line.materialName })}
                       className="h-9 text-right tabular-nums"
                     />
                   </div>
@@ -380,7 +382,7 @@ export function QuotesCard({
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="q-unit">Unit price (KSh)</Label>
+                  <Label htmlFor="q-unit">{t('finder.quotes.unitPrice')}</Label>
                   <Input id="q-unit" type="number" inputMode="decimal" min={0} value={form.unitPrice} onChange={(e) => setForm({ ...form, unitPrice: e.target.value })} placeholder="760" />
                 </div>
                 <div className="space-y-1.5">
@@ -389,7 +391,7 @@ export function QuotesCard({
                     <SelectTrigger id="q-eta"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {['same day', 'next day', '2 days', '3 days', '1 week'].map((d) => (
-                        <SelectItem key={d} value={d}>{d}</SelectItem>
+                        <SelectItem key={d} value={d}>{t(`finder.quotes.eta.${d.replace(/ /g, '_')}`)}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -403,7 +405,7 @@ export function QuotesCard({
                   <SelectTrigger id="q-eta"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {['same day', 'next day', '2 days', '3 days', '1 week'].map((d) => (
-                      <SelectItem key={d} value={d}>{d}</SelectItem>
+                      <SelectItem key={d} value={d}>{t(`finder.quotes.eta.${d.replace(/ /g, '_')}`)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -411,38 +413,38 @@ export function QuotesCard({
             )}
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="q-delivery">Delivery fee</Label>
+                <Label htmlFor="q-delivery">{t('finder.quotes.deliveryFee')}</Label>
                 <Input id="q-delivery" type="number" inputMode="decimal" min={0} value={form.deliveryFee} onChange={(e) => setForm({ ...form, deliveryFee: e.target.value })} placeholder="2500" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="q-transport">Transport</Label>
+                <Label htmlFor="q-transport">{t('finder.quotes.transport')}</Label>
                 <Input id="q-transport" type="number" inputMode="decimal" min={0} value={form.transportFee} onChange={(e) => setForm({ ...form, transportFee: e.target.value })} placeholder="0" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="q-fees">Other fees</Label>
+                <Label htmlFor="q-fees">{t('finder.quotes.otherFees')}</Label>
                 <Input id="q-fees" type="number" inputMode="decimal" min={0} value={form.fees} onChange={(e) => setForm({ ...form, fees: e.target.value })} placeholder="0" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="q-valid">Valid until</Label>
+                <Label htmlFor="q-valid">{t('finder.quotes.validUntil')}</Label>
                 <Input id="q-valid" type="date" value={validityForm.validUntil} onChange={(e) => setValidityForm((v) => ({ ...v, validUntil: e.target.value }))} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="q-terms">Terms</Label>
-                <Input id="q-terms" value={validityForm.terms} onChange={(e) => setValidityForm((v) => ({ ...v, terms: e.target.value }))} placeholder="50% on delivery, 50% after 14d" />
+                <Label htmlFor="q-terms">{t('finder.quotes.terms')}</Label>
+                <Input id="q-terms" value={validityForm.terms} onChange={(e) => setValidityForm((v) => ({ ...v, terms: e.target.value }))} placeholder={t('finder.quotes.termsPh')} />
               </div>
             </div>
             <label className="flex items-center justify-between rounded-lg border border-stone-200 px-3 py-2.5 text-sm">
               <span>
-                <span className="block font-medium text-stone-800">Stock confirmed</span>
-                <span className="block text-[10px] text-stone-400">Supplier confirms full quantity availability</span>
+                <span className="block font-medium text-stone-800">{t('finder.quotes.stockConfirmed')}</span>
+                <span className="block text-[10px] text-stone-400">{t('finder.quotes.stockConfirmedHint')}</span>
               </span>
-              <Switch checked={form.stockOk} onCheckedChange={(v) => setForm({ ...form, stockOk: v })} aria-label="Stock confirmed" />
+              <Switch checked={form.stockOk} onCheckedChange={(v) => setForm({ ...form, stockOk: v })} aria-label={t('finder.quotes.stockAria')} />
             </label>
             {(multiLine ? multiLineProductCost !== null : Number(form.unitPrice) > 0) && (
               <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600">
-                Landed total:{' '}
+                {t('finder.quotes.landedTotal')}{' '}
                 <span className="font-semibold tabular-nums text-stone-900">
                   {formatKes((multiLine ? (multiLineProductCost ?? 0) : Number(form.unitPrice) * (firstLine?.qty ?? 0)) + feeTotal)}
                 </span>
@@ -450,9 +452,9 @@ export function QuotesCard({
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setReceiveTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setReceiveTarget(null)}>{t('dialog.expense.cancel')}</Button>
             <Button className="gap-1.5 bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={() => void receive()}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null} Record quote
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null} {t('finder.quotes.record')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -462,24 +464,24 @@ export function QuotesCard({
       <Dialog open={Boolean(editTarget)} onOpenChange={(v) => !v && setEditTarget(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Validity &amp; terms — {editTarget?.supplierName}</DialogTitle>
+            <DialogTitle>{t('finder.quotes.edTitle', { name: editTarget?.supplierName ?? '' })}</DialogTitle>
             <DialogDescription>
-              Spec §32: quotes carry a validity window and payment/delivery terms. A past date greys the quote and marks it expired.
+              {t('finder.quotes.edDesc')}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="qe-valid">Valid until</Label>
+              <Label htmlFor="qe-valid">{t('finder.quotes.validUntil')}</Label>
               <Input id="qe-valid" type="date" value={validityForm.validUntil} onChange={(e) => setValidityForm((v) => ({ ...v, validUntil: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="qe-terms">Terms</Label>
-              <Input id="qe-terms" value={validityForm.terms} onChange={(e) => setValidityForm((v) => ({ ...v, terms: e.target.value }))} placeholder="e.g. 30 days validity · 50% on delivery" />
+              <Label htmlFor="qe-terms">{t('finder.quotes.terms')}</Label>
+              <Input id="qe-terms" value={validityForm.terms} onChange={(e) => setValidityForm((v) => ({ ...v, terms: e.target.value }))} placeholder={t('finder.quotes.edPh')} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
-            <Button className="bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={() => void saveValidity()}>Save</Button>
+            <Button variant="outline" onClick={() => setEditTarget(null)}>{t('dialog.expense.cancel')}</Button>
+            <Button className="bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={() => void saveValidity()}>{t('finder.quotes.save')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

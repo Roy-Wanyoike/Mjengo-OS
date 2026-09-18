@@ -39,8 +39,10 @@ const STATUS_LABELS: Record<string, string> = {
   present: 'Present', half_day: 'Half day', absent: 'Absent', excused: 'Excused',
 }
 
-/** Display label for an attendance status (t(`fundis.status.${s}`)); the
- *  bare STATUS_LABELS above stays EN because it feeds dispatch labels. */
+/** Display label for an attendance status (t(`fundis.status.${s}`)). The
+ *  STATUS_LABELS map above is the KNOWN-STATUS GUARD only — its EN values
+ *  never render; every dispatch label resolves the localized dict twin
+ *  (issue #125: dispatch STATUS_LABELS moved into the dicts). */
 function statusLabel(status: string | null | undefined, t: TranslateFn): string {
   return status && STATUS_LABELS[status] ? t(`fundis.status.${status}`) : t('fundis.noRecord')
 }
@@ -268,7 +270,7 @@ export function FundisTab() {
   }
 
   async function checkIn(workerId: string, workerName: string) {
-    const ok = await dispatch('attendance.checkin', { workerId, toggle: 'in', method: 'app' }, `Check in ${workerName}`)
+    const ok = await dispatch('attendance.checkin', { workerId, toggle: 'in', method: 'app' }, t('fundis.dispatch.checkIn', { name: workerName }))
     if (ok) toast.success(online
       ? t('fundis.checkinOk', { name: workerName })
       : t('fundis.checkinQueued', { count: outbox.length }))
@@ -276,7 +278,7 @@ export function FundisTab() {
   }
 
   async function checkOut(workerId: string, workerName: string) {
-    const ok = await dispatch('attendance.checkin', { workerId, toggle: 'out' }, `Check out ${workerName}`)
+    const ok = await dispatch('attendance.checkin', { workerId, toggle: 'out' }, t('fundis.dispatch.checkOut', { name: workerName }))
     if (ok) toast.success(t('fundis.checkoutOk', { name: workerName }))
     else toast.error(t('fundis.checkoutFailed'))
   }
@@ -297,8 +299,8 @@ export function FundisTab() {
     setOverrideBusy(true)
     try {
       const ok = attId
-        ? await dispatch('attendance.override', { id: attId, to, reason, by: 'Site Manager' }, `${worker.name} → ${STATUS_LABELS[to]}`)
-        : await dispatch('attendance.record', { records: JSON.stringify([{ workerId: worker.id, status: to }]), verification: 'reported', recordedBy: 'Site Manager' }, `Record ${worker.name} ${STATUS_LABELS[to]}`)
+        ? await dispatch('attendance.override', { id: attId, to, reason, by: 'Site Manager' }, t('fundis.dispatch.override', { name: worker.name, status: t(`fundis.status.${to}`) }))
+        : await dispatch('attendance.record', { records: JSON.stringify([{ workerId: worker.id, status: to }]), verification: 'reported', recordedBy: 'Site Manager' }, t('fundis.dispatch.record', { name: worker.name, status: t(`fundis.status.${to}`) }))
       if (ok) {
         toast.success(t('fundis.overrideOk', { name: worker.name, status: t(`fundis.status.${to}`) }))
         setOverrideFor(null)
@@ -319,7 +321,7 @@ export function FundisTab() {
       const ok = await dispatch(
         'attendance.record',
         { records: JSON.stringify(records), verification: 'reported', recordedBy: 'Site Manager' },
-        'Save daily muster',
+        t('fundis.dispatch.muster'),
       )
       if (ok) {
         toast.success(t('fundis.musterSaved', { count: records.length }))
@@ -339,7 +341,7 @@ export function FundisTab() {
       const ok = await dispatch(
         'attendance.exception',
         { workerId: exceptionFor.id, reason: exReason, note: exNote.trim() || undefined },
-        `Log exception for ${exceptionFor.name}`,
+        t('fundis.dispatch.exception', { name: exceptionFor.name }),
       )
       if (ok) {
         toast.success(t('fundis.exceptionLogged', { name: exceptionFor.name, reason: reasonLabel(exReason, t) }))
@@ -406,7 +408,7 @@ export function FundisTab() {
   async function addFundi(payload: AddWorkerPayload): Promise<boolean> {
     setAddBusy(true)
     try {
-      return await dispatch('worker.create', payload, `Add fundi ${payload.name}`)
+      return await dispatch('worker.create', payload, t('fundis.dispatch.addFundi', { name: payload.name }))
     } finally {
       setAddBusy(false)
     }
@@ -416,7 +418,7 @@ export function FundisTab() {
     if (!editWorker) return false
     setEditBusy(true)
     try {
-      return await dispatch('worker.update', { id: editWorker.id, ...payload }, `Edit fundi ${payload.name}`)
+      return await dispatch('worker.update', { id: editWorker.id, ...payload }, t('fundis.dispatch.editFundi', { name: payload.name }))
     } finally {
       setEditBusy(false)
     }
@@ -425,7 +427,7 @@ export function FundisTab() {
   function exportAttendance() {
     if (!data) return
     const filename = `${projectFilePrefix(data)}-attendance.csv`
-    downloadCSV(filename, attendanceCSV(data))
+    downloadCSV(filename, attendanceCSV(t, data))
     toast.success(t('field.exported', { file: filename }))
   }
 

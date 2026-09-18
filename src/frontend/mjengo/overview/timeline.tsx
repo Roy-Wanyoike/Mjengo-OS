@@ -6,9 +6,13 @@
 // getProjectPayload already ships it) — no extra fetch, no new API. The admin
 // Audit tab is the deep drill-down; this is the at-a-glance river of what
 // happened on this project, newest first, for every owner role.
+//
+// Copy flows through useT() (overview.tl.* — issue #125); kind badges reuse
+// the audit.kind.* family the audit tab resolves (fallback: the raw kind).
 
 import { useMemo, useState } from 'react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
+import { useT } from '@/frontend/i18n/provider'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/frontend/ui/card'
 import { Badge } from '@/frontend/ui/badge'
 import {
@@ -74,7 +78,18 @@ export interface TimelineEvent {
 
 const COLLAPSED_COUNT = 20
 
+/** Kinds the audit.kind.* dict family covers (audit-tab's label set). */
+const KNOWN_KINDS = new Set([
+  'task', 'phase', 'delivery', 'material', 'consumption', 'attendance', 'wage',
+  'worker', 'alert', 'photo', 'project', 'expense', 'transaction', 'share',
+  'escrow', 'milestone', 'variation', 'comment', 'notification', 'site_map',
+  'inventory', 'boq', 'payment', 'wallet', 'ledger', 'auth', 'export',
+  'action', 'mjengo_score', 'draw_pack', 'flag', 'ai_review', 'ai_screen',
+  'ai_digest', 'document',
+])
+
 export function ActivityTimeline() {
+  const t = useT()
   const events = useMjengo((s) => s.data?.auditEvents ?? null)
   const [expanded, setExpanded] = useState(false)
 
@@ -104,22 +119,24 @@ export function ActivityTimeline() {
     <Card className="border-stone-200 shadow-sm">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-          <History className="w-5 h-5 text-amber-600" aria-hidden /> Project activity
+          <History className="w-5 h-5 text-amber-600" aria-hidden /> {t('overview.tl.title')}
         </CardTitle>
         <CardDescription>
-          Every recorded action on this build — the same trail the admin Audit tab
-          drills into. Newest first · {ordered.length} event{ordered.length === 1 ? '' : 's'}.
+          {ordered.length === 1
+            ? t('overview.tl.descOne', { count: ordered.length })
+            : t('overview.tl.descMany', { count: ordered.length })}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <ol
           className="relative max-h-96 overflow-y-auto pr-2 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full"
-          aria-label="Project activity timeline"
+          aria-label={t('overview.tl.aria')}
         >
           {visible.map((ev, i) => {
             const { icon: KindIcon, tint } = kindIcon(ev.kind)
             const last = i === visible.length - 1 && hidden === 0
             const danger = tint === 'text-red-600'
+            const kindText = KNOWN_KINDS.has(ev.kind) ? t(`audit.kind.${ev.kind}`) : ev.kind.replace(/_/g, ' ')
             return (
               <li key={ev.id} className="relative flex gap-3">
                 {/* Vertical rail: icon node + connecting line */}
@@ -138,7 +155,7 @@ export function ActivityTimeline() {
                   </div>
                   <p className="text-sm text-stone-700 mt-0.5 leading-snug">{ev.summary}</p>
                   <p className="text-[11px] text-stone-400 mt-0.5">
-                    {ev.actor} · <span className="capitalize">{ev.kind.replace(/_/g, ' ')}</span>
+                    {ev.actor} · <span className="capitalize">{kindText}</span>
                   </p>
                 </div>
               </li>
@@ -153,7 +170,7 @@ export function ActivityTimeline() {
             aria-expanded={expanded}
             className="mt-3 w-full min-h-11 text-sm font-semibold text-stone-600 hover:text-stone-900 border border-stone-200 rounded-lg hover:bg-stone-50 transition-colors"
           >
-            {expanded ? 'Show latest 20 only' : `Show all activity (${hidden} more)`}
+            {expanded ? t('overview.tl.collapse') : t('overview.tl.expand', { count: hidden })}
           </button>
         )}
       </CardContent>

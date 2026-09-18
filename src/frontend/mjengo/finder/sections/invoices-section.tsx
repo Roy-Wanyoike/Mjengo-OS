@@ -28,6 +28,7 @@ import { matchThreeWay } from '@/backend/modules/invoices/three-way'
 import type { InvoiceWithLines, ThreeWayReport } from '@/backend/modules/invoices/types'
 import { AlertTriangle, Banknote, Check, Hourglass, Plus, ReceiptText, ScrollText, Send, ShieldCheck, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { useT } from '@/frontend/i18n/provider'
 import { CreateInvoiceDialog } from './invoices/create-invoice-dialog'
 import { DecisionQueueCard } from './invoices/decision-queue-card'
 import { InvoiceDetailDialog } from './invoices/invoice-detail-dialog'
@@ -38,6 +39,7 @@ import { PrintableInvoice } from './invoices/printable-invoice'
 
 export function InvoicesSection() {
   const { data, dispatch, viewMode, shareToken, clientRole, actionBusy, online, outbox } = useMjengo()
+  const t = useT()
   const busy = actionBusy !== null
 
   const [detailTarget, setDetailTarget] = useState<InvoiceWithLines | null>(null)
@@ -99,8 +101,8 @@ export function InvoicesSection() {
   }, [invoices, orders])
 
   const queue = invoices.filter((i) => i.status === 'submitted' || i.status === 'disputed')
-  const paymentRecords = (data?.transactions ?? []).filter((t) => t.type === 'invoice')
-  const offlineNote = `Saved on-device — queued (${outbox.length})`
+  const paymentRecords = (data?.transactions ?? []).filter((tx) => tx.type === 'invoice')
+  const offlineNote = t('field.savedQueued', { count: outbox.length })
   // Ledger refs for paid invoices (F-MONEY): Transaction.ledgerTxnId → ledger txn ref
   const allTransactions = data?.transactions
   const ledgerTxns = data?.finance?.ledger.transactions
@@ -129,46 +131,46 @@ export function InvoicesSection() {
   }
 
   async function submitDraft(inv: InvoiceWithLines) {
-    const ok = await dispatch('invoice.submit', { id: inv.id }, `Invoice submitted: ${inv.invoiceCode}`)
+    const ok = await dispatch('invoice.submit', { id: inv.id }, t('finder.inv.audit.submitted', { code: inv.invoiceCode }))
     if (ok) {
-      toast.success(online ? `${inv.invoiceCode} submitted — awaiting ${clientName}` : offlineNote)
+      toast.success(online ? t('finder.inv.toast.submitted', { code: inv.invoiceCode, client: clientName }) : offlineNote)
       setDetailTarget(null)
-    } else toast.error('Could not submit — the invoice may no longer be a draft')
+    } else toast.error(t('finder.inv.toast.submitFailed'))
   }
 
   async function approveInvoice(inv: InvoiceWithLines) {
     const ok = await dispatch('invoice.decide', {
       id: inv.id, decision: 'approve', by: clientName,
-    }, `Invoice approved: ${inv.invoiceCode}`)
+    }, t('finder.inv.audit.approved', { code: inv.invoiceCode }))
     if (ok) {
-      toast.success(`${inv.invoiceCode} approved — payment can now be recorded`)
+      toast.success(t('finder.inv.toast.approved', { code: inv.invoiceCode }))
       setApproveConfirm(null)
       setDetailTarget(null)
-    } else toast.error('Could not record the approval — only the client role may decide')
+    } else toast.error(t('finder.inv.toast.approveFailed'))
   }
 
   async function rejectInvoice(inv: InvoiceWithLines) {
     const ok = await dispatch('invoice.decide', {
       id: inv.id, decision: 'reject', by: clientName,
       note: noteDraft.trim() || undefined,
-    }, `Invoice rejected: ${inv.invoiceCode}`)
+    }, t('finder.inv.audit.rejected', { code: inv.invoiceCode }))
     if (ok) {
-      toast.success(`${inv.invoiceCode} rejected — the supplier can re-issue`)
+      toast.success(t('finder.inv.toast.rejected', { code: inv.invoiceCode }))
       setRejectTarget(null); setNoteDraft('')
       setDetailTarget(null)
-    } else toast.error('Could not record the rejection — only the client role may decide')
+    } else toast.error(t('finder.inv.toast.rejectFailed'))
   }
 
   async function disputeInvoice(inv: InvoiceWithLines) {
     // Disputes ride invoice.update { status: 'disputed' } — documented path (no dispute action in the tuple)
     const ok = await dispatch('invoice.update', {
       id: inv.id, status: 'disputed', note: noteDraft.trim() || undefined,
-    }, `Invoice disputed: ${inv.invoiceCode}`)
+    }, t('finder.inv.audit.disputed', { code: inv.invoiceCode }))
     if (ok) {
-      toast.success(`${inv.invoiceCode} marked disputed — reconcile with the supplier`)
+      toast.success(t('finder.inv.toast.disputed', { code: inv.invoiceCode }))
       setDisputeTarget(null); setNoteDraft('')
       setDetailTarget(null)
-    } else toast.error('Could not file the dispute — only the client role may dispute')
+    } else toast.error(t('finder.inv.toast.disputeFailed'))
   }
 
   async function payConfirmed(inv: InvoiceWithLines, payload: { method: string; reference: string; costCode: string | null; acknowledgeMismatch: boolean }) {
@@ -176,7 +178,7 @@ export function InvoicesSection() {
       id: inv.id, method: payload.method, reference: payload.reference,
       costCode: payload.costCode ?? undefined,
       acknowledgeMismatch: payload.acknowledgeMismatch || undefined, by: clientName,
-    }, `Invoice paid: ${inv.invoiceCode}`)
+    }, t('finder.inv.audit.paid', { code: inv.invoiceCode }))
     if (ok) {
       // F-MONEY: the payment posts a double-entry ledger row — quote its ref
       // from the refreshed payload (Transaction.ledgerTxnId → ledger ref).
@@ -186,20 +188,22 @@ export function InvoicesSection() {
         ? fresh?.finance.ledger.transactions.find((lt) => lt.id === txnRow.ledgerTxnId)?.ref
         : undefined
       toast.success(online
-        ? `${formatKES(inv.total)} paid — ${payload.reference} recorded${ledgerRef ? ` (ledger ${ledgerRef}, cost code ${txnRow?.costCode ?? 'invoice'})` : ' in the Transaction ledger'}`
+        ? t('finder.inv.toast.paid', { amount: formatKES(inv.total), reference: payload.reference }) + (ledgerRef
+          ? t('finder.inv.toast.paidLedger', { ledger: ledgerRef, cost: txnRow?.costCode ?? 'invoice' })
+          : t('finder.inv.toast.paidTxn'))
         : offlineNote)
       setPayTarget(null)
       setDetailTarget(null)
     } else {
       // Honest failure: the server blocked it (role, status or unacknowledged mismatch)
-      toast.error('Payment was not recorded — the server blocked it (approval, role or unreviewed 3-way discrepancy)')
+      toast.error(t('finder.inv.toast.payFailed'))
       setPayTarget(inv) // keep the dialog open so the payer can review
     }
   }
 
   async function runCheck(inv: InvoiceWithLines) {
     // Dispatch the action too — the run lands in the Bias-Free Ledger trail
-    await dispatch('invoice.threeWayCheck', { id: inv.id }, `3-way match: ${inv.invoiceCode}`)
+    await dispatch('invoice.threeWayCheck', { id: inv.id }, t('finder.inv.audit.match', { code: inv.invoiceCode }))
     setMatchRunFor(inv.id)
   }
 
@@ -213,17 +217,17 @@ export function InvoicesSection() {
     orderId?: string; supplierId?: string; lines: { name: string; qty: number; unitPrice: number }[]
     tax?: number; dueDate?: string; note?: string
   }) {
-    const ok = await dispatch('invoice.create', payload, 'Invoice draft created')
+    const ok = await dispatch('invoice.create', payload, t('finder.inv.audit.create'))
     if (ok) {
-      toast.success(online ? 'Draft invoice created — review it, then submit to the client' : offlineNote)
+      toast.success(online ? t('finder.inv.toast.created') : offlineNote)
       setCreateOpen(false)
-    } else toast.error('Could not create the invoice — check the lines')
+    } else toast.error(t('finder.inv.toast.createFailed'))
   }
 
   // ---------------- render ----------------
 
   return (
-    <section aria-label="Supplier invoices" className="space-y-6">
+    <section aria-label={t('finder.inv.aria')} className="space-y-6">
       {/* Print isolation — only #mjengo-print-root is visible on paper */}
       <style>{`@media print { body * { visibility: hidden !important; } #mjengo-print-root, #mjengo-print-root * { visibility: visible !important; } #mjengo-print-root { position: fixed !important; inset: 0 !important; overflow: visible !important; background: white !important; } }`}</style>
 
@@ -233,16 +237,15 @@ export function InvoicesSection() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
               <Hourglass className="h-5 w-5 text-amber-600" aria-hidden />
-              Client decision queue
+              {t('finder.inv.queue.title')}
               <Badge className="border-0 bg-amber-100 text-amber-900">{queue.length}</Badge>
             </CardTitle>
             <CardDescription>
-              Supplier invoices waiting on <span className="font-medium text-stone-700">{clientName}</span> — approve, reject with a note, or dispute.
-              The 3-way match flags open items; the system recommends, a human decides.
+              {t('finder.inv.queue.desc', { client: clientName })}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="max-h-[32rem] space-y-4 overflow-y-auto pr-2 -mr-2" role="region" aria-label="Invoices awaiting a client decision, scrollable">
+            <div className="max-h-[32rem] space-y-4 overflow-y-auto pr-2 -mr-2" role="region" aria-label={t('finder.inv.queue.scrollAria')}>
               {queue.map((inv) => (
                 <DecisionQueueCard
                   key={inv.id}
@@ -267,17 +270,17 @@ export function InvoicesSection() {
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
           <div className="space-y-2">
             <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-              <ReceiptText className="h-5 w-5 text-amber-600" aria-hidden /> Invoices
+              <ReceiptText className="h-5 w-5 text-amber-600" aria-hidden /> {t('finder.inv.title')}
               <Badge variant="outline" className="text-[10px] font-medium text-stone-500">{invoices.length}</Badge>
             </CardTitle>
             <CardDescription>
-              Draft → submitted → client decision → paid. Every payment writes one permanent Transaction ledger entry.
+              {t('finder.inv.desc')}
             </CardDescription>
             <LedgerConsistencyChip check={data.invoices.ledgerCheck} walletBalance={walletBalance} />
           </div>
           {isSiteTeam && (
-            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" onClick={() => setCreateOpen(true)} aria-label="Create a new supplier invoice">
-              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">New invoice</span>
+            <Button size="sm" variant="outline" className="min-h-11 gap-1.5" onClick={() => setCreateOpen(true)} aria-label={t('finder.inv.newAria')}>
+              <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('finder.inv.new')}</span>
             </Button>
           )}
         </CardHeader>
@@ -285,31 +288,31 @@ export function InvoicesSection() {
           {invoices.length === 0 ? (
             <div className="rounded-lg border border-dashed border-stone-300 p-8 text-center">
               <ReceiptText className="mx-auto h-8 w-8 text-stone-300" aria-hidden />
-              <p className="pt-3 text-sm font-medium text-stone-700">No invoices yet</p>
+              <p className="pt-3 text-sm font-medium text-stone-700">{t('finder.inv.emptyTitle')}</p>
               <p className="pt-1 text-xs text-stone-500">
                 {isSiteTeam
-                  ? 'Create one from a purchase order — supplier and lines pre-fill from the PO.'
-                  : 'The site team drafts supplier invoices here; you decide and pay.'}
+                  ? t('finder.inv.emptySite')
+                  : t('finder.inv.emptyClient')}
               </p>
               {isSiteTeam && (
                 <Button size="sm" className="mt-4 min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" onClick={() => setCreateOpen(true)}>
-                  <Plus className="h-4 w-4" aria-hidden /> New invoice
+                  <Plus className="h-4 w-4" aria-hidden /> {t('finder.inv.new')}
                 </Button>
               )}
             </div>
           ) : (
-            <div className="max-h-96 overflow-y-auto pr-2 -mr-2" role="region" aria-label="All invoices, scrollable">
+            <div className="max-h-96 overflow-y-auto pr-2 -mr-2" role="region" aria-label={t('finder.inv.scrollAria')}>
               <div className="overflow-x-auto rounded-md border border-stone-200">
                 <table className="w-full min-w-[560px] text-sm">
                   <thead>
                     <tr className="border-b border-stone-200 bg-stone-50 text-left text-[11px] uppercase tracking-wide text-stone-400">
-                      <th scope="col" className="px-3 py-2 font-medium">Invoice</th>
-                      <th scope="col" className="px-2 py-2 font-medium">Supplier</th>
-                      <th scope="col" className="px-2 py-2 font-medium">Match</th>
-                      <th scope="col" className="px-2 py-2 text-right font-medium">Total</th>
-                      <th scope="col" className="px-2 py-2 font-medium">Status</th>
-                      <th scope="col" className="px-3 py-2 font-medium">Payment</th>
-                      <th scope="col" className="relative px-2 py-2 text-right font-medium"><span className="sr-only">Actions</span></th>
+                      <th scope="col" className="px-3 py-2 font-medium">{t('finder.inv.col.invoice')}</th>
+                      <th scope="col" className="px-2 py-2 font-medium">{t('finder.inv.col.supplier')}</th>
+                      <th scope="col" className="px-2 py-2 font-medium">{t('finder.inv.col.match')}</th>
+                      <th scope="col" className="px-2 py-2 text-right font-medium">{t('finder.inv.col.total')}</th>
+                      <th scope="col" className="px-2 py-2 font-medium">{t('finder.inv.col.status')}</th>
+                      <th scope="col" className="px-3 py-2 font-medium">{t('finder.inv.col.payment')}</th>
+                      <th scope="col" className="relative px-2 py-2 text-right font-medium"><span className="sr-only">{t('finder.inv.col.actions')}</span></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -321,7 +324,7 @@ export function InvoicesSection() {
                             <button
                               className="font-mono text-xs font-semibold text-stone-800 underline-offset-2 hover:text-amber-700 hover:underline"
                               onClick={() => openDetail(inv)}
-                              aria-label={`Open invoice ${inv.invoiceCode}`}
+                              aria-label={t('finder.inv.openAria', { code: inv.invoiceCode })}
                             >
                               {inv.invoiceCode}
                             </button>
@@ -339,9 +342,9 @@ export function InvoicesSection() {
                                   size="sm" variant="outline" className="h-8 min-h-8 gap-1 px-2 text-xs"
                                   disabled={busy}
                                   onClick={() => void submitDraft(inv)}
-                                  aria-label={`Submit ${inv.invoiceCode} to the client`}
+                                  aria-label={t('finder.inv.submitAria', { code: inv.invoiceCode })}
                                 >
-                                  <Send className="h-3.5 w-3.5" aria-hidden /> Submit
+                                  <Send className="h-3.5 w-3.5" aria-hidden /> {t('finder.inv.submit')}
                                 </Button>
                               )}
                               {isDecider && inv.status === 'approved' && (
@@ -349,17 +352,17 @@ export function InvoicesSection() {
                                   size="sm" className="h-8 min-h-8 gap-1 bg-emerald-600 px-2 text-xs text-white hover:bg-emerald-700"
                                   disabled={busy}
                                   onClick={() => setPayTarget(inv)}
-                                  aria-label={`Record payment for ${inv.invoiceCode}`}
+                                  aria-label={t('finder.inv.payAria', { code: inv.invoiceCode })}
                                 >
-                                  <Banknote className="h-3.5 w-3.5" aria-hidden /> Pay
+                                  <Banknote className="h-3.5 w-3.5" aria-hidden /> {t('finder.inv.pay')}
                                 </Button>
                               )}
                               <Button
                                 size="sm" variant="ghost" className="h-8 min-h-8 gap-1 px-2 text-xs text-stone-500"
                                 onClick={() => openDetail(inv)}
-                                aria-label={`Open ${inv.invoiceCode} details`}
+                                aria-label={t('finder.inv.detailsAria', { code: inv.invoiceCode })}
                               >
-                                Details
+                                {t('finder.inv.details')}
                               </Button>
                             </div>
                           </td>
@@ -378,21 +381,20 @@ export function InvoicesSection() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <ScrollText className="h-5 w-5 text-amber-600" aria-hidden /> Payment records
+            <ScrollText className="h-5 w-5 text-amber-600" aria-hidden /> {t('finder.inv.payRec.title')}
             <Badge variant="outline" className="text-[10px] font-medium text-stone-500">{paymentRecords.length}</Badge>
           </CardTitle>
           <CardDescription>
-            Every invoice payment writes one Transaction ledger entry (type <span className="font-mono text-[10px]">invoice</span>) —
-            the same ledger that feeds the project spend totals (header + Overview burn-down).
+            {t('finder.inv.payRec.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {paymentRecords.length === 0 ? (
             <p className="rounded-md bg-stone-50 p-3 text-xs text-stone-500">
-              No invoice payments recorded yet — seeded history predates the runtime ledger (no double counting).
+              {t('finder.inv.payRec.empty')}
             </p>
           ) : (
-            <div className="max-h-72 space-y-2 overflow-y-auto pr-2 -mr-2" role="region" aria-label="Invoice payment ledger entries, scrollable">
+            <div className="max-h-72 space-y-2 overflow-y-auto pr-2 -mr-2" role="region" aria-label={t('finder.inv.payRec.scrollAria')}>
               {paymentRecords.slice(0, 8).map((t) => (
                 <div key={t.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-stone-200 bg-white p-2.5">
                   <div className="min-w-0">
@@ -405,7 +407,7 @@ export function InvoicesSection() {
                 </div>
               ))}
               {paymentRecords.length > 8 && (
-                <p className="text-[11px] text-stone-400">+{paymentRecords.length - 8} older entr{paymentRecords.length - 8 === 1 ? 'y' : 'ies'} — the full ledger lives in the project exports.</p>
+                <p className="text-[11px] text-stone-400">{t(paymentRecords.length - 8 === 1 ? 'finder.inv.payRec.moreOne' : 'finder.inv.payRec.moreMany', { count: paymentRecords.length - 8 })}</p>
               )}
             </div>
           )}
@@ -456,31 +458,31 @@ export function InvoicesSection() {
       <Dialog open={approveConfirm !== null} onOpenChange={(open) => { if (!open) setApproveConfirm(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Approve invoice</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('finder.inv.approve.title')}</DialogTitle>
             <DialogDescription>
               {approveConfirm
-                ? `This approves ${formatKes(approveConfirm.total)} to ${approveConfirm.supplierName ?? 'the supplier'} for ${approveConfirm.invoiceCode}. Payment is recorded separately, after this approval.`
+                ? t('finder.inv.approve.desc', { amount: formatKes(approveConfirm.total), supplier: approveConfirm.supplierName ?? t('finder.inv.noSupplier'), code: approveConfirm.invoiceCode })
                 : ''}
             </DialogDescription>
           </DialogHeader>
           {approveConfirm && (reports.get(approveConfirm.id)?.mismatches.length ?? 0) > 0 && (
             <p className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs leading-relaxed text-amber-800">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-              The 3-way match still shows {reports.get(approveConfirm.id)?.mismatches.length} open item(s). Approving is allowed — but paying will ask you to confirm you reviewed the discrepancy.
+              {t('finder.inv.approve.mismatch', { count: reports.get(approveConfirm.id)?.mismatches.length ?? 0 })}
             </p>
           )}
           <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-xs leading-relaxed text-stone-500">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
-            One deliberate click, not two accidental ones — the decision is recorded in the audit ledger and cannot be edited afterwards.
+            {t('finder.inv.approve.careful')}
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setApproveConfirm(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setApproveConfirm(null)}>{t('dialog.expense.cancel')}</Button>
             <Button
               onClick={() => { if (approveConfirm) void approveInvoice(approveConfirm) }}
               disabled={busy}
               className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
             >
-              <Check className="h-4 w-4" aria-hidden /> Confirm approval
+              <Check className="h-4 w-4" aria-hidden /> {t('finder.inv.approve.confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -490,26 +492,26 @@ export function InvoicesSection() {
       <Dialog open={rejectTarget !== null} onOpenChange={(open) => { if (!open) setRejectTarget(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Reject with a note</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('finder.inv.reject.title')}</DialogTitle>
             <DialogDescription>
-              {rejectTarget ? `Rejecting ${rejectTarget.invoiceCode} — the note is recorded in the decision history; the supplier can re-issue.` : ''}
+              {rejectTarget ? t('finder.inv.reject.desc', { code: rejectTarget.invoiceCode }) : ''}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="invoice-reject-note">Note to the site team (optional)</Label>
-              <Textarea id="invoice-reject-note" rows={3} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="e.g. Qty billed exceeds the PO — request a corrected invoice" />
+              <Label htmlFor="invoice-reject-note">{t('finder.inv.reject.noteLabel')}</Label>
+              <Textarea id="invoice-reject-note" rows={3} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder={t('finder.inv.reject.notePh')} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRejectTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setRejectTarget(null)}>{t('dialog.expense.cancel')}</Button>
             <Button
               onClick={() => { if (rejectTarget) void rejectInvoice(rejectTarget) }}
               disabled={busy}
               variant="outline"
               className="min-h-11 gap-1.5 border-rose-300 bg-white text-rose-700 hover:bg-rose-50 hover:text-rose-800"
             >
-              <X className="h-4 w-4" aria-hidden /> Reject
+              <X className="h-4 w-4" aria-hidden /> {t('finder.inv.reject.btn')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -519,28 +521,28 @@ export function InvoicesSection() {
       <Dialog open={disputeTarget !== null} onOpenChange={(open) => { if (!open) setDisputeTarget(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-stone-900">Dispute invoice</DialogTitle>
+            <DialogTitle className="text-stone-900">{t('finder.inv.dispute.title')}</DialogTitle>
             <DialogDescription>
               {disputeTarget
-                ? `Marks ${disputeTarget.invoiceCode} as disputed — reconciliation with the supplier before any payment. Filed via invoice.update { status: 'disputed' } (no separate dispute action in the tuple).`
+                ? t('finder.inv.dispute.desc', { code: disputeTarget.invoiceCode })
                 : ''}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="invoice-dispute-note">What is disputed (optional)</Label>
-              <Textarea id="invoice-dispute-note" rows={3} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="e.g. Wrong product delivered, 2 bags missing, price differs from the quote…" />
+              <Label htmlFor="invoice-dispute-note">{t('finder.inv.dispute.whatLabel')}</Label>
+              <Textarea id="invoice-dispute-note" rows={3} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder={t('finder.inv.dispute.whatPh')} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDisputeTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setDisputeTarget(null)}>{t('dialog.expense.cancel')}</Button>
             <Button
               onClick={() => { if (disputeTarget) void disputeInvoice(disputeTarget) }}
               disabled={busy}
               variant="outline"
               className="min-h-11 gap-1.5 border-orange-300 bg-white text-orange-700 hover:bg-orange-50 hover:text-orange-800"
             >
-              <AlertTriangle className="h-4 w-4" aria-hidden /> File dispute
+              <AlertTriangle className="h-4 w-4" aria-hidden /> {t('finder.inv.dispute.btn')}
             </Button>
           </DialogFooter>
         </DialogContent>

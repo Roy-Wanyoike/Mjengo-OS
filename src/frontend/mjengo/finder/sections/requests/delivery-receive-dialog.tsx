@@ -35,14 +35,11 @@ import { Textarea } from '@/frontend/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/frontend/ui/select'
 import { Camera, Loader2, Locate, MapPin } from 'lucide-react'
 import { toast } from 'sonner'
+import { useT } from '@/frontend/i18n/provider'
 import type { OrderWithDetail } from '@/backend/modules/supply/types'
 import { fmtQty, formatKes } from './bits'
 
-const CONDITIONS = [
-  { value: 'ok', label: 'OK' },
-  { value: 'partial', label: 'Partial' },
-  { value: 'damaged', label: 'Damaged' },
-] as const
+const CONDITIONS = ['ok', 'partial', 'damaged'] as const
 
 /** One uploaded evidence photo — the /api/upload response (id + preview URL). */
 interface UploadedPhoto {
@@ -88,6 +85,7 @@ function DeliveryReceiveForm({
   onDone: () => void
 }) {
   const { dispatch, online, outbox, actionBusy } = useMjengo()
+  const t = useT()
   const [counts, setCounts] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {}
     for (const line of order.lines) initial[line.id] = String(line.qty)
@@ -116,7 +114,7 @@ function DeliveryReceiveForm({
   const [locating, setLocating] = useState(false)
   const [saving, setSaving] = useState(false)
   const busy = actionBusy !== null || saving || uploading
-  const offlineNote = `Saved on-device — queued (${outbox.length})`
+  const offlineNote = t('field.savedQueued', { count: outbox.length })
 
   const shortPreview = order.lines.filter((l) => {
     const received = Number(counts[l.id])
@@ -133,7 +131,7 @@ function DeliveryReceiveForm({
 
   function captureLocation() {
     if (!('geolocation' in navigator)) {
-      toast.info('Geolocation is unavailable on this device — enter coordinates manually')
+      toast.info(t('finder.recv.toast.geoUnavailable'))
       return
     }
     setLocating(true)
@@ -141,11 +139,11 @@ function DeliveryReceiveForm({
       (pos) => {
         setGps(`${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`)
         setLocating(false)
-        toast.success('GPS captured on the ground')
+        toast.success(t('finder.recv.toast.geoOk'))
       },
       () => {
         setLocating(false)
-        toast.info('GPS denied or unavailable — enter the coordinates manually')
+        toast.info(t('finder.recv.toast.geoDenied'))
       },
       { enableHighAccuracy: true, timeout: 8000 },
     )
@@ -159,15 +157,15 @@ function DeliveryReceiveForm({
    */
   async function uploadPhoto(file: File, lineId?: string, lineName?: string) {
     if (!online) {
-      toast.info('Photos need a connection to upload — record the delivery now; attach photos when you are back online')
+      toast.info(t('finder.recv.toast.photoOffline'))
       return
     }
     if (file.type !== 'image/png' && file.type !== 'image/jpeg') {
-      toast.error('Evidence photos must be PNG or JPEG')
+      toast.error(t('finder.recv.toast.photoType'))
       return
     }
     if (file.size > 8 * 1024 * 1024) {
-      toast.error('Photo is over the 8 MB upload limit')
+      toast.error(t('finder.recv.toast.photoSize'))
       return
     }
     setUploading(true)
@@ -184,7 +182,7 @@ function DeliveryReceiveForm({
           // Honest category: an evidence photo is none of the named document
           // categories (contract/drawing/permit/receipt/boq/invoice/quote).
           category: 'other',
-          title: lineName ? `${lineName} — delivery evidence (${order.orderCode})` : `${order.orderCode} — delivery evidence`,
+          title: lineName ? t('finder.recv.uploadTitleLine', { name: lineName, code: order.orderCode }) : t('finder.recv.uploadTitle', { code: order.orderCode }),
           projectId: order.projectId,
           entityType: 'order_delivery',
           entityId: deliveryId,
@@ -195,7 +193,7 @@ function DeliveryReceiveForm({
         error?: string
       } | null
       if (!res.ok || !json?.attachment) {
-        toast.error(json?.error ?? 'Photo upload failed — nothing was recorded')
+        toast.error(json?.error ?? t('finder.recv.toast.uploadFailed'))
         return
       }
       const photo: UploadedPhoto = {
@@ -223,11 +221,11 @@ function DeliveryReceiveForm({
       condition: conditions[l.id] ?? 'ok',
     }))
     if (lines.some((l) => !Number.isFinite(l.qtyReceived) || l.qtyReceived < 0)) {
-      toast.error('Every line needs a received count (zero or more)')
+      toast.error(t('finder.recv.toast.counts'))
       return
     }
     if (lines.some((l) => l.qtyRejected < 0 || l.qtyReceived - l.qtyRejected < 0)) {
-      toast.error('A rejected count cannot exceed what arrived on that line')
+      toast.error(t('finder.recv.toast.rejected'))
       return
     }
     // #201 — same bound the server enforces: refuse the submit locally so the
@@ -235,7 +233,7 @@ function DeliveryReceiveForm({
     if (overPreview.length > 0) {
       const l = overPreview[0]
       toast.error(
-        `${l.name}: received ${fmtQty(Number(counts[l.id]))} but only ${fmtQty(l.qty)} ${l.unit} were ordered — over-delivery is not accepted. Count at most the ordered quantity; arrange the excess on a new purchase order.`,
+        t('finder.recv.toast.over', { name: l.name, received: fmtQty(Number(counts[l.id])), ordered: fmtQty(l.qty), unit: l.unit }),
       )
       return
     }
@@ -255,50 +253,50 @@ function DeliveryReceiveForm({
       note: note.trim() || undefined,
       ...(photoIds.length > 0 ? { photoIds } : {}),
       ...(Number.isFinite(lat) && Number.isFinite(lng) ? { gpsLat: lat, gpsLng: lng } : {}),
-    }, `Delivery received: ${order.orderCode}`)
+    }, t('finder.recv.audit.received', { code: order.orderCode }))
     setSaving(false)
     if (ok) {
       const attachedPhotos = photoIds.length + Object.values(linePhotos).reduce((s, list) => s + list.length, 0)
       if (attachedPhotos > 0) {
-        toast.success(`${attachedPhotos} evidence photo${attachedPhotos === 1 ? '' : 's'} attached to the delivery record`)
+        toast.success(t(attachedPhotos === 1 ? 'finder.recv.toast.photosAttachedOne' : 'finder.recv.toast.photosAttachedMany', { count: attachedPhotos }))
       }
       const anyShort = shortPreview.length > 0
       if (anyShort) {
         toast.warning(
           online
-            ? `Discrepancy recorded — ${shortPreview.length} line(s) short. Flagged for review; client + contractor notified.`
-            : `Discrepancy recorded on-device — queued (${outbox.length}). It syncs with notifications when back online.`,
+            ? t('finder.recv.toast.shortOnline', { count: shortPreview.length })
+            : t('finder.recv.toast.shortOffline', { count: outbox.length }),
         )
       } else {
-        toast.success(online ? `${order.orderCode} received in full — verified on the ground` : offlineNote)
+        toast.success(online ? t('finder.recv.toast.full', { code: order.orderCode }) : offlineNote)
       }
       if (rejectedTotal > 0 || lines.some((l) => l.condition !== 'ok')) {
         toast.info(
-          `Site Store updated — ${rejectedTotal > 0 ? `${fmtQty(rejectedTotal)} rejected (damaged/return movements posted), ` : ''}net quantities received into stock`,
+          rejectedTotal > 0
+            ? t('finder.recv.toast.storeRejected', { rejected: fmtQty(rejectedTotal) })
+            : t('finder.recv.toast.storeOk'),
           { duration: 6000 },
         )
       }
       onDone()
-    } else toast.error('Could not record the delivery — it may already be received')
+    } else toast.error(t('finder.recv.toast.fail'))
   }
 
   return (
     <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
-          <Camera className="h-5 w-5 text-amber-600" aria-hidden /> Receive delivery — {order.orderCode}
+          <Camera className="h-5 w-5 text-amber-600" aria-hidden /> {t('finder.recv.title', { code: order.orderCode })}
         </DialogTitle>
         <DialogDescription>
-          The physical count is ground truth: count what actually arrived, line by line, and record what was rejected
-          on inspection. Short counts are flagged for review — never accusations; payment stays gated by the 3-way
-          match. Net quantities (received − rejected) post into the Site Store.
+          {t('finder.recv.desc')}
         </DialogDescription>
       </DialogHeader>
 
       <div className="space-y-4">
         <div className="space-y-2">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">
-            Ordered vs received vs rejected — {order.supplierName}
+            {t('finder.recv.section', { supplier: order.supplierName })}
           </p>
           {order.lines.map((line) => {
             const received = Number(counts[line.id])
@@ -312,7 +310,7 @@ function DeliveryReceiveForm({
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-stone-800">{line.name}</p>
                     <p className="text-[11px] text-stone-500">
-                      ordered {fmtQty(line.qty)} {line.unit} · {formatKes(line.lineTotal)}
+                      {t('finder.recv.ordered', { qty: fmtQty(line.qty), unit: line.unit, amount: formatKes(line.lineTotal) })}
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -323,7 +321,7 @@ function DeliveryReceiveForm({
                       max={line.qty}
                       value={counts[line.id] ?? ''}
                       onChange={(e) => setCounts((c) => ({ ...c, [line.id]: e.target.value }))}
-                      aria-label={`Received count for ${line.name}`}
+                      aria-label={t('finder.recv.countAria', { name: line.name })}
                       className={`h-9 text-right tabular-nums ${over ? 'border-rose-300 bg-rose-50 focus-visible:ring-rose-400' : short ? 'border-orange-300 bg-orange-50 focus-visible:ring-orange-400' : ''}`}
                     />
                     <span className="text-[11px] text-stone-400">/ {fmtQty(line.qty)}</span>
@@ -338,21 +336,21 @@ function DeliveryReceiveForm({
                       max={Number(counts[line.id]) || 0}
                       value={rejected[line.id] ?? '0'}
                       onChange={(e) => setRejected((r) => ({ ...r, [line.id]: e.target.value }))}
-                      aria-label={`Rejected count for ${line.name}`}
+                      aria-label={t('finder.recv.rejAria', { name: line.name })}
                       className="h-8 text-right tabular-nums"
                     />
-                    <span className="text-[11px] text-stone-400">rej.</span>
+                    <span className="text-[11px] text-stone-400">{t('finder.recv.rej')}</span>
                   </div>
                   <Select
                     value={conditions[line.id] ?? 'ok'}
                     onValueChange={(v) => setConditions((c) => ({ ...c, [line.id]: v }))}
                   >
-                    <SelectTrigger className="h-8 text-xs" aria-label={`Inspection condition for ${line.name}`}>
+                    <SelectTrigger className="h-8 text-xs" aria-label={t('finder.recv.condAria', { name: line.name })}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       {CONDITIONS.map((c) => (
-                        <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                        <SelectItem key={c} value={c}>{t(`finder.recv.cond.${c}`)}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -360,8 +358,8 @@ function DeliveryReceiveForm({
                 <Input
                   value={damageNotes[line.id] ?? ''}
                   onChange={(e) => setDamageNotes((n) => ({ ...n, [line.id]: e.target.value }))}
-                  placeholder="Damage note (e.g. 4 bags set by rain) — optional"
-                  aria-label={`Damage note for ${line.name}`}
+                  placeholder={t('finder.recv.damagePh')}
+                  aria-label={t('finder.recv.damageAria', { name: line.name })}
                   className="h-8 text-xs"
                 />
                 {/* Photo evidence for THIS line — shown when it is flagged
@@ -375,21 +373,21 @@ function DeliveryReceiveForm({
                         <button
                           type="button"
                           className="absolute inset-x-0 bottom-0 flex items-center justify-center bg-stone-950/60 text-[9px] font-medium text-white hover:bg-rose-600"
-                          aria-label={`Remove ${ph.fileName} from this line`}
+                          aria-label={t('finder.recv.removeAria', { file: ph.fileName })}
                           onClick={() => setLinePhotos((m) => ({ ...m, [line.id]: (m[line.id] ?? []).filter((x) => x.id !== ph.id) }))}
                         >
-                          remove
+                          {t('finder.recv.remove')}
                         </button>
                       </span>
                     ))}
                     <label className="flex h-10 cursor-pointer items-center gap-1 rounded-md border border-dashed border-orange-300 px-2 text-[10px] font-medium text-orange-700 hover:border-orange-400 hover:text-orange-800">
                       {uploading ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Camera className="h-3 w-3" aria-hidden />}
-                      photo evidence
+                      {t('finder.recv.photoEvidence')}
                       <input
                         type="file"
                         accept="image/png,image/jpeg"
                         className="sr-only"
-                        aria-label={`Add damage photo for ${line.name}`}
+                        aria-label={t('finder.recv.damagePhotoAria', { name: line.name })}
                         onChange={(e) => { onFiles(e.target.files, line.id, line.name); e.target.value = '' }}
                       />
                     </label>
@@ -406,14 +404,12 @@ function DeliveryReceiveForm({
               const received = Number(counts[l.id])
               return (
                 <p key={l.id} className="font-medium">
-                  {l.name}: ordered {fmtQty(l.qty)} · received {fmtQty(received)} — {fmtQty(received - l.qty)} over the ordered count
+                  {t('finder.recv.overLine', { name: l.name, ordered: fmtQty(l.qty), received: fmtQty(received), over: fmtQty(received - l.qty) })}
                 </p>
               )
             })}
             <p className="pt-1 font-normal">
-              Over-delivery is not accepted at receive — it would inflate the Site Store and the supplier&apos;s receivable without
-              a review gate. Count at most the ordered quantity; arrange the excess with {order.supplierName} on a new purchase
-              order.
+              {t('finder.recv.overNote', { supplier: order.supplierName })}
             </p>
           </div>
         )}
@@ -424,16 +420,16 @@ function DeliveryReceiveForm({
               const received = Number(counts[l.id])
               return (
                 <p key={l.id} className="font-medium">
-                  {l.name}: ordered {fmtQty(l.qty)} · received {fmtQty(received)} — {fmtQty(l.qty - received)} missing, flagged for review
+                  {t('finder.recv.shortLine', { name: l.name, ordered: fmtQty(l.qty), received: fmtQty(received), missing: fmtQty(l.qty - received) })}
                 </p>
               )
             })}
-            <p className="pt-1 font-normal">Reconcile with {order.supplierName} before releasing payment — the invoices 3-way match will flag it too.</p>
+            <p className="pt-1 font-normal">{t('finder.recv.shortNote', { supplier: order.supplierName })}</p>
           </div>
         )}
 
         <div className="space-y-1.5">
-          <Label>Evidence photos</Label>
+          <Label>{t('finder.recv.evidence')}</Label>
           <div className="flex flex-wrap items-center gap-2">
             {photos.map((ph) => (
               <span key={ph.id} className="relative h-14 w-20 overflow-hidden rounded-lg border border-stone-200">
@@ -441,42 +437,42 @@ function DeliveryReceiveForm({
                 <button
                   type="button"
                   className="absolute inset-x-0 bottom-0 bg-stone-950/60 py-0.5 text-[9px] font-medium text-white hover:bg-rose-600"
-                  aria-label={`Remove ${ph.fileName}`}
+                  aria-label={t('finder.recv.removePhotoAria', { file: ph.fileName })}
                   onClick={() => setPhotos((p) => p.filter((x) => x.id !== ph.id))}
                 >
-                  remove
+                  {t('finder.recv.remove')}
                 </button>
               </span>
             ))}
             <label className="flex h-14 w-20 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg border border-dashed border-stone-300 text-[10px] font-medium text-stone-500 hover:border-amber-400 hover:text-amber-600">
               {uploading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Camera className="h-4 w-4" aria-hidden />}
-              Add photo
+              {t('finder.recv.addPhoto')}
               <input
                 type="file"
                 accept="image/png,image/jpeg"
                 multiple
                 className="sr-only"
-                aria-label="Add whole-delivery evidence photos"
+                aria-label={t('finder.recv.addPhotosAria')}
                 onChange={(e) => { onFiles(e.target.files); e.target.value = '' }}
               />
             </label>
           </div>
           <p className="text-[11px] text-stone-500">
             {online
-              ? 'Each photo uploads now and attaches when you record the delivery — a real file on the record, not a count.'
-              : 'Offline — photos upload when you are back online; the counts and inspection still record now.'}
+              ? t('finder.recv.photoNoteOnline')
+              : t('finder.recv.photoNoteOffline')}
           </p>
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="recv-gps">GPS coordinates</Label>
+          <Label htmlFor="recv-gps">{t('finder.recv.gps')}</Label>
           <div className="flex gap-1.5">
             <Input id="recv-gps" value={gps} onChange={(e) => setGps(e.target.value)} placeholder="-1.2921, 36.8219" className="tabular-nums" />
             <Button
               type="button" variant="outline" className="h-9 w-10 shrink-0 p-0"
               onClick={captureLocation} disabled={locating}
-              aria-label="Capture current GPS location"
-              title="Capture current GPS location"
+              aria-label={t('finder.recv.captureAria')}
+              title={t('finder.recv.captureAria')}
             >
               {locating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Locate className="h-4 w-4" aria-hidden />}
             </Button>
@@ -484,25 +480,25 @@ function DeliveryReceiveForm({
         </div>
         {gps && (
           <p className="flex items-center gap-1.5 text-[11px] text-stone-500">
-            <MapPin className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden /> GPS captured: {gps} — timestamped on save
+            <MapPin className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden /> {t('finder.recv.gpsCaptured', { gps })}
           </p>
         )}
 
         <div className="space-y-1.5">
-          <Label htmlFor="recv-note">Delivery note (optional)</Label>
-          <Textarea id="recv-note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Condition on arrival, driver, delivery note number…" />
+          <Label htmlFor="recv-note">{t('finder.recv.noteLabel')}</Label>
+          <Textarea id="recv-note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('finder.recv.notePh')} />
         </div>
       </div>
 
       <DialogFooter>
-        <Button variant="outline" onClick={onDone}>Cancel</Button>
+        <Button variant="outline" onClick={onDone}>{t('dialog.expense.cancel')}</Button>
         <Button
           className={`gap-1.5 text-white ${shortPreview.length > 0 ? 'bg-orange-600 hover:bg-orange-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
           disabled={busy}
           onClick={() => void save()}
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
-          {shortPreview.length > 0 ? 'Record delivery + discrepancy' : 'Record full delivery'}
+          {shortPreview.length > 0 ? t('finder.recv.recordShort') : t('finder.recv.recordFull')}
         </Button>
       </DialogFooter>
     </DialogContent>

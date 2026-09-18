@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
+import { useT } from '@/frontend/i18n/provider'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/frontend/ui/card'
 import { Button } from '@/frontend/ui/button'
 import { Input } from '@/frontend/ui/input'
@@ -21,9 +22,11 @@ const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(ma
 /**
  * Interactive site map — zones pinned over the aerial plan; tap a zone to browse
  * and tag its photos. Self-contained: reads zones/photos from the store.
+ * All copy flows through useT() (sitemap.* — issue #125).
  */
 export function SiteMapCard() {
   const { data, dispatch, actionBusy, viewMode } = useMjengo()
+  const t = useT()
   const [placing, setPlacing] = useState(false)
   const [zoneName, setZoneName] = useState('')
   const [openZoneId, setOpenZoneId] = useState<string | null>(null)
@@ -39,7 +42,7 @@ export function SiteMapCard() {
 
   function startPlacing() {
     if (zones.length >= MAX_ZONES) {
-      toast.info(`Site map is full — up to ${MAX_ZONES} zones per plan`)
+      toast.info(t('sitemap.toast.full', { max: MAX_ZONES }))
       return
     }
     setPlacing(true)
@@ -49,7 +52,7 @@ export function SiteMapCard() {
   async function placeZone(clientX: number, clientY: number, rect: DOMRect) {
     const name = zoneName.trim()
     if (!name) {
-      toast.error('Type a zone name first')
+      toast.error(t('sitemap.toast.nameFirst'))
       return
     }
     const px = ((clientX - rect.left) / rect.width) * 100
@@ -57,7 +60,7 @@ export function SiteMapCard() {
     const x = clamp(px - DEFAULT_W / 2, 0, 100 - DEFAULT_W)
     const y = clamp(py - DEFAULT_H / 2, 0, 100 - DEFAULT_H)
     setPlacing(false)
-    const ok = await dispatch('zone.create', { name, x, y }, `Add zone "${name}" to site map`)
+    const ok = await dispatch('zone.create', { name, x, y }, t('sitemap.audit.addZone', { name }))
     if (ok) setZoneName('')
   }
 
@@ -67,9 +70,9 @@ export function SiteMapCard() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <CardTitle className="flex items-center gap-2 text-stone-900">
-              <MapPin className="w-5 h-5 text-amber-600" aria-hidden /> Interactive site map
+              <MapPin className="w-5 h-5 text-amber-600" aria-hidden /> {t('sitemap.title')}
             </CardTitle>
-            <CardDescription>Tap a zone on the plan to see its photos and pin evidence to locations.</CardDescription>
+            <CardDescription>{t('sitemap.desc')}</CardDescription>
           </div>
           {/* Clients browse the map read-only — zone edits are site-team actions */}
           {!isClient && (
@@ -78,9 +81,9 @@ export function SiteMapCard() {
               className="min-h-11 gap-1.5 border-dashed"
               onClick={startPlacing}
               disabled={busy || placing}
-              aria-label="Add a zone to the site map"
+              aria-label={t('sitemap.addAria')}
             >
-              <Plus className="w-4 h-4" aria-hidden /> Add zone
+              <Plus className="w-4 h-4" aria-hidden /> {t('sitemap.addZone')}
             </Button>
           )}
         </div>
@@ -92,16 +95,16 @@ export function SiteMapCard() {
               autoFocus
               value={zoneName}
               onChange={(e) => setZoneName(e.target.value)}
-              placeholder="Zone name — e.g. Kitchen"
+              placeholder={t('sitemap.zoneNamePh')}
               className="h-11 w-56 bg-white"
-              aria-label="New zone name"
-              onKeyDown={(e) => { if (e.key === 'Enter') toast.info('Now tap the plan to place the zone') }}
+              aria-label={t('sitemap.zoneNameAria')}
+              onKeyDown={(e) => { if (e.key === 'Enter') toast.info(t('sitemap.toast.tapPlan')) }}
             />
             <p className="text-sm text-amber-800">
-              Tap the plan to place <span className="font-medium">{zoneName.trim() || 'the zone'}</span>
+              {t('sitemap.tapA')}<span className="font-medium">{zoneName.trim() || t('sitemap.theZone')}</span>
             </p>
-            <Button variant="ghost" size="sm" className="ml-auto h-11 gap-1" onClick={() => setPlacing(false)} aria-label="Cancel placing zone">
-              <X className="w-4 h-4" aria-hidden /> Cancel
+            <Button variant="ghost" size="sm" className="ml-auto h-11 gap-1" onClick={() => setPlacing(false)} aria-label={t('sitemap.cancelPlacingAria')}>
+              <X className="w-4 h-4" aria-hidden /> {t('sitemap.cancel')}
             </Button>
           </div>
         )}
@@ -109,13 +112,13 @@ export function SiteMapCard() {
         <div
           className={`relative aspect-[4/3] w-full select-none overflow-hidden rounded-xl border border-stone-200 bg-stone-100 ${placing ? 'cursor-crosshair' : ''}`}
           role="application"
-          aria-label="Aerial site plan with zones"
+          aria-label={t('sitemap.planAria')}
           onClick={(e) => {
             if (!placing) return
             void placeZone(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect())
           }}
         >
-          <img src="/photos/site-aerial.png" alt="Aerial site plan" className="pointer-events-none absolute inset-0 h-full w-full object-cover" draggable={false} />
+          <img src="/photos/site-aerial.png" alt={t('sitemap.aerialAlt')} className="pointer-events-none absolute inset-0 h-full w-full object-cover" draggable={false} />
 
           {zones.map((z) => {
             // FE-2 (issue #108): pluralize the count — same ternary as the
@@ -134,7 +137,9 @@ export function SiteMapCard() {
                 }}
                 className="absolute rounded-lg border-2 border-amber-500/70 bg-amber-500/10 transition hover:bg-amber-500/25 focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none"
                 style={{ left: `${z.x}%`, top: `${z.y}%`, width: `${z.w}%`, height: `${z.h}%` }}
-                aria-label={`Open zone ${z.name} — ${zonePhotoCount} ${zonePhotoCount === 1 ? 'photo' : 'photos'}`}
+                aria-label={zonePhotoCount === 1
+                  ? t('sitemap.zoneAriaOne', { name: z.name, count: zonePhotoCount })
+                  : t('sitemap.zoneAriaMany', { name: z.name, count: zonePhotoCount })}
               >
                 <span className="absolute inset-x-1 top-1 truncate text-left text-xs font-medium text-stone-900 drop-shadow-sm">{z.name}</span>
               </button>
@@ -144,10 +149,10 @@ export function SiteMapCard() {
           {zones.length === 0 && !placing && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-stone-950/30 p-4 text-center">
               <MapPin className="w-7 h-7 text-white/80" aria-hidden />
-              <p className="text-sm font-medium text-white">{isClient ? 'The site team has not mapped zones yet' : 'Add zones to map photos to locations'}</p>
+              <p className="text-sm font-medium text-white">{isClient ? t('sitemap.emptyClient') : t('sitemap.emptySite')}</p>
               {!isClient && (
                 <Button size="sm" variant="outline" className="h-11 min-w-44 gap-1.5 border-dashed bg-white/90" onClick={startPlacing}>
-                  <Plus className="w-4 h-4" aria-hidden /> Add first zone
+                  <Plus className="w-4 h-4" aria-hidden /> {t('sitemap.addFirstZone')}
                 </Button>
               )}
             </div>
@@ -162,31 +167,33 @@ export function SiteMapCard() {
                 <MapPin className="w-5 h-5 text-amber-600" aria-hidden /> {openZone?.name ?? ''}
               </DialogTitle>
               <DialogDescription>
-                {zonePhotos.length} {zonePhotos.length === 1 ? 'photo' : 'photos'} pinned to this zone.
+                {zonePhotos.length === 1
+                  ? t('sitemap.zonePhotosOne', { count: zonePhotos.length })
+                  : t('sitemap.zonePhotosMany', { count: zonePhotos.length })}
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4">
               {zonePhotos.length === 0 ? (
                 <p className="rounded-lg border border-dashed border-stone-200 bg-stone-50 p-4 text-center text-sm text-stone-500">
-                  No photos pinned here yet — tag one below.
+                  {t('sitemap.noPhotosPinned')}
                 </p>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
                   {zonePhotos.map((p) => (
                     <figure key={p.id} className="group relative overflow-hidden rounded-lg border border-stone-200">
                       <div className="aspect-video w-full overflow-hidden bg-stone-100">
-                        <img src={p.url} alt={p.caption ?? 'Site photo'} className="h-full w-full object-cover" />
+                        <img src={p.url} alt={p.caption ?? t('sitemap.sitePhoto')} className="h-full w-full object-cover" />
                       </div>
-                      <figcaption className="truncate px-2 py-1.5 text-xs text-stone-500">{p.caption ?? 'Site photo'}</figcaption>
+                      <figcaption className="truncate px-2 py-1.5 text-xs text-stone-500">{p.caption ?? t('sitemap.sitePhoto')}</figcaption>
                       {!isClient && (
                         <Button
                           size="icon"
                           variant="secondary"
                           className="absolute right-1.5 top-1.5 h-8 w-8 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                           disabled={busy}
-                          aria-label={`Unpin photo ${p.caption ?? ''} from ${openZone?.name}`}
-                          onClick={() => openZone && void dispatch('photo.zone', { id: p.id, zoneId: null }, `Unpin photo from ${openZone.name}`)}
+                          aria-label={t('sitemap.unpinAria', { caption: p.caption ?? '', zone: openZone?.name ?? '' })}
+                          onClick={() => openZone && void dispatch('photo.zone', { id: p.id, zoneId: null }, t('sitemap.audit.unpin', { zone: openZone.name }))}
                         >
                           <MapPinOff className="w-4 h-4" aria-hidden />
                         </Button>
@@ -198,21 +205,21 @@ export function SiteMapCard() {
 
               {!isClient && taggablePhotos.length > 0 && (
                 <div className="space-y-1.5">
-                  <label htmlFor="tag-photo-select" className="text-xs font-medium text-stone-500">Tag a photo to this zone</label>
+                  <label htmlFor="tag-photo-select" className="text-xs font-medium text-stone-500">{t('sitemap.tagLabel')}</label>
                   <Select
                     key={openZoneId ?? 'zone'}
                     onValueChange={async (photoId) => {
                       if (!openZone || !photoId) return
-                      await dispatch('photo.zone', { id: photoId, zoneId: openZone.id }, `Pin photo to ${openZone.name}`)
+                      await dispatch('photo.zone', { id: photoId, zoneId: openZone.id }, t('sitemap.audit.pin', { zone: openZone.name }))
                     }}
                   >
-                    <SelectTrigger id="tag-photo-select" className="min-h-11 w-full bg-white" disabled={busy} aria-label="Tag a photo to this zone">
-                      <SelectValue placeholder="Choose an unpinned photo…" />
+                    <SelectTrigger id="tag-photo-select" className="min-h-11 w-full bg-white" disabled={busy} aria-label={t('sitemap.tagLabel')}>
+                      <SelectValue placeholder={t('sitemap.tagPh')} />
                     </SelectTrigger>
                     <SelectContent className="max-h-64">
                       {taggablePhotos.map((p) => (
                         <SelectItem key={p.id} value={p.id} className="min-h-11">
-                          {p.caption ?? 'Site photo'}{p.phaseName ? ` · ${p.phaseName}` : ''}
+                          {p.caption ?? t('sitemap.sitePhoto')}{p.phaseName ? ` · ${p.phaseName}` : ''}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -227,7 +234,7 @@ export function SiteMapCard() {
                   disabled={busy}
                   onClick={() => openZone && setDeleteZone(openZone)}
                 >
-                  <Trash2 className="w-4 h-4" aria-hidden /> Delete zone
+                  <Trash2 className="w-4 h-4" aria-hidden /> {t('sitemap.deleteZone')}
                 </Button>
               )}
             </div>
@@ -238,24 +245,24 @@ export function SiteMapCard() {
         <AlertDialog open={Boolean(deleteZone)} onOpenChange={(o) => !o && setDeleteZone(null)}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete “{deleteZone?.name}”?</AlertDialogTitle>
+              <AlertDialogTitle>{t('sitemap.confirmDeleteTitle', { name: deleteZone?.name ?? '' })}</AlertDialogTitle>
               <AlertDialogDescription>
-                The zone is removed from the plan and its photos become unpinned. The ledger keeps a record of this change.
+                {t('sitemap.confirmDeleteBody')}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel className="min-h-11">Cancel</AlertDialogCancel>
+              <AlertDialogCancel className="min-h-11">{t('sitemap.cancel')}</AlertDialogCancel>
               <AlertDialogAction
                 className="min-h-11 bg-red-600 hover:bg-red-700"
                 onClick={async () => {
                   if (deleteZone) {
-                    await dispatch('zone.delete', { id: deleteZone.id }, `Delete zone "${deleteZone.name}"`)
+                    await dispatch('zone.delete', { id: deleteZone.id }, t('sitemap.audit.deleteZone', { name: deleteZone.name }))
                     setOpenZoneId(null)
                   }
                   setDeleteZone(null)
                 }}
               >
-                Delete zone
+                {t('sitemap.deleteZone')}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

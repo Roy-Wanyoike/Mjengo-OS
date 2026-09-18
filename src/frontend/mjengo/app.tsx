@@ -277,7 +277,7 @@ export function MjengoApp() {
 
   async function handleRegenerateShareLink() {
     if (!data?.project) return
-    const ok = await dispatch('share.regenerate', { id: data.project.id }, 'Regenerate client share link')
+    const ok = await dispatch('share.regenerate', { id: data.project.id }, t('app.share.regenerateAudit'))
     if (ok) toast.success(t('app.share.regenerated'))
     else toast.error(t('app.share.regenerateFailed'))
   }

@@ -2,6 +2,7 @@
 
 import type { KeyboardEvent, ReactNode } from 'react'
 import { Inbox } from 'lucide-react'
+import { useT } from '@/frontend/i18n/provider'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/frontend/ui/table'
@@ -98,18 +99,19 @@ export function DataTable<T>({
   emptyState,
   maxHeight = 'max-h-96',
 }: DataTableProps<T>) {
+  const t = useT()
   // Empty (and not loading) → the caller's empty state, or a sane default.
   if (!loading && rows.length === 0) {
     return (
       <div className="w-full">
         {emptyState ?? (
-          <EmptyState icon={Inbox} title="No rows to show" compact />
+          <EmptyState icon={Inbox} title={t('uikit.noRows')} compact />
         )}
       </div>
     )
   }
 
-  const regionLabel = `${columns.map((c) => c.header).join(', ')} — scrollable rows`
+  const regionLabel = t('uikit.tableRegion', { columns: columns.map((c) => c.header).join(', ') })
   const clickable = onRowClick !== undefined
 
   return (
