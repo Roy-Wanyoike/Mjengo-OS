@@ -1058,6 +1058,12 @@ model LedgerAccount {
 // Immutable double-entry transaction. Every financial movement posts here with
 // balanced debit/credit legs. Reversals are new transactions linked via
 // reversalOfId — history is never edited or deleted (spec §39).
+//
+// DB-3 (#124, migration 14_ledger_invariants): the lifecycle is DB-enforced —
+// rows are BORN 'pending' (a trigger rejects any other birth status), legs
+// may only attach while pending, and the pending→'posted' UPDATE is the
+// balance gate (Σdebits = Σcredits asserted by trigger). The only other
+// legal mutation is reversal marking: posted→'reversed' + reversalRef.
 model LedgerTransaction {
   id             String        @id @default(cuid())
   ref            String        @unique // LX-2026-000001
@@ -1067,7 +1073,7 @@ model LedgerTransaction {
   occurredAt     DateTime      @default(now())
   postedBy       String // actor name
   postedRole     String // contractor, client, finance, system
-  status         String        @default("posted") // posted, reversed
+  status         String        @default("posted") // pending → posted → reversed (DB-enforced, migration 14)
   reversalOfId   String? // if this txn reverses an earlier one
   reversalRef    String? // quick-lookup ref of the reversing txn
   idempotencyKey String?       @unique // natural idempotency (spec §57)
@@ -1076,20 +1082,35 @@ model LedgerTransaction {
 }
 
 // One debit or credit leg of a ledger transaction. Σdebits = Σcredits per txn.
+// DB-3 (#124, migration 14): append-only (UPDATE/DELETE rejected by trigger)
+// with CHECKs side ∈ {debit, credit} and amount > 0 — the SQLite twin of the
+// Supabase ledger_entries DDL (0001_schema.sql L984-985).
 model LedgerEntry {
   id        String            @id @default(cuid())
   txnId     String
   txn       LedgerTransaction @relation(fields: [txnId], references: [id], onDelete: Cascade)
   accountId String
   account   LedgerAccount     @relation(fields: [accountId], references: [id])
-  side      String // debit, credit
-  amount    BigInt // cents (issue #122) — positive KES
+  side      String // debit, credit (DB CHECK, migration 14)
+  amount    BigInt // cents (issue #122) — positive KES (DB CHECK amount > 0, migration 14)
   memo      String?
   createdAt DateTime          @default(now())
 
   // DB-6: hot path — balances are derived by loading an account's entries
   // (ledger + wallet services); without this index every lookup is a scan.
   @@index([accountId])
+}
+
+// DB-3 (#124): one-row maintenance flag — the SQLite twin of the Supabase
+// design's mjengo.allow_maintenance GUC (0002_rls.sql §5.3/§9). While
+// (id=1, allow=true) exists, the migration-14 triggers pause their
+// append-only / birth-state / whitelist guards for archival operations
+// (seeds, supervised backfills). The posting-gate balance assertion and the
+// CHECK constraints are NOT bypassed. Writers must ALWAYS restore allow=false
+// (see prisma/seed-extras/ledger-maintenance.ts).
+model LedgerMaintenance {
+  id    Int     @id @default(1)
+  allow Boolean @default(false)
 }
 
 // Idempotency guard (spec §57): repeated Idempotency-Key requests replay the

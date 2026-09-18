@@ -19,6 +19,7 @@
 
 import { PrismaClient } from '@prisma/client'
 import { fmtKes } from '@/backend/lib/money'
+import { withLedgerMaintenance } from './ledger-maintenance'
 
 const db = new PrismaClient()
 
@@ -29,7 +30,18 @@ function daysAgo(n: number, hour = 10, minute = 0): Date {
   return d
 }
 
-/** Post a balanced double-entry ledger transaction with explicit entries. */
+/**
+ * Post a balanced double-entry ledger transaction with explicit entries.
+ *
+ * DB-3 (#124, migration 14): the seed no longer bypasses the ledger
+ * invariants — it posts through the DB-enforced pending→posted gate (the
+ * same lifecycle the TypeScript service uses). The migration-14 posting
+ * trigger asserts Σdebits = Σcredits at the final UPDATE, so the seed can
+ * no longer write unbalanced history even though it resolves accounts by
+ * id and pins deterministic refs instead of calling the service. The
+ * initial WIPE below still needs the documented maintenance exemption
+ * (archival op — the SQLite twin of mjengo.allow_maintenance).
+ */
 async function postSeedLedger(input: {
   ref: string
   projectId: string
@@ -39,7 +51,7 @@ async function postSeedLedger(input: {
   postedRole: string
   lines: Array<{ accountId: string; side: 'debit' | 'credit'; amount: bigint; memo?: string }>
 }) {
-  const txn = await db.ledgerTransaction.create({
+  const pending = await db.ledgerTransaction.create({
     data: {
       ref: input.ref,
       projectId: input.projectId,
@@ -47,15 +59,15 @@ async function postSeedLedger(input: {
       occurredAt: input.occurredAt,
       postedBy: input.postedBy,
       postedRole: input.postedRole,
-      status: 'posted',
+      status: 'pending',
     },
   })
   for (const l of input.lines) {
     await db.ledgerEntry.create({
-      data: { txnId: txn.id, accountId: l.accountId, side: l.side, amount: l.amount, memo: l.memo ?? null },
+      data: { txnId: pending.id, accountId: l.accountId, side: l.side, amount: l.amount, memo: l.memo ?? null },
     })
   }
-  return txn
+  return db.ledgerTransaction.update({ where: { id: pending.id }, data: { status: 'posted' } })
 }
 
 async function main() {
@@ -67,8 +79,14 @@ async function main() {
   await db.drawPack.deleteMany()
   await db.milestone.deleteMany()
   await db.escrowWallet.deleteMany()
-  await db.ledgerEntry.deleteMany()
-  await db.ledgerTransaction.deleteMany()
+  // DB-3 (#124): ledger rows are append-only at the DB level (migration 14) —
+  // the wipe is the documented maintenance exemption (archival op), the
+  // SQLite twin of mjengo.allow_maintenance. The flag is ALWAYS restored
+  // (finally inside the helper) even if the wipe crashes mid-way.
+  await withLedgerMaintenance(db, async () => {
+    await db.ledgerEntry.deleteMany()
+    await db.ledgerTransaction.deleteMany()
+  })
   await db.ledgerAccount.deleteMany()
   await db.idempotencyRecord.deleteMany()
   // WalletAccounts are runtime-created (v1 API / wallet.create actions) — none

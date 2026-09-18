@@ -42,6 +42,20 @@ Total = 68 (matches prior QA claim).
 
 ### 2.1 FINANCIAL — "the ledger never lies": **PARTIAL — service-level only on SQLite; Float money**
 
+> **UPDATE (2026-09-19, task 4-c / #124):** DB-3 is now CLOSED on the SQLite
+> path — migration `14_ledger_invariants` ports the Supabase semantics:
+> Σdebits = Σcredits asserted by the `LedgerTransaction_posting_gate`
+> trigger at the pending→posted transition (SQLite has no deferred
+> triggers/commit hooks, and Prisma writes each leg as its own INSERT, so
+> the gate is the final UPDATE of the posting flow — the closest
+> commit-equivalent seam), `ledger_entries` append-only (UPDATE/DELETE
+> rejected), a reversal-only update whitelist on `ledger_transactions`,
+> CHECKs for `side`/`amount > 0`, and a `LedgerMaintenance` one-row flag as
+> the `mjengo.allow_maintenance` twin. The service-level `validateLines`
+> stays as a fail-fast pre-check. The bullets below are the pre-#124
+> baseline, kept for history. (The Float-era bullets were already closed by
+> #122's integer cents.)
+
 - **Model:** `LedgerTransaction` (ref `@unique`, `idempotencyKey @unique`, `reversalOfId`, `status posted|reversed`) + `LedgerEntry` (`txnId`, `accountId`, `side debit|credit`, `amount Float`) — schema.prisma L980–1008.
 - **Balanced check is service code only:** `modules/ledger/service.ts` `validateLines` L114–125 throws when Σdebits ≠ Σcredits — with a **`Math.abs(debit-credit) > 0.005` float tolerance** (L122), an explicit acknowledgement of binary-float money. Nothing at the DB level (SQLite has no cross-row CHECK; no trigger). Any writer that bypasses `postLedgerTransaction*` can post unbalanced legs — and `prisma/seed-extras/money.ts` L41–53 does exactly that (`db.ledgerTransaction.create` + `db.ledgerEntry.create` directly).
 - **Immutability is convention + one legal mutation:** `reverseLedgerTransaction` (L191–213) creates mirrored entries and **updates** the original row (`status: 'reversed'`, `reversalRef`) — so "immutable" really means "no edits except reversal marking". Not DB-enforced on SQLite.
@@ -142,14 +156,14 @@ List (`prisma/migrations`, `migration_lock.toml` = sqlite):
 |---|---|---|---|---|
 | DB-1 | High | All money is `Float`/`REAL` (no Int cents, no Decimal); ledger balance check carries a 0.005 float tolerance | schema L17, L250, L1005, L310; ledger/service.ts L122; supabase-design.test.ts §3 names it "the Float-money fix" | "Replace Float money with integer cents (or Decimal) across schema + services" |
 | DB-2 | High | Inventory service: over-consumption movement persists before the negative-stock throw (no transaction); return/damage/adjust return fake `closingQty: 0`; transfer legs non-atomic and unguarded | inventory/service.ts L56–63, L65–72, L78/85/92 | "inventory.consume can persist negative stock: wrap movement+check in one transaction, derive all closingQty" |
-| DB-3 | High | Balanced-ledger and append-only invariants are service-code-only on SQLite; seeds already bypass them | ledger/service.ts L114–125; seed-extras/money.ts L41–53; fixed only in supabase 0002 L281–366 | "DB-enforce ledger balance + append-only on the SQLite path (triggers or guard) or land Supabase Phase-1 sooner" |
+| DB-3 | High | Balanced-ledger and append-only invariants are service-code-only on SQLite; seeds already bypass them | ledger/service.ts L114–125; seed-extras/money.ts L41–53; fixed only in supabase 0002 L281–366 | "DB-enforce ledger balance + append-only on the SQLite path (triggers or guard) or land Supabase Phase-1 sooner" — **CLOSED 2026-09-19 by #124 (migration 14; see §2.1 update)** |
 | DB-4 | Medium-High | v1 money routes leave no AuditEvent; logAudit is post-hoc, out-of-transaction, error-swallowing | api/v1/payments.ts L29–30; lib/audit.ts L91–93 | "Audit trail gaps: v1 wallet/payment mutations unaudited; make logAudit fail-visible" |
 | DB-5 | Medium-High | Seeds wipe 20+ tables with no production guard | seed.ts L37–57; users.ts L29; no NODE_ENV check anywhere in prisma/ | "Refuse to run seeds when NODE_ENV=production (or require SEED_CONFIRM=WIPE)" |
 | DB-6 | Medium | Only 1 non-unique index in the whole DB; hot paths are full scans; balances computed by loading all entries into memory | 0_init L913–945; wallet/service.ts L589–592, L647–650; ledger/service.ts L216–225 | "Add hot-path indexes (attendance project+date, ledgerEntry accountId, jobs queue) + SQL SUM aggregation" |
 | DB-7 | Medium | No unique constraint on Attendance (workerId, date) — duplicate day rows possible under concurrent check-in/USSD/sync | schema L151–178; mjengo.ts L1128–1133; trust.ts L83–89 | "Enforce one attendance day-row per (workerId, date) — unique constraint + upsert" |
 | DB-8 | Medium | Business codes not unique: requestCode/orderCode/invoiceCode/requestCode; `Transaction.ledgerTxnId` comment claims uniqueness it doesn't have | schema L657, L749, L865, L1040, L264; design doc §10.1 admits it | "Promote business codes to unique (data audit first) — MR-/PO-/INV-/PR- + Transaction.ledgerTxnId" |
 | DB-9 | Low-Medium | 11+ soft FK columns can dangle (mostly fail-closed in code, documented) | schema L447, L700–701, L1031, L1071, L320, L341, L225, L1282–1288 | "Harden soft FK links (supplierId, approval entity, wallet ledger link) with validation or constraints" |
-| DB-10 | Low | "Immutable" ledger rows ARE updated for reversal marking; no enforcement on SQLite | ledger/service.ts L181–186; guard exists only in supabase 0002 L309–340 | "Document/align ledger immutability semantics (reversal-only update) on both paths" |
+| DB-10 | Low | "Immutable" ledger rows ARE updated for reversal marking; no enforcement on SQLite | ledger/service.ts L181–186; guard exists only in supabase 0002 L309–340 | "Document/align ledger immutability semantics (reversal-only update) on both paths" — **CLOSED on SQLite 2026-09-19 by #124 (reversal-only update whitelist trigger)** |
 | DB-11 | Low | Zero enums / zero CHECKs on SQLite — status ladders are free text | schema census §1; CHECKs only in supabase 0001 | "Constrain status ladders (enums or CHECKs) to catch typos early" |
 | DB-12 | Low | SQLite `PRAGMA foreign_keys` enforcement for raw/prisma-external writers unverified; in-process ledger ref counter documented multi-process limit | migrations (all FKs); ledger/service.ts L88–105 (BE-10) | "Verify FK pragma posture for SQLite; note multi-process ref-counter limit in deploy docs" |
 

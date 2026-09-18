@@ -2,6 +2,15 @@
 // Every financial write posts a LedgerTransaction with balanced debit/credit
 // legs inside one db.$transaction. History is immutable: corrections are
 // new reversal transactions, never edits or deletes.
+//
+// DB-3 (#124, migration 14_ledger_invariants): these invariants are ALSO
+// DB-enforced on SQLite — entries are append-only (UPDATE/DELETE rejected
+// by trigger), the txn lifecycle is pending → posted → reversed with a
+// reversal-only update whitelist, and Σdebits = Σcredits is asserted by the
+// LedgerTransaction_posting_gate trigger at the pending→posted transition
+// (the SQLite equivalent of the Supabase deferred COMMIT constraint — see
+// the migration's DESIGN NOTE for why the enforcement point is the final
+// UPDATE, not a per-entry check).
 
 import { db } from '@/backend/lib/db'
 import type { Cents } from '@/backend/lib/money'
@@ -115,6 +124,11 @@ export function cashAccountForMethod(method: string): 'CASH_MPESA' | 'CASH_BANK'
 }
 
 function validateLines(lines: LedgerLineInput[]) {
+  // Service-level pre-check (fail fast, honest error messages). The SAME
+  // invariant is DB-enforced at the posting gate — migration 14's
+  // LedgerTransaction_posting_gate trigger asserts Σdebits = Σcredits when
+  // status moves pending→posted, so even a writer that bypasses this
+  // service can never post unbalanced legs (issue #124 / DB-3).
   if (!lines.length) throw new Error('Ledger transaction needs at least one line')
   for (const l of lines) {
     if (!(l.amount > 0n)) throw new Error('Ledger amounts must be positive')
@@ -163,7 +177,7 @@ export async function postLedgerTransactionInTx(tx: Prisma.TransactionClient, in
     ? await tx.ledgerTransaction.findUnique({ where: { id: input.reversalOfId } })
     : null
 
-  const txn = await tx.ledgerTransaction.create({
+  const pending = await tx.ledgerTransaction.create({
     data: {
       ref: nextLedgerRef(),
       projectId: input.projectId,
@@ -173,6 +187,10 @@ export async function postLedgerTransactionInTx(tx: Prisma.TransactionClient, in
       postedRole: input.postedRole,
       reversalOfId: reversalOf?.id ?? null,
       idempotencyKey: input.idempotencyKey ?? null,
+      // DB-3 (#124): born pending — the DB rejects any other birth status
+      // and only allows legs to attach while pending (migration 14), so the
+      // posting transition below is the ONE balance-enforcement point.
+      status: 'pending',
       entries: {
         create: resolved.map(({ line, account }) => ({
           accountId: account.id,
@@ -182,6 +200,18 @@ export async function postLedgerTransactionInTx(tx: Prisma.TransactionClient, in
         })),
       },
     },
+    include: { entries: true },
+  })
+  // The posting gate (#124 / migration 14): this final UPDATE is where the
+  // DB asserts Σdebits = Σcredits (LedgerTransaction_posting_gate) — the
+  // SQLite equivalent of the Supabase deferred-at-COMMIT constraint.
+  // SQLite has no deferred triggers and Prisma writes each leg as its own
+  // INSERT inside this transaction, so a per-entry check would fire
+  // mid-batch; gating the LAST write of the flow checks the complete leg
+  // set and rolls back the whole post on violation.
+  const txn = await tx.ledgerTransaction.update({
+    where: { id: pending.id },
+    data: { status: 'posted' },
     include: { entries: true },
   })
   if (reversalOf) {

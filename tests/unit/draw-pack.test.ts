@@ -316,6 +316,16 @@ vi.mock('@/backend/lib/db', () => {
         state.createCounts.ledgerEntry += entryRows.length
         return cloneTxn(row)
       },
+      // #124 (migration 14): the posting flow's final write marks the
+      // born-'pending' transaction 'posted' (the DB balance gate hangs off
+      // that transition); reversal marking updates the original row. The
+      // stub applies the same mutations the real client would.
+      async update({ where, data }: { where: Row; data: Row }) {
+        const row = state.ledgerTxns.find((t) => t.id === where.id)
+        if (!row) throw new Error(`stub: ledger txn ${String(where.id)} not found`)
+        Object.assign(row, data)
+        return cloneTxn(row)
+      },
     },
     transaction: {
       async findFirst({ where }: { where: Row }) {

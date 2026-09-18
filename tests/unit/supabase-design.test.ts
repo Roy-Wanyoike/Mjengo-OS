@@ -6,8 +6,9 @@
  * Prisma model. These tests parse the SQL files structurally and pin:
  *
  *   1. SCHEMA COMPLETENESS — every Prisma model has exactly one
- *      create-table in 0001_schema.sql (68/68, parsed live from
- *      prisma/schema.prisma so the design cannot drift from the model);
+ *      create-table in 0001_schema.sql (parsed live from
+ *      prisma/schema.prisma so the design cannot drift from the model),
+ *      EXCEPT the documented SQLite-only models (§ below);
  *   2. RLS COVERAGE — every table (69 + profiles = 70) has RLS enabled and
  *      at least one policy; anon is revoked everywhere;
  *   3. MONEY TYPING — every money column is numeric(18,2), every quantity
@@ -71,6 +72,14 @@ const TABLE_NAME_EXCEPTIONS: Record<string, string> = {
   ProjectHealth: 'project_health',
 }
 
+/** SQLite-only models with NO Supabase table BY DESIGN (#124 / DB-3):
+ *  LedgerMaintenance is the SQLite twin of the Supabase design's
+ *  mjengo.allow_maintenance GUC (0002_rls.sql §5.3/§9) — Postgres uses a
+ *  session GUC, not a table, so this model deliberately has no
+ *  create-table in 0001_schema.sql. Keep this list EXPLICIT so any new
+ *  SQLite-only model must justify itself here. */
+const SQLITE_ONLY_MODELS = ['LedgerMaintenance']
+
 function expectedTable(model: string): string {
   if (TABLE_NAME_EXCEPTIONS[model]) return TABLE_NAME_EXCEPTIONS[model]
   const snake = toSnake(model)
@@ -81,7 +90,7 @@ function expectedTable(model: string): string {
 
 /** Prisma model names, in declaration order. */
 const PRISMA_MODELS = Array.from(PRISMA.matchAll(/^model (\w+) \{$/gm)).map((m) => m[1])
-const MODEL_TABLES = PRISMA_MODELS.map(expectedTable)
+const MODEL_TABLES = PRISMA_MODELS.filter((m) => !SQLITE_ONLY_MODELS.includes(m)).map(expectedTable)
 
 // ---- SQL structure parsing --------------------------------------------------
 
@@ -240,8 +249,18 @@ const QUANTITY_COLUMNS: Array<[string, string]> = [
 // ---------------------------------------------------------------- tests
 
 describe('1. schema completeness (design tracks the Prisma model)', () => {
-  it('parses the full model list from prisma/schema.prisma (69 models)', () => {
-    expect(PRISMA_MODELS.length).toBe(69)
+  it('parses the full model list from prisma/schema.prisma (70 models)', () => {
+    expect(PRISMA_MODELS.length).toBe(70)
+  })
+
+  it('the SQLite-only exemption list is exactly LedgerMaintenance (no Supabase table, by design)', () => {
+    // #124: the maintenance flag is a SQLite TABLE because SQLite has no
+    // session GUCs; the Supabase design uses mjengo.allow_maintenance
+    // instead. Any OTHER model missing from 0001_schema.sql must extend
+    // this list deliberately — the create-table test below still covers
+    // every non-exempt model.
+    expect(SQLITE_ONLY_MODELS).toEqual(['LedgerMaintenance'])
+    expect(PRISMA_MODELS).toContain('LedgerMaintenance')
   })
 
   it('every Prisma model has exactly one create-table in 0001_schema.sql', () => {
