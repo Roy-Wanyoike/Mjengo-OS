@@ -9,7 +9,10 @@
 // already exist BEFORE persisting, so over-consumption throws without
 // leaving a row; transfers write their out+in legs as one atomic unit; and
 // every result reports the REAL derived closingQty (return/damage/adjust
-// used to hardcode 0).
+// used to hardcode 0). #147 closes the one write path that had escaped this
+// discipline: updateQuote's header edit + deleteMany/recreate line rewrite
+// is one transaction too — a mid-rewrite failure can no longer leave a
+// quote with a partial (or empty) line set.
 //
 // Input validation (#210): the movement ledger is the single source of truth
 // for stock (nothing is stored), so a bad quantity poisons every derived
@@ -742,31 +745,45 @@ export async function unsaveSupplier(projectId: string, p: any) {
 }
 
 export async function updateQuote(projectId: string, p: any) {
-  const quote = await db.quote.findFirst({
-    where: { id: String(p.id), request: { projectId } },
-  })
-  if (!quote) throw new Error('Quote not found')
-  const updated = await db.quote.update({
-    where: { id: quote.id },
-    data: {
-      validUntil: p.validUntil ? new Date(p.validUntil) : undefined,
-      terms: p.terms ?? undefined,
-    },
-  })
-  if (Array.isArray(p.lines)) {
-    await db.quoteLine.deleteMany({ where: { quoteId: quote.id } })
-    for (const l of p.lines) {
-      await db.quoteLine.create({
-        data: {
-          quoteId: quote.id,
-          name: String(l.name),
-          unit: String(l.unit ?? 'unit'),
-          qty: Number(l.qty ?? 1),
-          unitPrice: Number(l.unitPrice ?? 0),
-          lineTotal: Number(l.qty ?? 1) * Number(l.unitPrice ?? 0),
-        },
-      })
+  // #147 (the DB-2 class on the quote-editing path): the header update AND
+  // the full line rewrite run in ONE db.$transaction — the same house pattern
+  // as the movement paths above and supply's receiveDelivery (#196). The old
+  // shape `deleteMany`d ALL of the quote's QuoteLine rows and recreated them
+  // one-by-one with no transaction, so a failure mid-loop left a PARTIAL line
+  // set that read as a valid quote with fewer items (silent corruption feeding
+  // supplier comparison and PO creation), and a concurrent reader between the
+  // deleteMany and the loop saw an empty quote. Now: either every line is
+  // replaced or none is, and the header edit rides the same unit — a mid-rewrite
+  // throw rolls the deleteMany, the partial creates AND the header update back
+  // to the original quote. The scoping guard runs INSIDE the transaction too
+  // (guards inside, not before — the file's DB-2 discipline).
+  return db.$transaction(async (tx) => {
+    const quote = await tx.quote.findFirst({
+      where: { id: String(p.id), request: { projectId } },
+    })
+    if (!quote) throw new Error('Quote not found')
+    const updated = await tx.quote.update({
+      where: { id: quote.id },
+      data: {
+        validUntil: p.validUntil ? new Date(p.validUntil) : undefined,
+        terms: p.terms ?? undefined,
+      },
+    })
+    if (Array.isArray(p.lines)) {
+      await tx.quoteLine.deleteMany({ where: { quoteId: quote.id } })
+      for (const l of p.lines) {
+        await tx.quoteLine.create({
+          data: {
+            quoteId: quote.id,
+            name: String(l.name),
+            unit: String(l.unit ?? 'unit'),
+            qty: Number(l.qty ?? 1),
+            unitPrice: Number(l.unitPrice ?? 0),
+            lineTotal: Number(l.qty ?? 1) * Number(l.unitPrice ?? 0),
+          },
+        })
+      }
     }
-  }
-  return { id: updated.id, validUntil: updated.validUntil, terms: updated.terms }
+    return { id: updated.id, validUntil: updated.validUntil, terms: updated.terms }
+  })
 }
