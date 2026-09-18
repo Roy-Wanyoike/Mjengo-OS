@@ -2155,7 +2155,9 @@ const spec = {
           'ordered vs received vs rejected counts with inspection condition, and discrepancy flags (shortLines = ' +
           'receiveDelivery\'s exact short-line predicate). EVIDENCE PHOTOS are referenced by ATTACHMENT ID ONLY — ' +
           'no photo bytes and no storage URLs are served by /api/v1; fetch them through the app\'s own storage seam. ' +
-          'FEATURE FLAG (spec §81): gated by `marketplace` — OFF → 403 for non-admin sessions (admins bypass), the ' +
+          'Issue #155 (API-4): the deliveries ride loadSupplyOrdersBounded — the supply module\'s bounded orders ' +
+          'read (take-capped at 200; the full network stays on detail surfaces), so a page beyond that window of ' +
+          'newest orders reports hasMore: false. FEATURE FLAG (spec §81): gated by `marketplace` — OFF → 403 for non-admin sessions (admins bypass), the ' +
           'same uniform gate the v1 wallet family applies for `wallet`. GUARD: any signed-in role; client-role ' +
           'sessions pinned to their own project (foreign → 403); unknown project → 404. ?status= filters BEFORE ' +
           'pagination (a cursor that falls out → 400). Ordered (createdAt DESC, id DESC). Rate limit: 120/min per ' +
@@ -2184,9 +2186,12 @@ const spec = {
         operationId: 'listSupplyOrders',
         summary: 'Purchase orders of one project (cursor-paginated)',
         description:
-          'The purchase orders of ONE project — loadSupplySlice(projectId), the supply module\'s public read (the ' +
-          'exact procurement network the webapp Finder tab renders), projected to order summaries with supplier name, ' +
-          'landed totals and delivery counts. FEATURE FLAG (spec §81): gated by `marketplace` — OFF → 403 for ' +
+          'The purchase orders of ONE project — loadSupplyOrdersBounded(projectId), the supply module\'s bounded ' +
+          'list read (issue #155 / API-4: the orders network alone, take-capped at 200 at the DB — the full ' +
+          'loadSupplySlice network stays on the detail surfaces), projected to order summaries with supplier name, ' +
+          'landed totals and delivery counts. A page beyond the 200-order window reports hasMore: false (the ' +
+          'documented bound, the search-route MAX_SCAN honesty convention). FEATURE FLAG (spec §81): gated by ' +
+          '`marketplace` — OFF → 403 for ' +
           'non-admin sessions (admins bypass). GUARD: any signed-in role; client-role sessions pinned to their own ' +
           'project (a foreign projectId → 403, the v1 payments precedent). projectId is REQUIRED — the Finder surface ' +
           'is project-scoped (absent → 400; unknown → 404 — no default-project guessing, mirroring the ' +
@@ -2492,7 +2497,10 @@ const spec = {
           'attendance mutations stay on POST /api/actions (attendance.checkin / record / override / payroll.*). NO ' +
           'FEATURE FLAG (the workforce-family precedent). GUARD: any signed-in role; client-role sessions pinned to ' +
           'their own project (foreign → 403); supplier-role sessions → uniform 403 (W5-3); unknown project → 404. ' +
-          'The page is ordered (createdAt DESC, id DESC) — newest day-rows first, the invoices-list precedent. ' +
+          'The page is ordered (createdAt DESC, id DESC) — newest day-rows first, the invoices-list precedent — ' +
+          'and since issue #155 (API-4) the filters, the keyset boundary and take = limit + 1 are pushed INTO the ' +
+          'findMany (DB-level keyset: page 2 never re-reads page 1 rows; the scan is bounded by the page, not the ' +
+          'table). ' +
           'FILTERS (all BEFORE pagination): ?workerId= (a worker of this project — a foreign or unknown id matches ' +
           'no rows and answers an honest empty page, the never-written-status precedent), ?status= (present, absent, ' +
           'half_day, excused), ?date= (an exact YYYY-MM-DD calendar day — the column IS a date string). Rate limit: ' +

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { logAudit, summarizeAction } from '@/backend/lib/audit'
-import { getProjectPayload, getProjectsList } from '@/backend/lib/mjengo'
+import { getProjectPayload, getProjectsList, PROJECTS_LIST_TAKE } from '@/backend/lib/mjengo'
 import { ownerReadScope } from '@/backend/lib/membership-scope'
 import { route, safeError, genericError } from '@/backend/lib/route-kit'
 import { shareTokenExpiryFromNow } from '@/backend/lib/share-token'
@@ -45,27 +45,80 @@ export const GET = route(
     rateLimit: { bucket: 'projects.list', limit: 60, windowMs: 60_000 },
     onError: genericError(500, 'Failed to list projects'),
   },
-  async (_req, session) => {
-    const projects = await getProjectsList()
+  async (req, session) => {
+    // ---- pagination (issue #155 / audit API-4): the portfolio list pages at
+    // the DB, not after loading every project. ?limit (1-500, default 500 =
+    // PROJECTS_LIST_TAKE — the same honest roster bound the no-arg service
+    // call uses, so the default first page is byte-identical for every
+    // portfolio within the bound) + ?cursor (the project id of the last item
+    // of the previous page — the audit-route keyset convention; unknown or
+    // out-of-scope → 400). The response ADDS nextCursor/hasMore; existing
+    // consumers read only `projects` and are unaffected.
+    const sp = req.nextUrl.searchParams
+    const err = (error: string) => NextResponse.json({ error }, { status: 400 })
+    const limitRaw = sp.get('limit')?.trim() ?? ''
+    let limit = PROJECTS_LIST_TAKE
+    if (limitRaw) {
+      limit = Number(limitRaw)
+      if (!Number.isInteger(limit) || limit < 1 || limit > PROJECTS_LIST_TAKE) {
+        return err(`limit must be an integer between 1 and ${PROJECTS_LIST_TAKE}`)
+      }
+    }
+    const cursor = sp.get('cursor')?.trim() || undefined
+
+    // ---- role scoping, resolved BEFORE the read and pushed INTO it (the
+    // client pin and the SEC-6 membership scope become the query's id scope,
+    // so a pinned project is found by id — never by happening to sit inside
+    // the first-500 window):
     // Client-role sessions see exactly their own project — never the portfolio.
     // W5-3 supplier sessions see an EMPTY list — never the portfolio (the same
     // honest empty answer a client without a pinned project gets; the supplier
-    // surface is /api/supplier, which scopes to their own rows).
+    // surface is /api/supplier, which scopes to their own rows). Both stay
+    // "the service ran once, matched nothing" (id IN ()) so the empty-roster
+    // contract is enforced by the query itself.
     // SEC-6 (issue #174): supervisor/procurement/qs/finance see EXACTLY their
     // ProjectMembership projects — fail closed on zero rows (the same honest
     // empty answer); contractor/admin keep the explicit portfolio grant.
-    const scoped =
-      session.user.role === 'client' && session.user.projectId
-        ? projects.filter((p) => p.id === session.user.projectId)
+    const ownerScope = await ownerReadScope(session)
+    const projectIds =
+      session.user.role === 'client'
+        ? session.user.projectId
+          ? [session.user.projectId]
+          : []
         : session.user.role === 'supplier'
           ? []
-          : projects
-    const ownerScope = await ownerReadScope(session)
+          : ownerScope.kind === 'memberships'
+            ? ownerScope.projectIds
+            : undefined
+
+    // One row beyond the page reveals hasMore without a second count query
+    // (the audit-route take pattern); a bad cursor surfaces as the service's
+    // single-line Unknown-cursor error → honest 400.
+    let rows: Awaited<ReturnType<typeof getProjectsList>>
+    try {
+      rows = await getProjectsList({ cursor, take: limit + 1, projectIds })
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('Unknown cursor')) return err(e.message)
+      throw e
+    }
+    // The scope is re-asserted on the returned page (the route owns its
+    // tenant contract — with the id scope pushed into the query this is a
+    // no-op in production, but the route never TRUSTS a lower layer with a
+    // pin; the same fail-closed filter chain as before #155).
+    const scoped =
+      session.user.role === 'client' && session.user.projectId
+        ? rows.filter((p) => p.id === session.user.projectId)
+        : session.user.role === 'supplier'
+          ? []
+          : rows
     const membershipScoped =
       ownerScope.kind === 'memberships'
         ? scoped.filter((p) => ownerScope.projectIds.includes(p.id))
         : scoped
-    return NextResponse.json({ ok: true, projects: membershipScoped })
+    const hasMore = membershipScoped.length > limit
+    const projects = membershipScoped.slice(0, limit)
+    const nextCursor = hasMore ? projects[projects.length - 1]?.id ?? null : null
+    return NextResponse.json({ ok: true, projects, nextCursor, hasMore })
   },
 )
 

@@ -40,7 +40,8 @@
  *     shape on the 61st request in the window (60/min per principal, the
  *     /api/project publicRoute bucket posture) without touching the db;
  *   · BE-8: getProjectsList take-caps every per-table scan
- *     (500/500/500/200/500) while the project roster itself stays uncapped.
+ *     (500/500/500/200/500) — and since issue #155 the project roster
+ *     itself too (500, createdAt ASC + id ASC keyset order).
  *
  * Mocks (the supplier-role / sync-flag-gate / search-rate-limit idioms):
  * '@/backend/lib/db' (in-memory stub with write-tracking), '@/backend/lib/guard'
@@ -883,8 +884,8 @@ describe('GET /api/projects — the standard rate limiter (BE-8, 60/min per prin
 
 // ------------------------------------------- BE-8: getProjectsList take caps
 
-describe('getProjectsList — every per-table scan is take-capped (BE-8)', () => {
-  it('phases 500 / transactions 500 / workers 500 / alerts 200 / photos 500; the project roster itself stays uncapped', async () => {
+describe('getProjectsList — every per-table scan is take-capped (BE-8 + #155)', () => {
+  it('phases 500 / transactions 500 / workers 500 / alerts 200 / photos 500 / projects 500 (the roster itself, issue #155)', async () => {
     const list = await getProjectsList()
     expect(list.map((p) => p.id)).toEqual(['p-1'])
 
@@ -897,7 +898,10 @@ describe('getProjectsList — every per-table scan is take-capped (BE-8)', () =>
     expect(solo(state.calls.workerFindMany, 'workers').take).toBe(500)
     expect(solo(state.calls.alertFindMany, 'alerts').take).toBe(200)
     expect(solo(state.calls.sitePhotoFindMany, 'photos').take).toBe(500)
-    // The roster IS the list this function exists to return — uncapped.
-    expect(solo(state.calls.projectFindMany, 'projects').take).toBeUndefined()
+    // Issue #155 (audit API-4): the roster read is bounded too — the same
+    // 500 cap as its largest sibling, with /api/projects GET keyset-paging
+    // past it (bounded-reads.test.ts pins the cursor mechanics).
+    expect(solo(state.calls.projectFindMany, 'projects').take).toBe(500)
+    expect(solo(state.calls.projectFindMany, 'projects').orderBy).toEqual([{ createdAt: 'asc' }, { id: 'asc' }])
   })
 })

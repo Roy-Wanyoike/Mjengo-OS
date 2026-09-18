@@ -1,7 +1,7 @@
 import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
 import { projectIdRef, projectAttendanceQuery, validateQuery } from './schemas'
-import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
+import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, membershipProjectDenied, supplierProjectDenied } from './scope'
 import { jsonArrayLength } from './worker-rows'
 
@@ -27,9 +27,14 @@ type Ctx = { params: Promise<{ id: string }> }
  * matches no rows and answers an honest empty page, the never-written-status
  * precedent), ?status= (present|absent|half_day|excused), ?date= (an exact
  * YYYY-MM-DD calendar day — the column IS a date string). All three filter
- * BEFORE pagination. Pagination is the wallet-list pattern: a deterministic
- * (createdAt DESC, id DESC) total order (newest day-rows first) sliced in
- * the route layer; a cursor that falls out of the filtered list → 400.
+ * BEFORE pagination. Pagination is the wallet-list order — a deterministic
+ * (createdAt DESC, id DESC) total order (newest day-rows first) — but since
+ * issue #155 (audit API-4) it is pushed INTO the findMany: the filters, the
+ * keyset boundary (the cursor row's createdAt/id pair, the audit-route
+ * pattern) and take = limit + 1 all ride the single query, so page 2 never
+ * re-reads page 1 rows at the DB level and the scan is bounded by the page,
+ * not the table. A cursor that falls out of the filtered list → 400 (the
+ * pageOfKind message, byte-identical).
  *
  * DATA (honest seam note): attendance rows are read here with a route-layer
  * include (worker name/role join — the wallet-transactions precedent; the
@@ -68,28 +73,59 @@ export const GET = route(
     const supplierDenied = supplierProjectDenied(session)
     if (supplierDenied) return supplierDenied
 
+    // The filters, applied identically to the page query and the cursor
+    // membership check below (filter-before-pagination, unchanged).
+    const filters = {
+      projectId: id,
+      ...(q.data.workerId ? { workerId: q.data.workerId } : {}),
+      ...(q.data.status ? { status: q.data.status } : {}),
+      ...(q.data.date ? { date: q.data.date } : {}),
+    }
+    const inFilteredSet = (a: { projectId: string; workerId: string; status: string; date: string }) =>
+      a.projectId === filters.projectId &&
+      (filters.workerId === undefined || a.workerId === filters.workerId) &&
+      (filters.status === undefined || a.status === filters.status) &&
+      (filters.date === undefined || a.date === filters.date)
+
+    // Keyset boundary (#155): resolve the cursor row by id, then refuse it
+    // unless it belongs to THIS filtered list — the exact pageOfKind rule
+    // ("the id of an attendance record in this list"), same 400 body.
+    let boundary: { createdAt: Date; id: string } | null = null
+    if (q.data.cursor) {
+      const cursorRow = await db.attendance.findUnique({ where: { id: q.data.cursor } })
+      if (!cursorRow || !inFilteredSet(cursorRow)) {
+        return v1Err(400, 'Unknown cursor — it must be the id of an attendance record in this list', 'cursor')
+      }
+      boundary = { createdAt: cursorRow.createdAt, id: cursorRow.id }
+    }
+
+    // One query: filters + boundary + (createdAt DESC, id DESC) + take
+    // limit+1 — the extra row reveals hasMore without a count (the
+    // audit-route pattern). The full load + in-memory sort + slice this
+    // replaced read EVERY day-row of the project per page (API-4).
     const rows = await db.attendance.findMany({
       where: {
-        projectId: id,
-        ...(q.data.workerId ? { workerId: q.data.workerId } : {}),
-        ...(q.data.status ? { status: q.data.status } : {}),
-        ...(q.data.date ? { date: q.data.date } : {}),
+        ...filters,
+        ...(boundary
+          ? {
+              OR: [
+                { createdAt: { lt: boundary.createdAt } },
+                { createdAt: boundary.createdAt, id: { lt: boundary.id } },
+              ],
+            }
+          : {}),
       },
       include: { worker: { select: { name: true, role: true } } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: q.data.limit + 1,
     })
-    // Deterministic keyset order: (createdAt DESC, id DESC) — the day-sheet
-    // reads newest-first, the invoices-list precedent.
-    const attendance = [...rows].sort(
-      (a, b) =>
-        b.createdAt.getTime() - a.createdAt.getTime() ||
-        (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
-    )
 
-    const p = pageOfKind(attendance, q.data.limit, q.data.cursor, 'an attendance record')
-    if (!p.ok) return p.response
+    const hasMore = rows.length > q.data.limit
+    const attendance = rows.slice(0, q.data.limit)
+    const nextCursor = hasMore ? attendance[attendance.length - 1]?.id ?? null : null
 
     return v1Ok(
-      p.page.items.map((a) => ({
+      attendance.map((a) => ({
         id: a.id,
         projectId: a.projectId,
         workerId: a.workerId,
@@ -111,7 +147,7 @@ export const GET = route(
         version: a.version, // offline-sync entity version (bumped by every applier)
         createdAt: a.createdAt.toISOString(),
       })),
-      { nextCursor: p.page.nextCursor, hasMore: p.page.hasMore },
+      { nextCursor, hasMore },
     )
   },
 )
