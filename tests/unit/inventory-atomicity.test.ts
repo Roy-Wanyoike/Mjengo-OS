@@ -277,17 +277,38 @@ describe('input validation — every movement action refuses a bad qty before an
     expect(r.closingQty).toBe(5)
   })
 
-  it('unitCost is validated where accepted: negative / NaN refused, zero and absent pass', async () => {
+  it('unitCost is validated where accepted: negative / NaN / >2-dp refused, zero and absent pass (#282 boundary)', async () => {
     await expect(
       openStock(P, { materialName: 'Cement', unit: 'bags', qty: 10, location: 'Site Store', unitCost: -1 }),
-    ).rejects.toThrow('inventory.open: unitCost must be zero or more')
+    ).rejects.toThrow('inventory.open: unitCost must be a non-negative KSh amount')
     await expect(
       receiveStock(P, { materialName: 'Cement', unit: 'bags', qty: 10, location: 'Site Store', unitCost: 'free' }),
-    ).rejects.toThrow('inventory.receive: unitCost must be zero or more')
+    ).rejects.toThrow('inventory.receive: unitCost must be a non-negative KSh amount')
+    // #282: the boundary parses like money (#122) — sub-KSh precision is 2 dp.
+    await expect(
+      receiveStock(P, { materialName: 'Cement', unit: 'bags', qty: 10, location: 'Site Store', unitCost: 750.555 }),
+    ).rejects.toThrow(/no more than 2 decimal places/)
     const zero = await openStock(P, { materialName: 'Cement', unit: 'bags', qty: 10, location: 'Site Store', unitCost: 0 })
     expect(zero.closingQty).toBe(10)
     const none = await receiveStock(P, { materialName: 'Cement', unit: 'bags', qty: 5, location: 'Site Store' })
     expect(none.closingQty).toBe(15)
+  })
+
+  it('unitCost crosses the boundary as KSh and is STORED as integer cents (#282)', async () => {
+    // The payload is the frontend "Unit cost (KSh)" contract; the BigInt
+    // column holds cents. parseUnitCost is the one conversion point.
+    await openStock(P, { materialName: 'Cement', unit: 'bags', qty: 10, location: 'Site Store', unitCost: 750 })
+    await receiveStock(P, { materialName: 'Cement', unit: 'bags', qty: 5, location: 'Site Store', unitCost: 12.5 })
+    const rows = [...state.movements.values()]
+    expect(rows.find((m) => m.type === 'opening')?.unitCost).toBe(75_000n)
+    expect(rows.find((m) => m.type === 'received')?.unitCost).toBe(1_250n) // KSh 12.50
+    // Absent → null (no cost recorded); zero → 0n (a real zero-cost row).
+    await receiveStock(P, { materialName: 'Ballast', unit: 'tonne', qty: 2, location: 'Site Store' })
+    await openStock(P, { materialName: 'Sand', unit: 'tonne', qty: 1, location: 'Site Store', unitCost: 0 })
+    const all = [...state.movements.values()]
+    const ballastItem = [...state.items.values()].find((i) => i.materialName === 'Ballast')!
+    expect(all.find((m) => m.inventoryItemId === ballastItem.id)?.unitCost).toBeNull()
+    expect(all.find((m) => m.unitCost === 0n)?.type).toBe('opening') // the Sand row
   })
 
   it('the absurd-qty cap speaks honestly (unit mistakes, not digits)', async () => {

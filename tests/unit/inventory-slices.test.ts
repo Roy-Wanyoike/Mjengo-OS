@@ -33,11 +33,10 @@
  * (inventory-realdb.test.ts, #184), and the counts/uncounted history half
  * of the slice (inventory-reconciliation*.test.ts, #194).
  *
- * KNOWN UNIT DRIFT (#282, pinned as-is — fails on purpose when normalized):
- * writers store unitCost as a raw KSh number into the BigInt column whose
- * comment says cents, so the loader's centsToKes divides by 100 again. The
- * stockValue assertions below pin the CURRENT (drifted) arithmetic so a
- * units fix flips them loudly.
+ * #282 RESOLVED (2026-09-21): unitCost is integer CENTS in the column —
+ * the fixtures below seed honest cents (KSh 750 → 75,000n) and the loader
+ * converts once at this DTO boundary. The stockValue/unitCost assertions
+ * are the CORRECT units (they pinned the ÷100 drift before the fix).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -147,7 +146,7 @@ function seedItem(
       inventoryItemId: id,
       type: m.type,
       quantity: m.quantity,
-      // Writers store the raw KSh number into the BigInt cents column (#282):
+      // Integer CENTS in the column (#282 normalized) — KSh 750 → 75,000n.
       unitCost: m.unitCost === undefined ? null : m.unitCost,
       reference: m.reference ?? null,
       note: m.note ?? null,
@@ -233,12 +232,12 @@ describe('loadInventorySlice — per-type sums and the closing formula (stubbed 
 
 describe('loadInventorySlice — stockValue from the latest cost-bearing movement', () => {
   it('multiplies the closing by the LATEST movement that carries a unitCost', async () => {
-    // Mixed-cost history: opened @ 750, topped up @ 760, then three
-    // cost-less movements AFTER the last cost (the hard case — the latest
-    // ROW is not the latest COST).
+    // Mixed-cost history: opened @ KSh 750 (75,000 cents), topped up @
+    // KSh 760 (76,000 cents), then three cost-less movements AFTER the last
+    // cost (the hard case — the latest ROW is not the latest COST).
     seedItem(P, { materialName: 'Cement' }, [
-      { type: 'opening', quantity: 100, unitCost: 750n, at: T(1) },
-      { type: 'received', quantity: 50, unitCost: 760n, at: T(2) },
+      { type: 'opening', quantity: 100, unitCost: 75_000n, at: T(1) },
+      { type: 'received', quantity: 50, unitCost: 76_000n, at: T(2) },
       { type: 'consumed', quantity: 30, at: T(3) },
       { type: 'damaged', quantity: 5, at: T(4) },
       { type: 'adjusted', quantity: -10, at: T(5) },
@@ -248,12 +247,13 @@ describe('loadInventorySlice — stockValue from the latest cost-bearing movemen
     const row = slice.items[0]
     expect(row.closingQty).toBe(105)
 
-    // KNOWN UNIT DRIFT (#282 — pinned as-is, fails on purpose when fixed):
-    // writers store the KSh number raw into the cents column, so the loader
-    // computes 105 × 760 "cents" → centsToKes → 798. The value being pinned
-    // is the ARITHMETIC: closing × the LATEST cost (760), not the FIRST
-    // (750 → 787.5), not the newest row (null → 0), i.e. exactly 798.
-    expect(row.stockValue).toBe(798)
+    // #282 normalized — the units are honest now: stockValue = closing ×
+    // the LATEST cost in CENTS (mulQtyCents), converted to KSh once at this
+    // DTO boundary: 105 × 76,000 cents = 7,980,000 cents → KSh 79,800.
+    // The value being pinned is the ARITHMETIC: closing × the LATEST cost
+    // (KSh 760), not the FIRST (KSh 750 → 78,750), not the newest row
+    // (null → 0), i.e. exactly 79,800.
+    expect(row.stockValue).toBe(79_800)
   })
 
   it('falls back to 0 when no movement ever carried a cost', async () => {
@@ -270,7 +270,7 @@ describe('loadInventorySlice — stockValue from the latest cost-bearing movemen
 describe('loadInventorySlice — newest-first movement flattening', () => {
   it('flattens movements across ALL items newest-first, denormalizing name/unit onto every row', async () => {
     const ballast = seedItem(P, { materialName: 'Ballast', unit: 'tonne' }, [
-      { type: 'opening', quantity: 10, unitCost: 900n, at: T(1), reference: 'GRN-1', note: 'initial', recordedBy: 'Otieno' },
+      { type: 'opening', quantity: 10, unitCost: 90_000n, at: T(1), reference: 'GRN-1', note: 'initial', recordedBy: 'Otieno' },
       { type: 'consumed', quantity: 2, at: T(3) },
     ])
     const nails = seedItem(P, { materialName: 'Nails', unit: 'kg', location: 'Workshop' }, [
@@ -306,9 +306,9 @@ describe('loadInventorySlice — newest-first movement flattening', () => {
     expect(oldest.unit).toBe('tonne')
     expect(oldest.type).toBe('opening')
     expect(oldest.quantity).toBe(10)
-    // #282 drift, pinned as-is: centsToKes(900n) → 9 (the writer stored the
-    // KSh number 900 into the cents column). Fails on purpose when fixed.
-    expect(oldest.unitCost).toBe(9)
+    // #282 normalized: 90,000 cents in the column → KSh 900 at this DTO
+    // boundary (the drifted fixture showed 9).
+    expect(oldest.unitCost).toBe(900)
     expect(oldest.reference).toBe('GRN-1')
     expect(oldest.note).toBe('initial')
     expect(oldest.recordedBy).toBe('Otieno')

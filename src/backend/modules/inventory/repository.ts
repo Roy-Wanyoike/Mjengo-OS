@@ -66,6 +66,10 @@ export async function loadInventorySlice(projectId: string): Promise<InventorySl
     const adjustedQty = sum('adjusted')
     const closingQty = derivedClosingQty(item.movements)
     const lastCost = item.movements.find((m) => m.unitCost != null)?.unitCost ?? 0n
+    // #282: unitCost is integer CENTS in the column (writers convert at the
+    // action boundary) — this DTO is the KSh read boundary (centsToKes), the
+    // mirror of the service's parseUnitCost. stockValue = closing × lastCost
+    // is computed in cents (mulQtyCents) and only then converted to KSh.
     const movements: StockMovementRow[] = item.movements.map((m) => ({
       id: m.id,
       inventoryItemId: m.inventoryItemId,
