@@ -45,13 +45,41 @@ import { SupplierSyncControl } from './supplier-sync-control'
 
 /** The portal's dispatch signature (scoped: names the buyer project the row
  *  lives in — catalog rows are network-global, so their project context is
- *  optional and the server falls back to the default project). */
+ *  optional and the server falls back to the default project).
+ *
+ *  #141 / audit FE-10 — the DECISION, recorded with the type that owns it:
+ *  KEEP the `label`. It is the human-readable action context (owner dispatch
+ *  parity): every supplier card passes one, the portal threads it into the
+ *  store, and when the radio is down it rides the queued outbox item and
+ *  renders per-item in the sync sheet (`SupplierSyncControl`). Online it is
+ *  deliberately NOT sent to the server — the server writes its own audit
+ *  events — so the label is purely client-side context, never wire payload. */
 export type SupplierDispatch = (
   type: ActionType,
   payload: Record<string, unknown>,
   projectId: string | undefined,
   label: string,
 ) => Promise<boolean>
+
+// #141 — the keep-decision, COMPILE-PINNED (the i18n dicts/check.ts Assert
+// idiom; tests/ sits outside tsc's include, so signature pins live in src):
+// dropping or retyping the label param on EITHER seam below fails
+// `bunx tsc --noEmit` — the "remove honestly" path is a reviewed change,
+// never silent drift back to the pre-#128 dropped-label posture.
+type Assert<T extends true> = T
+type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends (<T>() => T extends Y ? 1 : 2) ? true : false
+/** The store-side dispatch seam (use-supplier-outbox) — must take the SAME 4-tuple. */
+type SupplierStoreDispatch = ReturnType<typeof useSupplierOutbox.getState>['dispatch']
+const _supplierDispatchKeepsLabel: Assert<Equal<
+  Parameters<SupplierDispatch>,
+  [type: ActionType, payload: Record<string, unknown>, projectId: string | undefined, label: string]
+>> = true
+const _storeDispatchSeamMatchesThePortal: Assert<Equal<
+  Parameters<SupplierStoreDispatch>,
+  Parameters<SupplierDispatch>
+>> = true
+void _supplierDispatchKeepsLabel
+void _storeDispatchSeamMatchesThePortal
 
 export function SupplierPortal() {
   const { data: session, status } = useSession()
@@ -144,7 +172,8 @@ export function SupplierPortal() {
    *  in the persisted outbox and drains on reconnect. 'applied' → re-read the
    *  whole portal payload (source of truth); 'queued' → true (the sync sheet
    *  owns the pending state); 'refused' → false (the honest server message
-   *  was already toasted by the store). */
+   *  was already toasted by the store). The label rides the queued item
+   *  (#141 — the sync sheet renders it per item). */
   const dispatch: SupplierDispatch = useCallback(
     async (type, actionPayload, projectId, label) => {
       setBusy(true)

@@ -103,7 +103,10 @@ interface SupplierOutboxState {
    * Offline-first supplier dispatch: online → POST /api/actions (the scoped
    * transport the portal always used); offline / network-failed → queue.
    * Server refusals are final and honest (toast + 'refused') — they are NOT
-   * queued (an identical payload would fail again).
+   * queued (an identical payload would fail again). The `label` is
+   * client-side action context ONLY (#141): it rides the queued item for
+   * the per-item sync sheet and never leaves the client (the server writes
+   * its own audit events).
    */
   dispatch: (
     type: ActionType,
@@ -187,6 +190,10 @@ export const useSupplierOutbox = create<SupplierOutboxState>()(
           return 'refused'
         }
         if (get().online) {
+          // Online: applied immediately, nothing queued — the label has no
+          // client-side job on this branch (#141: it is the OUTBOX's human
+          // string; it rides the queued item below and never leaves the
+          // client).
           try {
             const res = await fetch('/api/actions', {
               method: 'POST',
@@ -212,8 +219,9 @@ export const useSupplierOutbox = create<SupplierOutboxState>()(
           }
         }
         // Offline (or the radio just dropped): queue. The label rides the
-        // item — the per-item sync sheet renders it (FE-10 resolved here:
-        // the supplier dispatch finally KEEPS its action context).
+        // item — the per-item sync sheet renders it (issue #141 / audit
+        // FE-10: the supplier dispatch KEEPS its action context — the
+        // keep-for-outbox decision, compile-pinned in supplier-portal.tsx).
         const item: OutboxItem = {
           id: uid(),
           type,
