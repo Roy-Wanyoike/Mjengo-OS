@@ -1,7 +1,7 @@
-import Link from "next/link";
 import type { Metadata } from "next";
 import { Container } from "@/components/container";
 import { Button } from "@/components/button";
+import { SiteLink } from "@/components/site-link";
 
 export const metadata: Metadata = {
   title: "Page Not Found",
@@ -23,12 +23,12 @@ export default function NotFound() {
         </p>
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <Button href="/" size="lg">Back to the homepage</Button>
-          <Link
+          <SiteLink
             href="/platform"
             className="text-[15px] font-medium text-forest-700 underline decoration-forest-300 underline-offset-4 hover:text-forest-800"
           >
             Explore the platform
-          </Link>
+          </SiteLink>
         </div>
       </Container>
     </section>
