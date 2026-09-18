@@ -364,6 +364,9 @@ neither docker nor a running systemd): install the timer pair per the
 full-stack drill: `systemctl start mjengo-backup.service` →
 `docker compose stop app` → restore per §7.2 into the real volumes →
 `docker compose up -d` → `curl -fsS localhost:3000/api/health` must
-answer `{"ok":true,"db":"up",…}` with the expected `counts`. A backup
-that has never been restored on YOUR hardware is still a hope, not a
-backup.
+answer `{"ok":true,"db":"up",…}`, and (issue #164: the counts are gated
+now) the detail probe
+`curl -fsS -H "X-Health-Detail: $HEALTH_DETAIL_TOKEN" localhost:3000/api/health`
+— or an admin session in the browser — must show the expected `counts`.
+A backup that has never been restored on YOUR hardware is still a hope,
+not a backup.
