@@ -28,12 +28,13 @@
  *     matching operationIds + the honest warn-only verdict notes.
  *
  * Mocks (flags-gating idioms): '@/backend/lib/guard' full fake (session
- * control), '@/backend/lib/db' (featureFlag rows + invoice.findFirst),
- * '@/backend/lib/mjengo' (getProjectPayload — the payload's invoices slice)
- * and '@/backend/modules/invoices/service' (threeWayCheck — the module's
- * read-only check, controlled here; the pure matchThreeWay math is pinned
- * by three-way.test.ts). route-kit, rate-limit, flags, respond/schemas and
- * the routes themselves stay REAL.
+ * control), '@/backend/lib/db' (featureFlag rows + invoice.findFirst (the
+ * detail read, shared with the #154 cursor resolution) + invoice.findMany
+ * (the #154 direct list read — filters/boundary/take pushed in) +
+ * project.findUnique resolve), and '@/backend/modules/invoices/service'
+ * (threeWayCheck — the module's read-only check, controlled here; the pure
+ * matchThreeWay math is pinned by three-way.test.ts). route-kit, rate-limit,
+ * flags, respond/schemas and the routes themselves stay REAL.
  */
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -134,10 +135,74 @@ vi.mock('@/backend/lib/db', () => {
       { key: 'marketplace', enabled: true, description: 'Marketplace' },
       { key: 'land_verification', enabled: true, description: 'Land' },
     ],
+    // The LIST route's resolve step (#154): p-1 exists, anything else is a
+    // 404.
+    projects: [{ id: 'p-1', name: 'Nyumba Yangu' }],
   }
   return {
     db: {
       __state: state,
+      project: {
+        async findUnique({ where }: { where: { id: string } }) {
+          return state.projects.find((p) => p.id === where.id) ?? null
+        },
+      },
+      invoice: {
+        // Shared by the detail route (id OR invoiceCode) and the #154 cursor
+        // resolution ({ id, projectId, status?, supplierId? }) — an honest
+        // where-filtering twin.
+        async findFirst({ where }: { where: { OR?: Array<Record<string, string>>; id?: string; projectId?: string; status?: string; supplierId?: string } }) {
+          let found: (typeof INVOICES)[number] | undefined
+          if (Array.isArray(where.OR)) {
+            const id = where.OR.find((c) => c.id !== undefined)?.id
+            const code = where.OR.find((c) => c.invoiceCode !== undefined)?.invoiceCode
+            found = INVOICES.find((i) => i.id === id || i.invoiceCode === code)
+          } else {
+            found = INVOICES.find(
+              (i) =>
+                i.id === where.id &&
+                (where.projectId === undefined || i.projectId === where.projectId) &&
+                (where.status === undefined || i.status === where.status) &&
+                (where.supplierId === undefined || i.supplierId === where.supplierId),
+            )
+          }
+          return found ? structuredClone(found) : null
+        },
+        // The invoices LIST direct read (#154): an honest Prisma twin —
+        // where-filtering (projectId + status + the supplier row pin + the
+        // keyset boundary OR), the (createdAt DESC, id DESC) total order and
+        // take are all honored.
+        async findMany({ where, orderBy, take }: { where?: Record<string, unknown>; orderBy?: Array<Record<string, string>>; take?: number }) {
+          const boundary = where?.OR as Array<Record<string, unknown>> | undefined
+          const inBoundary = (i: (typeof INVOICES)[number]) => {
+            if (!boundary) return true
+            return boundary.some((cond) => {
+              const c = cond.createdAt as unknown
+              if (c instanceof Date) {
+                const id = cond.id as { lt: string }
+                return i.createdAt.getTime() === c.getTime() && i.id < id.lt
+              }
+              const lt = (c as { lt: Date }).lt
+              return i.createdAt.getTime() < lt.getTime()
+            })
+          }
+          const rows = INVOICES.filter((i) => {
+            if (where?.projectId && i.projectId !== where.projectId) return false
+            if (where?.status && i.status !== where.status) return false
+            if (where?.supplierId && i.supplierId !== where.supplierId) return false
+            if (!inBoundary(i)) return false
+            return true
+          })
+            .map((i) => structuredClone(i))
+            .sort(
+              (a, b) =>
+                b.createdAt.getTime() - a.createdAt.getTime() ||
+                (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+            )
+          void orderBy
+          return take !== undefined ? rows.slice(0, take) : rows
+        },
+      },
       featureFlag: {
         async upsert() { /* rows exist; lazy creation is a no-op here */ },
         async findMany({ where }: { where?: { key?: { in?: string[] } } }) {
@@ -145,14 +210,6 @@ vi.mock('@/backend/lib/db', () => {
           return state.flagRows.filter((r) => !keys || keys.includes(r.key)).map((r) => ({ ...r }))
         },
         async update() { throw new Error('not used here') },
-      },
-      invoice: {
-        async findFirst({ where }: { where: { OR: Array<Record<string, string>> } }) {
-          const id = where.OR.find((c) => c.id !== undefined)?.id
-          const code = where.OR.find((c) => c.invoiceCode !== undefined)?.invoiceCode
-          const found = INVOICES.find((i) => i.id === id || i.invoiceCode === code)
-          return found ? structuredClone(found) : null
-        },
       },
     },
   }
@@ -191,13 +248,10 @@ vi.mock('@/backend/lib/guard', async () => {
   }
 })
 
-// The payload seam the invoice LIST reuses (aggregations stay REAL in
-// production — pinned by the app's own tests; here they are controlled).
-const svc = vi.hoisted(() => ({
-  getProjectPayload: vi.fn(),
-}))
-
-vi.mock('@/backend/lib/mjengo', () => svc)
+// The payload seam is gone from this suite (#154): the invoice LIST reads
+// the db stub directly (the route flattens supplierName/orderCode and
+// converts totals at its own boundary — the slice's exact mapping); the
+// detail route always read the db stub.
 
 // The invoices module's read-only 3-way check — controlled per test (the
 // pure matchThreeWay math it delegates to is pinned by three-way.test.ts).
@@ -222,21 +276,7 @@ async function bodyOf(res: { json: () => Promise<unknown> }): Promise<Record<str
   return (await res.json()) as Record<string, unknown>
 }
 
-// ---------------------------------------------------------------- payload + verdict fixtures
-
-const PAYLOAD = {
-  project: { id: 'p-1', name: 'Nyumba Yangu' },
-  phases: [],
-  // the payload's invoices slice: InvoiceWithLines rows + supplierName/orderCode flattened
-  invoices: {
-    invoices: INVOICES.map(({ supplier, order, ...rest }) => ({
-      ...rest,
-      supplierName: supplier?.businessName ?? null,
-      orderCode: order?.orderCode ?? null,
-    })),
-    ledgerCheck: { consistent: true, drift: 0, breakdown: {}, note: 'not under test here' },
-  },
-}
+// ---------------------------------------------------------------- fixtures (served by the db stub)
 
 const VERDICT_27 = {
   mode: 'three-way', hasOrder: true, hasDelivery: true,
@@ -284,7 +324,6 @@ beforeEach(() => {
   h.session = null
   delete process.env.NEXT_FLAGS_OFF
   invalidateFlagCache()
-  svc.getProjectPayload.mockResolvedValue(PAYLOAD)
   invoiceSvc.threeWayCheck.mockResolvedValue(VERDICT_DEFAULT)
 })
 
@@ -384,7 +423,7 @@ describe('GET /api/v1/projects/:id/invoices — the lifecycle list', () => {
   })
 
   it('scoping: unknown project → 404; foreign client → 403; own client → 200; anonymous → 401', async () => {
-    svc.getProjectPayload.mockResolvedValueOnce(null)
+    // p-x resolves null on the db stub (the #154 direct resolve).
     sessionFor('admin')
     expect((await projectInvoicesGet(req('p-x'), ctx('p-x'))).status).toBe(404)
 

@@ -1277,13 +1277,9 @@ describe('v1 project-scoped reads — a supplier is not a project reader', () =>
   })
 
   it('GET /api/v1/projects/:id/invoices → row-pinned: their invoices in the project only', async () => {
-    vi.mocked(getProjectPayload).mockResolvedValueOnce({
-      project: { id: 'p-1', name: 'Riverside Villas', client: 'Mama Njeri', clientType: 'diaspora', location: 'Karen', status: 'active', budget: 2_000_000, startDate: new Date('2026-01-05T09:00:00Z'), targetDate: null, createdAt: new Date('2026-01-04T09:00:00Z'), updatedAt: new Date('2026-02-01T09:00:00Z') },
-      invoices: { invoices: [
-        { id: 'inv-1', invoiceCode: 'INV-2026-000027', projectId: 'p-1', supplierId: 'sup-1', status: 'submitted', total: 185_000, subtotal: 181_500, dueDate: new Date('2026-04-01T00:00:00Z'), paidAt: null, paymentMethod: null, note: null, createdAt: new Date('2026-03-05T10:00:00Z'), updatedAt: new Date('2026-03-05T10:00:00Z'), lines: [] },
-        { id: 'inv-2', invoiceCode: 'INV-2026-000028', projectId: 'p-1', supplierId: 'sup-2', status: 'paid', total: 62_000, subtotal: 60_000, dueDate: new Date('2026-03-15T00:00:00Z'), paidAt: new Date('2026-03-12T14:00:00Z'), paymentMethod: 'mpesa', note: null, createdAt: new Date('2026-03-06T10:00:00Z'), updatedAt: new Date('2026-03-12T14:00:00Z'), lines: [] },
-      ] },
-    } as never)
+    // #154: the route reads db.invoice.findMany directly — the stub's
+    // invoices fixture (inv-1 of sup-1 + inv-2 of sup-2, both p-1) is the
+    // data; the row pin pushes supplierId into the where.
     sessionFor('supplier', { supplierId: 'sup-1' })
     const res = await v1ProjectInvoicesGet(getReq('http://localhost/api/v1/projects/p-1/invoices'), ctx('p-1'))
     expect(res.status).toBe(200)
@@ -1292,10 +1288,6 @@ describe('v1 project-scoped reads — a supplier is not a project reader', () =>
   })
 
   it('GET /api/v1/projects/:id/invoices with no link → 403 fail closed', async () => {
-    vi.mocked(getProjectPayload).mockResolvedValueOnce({
-      project: { id: 'p-1' },
-      invoices: { invoices: [] },
-    } as never)
     sessionFor('supplier', { supplierId: null })
     const res = await v1ProjectInvoicesGet(getReq('http://localhost/api/v1/projects/p-1/invoices'), ctx('p-1'))
     expect(res.status).toBe(403)

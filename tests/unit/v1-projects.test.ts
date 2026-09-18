@@ -26,8 +26,10 @@
  *
  * Mocks (flags-gating idioms): '@/backend/lib/guard' full fake (session
  * control for route-kit's withGuard), '@/backend/lib/mjengo' (the
- * getProjectsList / getProjectPayload service seams), '@/backend/lib/db'
- * (featureFlag rows only — the flags module stays REAL, like flags-gating).
+ * getProjectsList / getProjectPayload service seams — the LIST and DETAIL
+ * reads), '@/backend/lib/db' (featureFlag rows + the tasks route's direct
+ * reads since #154: project.findUnique resolve, task.findMany with the
+ * pushed filters/boundary/take, task.findFirst cursor resolution).
  * route-kit, rate-limit, respond/schemas and the routes themselves stay
  * REAL. NEXT_FLAGS_OFF + invalidateFlagCache() control the flag state.
  */
@@ -48,6 +50,9 @@ vi.mock('@/backend/lib/db', () => {
       { key: 'marketplace', enabled: true, description: 'Marketplace' },
       { key: 'land_verification', enabled: true, description: 'Land' },
     ],
+    // The tasks route's resolve step (#154): p-1 exists, anything else is a
+    // 404 (the detail route keeps the payload seam below).
+    projects: [{ id: 'p-1', name: 'Riverside Villas' }],
   }
   return {
     db: {
@@ -66,6 +71,47 @@ vi.mock('@/backend/lib/db', () => {
         },
       },
       __state: state,
+      project: {
+        async findUnique({ where }: { where: { id: string } }) {
+          return state.projects.find((p) => p.id === where.id) ?? null
+        },
+      },
+      task: {
+        // The tasks route's direct read (#154): an honest Prisma twin —
+        // where-filtering (the phase-project scope, the status filter and
+        // the keyset boundary OR), the (createdAt ASC, id ASC) total order
+        // and take are all honored, with the phase join attached.
+        async findFirst({ where }: { where: { id: string; phase?: { projectId: string }; status?: string } }) {
+          const t = TASKS.find((x) => x.id === where.id)
+          if (!t) return null
+          if (where.phase && TASK_PHASES[t.phaseId].projectId !== where.phase.projectId) return null
+          if (where.status && t.status !== where.status) return null
+          return structuredClone(t)
+        },
+        async findMany({ where, orderBy, take }: { where?: Record<string, unknown>; orderBy?: Array<Record<string, string>>; take?: number }) {
+          const boundary = where?.OR as Array<Record<string, unknown>> | undefined
+          const inBoundary = (t: (typeof TASKS)[number]) => {
+            if (!boundary) return true
+            return boundary.some((cond) => {
+              const c = cond.createdAt as unknown
+              if (c instanceof Date) {
+                const id = cond.id as { gt: string }
+                return t.createdAt.getTime() === c.getTime() && t.id > id.gt
+              }
+              const gt = (c as { gt: Date }).gt
+              return t.createdAt.getTime() > gt.getTime()
+            })
+          }
+          const rows = TASKS.filter((t) => {
+            if (where?.phase && TASK_PHASES[t.phaseId].projectId !== (where.phase as { projectId: string }).projectId) return false
+            if (where?.status && t.status !== where.status) return false
+            if (!inBoundary(t)) return false
+            return true
+          }).map((t) => ({ ...t, phase: { ...TASK_PHASES[t.phaseId] } }))
+          void orderBy // the fixture is already in (createdAt ASC, id ASC) order
+          return take !== undefined ? rows.slice(0, take) : rows
+        },
+      },
       featureFlag: {
         async upsert() { /* rows exist; lazy creation is a no-op here */ },
         async findMany({ where }: { where?: { key?: { in?: string[] } } }) {
@@ -167,6 +213,12 @@ const TASKS = [
   task('t-4', 'ph-2', 'Fix drainage', 'blocked', '2026-01-18T10:00:00Z', { blockedById: 't-2', blockedReason: 'waiting on trusses' }),
   task('t-5', 'ph-2', 'Paint interior', 'done', '2026-01-20T10:00:00Z'),
 ]
+
+/** The phases the task rows join to (the tasks route's select join, #154). */
+const TASK_PHASES: Record<string, { id: string; name: string; projectId: string }> = {
+  'ph-1': { id: 'ph-1', name: 'Site Prep & Foundation', projectId: 'p-1' },
+  'ph-2': { id: 'ph-2', name: 'Roofing', projectId: 'p-1' },
+}
 
 const PAYLOAD = {
   project: { id: 'p-1', name: 'Riverside Villas', client: 'Mama Njeri', clientType: 'diaspora', location: 'Karen', status: 'active', budget: 2_000_000, shareToken: 'tok-secret-1', startDate: d('2026-01-05T09:00:00Z'), targetDate: d('2026-05-05T09:00:00Z'), createdAt: d('2026-01-04T09:00:00Z'), updatedAt: d('2026-02-01T09:00:00Z') },
@@ -545,7 +597,7 @@ describe('GET /api/v1/projects/:id/tasks', () => {
   })
 
   it('unknown project → 404; client foreign project → 403; anonymous → 401', async () => {
-    svc.getProjectPayload.mockResolvedValueOnce(null)
+    // p-x resolves null on the db stub (the #154 direct resolve).
     sessionFor('admin')
     expect((await projectTasksGet(req('p-x'), ctx('p-x'))).status).toBe(404)
 

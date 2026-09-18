@@ -1,7 +1,9 @@
+import { db } from '@/backend/lib/db'
+import { centsToKes } from '@/backend/lib/money'
 import { route } from '@/backend/lib/route-kit'
-import { getProjectPayload } from '@/backend/lib/mjengo'
+import { afterCreatedAtId, cursorRowOr400 } from './keyset'
 import { projectInvoicesQuery, projectIdRef, validateQuery } from './schemas'
-import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
+import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, membershipProjectDenied, supplierSessionId } from './scope'
 
 // /api/v1/projects/:id/invoices (Phase C, read-only — the money-governance
@@ -11,6 +13,14 @@ import { clientProjectDenied, membershipProjectDenied, supplierSessionId } from 
 type Ctx = { params: Promise<{ id: string }> }
 
 const iso = (v: Date | null): string | null => (v ? v.toISOString() : null)
+
+/**
+ * Cents → KSh at the row boundary (issue #122) — the milestone-rows /
+ * worker-rows dual-type convention: production Prisma rows carry BigInt
+ * cents (converted here, exactly once), while the structural row types also
+ * admit plain KSh numbers so shaped fixtures ride the same mapper.
+ */
+const kes = (v: number | bigint): number => (typeof v === 'bigint' ? centsToKes(v) : v)
 
 /**
  * GET /api/v1/projects/:id/invoices — the project's supplier-invoice
@@ -32,14 +42,18 @@ const iso = (v: Date | null): string | null => (v ? v.toISOString() : null)
  * read ROW-PINNED: only THEIR OWN invoices in the project (a supplier with no
  * link → 403 fail closed — never another supplier's money rows).
  *
- * DATA: the invoice rows come from getProjectPayload()'s invoices slice —
- * loadInvoicesSlice(projectId), the invoices module's public read (rows
- * include lines, supplier name and PO code; the A-1-lite ledgerCheck rides
- * the payload for the webapp, not this list). The set is bounded, so
- * pagination is the wallet-list pattern: a deterministic (createdAt DESC,
- * id DESC) total order sliced in the route layer. ?status= (the six
- * InvoiceStatus values) filters BEFORE pagination — a cursor that falls out
- * of the filtered list → 400. Rate limit: 120/min per principal.
+ * DATA (issue #154 / audit API-3): DIRECT READ — db.invoice.findMany scoped
+ * `where: { projectId }` (the same rows the invoices module's
+ * loadInvoicesSlice returns), with only the joins the summary needs: line
+ * IDS (the count), the supplier's businessName and the order's code — the
+ * slice's own flattening, projected field-for-field. The old path
+ * materialized the whole ~20-read getProjectPayload to slice the invoices
+ * out of it (and rode the slice's transactions/wallet/milestones reads for
+ * a ledgerCheck this list never served); the page cost is now O(page): the
+ * supplier row-pin, ?status=, the keyset boundary and take = limit + 1 all
+ * ride the single query (the #155 attendance pattern), ordered
+ * (createdAt DESC, id DESC) — the same total order the route's old
+ * in-memory sort produced. Rate limit: 120/min per principal.
  */
 export const GET = route(
   {
@@ -54,16 +68,17 @@ export const GET = route(
     const q = validateQuery(req, projectInvoicesQuery)
     if (!q.ok) return q.response
 
-    const payload = await getProjectPayload(id)
-    if (!payload) return v1Err(404, 'Project not found')
-    const denied = clientProjectDenied(session, payload.project.id)
+    // Unknown project → 404 (the attendance/deliveries resolve step).
+    const project = await db.project.findUnique({ where: { id } })
+    if (!project) return v1Err(404, 'Project not found')
+    const denied = clientProjectDenied(session, id)
     if (denied) return denied
     // SEC-6 (issue #174): the site-team membership pin — supervisor /
     // procurement / qs / finance read only the projects they hold a
     // ProjectMembership row on (fail closed on zero rows); contractor/admin
     // keep the explicit portfolio-wide grant. Same uniform 403 body as the
     // client pin, after the resolve (resolve-then-pin, the v1 precedent).
-    const membershipDenied = await membershipProjectDenied(session, payload.project.id)
+    const membershipDenied = await membershipProjectDenied(session, id)
     if (membershipDenied) return membershipDenied
     // W5-3 supplier row pin: their invoices only (fail closed with no link).
     const supplierId = supplierSessionId(session)
@@ -71,35 +86,63 @@ export const GET = route(
       return v1Err(403, 'Supplier account has no supplier linked')
     }
 
-    let invoices = payload.invoices.invoices
-    if (supplierId) {
-      invoices = invoices.filter((i) => i.supplierId === supplierId)
+    // Keyset cursor (#155 convention): resolve by id, refuse unless the row
+    // belongs to THIS filtered list (project + status filter + the
+    // supplier's own row pin).
+    const cursor = q.data.cursor
+    let boundary: { createdAt: Date; id: string } | null = null
+    if (cursor) {
+      const c = await cursorRowOr400(
+        () =>
+          db.invoice.findFirst({
+            where: {
+              id: cursor,
+              projectId: id,
+              ...(q.data.status ? { status: q.data.status } : {}),
+              ...(supplierId ? { supplierId } : {}),
+            },
+          }),
+        'an invoice',
+      )
+      if (!c.ok) return c.response
+      boundary = { createdAt: c.row.createdAt, id: c.row.id }
     }
-    if (q.data.status) {
-      invoices = invoices.filter((i) => i.status === q.data.status)
-    }
-    // Deterministic keyset order: (createdAt DESC, id DESC) — the slice's own
-    // newest-first order with the id tiebreak the keyset needs.
-    invoices = [...invoices].sort(
-      (a, b) =>
-        b.createdAt.getTime() - a.createdAt.getTime() ||
-        (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
-    )
 
-    // pageOfKind needs { id } rows; map the summary alongside.
-    const rows = invoices.map((i) => ({
-      id: i.id,
-      item: {
+    // One query: scope + row pin + filter + boundary + (createdAt DESC,
+    // id DESC) + take limit+1 — the slice's own newest-first order with the
+    // id tiebreak the keyset needs.
+    const rows = await db.invoice.findMany({
+      where: {
+        projectId: id,
+        ...(q.data.status ? { status: q.data.status } : {}),
+        ...(supplierId ? { supplierId } : {}),
+        ...(boundary ? afterCreatedAtId(boundary, 'desc') : {}),
+      },
+      include: {
+        lines: { select: { id: true } },
+        supplier: { select: { businessName: true } },
+        order: { select: { orderCode: true } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: q.data.limit + 1,
+    })
+
+    const hasMore = rows.length > q.data.limit
+    const invoices = rows.slice(0, q.data.limit)
+    const nextCursor = hasMore ? invoices[invoices.length - 1]?.id ?? null : null
+
+    return v1Ok(
+      invoices.map((i) => ({
         id: i.id,
         invoiceCode: i.invoiceCode,
         status: i.status,
         supplierId: i.supplierId,
-        supplierName: i.supplierName,
+        supplierName: i.supplier?.businessName ?? null,
         orderId: i.orderId,
-        orderCode: i.orderCode,
-        subtotal: i.subtotal,
-        tax: i.tax,
-        total: i.total,
+        orderCode: i.order?.orderCode ?? null,
+        subtotal: kes(i.subtotal),
+        tax: kes(i.tax),
+        total: kes(i.total),
         lineCount: i.lines.length,
         dueDate: iso(i.dueDate),
         issuedAt: iso(i.issuedAt),
@@ -113,14 +156,8 @@ export const GET = route(
         createdBy: i.createdBy,
         createdAt: iso(i.createdAt),
         updatedAt: iso(i.updatedAt),
-      },
-    }))
-    const p = pageOfKind(rows, q.data.limit, q.data.cursor, 'an invoice')
-    if (!p.ok) return p.response
-
-    return v1Ok(
-      p.page.items.map((r) => r.item),
-      { nextCursor: p.page.nextCursor, hasMore: p.page.hasMore },
+      })),
+      { nextCursor, hasMore },
     )
   },
 )

@@ -1,6 +1,6 @@
 import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
-import { getProjectPayload } from '@/backend/lib/mjengo'
+import { loadIntelSlice } from '@/backend/modules/intel/repository'
 import { projectIdRef, projectIntelQuery, validateQuery } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, membershipProjectDenied, supplierProjectDenied } from './scope'
@@ -40,10 +40,12 @@ type Ctx = { params: Promise<{ id: string }> }
  * project, foreign → 403; unknown project → 404). W5-3: supplier sessions
  * are not project readers — uniform 403.
  *
- * DATA (honest seam notes): risk/score/digests/health/flags come from
- * getProjectPayload()'s intel slice — loadIntelSlice(projectId), the intel
+ * DATA (honest seam notes, issue #154 / audit API-3): risk/score/digests/
+ * health/flags come from loadIntelSlice(projectId) DIRECTLY — the intel
  * module's public read (latest-wins rows + the module's own safe JSON
- * parsers, re-used here; never re-implemented). The anomalies summary is a
+ * parsers, re-used here; never re-implemented). The old path materialized
+ * the whole ~20-read getProjectPayload to read one slice of it; the digest
+ * now pays only its own module's reads. The anomalies summary is a
  * route-layer read of the Alert ledger (the rows the anomaly scan writes) —
  * the wallet-transactions precedent. Pagination does not apply (one digest
  * object). Rate limit: 120/min per principal.
@@ -61,23 +63,26 @@ export const GET = route(
     const q = validateQuery(req, projectIntelQuery)
     if (!q.ok) return q.response
 
-    const payload = await getProjectPayload(id)
-    if (!payload) return v1Err(404, 'Project not found')
-    const denied = clientProjectDenied(session, payload.project.id)
+    // Unknown project → 404 (the attendance/deliveries resolve step).
+    const project = await db.project.findUnique({ where: { id } })
+    if (!project) return v1Err(404, 'Project not found')
+    const denied = clientProjectDenied(session, id)
     if (denied) return denied
     // SEC-6 (issue #174): the site-team membership pin — supervisor /
     // procurement / qs / finance read only the projects they hold a
     // ProjectMembership row on (fail closed on zero rows); contractor/admin
     // keep the explicit portfolio-wide grant. Same uniform 403 body as the
     // client pin, after the resolve (resolve-then-pin, the v1 precedent).
-    const membershipDenied = await membershipProjectDenied(session, payload.project.id)
+    const membershipDenied = await membershipProjectDenied(session, id)
     if (membershipDenied) return membershipDenied
     // W5-3: supplier sessions are not project readers. Uniform 403 — no
     // project data is returned.
     const supplierDenied = supplierProjectDenied(session)
     if (supplierDenied) return supplierDenied
 
-    const intel = payload.intel
+    // The intel module's public read — the exact slice the webapp payload
+    // embeds, loaded here without the other ~19 reads around it (#154).
+    const intel = await loadIntelSlice(id)
     // The alert ledger — the anomaly scan's output rows (counts + latest 5).
     const alerts = await db.alert.findMany({
       where: { projectId: id },

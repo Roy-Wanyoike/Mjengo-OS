@@ -27,10 +27,13 @@
  *     schemas.
  *
  * Mocks (flags-gating idioms): '@/backend/lib/guard' full fake (session
- * control), '@/backend/lib/db' (featureFlag rows — the flag gates) and
- * '@/backend/lib/mjengo' (getProjectPayload — the payload's supply + land
- * slices). route-kit, rate-limit, flags, respond/schemas and the routes stay
- * REAL.
+ * control), '@/backend/lib/db' (featureFlag rows — the flag gates — plus
+ * since #154 the parcels route's direct reads: project.findUnique resolve,
+ * landParcel.findMany with the pushed filter/boundary/take,
+ * landParcel.findFirst cursor resolution), and
+ * '@/backend/modules/supply/repository' (loadSupplierDirectoryBounded — the
+ * bounded directory read the suppliers route calls since #154).
+ * route-kit, rate-limit, flags, respond/schemas and the routes stay REAL.
  */
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -158,10 +161,57 @@ vi.mock('@/backend/lib/db', () => {
       { key: 'marketplace', enabled: true, description: 'Marketplace' },
       { key: 'land_verification', enabled: true, description: 'Land' },
     ],
+    // Both routes' resolve step (#154): p-1 exists, anything else is a 404.
+    projects: [{ id: 'p-1', name: 'Nyumba Yangu' }],
   }
   return {
     db: {
       __state: state,
+      project: {
+        async findUnique({ where }: { where: { id: string } }) {
+          return state.projects.find((p) => p.id === where.id) ?? null
+        },
+      },
+      landParcel: {
+        // The #154 cursor resolution: id + project scope + status filter.
+        async findFirst({ where }: { where: { id: string; projectId?: string; status?: string } }) {
+          const found = PARCELS.find(
+            (p) =>
+              p.id === where.id &&
+              (where.projectId === undefined || p.projectId === where.projectId) &&
+              (where.status === undefined || p.status === where.status),
+          )
+          return found ? withJoins(found) : null
+        },
+        // The parcels LIST direct read (#154): an honest Prisma twin —
+        // where-filtering (projectId + status + the keyset boundary OR), the
+        // (createdAt ASC, id ASC) total order and take are all honored, with
+        // the include joins attached (documents → ids, searches
+        // newest-first, assignments + professional).
+        async findMany({ where, orderBy, take }: { where?: Record<string, unknown>; orderBy?: Array<Record<string, string>>; take?: number }) {
+          const boundary = where?.OR as Array<Record<string, unknown>> | undefined
+          const inBoundary = (p: (typeof PARCELS)[number]) => {
+            if (!boundary) return true
+            return boundary.some((cond) => {
+              const c = cond.createdAt as unknown
+              if (c instanceof Date) {
+                const id = cond.id as { gt: string }
+                return p.createdAt.getTime() === c.getTime() && p.id > id.gt
+              }
+              const gt = (c as { gt: Date }).gt
+              return p.createdAt.getTime() > gt.getTime()
+            })
+          }
+          const rows = PARCELS.filter((p) => {
+            if (where?.projectId && p.projectId !== where.projectId) return false
+            if (where?.status && p.status !== where.status) return false
+            if (!inBoundary(p)) return false
+            return true
+          }).map(withJoins)
+          void orderBy // the fixture is already in (createdAt ASC, id ASC) order
+          return take !== undefined ? rows.slice(0, take) : rows
+        },
+      },
       featureFlag: {
         async upsert() { /* rows exist; lazy creation is a no-op here */ },
         async findMany({ where }: { where?: { key?: { in?: string[] } } }) {
@@ -207,13 +257,11 @@ vi.mock('@/backend/lib/guard', async () => {
   }
 })
 
-// The payload seam both routes reuse (supply + land slices — controlled here;
-// pinned by the app's own tests).
-const svc = vi.hoisted(() => ({
-  getProjectPayload: vi.fn(),
-}))
-
-vi.mock('@/backend/lib/mjengo', () => svc)
+// The supply module's bounded directory read — the suppliers route's data
+// source since #154 (the #155 loadSupplyOrdersBounded idiom): controlled
+// here, pinned by the app's own tests.
+const supplyRepo = vi.hoisted(() => ({ loadSupplierDirectoryBounded: vi.fn() }))
+vi.mock('@/backend/modules/supply/repository', () => supplyRepo)
 
 import { GET as openapiGet } from '@/app/api/openapi.json/route'
 import { GET as projectSuppliersGet } from '@/app/api/v1/projects/[id]/suppliers/route'
@@ -232,16 +280,24 @@ async function bodyOf(res: { json: () => Promise<unknown> }): Promise<Record<str
   return (await res.json()) as Record<string, unknown>
 }
 
-// ---------------------------------------------------------------- payload fixture
+// ---------------------------------------------------------------- fixtures (served by the stubs)
 
-const PAYLOAD = {
-  project: { id: 'p-1', name: 'Nyumba Yangu' },
-  supply: {
-    suppliers: SUPPLIERS.map((s) => ({ ...s, catalogItems: s.catalogItems.map((c) => ({ ...c })) })),
-    orders: ORDERS.map((o) => ({ ...o })),
-    savedSupplierIds: ['sup-2'],
-  },
-  land: { parcels: PARCELS.map((p) => ({ ...p })) },
+/** Attach the include joins a real findMany returns (documents → ids,
+ * searches newest-first, assignments + the professional row). */
+function withJoins(p: (typeof PARCELS)[number]) {
+  return {
+    ...p,
+    documents: p.documents.map((doc) => ({ ...doc })),
+    searches: [...p.searches].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+    ).map((s) => ({ ...s })),
+    assignments: [...p.assignments]
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((a) => ({
+        ...a,
+        professional: { name: a.professionalName, category: a.professionalCategory },
+      })),
+  }
 }
 
 beforeEach(() => {
@@ -255,7 +311,20 @@ beforeEach(() => {
   h.session = null
   delete process.env.NEXT_FLAGS_OFF
   invalidateFlagCache()
-  svc.getProjectPayload.mockResolvedValue(PAYLOAD)
+  // The bounded directory read (#154): the slice-shaped directory rows +
+  // this project's relationship marks (the same data the old payload seam
+  // carried — suppliers, saved ids, per-supplier order count/total).
+  supplyRepo.loadSupplierDirectoryBounded.mockResolvedValue({
+    suppliers: SUPPLIERS.map((s) => ({ ...s, catalogItems: s.catalogItems.map((c) => ({ ...c })) })),
+    savedSupplierIds: ['sup-2'],
+    ordersBySupplier: ORDERS.reduce((map, o) => {
+      const agg = map.get(o.supplierId) ?? { count: 0, total: 0 }
+      agg.count += 1
+      agg.total += o.total
+      map.set(o.supplierId, agg)
+      return map
+    }, new Map<string, { count: number; total: number }>()),
+  })
 })
 
 afterEach(() => {
@@ -347,7 +416,7 @@ describe('GET /api/v1/projects/:id/suppliers — the catalog summary', () => {
   })
 
   it('scoping: unknown project → 404; foreign client → 403; own client → 200; supplier → uniform 403; anonymous → 401', async () => {
-    svc.getProjectPayload.mockResolvedValueOnce(null)
+    // p-x resolves null on the db stub (the #154 direct resolve).
     sessionFor('admin')
     expect((await projectSuppliersGet(req('p-x'), ctx('p-x'))).status).toBe(404)
 
@@ -451,7 +520,7 @@ describe('GET /api/v1/projects/:id/parcels — the verification ladder summary',
   })
 
   it('scoping: unknown project → 404; foreign client → 403; own client → 200; supplier → uniform 403; anonymous → 401', async () => {
-    svc.getProjectPayload.mockResolvedValueOnce(null)
+    // p-x resolves null on the db stub (the #154 direct resolve).
     sessionFor('admin')
     expect((await projectParcelsGet(req('p-x'), ctx('p-x'))).status).toBe(404)
 

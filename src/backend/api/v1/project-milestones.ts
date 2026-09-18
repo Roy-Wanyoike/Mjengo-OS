@@ -1,8 +1,9 @@
+import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
-import { getProjectPayload } from '@/backend/lib/mjengo'
 import { milestoneSummary } from './milestone-rows'
+import { afterCreatedAtId, cursorRowOr400 } from './keyset'
 import { projectMilestonesQuery, projectIdRef, validateQuery } from './schemas'
-import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
+import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, membershipProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/projects/:id/milestones (Phase C, read-only — the money-governance
@@ -28,13 +29,16 @@ type Ctx = { params: Promise<{ id: string }> }
  * ROLE SCOPING: same as /api/v1/projects/:id (client pinned to their own
  * project, foreign → 403; unknown project → 404).
  *
- * DATA: the milestone rows come from getProjectPayload()'s milestones read
- * (db.milestone.findMany, createdAt ASC — the same query the webapp payload
- * runs; this is surface work, not new domain logic). The set is bounded, so
- * pagination is the wallet-list pattern: a deterministic (createdAt ASC,
- * id ASC) total order sliced in the route layer. ?status= (the six
- * documented column values) filters BEFORE pagination — a cursor that falls
- * out of the filtered list → 400. Rate limit: 120/min per principal.
+ * DATA (issue #154 / audit API-3): DIRECT READ — db.milestone.findMany
+ * scoped `where: { projectId }` (the same rows the webapp payload's
+ * milestones read returns), plus the one related collection the response
+ * needs: the project's phase id→name pairs (id + name only — a project's
+ * phases are a handful, bounded by the domain shape). The old path
+ * materialized the whole ~20-read getProjectPayload to slice the ladder out
+ * of it; the page cost is now O(page): ?status=, the keyset boundary and
+ * take = limit + 1 all ride the single query (the #155 attendance pattern),
+ * ordered (createdAt ASC, id ASC) — the same total order the route's old
+ * in-memory sort produced. Rate limit: 120/min per principal.
  */
 export const GET = route(
   {
@@ -49,46 +53,73 @@ export const GET = route(
     const q = validateQuery(req, projectMilestonesQuery)
     if (!q.ok) return q.response
 
-    const payload = await getProjectPayload(id)
-    if (!payload) return v1Err(404, 'Project not found')
-    const denied = clientProjectDenied(session, payload.project.id)
+    // Unknown project → 404 (the attendance/deliveries resolve step).
+    const project = await db.project.findUnique({ where: { id } })
+    if (!project) return v1Err(404, 'Project not found')
+    const denied = clientProjectDenied(session, id)
     if (denied) return denied
     // SEC-6 (issue #174): the site-team membership pin — supervisor /
     // procurement / qs / finance read only the projects they hold a
     // ProjectMembership row on (fail closed on zero rows); contractor/admin
     // keep the explicit portfolio-wide grant. Same uniform 403 body as the
     // client pin, after the resolve (resolve-then-pin, the v1 precedent).
-    const membershipDenied = await membershipProjectDenied(session, payload.project.id)
+    const membershipDenied = await membershipProjectDenied(session, id)
     if (membershipDenied) return membershipDenied
     // W5-3: supplier sessions are not project readers (their surface is the
     // supplier-owned rows). Uniform 403 — no project data is returned.
     const supplierDenied = supplierProjectDenied(session)
     if (supplierDenied) return supplierDenied
 
-    const phaseNames = new Map(payload.phases.map((ph) => [ph.id, ph.name]))
-    let milestones = payload.milestones
-    if (q.data.status) {
-      milestones = milestones.filter((m) => m.status === q.data.status)
-    }
-    // Deterministic keyset order: (createdAt ASC, id ASC) — the ladder reads
-    // oldest-first, matching the payload's own query order.
-    milestones = [...milestones].sort(
-      (a, b) =>
-        a.createdAt.getTime() - b.createdAt.getTime() ||
-        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-    )
+    // The ladder summaries join the phase name — the one related read this
+    // response needs (bounded: a project's phases are a handful).
+    const phases = await db.phase.findMany({
+      where: { projectId: id },
+      select: { id: true, name: true },
+    })
+    const phaseNames = new Map(phases.map((ph) => [ph.id, ph.name]))
 
-    // pageOfKind needs { id } rows; map the summary alongside.
-    const rows = milestones.map((m) => ({
-      id: m.id,
-      item: milestoneSummary(m, m.phaseId ? phaseNames.get(m.phaseId) ?? null : null),
-    }))
-    const p = pageOfKind(rows, q.data.limit, q.data.cursor, 'a milestone')
-    if (!p.ok) return p.response
+    // Keyset cursor (#155 convention): resolve by id, refuse unless the row
+    // belongs to THIS filtered list (project + status filter).
+    const cursor = q.data.cursor
+    let boundary: { createdAt: Date; id: string } | null = null
+    if (cursor) {
+      const c = await cursorRowOr400(
+        () =>
+          db.milestone.findFirst({
+            where: {
+              id: cursor,
+              projectId: id,
+              ...(q.data.status ? { status: q.data.status } : {}),
+            },
+          }),
+        'a milestone',
+      )
+      if (!c.ok) return c.response
+      boundary = { createdAt: c.row.createdAt, id: c.row.id }
+    }
+
+    // One query: scope + filter + boundary + (createdAt ASC, id ASC) + take
+    // limit+1 — the ladder reads oldest-first (the payload query's own
+    // order) with the id tiebreak the keyset needs.
+    const rows = await db.milestone.findMany({
+      where: {
+        projectId: id,
+        ...(q.data.status ? { status: q.data.status } : {}),
+        ...(boundary ? afterCreatedAtId(boundary, 'asc') : {}),
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: q.data.limit + 1,
+    })
+
+    const hasMore = rows.length > q.data.limit
+    const milestones = rows.slice(0, q.data.limit)
+    const nextCursor = hasMore ? milestones[milestones.length - 1]?.id ?? null : null
 
     return v1Ok(
-      p.page.items.map((r) => r.item),
-      { nextCursor: p.page.nextCursor, hasMore: p.page.hasMore },
+      milestones.map((m) =>
+        milestoneSummary(m, m.phaseId ? phaseNames.get(m.phaseId) ?? null : null),
+      ),
+      { nextCursor, hasMore },
     )
   },
 )

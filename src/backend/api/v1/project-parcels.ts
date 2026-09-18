@@ -1,8 +1,9 @@
+import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
-import { getProjectPayload } from '@/backend/lib/mjengo'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
+import { afterCreatedAtId, cursorRowOr400 } from './keyset'
 import { projectIdRef, projectParcelsQuery, validateQuery } from './schemas'
-import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
+import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, membershipProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/projects/:id/parcels (Phase D, read-only — the land family) —
@@ -34,14 +35,17 @@ type Ctx = { params: Promise<{ id: string }> }
  * certification claim; "flagged" is an anomaly state for human review, never
  * an accusation.
  *
- * DATA: the parcel rows come from getProjectPayload()'s land slice —
- * loadLandSlice(projectId), the land module's public read (parcels with
- * documents, searches and assignments; the same rows the webapp Land tab
- * renders). The per-project set is bounded, so pagination is the wallet-list
- * pattern: a deterministic (createdAt ASC, id ASC) total order sliced in the
- * route layer. ?status= (searching|verified|flagged) filters BEFORE
- * pagination — a cursor that falls out of the filtered list → 400. Rate
- * limit: 120/min per principal.
+ * DATA (issue #154 / audit API-3): DIRECT READ — db.landParcel.findMany
+ * scoped `where: { projectId }` (the same rows the land module's
+ * loadLandSlice returns), with only the joins the summary needs: document
+ * IDS (the count), the searches ordered newest-first (the count + the
+ * latest row) and the assignments with their professional join. The old
+ * path materialized the whole ~20-read getProjectPayload to slice the
+ * parcels out of it; the page cost is now O(page): ?status=, the keyset
+ * boundary and take = limit + 1 all ride the single query (the #155
+ * attendance pattern), ordered (createdAt ASC, id ASC) — the same total
+ * order the route's old in-memory sort produced. Rate limit: 120/min per
+ * principal.
  */
 export const GET = route(
   {
@@ -61,37 +65,72 @@ export const GET = route(
     const q = validateQuery(req, projectParcelsQuery)
     if (!q.ok) return q.response
 
-    const payload = await getProjectPayload(id)
-    if (!payload) return v1Err(404, 'Project not found')
-    const denied = clientProjectDenied(session, payload.project.id)
+    // Unknown project → 404 (the attendance/deliveries resolve step).
+    const project = await db.project.findUnique({ where: { id } })
+    if (!project) return v1Err(404, 'Project not found')
+    const denied = clientProjectDenied(session, id)
     if (denied) return denied
     // SEC-6 (issue #174): the site-team membership pin — supervisor /
     // procurement / qs / finance read only the projects they hold a
     // ProjectMembership row on (fail closed on zero rows); contractor/admin
     // keep the explicit portfolio-wide grant. Same uniform 403 body as the
     // client pin, after the resolve (resolve-then-pin, the v1 precedent).
-    const membershipDenied = await membershipProjectDenied(session, payload.project.id)
+    const membershipDenied = await membershipProjectDenied(session, id)
     if (membershipDenied) return membershipDenied
     // W5-3: supplier sessions are not project readers. Uniform 403 — no
     // project data is returned.
     const supplierDenied = supplierProjectDenied(session)
     if (supplierDenied) return supplierDenied
 
-    let parcels = payload.land.parcels
-    if (q.data.status) {
-      parcels = parcels.filter((p) => p.status === q.data.status)
+    // Keyset cursor (#155 convention): resolve by id, refuse unless the row
+    // belongs to THIS filtered list (project + status filter).
+    const cursor = q.data.cursor
+    let boundary: { createdAt: Date; id: string } | null = null
+    if (cursor) {
+      const c = await cursorRowOr400(
+        () =>
+          db.landParcel.findFirst({
+            where: {
+              id: cursor,
+              projectId: id,
+              ...(q.data.status ? { status: q.data.status } : {}),
+            },
+          }),
+        'a parcel',
+      )
+      if (!c.ok) return c.response
+      boundary = { createdAt: c.row.createdAt, id: c.row.id }
     }
-    // Deterministic keyset order: (createdAt ASC, id ASC) — the slice's own
-    // oldest-first order with the id tiebreak the keyset needs.
-    parcels = [...parcels].sort(
-      (a, b) =>
-        a.createdAt.getTime() - b.createdAt.getTime() ||
-        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-    )
 
-    const rows = parcels.map((parcel) => ({
-      id: parcel.id,
-      item: {
+    // One query: scope + filter + boundary + (createdAt ASC, id ASC) + take
+    // limit+1, with only the joins the summary needs (the loadLandSlice
+    // include, slimmed for the list: document ids for the count, searches
+    // newest-first so [0] is the latest, assignments with the professional
+    // join).
+    const rows = await db.landParcel.findMany({
+      where: {
+        projectId: id,
+        ...(q.data.status ? { status: q.data.status } : {}),
+        ...(boundary ? afterCreatedAtId(boundary, 'asc') : {}),
+      },
+      include: {
+        documents: { select: { id: true }, orderBy: { createdAt: 'desc' } },
+        searches: { orderBy: { createdAt: 'desc' } },
+        assignments: {
+          include: { professional: { select: { name: true, category: true } } },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: q.data.limit + 1,
+    })
+
+    const hasMore = rows.length > q.data.limit
+    const parcels = rows.slice(0, q.data.limit)
+    const nextCursor = hasMore ? parcels[parcels.length - 1]?.id ?? null : null
+
+    return v1Ok(
+      parcels.map((parcel) => ({
         id: parcel.id,
         projectId: parcel.projectId,
         plotNumber: parcel.plotNumber,
@@ -122,22 +161,16 @@ export const GET = route(
           : null,
         assignments: parcel.assignments.map((a) => ({
           id: a.id,
-          professionalName: a.professionalName,
-          professionalCategory: a.professionalCategory,
+          professionalName: a.professional.name,
+          professionalCategory: a.professional.category,
           roleOnParcel: a.role,
           status: a.status,
           createdAt: a.createdAt.toISOString(),
         })),
         createdAt: parcel.createdAt.toISOString(),
         updatedAt: parcel.updatedAt.toISOString(),
-      },
-    }))
-    const p = pageOfKind(rows, q.data.limit, q.data.cursor, 'a parcel')
-    if (!p.ok) return p.response
-
-    return v1Ok(
-      p.page.items.map((r) => r.item),
-      { nextCursor: p.page.nextCursor, hasMore: p.page.hasMore },
+      })),
+      { nextCursor, hasMore },
     )
   },
 )

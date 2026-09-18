@@ -30,10 +30,11 @@
  * Mocks (flags-gating idioms): '@/backend/lib/guard' full fake (session
  * control for route-kit's withGuard), '@/backend/lib/db' (featureFlag rows +
  * the route-layer reads: project.findUnique, milestone.findFirst,
- * phase.findUnique, transaction.findFirst, ledgerAccount.findUnique), and
- * '@/backend/lib/mjengo' (getProjectPayload — the payload's milestones/
- * phases reads). route-kit, rate-limit, flags, ledger/service.derivedBalance,
- * respond/schemas and the routes themselves stay REAL.
+ * milestone.findMany (the #154 direct list read — filters/boundary/take
+ * pushed in), phase.findMany (the ladder's phase-name join),
+ * transaction.findFirst, ledgerAccount.findUnique). route-kit, rate-limit,
+ * flags, ledger/service.derivedBalance, respond/schemas and the routes
+ * themselves stay REAL.
  */
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -147,15 +148,54 @@ vi.mock('@/backend/lib/db', () => {
         },
       },
       milestone: {
-        async findFirst({ where }: { where: { id: string } }) {
-          const found = MILESTONES.find((m) => m.id === where.id)
+        // Shared by the detail route ({ id }) and the #154 cursor resolution
+        // ({ id, projectId, status? }) — an honest where-filtering twin.
+        async findFirst({ where }: { where: { id: string; projectId?: string; status?: string } }) {
+          const found = MILESTONES.find(
+            (m) =>
+              m.id === where.id &&
+              (where.projectId === undefined || m.projectId === where.projectId) &&
+              (where.status === undefined || m.status === where.status),
+          )
           return found ? structuredClone(found) : null
+        },
+        // The milestones LIST direct read (#154): an honest Prisma twin —
+        // where-filtering (projectId + status + the keyset boundary OR), the
+        // (createdAt ASC, id ASC) total order and take are all honored.
+        async findMany({ where, orderBy, take }: { where?: Record<string, unknown>; orderBy?: Array<Record<string, string>>; take?: number }) {
+          const boundary = where?.OR as Array<Record<string, unknown>> | undefined
+          const inBoundary = (m: (typeof MILESTONES)[number]) => {
+            if (!boundary) return true
+            return boundary.some((cond) => {
+              const c = cond.createdAt as unknown
+              if (c instanceof Date) {
+                const id = cond.id as { gt: string }
+                return m.createdAt.getTime() === c.getTime() && m.id > id.gt
+              }
+              const gt = (c as { gt: Date }).gt
+              return m.createdAt.getTime() > gt.getTime()
+            })
+          }
+          const rows = MILESTONES.filter((m) => {
+            if (where?.projectId && m.projectId !== where.projectId) return false
+            if (where?.status && m.status !== where.status) return false
+            if (!inBoundary(m)) return false
+            return true
+          })
+          void orderBy // the fixture is already in (createdAt ASC, id ASC) order
+          return take !== undefined ? rows.slice(0, take) : rows.map((m) => ({ ...m }))
         },
       },
       phase: {
         async findUnique({ where }: { where: { id: string } }) {
           const found = PHASES.find((p) => p.id === where.id)
           return found ? { name: found.name } : null
+        },
+        // The ladder's phase-name join (#154): id + name of the project's
+        // phases.
+        async findMany({ where }: { where?: { projectId?: string } }) {
+          void where // every fixture phase belongs to p-1
+          return PHASES.map((p) => ({ ...p }))
         },
       },
       transaction: {
@@ -237,13 +277,8 @@ vi.mock('@/backend/lib/guard', async () => {
   }
 })
 
-// The payload seam the milestone LIST reuses (aggregations stay REAL in
-// production — pinned by the app's own tests; here they are controlled).
-const svc = vi.hoisted(() => ({
-  getProjectPayload: vi.fn(),
-}))
-
-vi.mock('@/backend/lib/mjengo', () => svc)
+// The payload seam is gone from this suite (#154): the milestone LIST
+// reads the db stub directly; the detail/escrow routes never used it.
 
 import { GET as openapiGet } from '@/app/api/openapi.json/route'
 import { GET as projectMilestonesGet } from '@/app/api/v1/projects/[id]/milestones/route'
@@ -263,17 +298,7 @@ async function bodyOf(res: { json: () => Promise<unknown> }): Promise<Record<str
   return (await res.json()) as Record<string, unknown>
 }
 
-// ---------------------------------------------------------------- payload fixture
-
-const PAYLOAD = {
-  project: { id: 'p-1', name: 'Nyumba Yangu' },
-  phases: [
-    { id: 'ph-1', name: 'Site Prep & Foundation' },
-    { id: 'ph-2', name: 'Walling' },
-    { id: 'ph-3', name: 'Roofing' },
-  ],
-  milestones: MILESTONES.map((m) => ({ ...m })),
-}
+// ---------------------------------------------------------------- payload fixture (gone — #154 direct reads)
 
 beforeEach(() => {
   // Trusted-proxy fixture (issue #156): these route tests isolate rate-limit
@@ -286,7 +311,6 @@ beforeEach(() => {
   h.session = null
   delete process.env.NEXT_FLAGS_OFF
   invalidateFlagCache()
-  svc.getProjectPayload.mockResolvedValue(PAYLOAD)
 })
 
 afterEach(() => {
@@ -377,7 +401,7 @@ describe('GET /api/v1/projects/:id/milestones — the release ladder list', () =
   })
 
   it('scoping: unknown project → 404; foreign client → 403; own client → 200; anonymous → 401', async () => {
-    svc.getProjectPayload.mockResolvedValueOnce(null)
+    // p-x resolves null on the db stub (the #154 direct resolve).
     sessionFor('admin')
     expect((await projectMilestonesGet(req('p-x'), ctx('p-x'))).status).toBe(404)
 
