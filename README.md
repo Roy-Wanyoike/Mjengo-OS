@@ -631,18 +631,19 @@ Three workflows live in `.github/workflows/`, all triggered on every push to
   a real `next build` (standalone) with a throwaway SQLite URL + dummy secret
   — the production build must never require real env secrets.
 - **Tests** (`test.yml`) — the full vitest unit suite, **`bun run test`**
-  (1,888 tests across 76 files, all passing — counts as of 2026-09-16;
+  (2,528 tests across 110 files, all passing — counts as of 2026-09-18;
   re-run `bunx vitest run` for the current number, since every wave adds
   tests), on every push/PR to `main`. No database or secrets required —
-  the tests are pure/unit-level by design.
+  the tests are pure/unit-level by design (a handful of critical-path
+  suites spin up a throwaway real SQLite file via `tests/helpers/db.ts`).
 - **Docker** (`docker.yml`) — `docker build` for both production images
   (webapp + marketing site) on a GitHub runner (the dev sandbox has no docker
   CLI — CI is the image verification).
 
 The suite grew 495 → 899 → 1,019 → 1,102 → 1,244 → 1,513 → 1,645 → 1,700
-→ 1,811 → 1,888 across waves 1–6 and the 2026-09 audit waves (counts as
-of 2026-09-16 — re-run vitest for current), re-run in full on every wave
-merge. **Honest state:** the workflow definitions are active and fire on
+→ 1,811 → 1,888 → 2,494 → 2,528 across waves 1–6, the 2026-09 audit waves
+and waves 7–11 (counts as of 2026-09-18 — re-run vitest for current),
+re-run in full on every wave merge. **Honest state:** the workflow definitions are active and fire on
 every push/PR, but every run to date has failed to start its jobs — the
 GitHub account is locked by a billing issue ("The job was not started
 because your account is locked due to a billing issue."), so no run has ever
@@ -722,7 +723,7 @@ the README wins on current status); the live issue-level roadmap is the
 | `mjengoos-website/` | Marketing site (independent Next.js app, `:3001`, proxied at `/website`) |
 | `prisma/` | `schema.prisma` (68 models), `migrations/` (0_init + additive 1_mjengo_score … 8_trust_digest; 9_schema_reconcile closes the last drift — see DEPLOYMENT.md §4.1), `seed.ts` + `seed-extras/` |
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
-| `tests/unit/` | The vitest suite (76 files, 1,888 tests — counts as of 2026-09-16; re-run vitest for current) — pure/unit-level, no DB or secrets needed |
+| `tests/unit/` | The vitest suite (110 files, 2,528 tests — counts as of 2026-09-18; re-run vitest for current) — unit-level, no DB or secrets needed (critical-path suites use a throwaway real SQLite file) |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
 | `docs/audit/` | **Phase-0 baseline entry point** — the 2026-09 production-readiness re-audit baselines (API, frontend, website, database, security, mock/demo, integration), one file per surface |
 | [docs/SUPABASE-DATABASE-DESIGN.md](./docs/SUPABASE-DATABASE-DESIGN.md) | Target-state Supabase/PostgreSQL design (68-table DDL, RLS policy matrix, storage, migration + rollback plan; ADR 0002) |
