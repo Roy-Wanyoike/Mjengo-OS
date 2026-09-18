@@ -37,11 +37,17 @@ const nextConfig: NextConfig = {
       { source: "/website/:path*", destination: `${WEBSITE_ORIGIN}/website/:path*` },
     ];
   },
-  // Audit finding #3: baseline security headers on every response — the
-  // marketing site already sends these (mjengoos-website/next.config.ts);
-  // the app now matches. Deliberately NO X-Frame-Options and no CSP
-  // frame-ancestors: the preview gateway embeds this app in a cross-site
-  // iframe, so it must stay embeddable.
+  // Security headers, issue #178 / audit SEC-11 — the STATIC half of the set:
+  // scheme-independent, no per-request values, applied to EVERY response
+  // (including the paths src/proxy.ts skips: _next/static, /website,
+  // /offline.html). The DYNAMIC half (nonce CSP, HSTS on https, the
+  // frame-ancestors allowlist + conditional X-Frame-Options) lives in
+  // src/proxy.ts — see src/backend/lib/security-headers.ts for the design.
+  // Framing posture: the app IS embeddable by design (the preview gateway
+  // embeds it in a cross-site iframe), so instead of X-Frame-Options the
+  // proxy sends CSP frame-ancestors 'self' + EMBED_ORIGINS (env knob,
+  // MUTATION_ORIGIN_ALLOWLIST's model) — the legit embedder is declared by
+  // the operator, everything else is refused.
   async headers() {
     return [
       {
@@ -49,6 +55,16 @@ const nextConfig: NextConfig = {
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          {
+            // Lock-down with per-feature enables (issue #178): camera +
+            // microphone stay enabled for THIS origin only (evidence capture
+            // and the voice-notes copilot use getUserMedia — cross-origin
+            // embedders additionally need their own iframe allow attribute);
+            // everything sensitive the app never uses is denied outright.
+            key: "Permissions-Policy",
+            value:
+              "camera=(self), microphone=(self), geolocation=(), payment=(), usb=(), bluetooth=(), serial=(), nfc=(), idle-detection=()",
+          },
         ],
       },
     ];
