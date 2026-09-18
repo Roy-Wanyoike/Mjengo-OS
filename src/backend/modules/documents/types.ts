@@ -120,3 +120,16 @@ export type ReviewDecision = (typeof REVIEW_DECISIONS)[number]
 export function isReviewDecision(v: unknown): v is ReviewDecision {
   return typeof v === 'string' && (REVIEW_DECISIONS as readonly string[]).includes(v)
 }
+
+/**
+ * The full Attachment.reviewStatus state space (schema default 'pending'; the
+ * two REVIEW_DECISIONS are what a human can set through the review gate).
+ * Mirrors the schema comment — kept here so the GET review-queue route and any
+ * future consumer validate against one allowlist (issue #153).
+ */
+export const REVIEW_STATUSES = ['pending', 'approved', 'rejected'] as const
+export type ReviewStatus = (typeof REVIEW_STATUSES)[number]
+
+export function isReviewStatus(v: unknown): v is ReviewStatus {
+  return typeof v === 'string' && (REVIEW_STATUSES as readonly string[]).includes(v)
+}

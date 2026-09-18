@@ -16,7 +16,11 @@ import { NextResponse } from 'next/server'
  * workers list/detail, attendance, task detail, suppliers, parcels, intel
  * digest, budget-variance mirror), plus the two wave-3 app-level GETs added by
  * W3-B: /api/audit (admin audit log, spec §44) and /api/reports/
- * budget-variance (QS report).
+ * budget-variance (QS report), plus the document-intelligence route
+ * /api/ai/extract-document added by issue #153 (GET review queue / POST
+ * extraction draft / PUT human review gate — the one non-v1 mutation surface
+ * in the doc, documented because the review gate is the app's "AI assists,
+ * humans decide" control and it now has an operator surface).
  *
  * Honest facts baked into the text: simulated-by-default payment rails (Daraja
  * sandbox when env-configured), KES-only money,
@@ -326,6 +330,74 @@ const reportRateLimitedResponse = {
     'Single-instance, in-process — honest limitation of the current deployment.',
   headers: { 'Retry-After': { schema: { type: 'integer' }, description: 'Seconds until one token refills.' } },
   content: { 'application/json': { schema: rateErrorSchema } },
+}
+
+// ---- document intelligence (issue #153) schema fragments ----------------------
+
+const aiRouteRateLimitedResponse = {
+  description:
+    'Per-principal token bucket (session email, else IP): the shared /api/ai/* gate — 10 model ' +
+    'calls/min per route (POST extraction, PUT review); the GET review queue reads at 30/min. ' +
+    'Retry-After header (seconds).',
+  headers: { 'Retry-After': { schema: { type: 'integer' }, description: 'Seconds until one token refills.' } },
+  content: { 'application/json': { schema: rateErrorSchema } },
+}
+
+/** Attachment.extractedJson, parsed by the queue route (normalized shape — never the raw model text). */
+const documentExtractionSchema = {
+  type: 'object',
+  required: ['docType', 'supplier', 'total', 'currency', 'lines', 'notes'],
+  properties: {
+    docType: { type: 'string', description: 'Best read of what the document is (invoice, quotation, boq, receipt, contract, permit, drawing, delivery note, other).' },
+    supplier: { type: ['string', 'null'], description: 'Supplier/vendor name exactly as printed, or null when unreadable.' },
+    total: { type: ['number', 'null'], description: 'Grand total as a plain number, or null (never a guess).' },
+    currency: { type: ['string', 'null'], description: 'Currency code as printed, e.g. KES.' },
+    lines: {
+      type: 'array',
+      description: 'Priced line items as printed (≤ 200; empty when the document has none).',
+      items: {
+        type: 'object',
+        required: ['description', 'qty', 'unitPrice', 'total'],
+        properties: {
+          description: { type: 'string' },
+          qty: { type: ['number', 'null'] },
+          unitPrice: { type: ['number', 'null'] },
+          total: { type: ['number', 'null'] },
+        },
+      },
+    },
+    notes: { type: ['string', 'null'], description: 'One short note about anything unreadable or uncertain.' },
+  },
+}
+
+/** One queued document row (GET ?projectId → documents[]). */
+const documentReviewItemSchema = {
+  type: 'object',
+  required: ['id', 'fileName', 'storageKey', 'reviewStatus', 'uploadedBy', 'createdAt', 'extraction'],
+  properties: {
+    id: { type: 'string', description: 'Attachment id (cuid) — the value POST/PUT take as attachmentId.' },
+    fileName: { type: 'string', description: 'Sanitized display name (never a path).', },
+    title: { type: ['string', 'null'] },
+    category: { type: ['string', 'null'], enum: ['contract', 'drawing', 'permit', 'receipt', 'boq', 'invoice', 'quote', 'other', null], description: '§60 document kind stamped at upload.' },
+    mimeType: { type: ['string', 'null'], enum: ['application/pdf', 'image/png', 'image/jpeg', null] },
+    sizeBytes: { type: ['integer', 'null'] },
+    storageKey: { type: 'string', description: 'The stored file\'s URL/path (local /docs/<name> or the storage driver\'s publicUrl).' },
+    projectId: { type: ['string', 'null'] },
+    entityType: { type: 'string' },
+    entityId: { type: 'string' },
+    expiresAt: { type: ['string', 'null'], format: 'date-time' },
+    reviewStatus: { type: 'string', enum: ['pending', 'approved', 'rejected'] },
+    reviewedBy: { type: ['string', 'null'], description: 'The reviewer identity the PUT stamped (the signed-in session by default).' },
+    reviewedAt: { type: ['string', 'null'], format: 'date-time' },
+    extractionConfidence: { type: ['number', 'null'], description: 'The model\'s honest 0-1 confidence; null before the first extraction.' },
+    extractionModel: { type: ['string', 'null'], description: 'Provenance: glm-5v-turbo (image scans) or zai-chat-llm (PDF text layer).' },
+    uploadedBy: { type: 'string', description: 'Uploader email.' },
+    createdAt: { type: 'string', format: 'date-time' },
+    extraction: {
+      oneOf: [{ $ref: '#/components/schemas/DocumentExtraction' }, { type: 'null' }],
+      description: 'The parsed draft (extractedJson), or null when no extraction has run. DRAFT-ONLY — approval never copies it into any official record.',
+    },
+  },
 }
 
 // ---- Phase B (task 10-a) schema fragments: projects + supply reads ----
@@ -1513,8 +1585,14 @@ const spec = {
       'list/detail), the Phase C READ-ONLY money-governance resources (milestones list/detail, escrow, ' +
       'invoices list/detail — no mutations outside the money family), and the Phase D READ-ONLY site + market + ' +
       'intel resources (workers list/detail, attendance, task detail, suppliers, parcels, intel digest, ' +
-      'budget-variance mirror — no mutations at all) — and the two wave-3 app-level GETs: ' +
-      '/api/audit (admin audit log, spec §44) and /api/reports/budget-variance (QS report).',
+      'budget-variance mirror — no mutations at all) — the two wave-3 app-level GETs: ' +
+      '/api/audit (admin audit log, spec §44) and /api/reports/budget-variance (QS report) — and the ' +
+      'document-intelligence route /api/ai/extract-document (GET review queue / POST extraction draft / PUT ' +
+      'human review gate; issue #153 — the one non-v1 mutation surface documented here, because its review ' +
+      'gate is the app\'s "AI assists, humans decide" control and it now has an operator surface in the ' +
+      'Copilot tab). The other /api/ai/* routes stay undocumented app surface (analyze-photo, voice-log, ' +
+      'parse-text, anomaly-scan, recap, authenticity-screen — consumed by the webapp itself; API-14 tracks ' +
+      'extending the doc further).',
   },
   servers: [{ url: '/', description: 'Same-origin (the app that rendered this document).' }],
   tags: [
@@ -1529,6 +1607,7 @@ const spec = {
     { name: 'intel', description: 'Read-only intel digest: flags state, latest MjengoScore, risk, health, weekly digest and the anomalies summary (any signed-in role, client pinned; no flag gates the intel reads).' },
     { name: 'audit', description: 'Admin audit-log reads — the append-only event ledger (admin only, spec §44).' },
     { name: 'reports', description: 'QS / cost-plan reports: budget variance per phase and category (contractor, admin, supervisor, qs).' },
+    { name: 'documents', description: 'Document intelligence: extraction drafts (AI) + the human review gate (contractor, admin, supervisor — issue #153).' },
   ],
   components: {
     securitySchemes: {
@@ -1661,6 +1740,8 @@ const spec = {
       SupplierCatalogSummary: supplierCatalogSummarySchema,
       ParcelSummary: parcelSummarySchema,
       IntelDigest: intelDigestSchema,
+      DocumentExtraction: documentExtractionSchema,
+      DocumentReviewItem: documentReviewItemSchema,
     },
   },
   paths: {
@@ -2726,6 +2807,213 @@ const spec = {
             content: { 'application/json': { schema: errorSchema } },
           },
           429: reportRateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+    },
+    '/api/ai/extract-document': {
+      get: {
+        tags: ['documents'],
+        operationId: 'listDocumentReviewQueue',
+        summary: 'Document review queue (extraction drafts + human review state)',
+        description:
+          'Document intelligence (issue #153): the review queue the app\'s Copilot "Documents" panel renders — ' +
+          'document-mode Attachments (entityType "document") for one project, newest first, capped at 100, each ' +
+          'with its parsed extraction draft and review state. Guard: contractor / admin / supervisor ONLY (the ' +
+          'shared /api/ai/* gate; any other signed-in role → 403, anonymous → 401). projectId is REQUIRED — ' +
+          'no default-project guessing on a queue a human decides from (absent → 400; unknown → 404). ' +
+          'reviewStatus is optional (pending | approved | rejected; other values → 400); absent = all statuses. ' +
+          'The response never carries ocrText (the raw text layer can be 200 KB and the queue does not render it) — ' +
+          'only the parsed extractedJson draft, or null when no extraction has run. ' +
+          'Rate limit: 30 reads/min per principal (one queue read per review round-trip — not a model call).',
+        security,
+        parameters: [
+          {
+            name: 'projectId',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 40 },
+            description: 'The project whose documents are queued. Required — absent → 400; unknown → 404.',
+          },
+          {
+            name: 'reviewStatus',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['pending', 'approved', 'rejected'] },
+            description: 'Filter by review state. Absent = all statuses (the panel asks for pending).',
+          },
+        ],
+        responses: {
+          200: {
+            description:
+              'ok: true. documents = the queue rows (createdAt DESC, take 100), each with the parsed `extraction` draft or null.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['ok', 'documents'],
+                  properties: {
+                    ok: { const: true },
+                    documents: { type: 'array', items: { $ref: '#/components/schemas/DocumentReviewItem' } },
+                  },
+                },
+              },
+            },
+          },
+          400: {
+            description: 'projectId missing, or reviewStatus outside pending|approved|rejected. Body { error }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          401: unauthorizedResponse,
+          403: {
+            description:
+              'Signed in but not on the site-team allowlist (contractor, admin, supervisor) — the shared /api/ai/* gate. ' +
+              'Body { error: "AI tools are limited to site-team roles…" }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          404: {
+            description: 'Unknown projectId. Body { error: "Project not found" }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          429: aiRouteRateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+      post: {
+        tags: ['documents'],
+        operationId: 'extractDocumentDraft',
+        summary: 'Run extraction on a stored document (DRAFT-ONLY — no official record is ever written)',
+        description:
+          'Runs the extraction on a stored document Attachment and persists the draft: image scans → the VLM seam ' +
+          '(model glm-5v-turbo); PDFs → the server-side text-layer extraction (lib/pdf-text.ts, issue #42) fed ' +
+          'through the same parse path — a PDF with NO usable text layer (a scan) or an encrypted PDF fails ' +
+          'HONESTLY with 400 and the reason (never a faked extraction). An ocrTextHint (≤ 100,000 chars) always ' +
+          'WINS over the server-side extraction. The write touches ONLY the Attachment row\'s own extraction fields ' +
+          '(ocrText, extractedJson, extractionConfidence, extractionModel) — no BOQ, material request, invoice or ' +
+          'ledger row is ever created or mutated — and reviewStatus resets to "pending" because the content changed. ' +
+          'Guard: the shared /api/ai/* gate (contractor / admin / supervisor; strict body shape — unknown fields → 400; ' +
+          'body capped at 128 KB). Rate limit: 10 calls/min per principal.',
+        security,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['attachmentId'],
+                properties: {
+                  attachmentId: { type: 'string', description: 'The Attachment id (from the review queue row or the /api/upload document-mode response).' },
+                  ocrTextHint: { type: 'string', maxLength: 100000, description: 'Optional text extracted ELSEWHERE (client-side lib, upstream OCR). When present it wins over the server-side extraction.' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description:
+              'ok: true, simulated: false (honest label — a real model call, no fixture). reviewStatus is "pending" — re-extraction always re-opens review.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['ok', 'simulated', 'model', 'confidence', 'extraction', 'attachmentId', 'reviewStatus'],
+                  properties: {
+                    ok: { const: true },
+                    simulated: { const: false },
+                    model: { type: 'string', description: 'glm-5v-turbo (image scan) or zai-chat-llm (PDF text layer — a pipeline label, the chat seam does not return a model id).' },
+                    confidence: { type: ['number', 'null'], description: 'The model\'s honest 0-1 confidence.' },
+                    extraction: { $ref: '#/components/schemas/DocumentExtraction' },
+                    attachmentId: { type: 'string' },
+                    reviewStatus: { const: 'pending' },
+                  },
+                },
+              },
+            },
+          },
+          400: {
+            description:
+              'Missing attachmentId; ocrTextHint over 100,000 chars; the stored file is missing/unreadable, not a ' +
+              'PDF/PNG/JPEG, or its bytes do not match the recorded mime; a scanned PDF with no text layer and no hint ' +
+              '(the honest failure — never a faked extraction). Body { error }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          401: unauthorizedResponse,
+          403: {
+            description: 'Signed in but not on the site-team allowlist (contractor, admin, supervisor). Body { error }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          404: {
+            description: 'Unknown attachmentId. Body { error: "Attachment not found" }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          429: aiRouteRateLimitedResponse,
+          500: serverErrorResponse,
+        },
+      },
+      put: {
+        tags: ['documents'],
+        operationId: 'reviewDocumentDraft',
+        summary: 'The human review gate — approve or reject a document draft',
+        description:
+          'The "AI assists, humans decide" control (spec §60): sets reviewStatus to approved|rejected, stamps ' +
+          'reviewedBy/reviewedAt, and writes an AuditEvent (kind "document") on the linked project (an unlinked ' +
+          'document\'s verdict is carried by the Attachment row alone — AuditEvent.projectId is non-nullable). ' +
+          'The default reviewer identity is the signed-in session (auditable) — the optional `reviewer` field only ' +
+          'overrides the display name (≤ 120 chars), never the audit actor. Approving does NOT copy the draft into ' +
+          'any official record; consuming flows must gate on reviewStatus === "approved" themselves. ' +
+          'Guard: the shared /api/ai/* gate (contractor / admin / supervisor; strict body shape). ' +
+          'Rate limit: 10 calls/min per principal.',
+        security,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['attachmentId', 'decision'],
+                properties: {
+                  attachmentId: { type: 'string' },
+                  decision: { type: 'string', enum: ['approved', 'rejected'] },
+                  reviewer: { type: 'string', maxLength: 120, description: 'Optional display-name override; the audit actor is always the signed-in session.' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'ok: true — the stamped verdict (reviewStatus, reviewedBy, reviewedAt).',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['ok', 'attachmentId', 'reviewStatus', 'reviewedBy', 'reviewedAt'],
+                  properties: {
+                    ok: { const: true },
+                    attachmentId: { type: 'string' },
+                    reviewStatus: { type: 'string', enum: ['approved', 'rejected'] },
+                    reviewedBy: { type: 'string' },
+                    reviewedAt: { type: 'string', format: 'date-time' },
+                  },
+                },
+              },
+            },
+          },
+          400: {
+            description: 'Missing attachmentId, decision outside approved|rejected, or reviewer over 120 chars. Body { error }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          401: unauthorizedResponse,
+          403: {
+            description: 'Signed in but not on the site-team allowlist (contractor, admin, supervisor). Body { error }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          404: {
+            description: 'Unknown attachmentId. Body { error: "Attachment not found" }.',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          429: aiRouteRateLimitedResponse,
           500: serverErrorResponse,
         },
       },

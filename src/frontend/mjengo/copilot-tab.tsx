@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import { PhotoAnalysisBody } from '@/frontend/mjengo/overview-tab'
+import { DocumentsPanel } from '@/frontend/mjengo/copilot/documents-panel'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/frontend/ui/card'
 import { Badge } from '@/frontend/ui/badge'
 import { Button } from '@/frontend/ui/button'
@@ -15,7 +16,7 @@ import { Label } from '@/frontend/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/frontend/ui/table'
 import {
   Camera, Mic, Square, ScanSearch, Sparkles, Upload, Play, Loader2, CheckCircle2,
-  AlertTriangle, TriangleAlert, Info, Lock, FileAudio,
+  AlertTriangle, TriangleAlert, Info, Lock, FileAudio, FileText,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatKES } from '@/frontend/lib/format'
@@ -65,7 +66,7 @@ interface ScanResult {
 export function CopilotTab() {
   const { data, dispatch, online, viewMode } = useMjengo()
   const t = useT()
-  const [tab, setTab] = useState<'photo' | 'voice' | 'scan'>('photo')
+  const [tab, setTab] = useState<'photo' | 'voice' | 'scan' | 'docs'>('photo')
 
   if (!data) return null
 
@@ -109,6 +110,11 @@ export function CopilotTab() {
           <Button variant={tab === 'scan' ? 'default' : 'outline'} size="sm" className="gap-1.5" onClick={() => setTab('scan')}>
             <ScanSearch className="w-4 h-4" aria-hidden /> {t('copilot.tab.scan')}
           </Button>
+          {/* Issue #153: the document-intelligence review surface — the fourth
+              AI route family consumer (extract + the human review gate). */}
+          <Button variant={tab === 'docs' ? 'default' : 'outline'} size="sm" className="gap-1.5" onClick={() => setTab('docs')}>
+            <FileText className="w-4 h-4" aria-hidden /> {t('copilot.tab.docs')}
+          </Button>
           {!online && (
             <Badge className="gap-1 bg-amber-100 text-amber-800 border-0 ml-auto"><Lock className="w-3 h-3" aria-hidden /> {t('copilot.offlineBadge')}</Badge>
           )}
@@ -118,6 +124,7 @@ export function CopilotTab() {
       {tab === 'photo' && <PhotoPanel online={online} />}
       {tab === 'voice' && <VoicePanel online={online} />}
       {tab === 'scan' && <ScanPanel online={online} />}
+      {tab === 'docs' && <DocumentsPanel online={online} />}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[

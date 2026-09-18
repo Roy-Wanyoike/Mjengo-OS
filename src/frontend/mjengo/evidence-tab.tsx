@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/frontend/ui/select'
 import {
   Truck, Banknote, UserCheck, Flag, FileDiff, Wallet, Camera, MessageSquare, HardHat, Receipt,
-  Package, Link, ListChecks, Layers, ArrowLeftRight, Map, Bell, TriangleAlert,
+  Package, Link, ListChecks, Layers, ArrowLeftRight, Map, Bell, TriangleAlert, FileText,
   ScrollText, FileDown, CheckCheck, ShieldCheck, Loader2, Fingerprint,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -43,6 +43,10 @@ const KIND_META: Record<string, { label: string; Icon: LucideIcon; tint: string 
   site_map: { label: 'ev.kind.site_map', Icon: Map, tint: 'bg-stone-100 text-stone-600' },
   notification: { label: 'ev.kind.notification', Icon: Bell, tint: 'bg-stone-100 text-stone-600' },
   alert: { label: 'ev.kind.alert', Icon: TriangleAlert, tint: 'bg-red-100 text-red-600' },
+  // Document intelligence (issue #153): uploads + the human review verdicts
+  // the Copilot "Documents" panel writes (kindForAction family bypass — the
+  // documents service logs kind 'document' directly).
+  document: { label: 'ev.kind.document', Icon: FileText, tint: 'bg-stone-100 text-stone-600' },
 }
 
 function kindMeta(kind: string) {
