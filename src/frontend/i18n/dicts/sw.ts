@@ -136,7 +136,7 @@ export const swDict = {
   'header.aria.online': 'Mtandaoni',
   'header.aria.offline': 'Nje ya mtandao',
   'header.aria.toggleConnectivity': 'Washa/zima muunganisho wa mfano',
-  'header.simNote': 'Kidhibiti cha mfano — programu pia inafuata hali halisi ya mtandao ya kivinjari',
+  'header.simNote': 'Zana ya Dev/QA — huiga kutoka mtandao kwa majaribio ya foleni ya usawazishaji; programu bado inafuata hali halisi ya mtandao ya kivinjari. Haionekani kamwe katika matoleo ya uzalishaji',
   'header.sync': 'Sawazisha',
   'header.syncing': 'Inasawazisha…',
   'header.aria.sync': 'Sawazisha vitendo vilivyowekwa foleni',
