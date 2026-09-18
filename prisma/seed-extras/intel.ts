@@ -9,6 +9,7 @@
 // to re-run AFTER seed-extras/money.ts, which wipes all notifications.
 
 import { PrismaClient } from '@prisma/client'
+import { fmtKes } from '@/backend/lib/money'
 
 const db = new PrismaClient()
 
@@ -61,14 +62,14 @@ export async function seedIntel(db: PrismaClient): Promise<void> {
 
   // ---------------- price points (cement + Y12 steel × 3 regions × 8 weeks) ----------------
   // Gentle upward trend, wobble included; 8 weekly points ending this week.
-  const series: Array<[string, string, number[]]> = [
+  const series: Array<[string, string, bigint[]]> = [
     // [material, region, prices oldest → newest]
-    ['Cement 50kg', 'Nairobi', [728, 732, 731, 736, 741, 745, 748, 754]],
-    ['Cement 50kg', 'Kiambu', [721, 724, 726, 725, 731, 736, 739, 744]],
-    ['Cement 50kg', 'Machakos', [736, 739, 741, 745, 749, 753, 757, 764]],
-    ['Steel bar Y12 (12m length)', 'Nairobi', [9420, 9460, 9490, 9510, 9580, 9640, 9690, 9780]],
-    ['Steel bar Y12 (12m length)', 'Kiambu', [9380, 9410, 9440, 9470, 9520, 9580, 9620, 9720]],
-    ['Steel bar Y12 (12m length)', 'Machakos', [9540, 9570, 9610, 9650, 9700, 9760, 9820, 9910]],
+    ['Cement 50kg', 'Nairobi', [72800n, 73200n, 73100n, 73600n, 74100n, 74500n, 74800n, 75400n]],
+    ['Cement 50kg', 'Kiambu', [72100n, 72400n, 72600n, 72500n, 73100n, 73600n, 73900n, 74400n]],
+    ['Cement 50kg', 'Machakos', [73600n, 73900n, 74100n, 74500n, 74900n, 75300n, 75700n, 76400n]],
+    ['Steel bar Y12 (12m length)', 'Nairobi', [942000n, 946000n, 949000n, 951000n, 958000n, 964000n, 969000n, 978000n]],
+    ['Steel bar Y12 (12m length)', 'Kiambu', [938000n, 941000n, 944000n, 947000n, 952000n, 958000n, 962000n, 972000n]],
+    ['Steel bar Y12 (12m length)', 'Machakos', [954000n, 957000n, 961000n, 965000n, 970000n, 976000n, 982000n, 991000n]],
   ]
   for (const [materialName, region, prices] of series) {
     await db.pricePoint.createMany({
@@ -122,7 +123,7 @@ export async function seedIntel(db: PrismaClient): Promise<void> {
         projectId: p1.id,
         kind: 'approval.requested',
         title: 'Approval needed: MR-1043',
-        body: 'Ballast & river sand request (~KSh 29,300) is waiting for a contractor decision.',
+        body: `Ballast & river sand request (~${fmtKes(2_930_000n)}) is waiting for a contractor decision.`,
         recipient: 'Site Manager',
         audienceRole: 'contractor',
         read: false,
@@ -143,7 +144,7 @@ export async function seedIntel(db: PrismaClient): Promise<void> {
         projectId: p1.id,
         kind: 'invoice.submitted',
         title: 'Invoice INV-2026-000031 submitted',
-        body: 'KSh 138,500 from Kiambu Road Building Supplies — awaiting your decision.',
+        body: `${fmtKes(13_850_000n)} from Kiambu Road Building Supplies — awaiting your decision.`,
         recipient: 'Amina & Yusuf (Diaspora · Boston)',
         audienceRole: 'client',
         read: false,

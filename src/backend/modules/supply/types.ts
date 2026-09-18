@@ -32,21 +32,38 @@ export type ApprovalDecision = 'pending' | 'approved' | 'rejected'
 
 // ---- slice shapes ----
 
-export interface SupplierWithCatalog extends Supplier {
-  catalogItems: CatalogItem[]
+/**
+ * KSh-view DTOs (issue #122): the DB stores cents (BigInt); the payload
+ * slice ships KSh numbers. Omit+override — a bigint must never reach JSON.
+ */
+export type CatalogItemKes = Omit<CatalogItem, 'unitPrice'> & { unitPrice: number }
+
+export interface SupplierWithCatalog extends Omit<Supplier, 'deliveryFeeBase' | 'freeDeliveryOver' | 'minimumOrder'> {
+  deliveryFeeBase: number
+  freeDeliveryOver: number | null
+  minimumOrder: number
+  catalogItems: CatalogItemKes[]
 }
+
+export type QuoteLineKes = Omit<QuoteLine, 'unitPrice' | 'lineTotal'> & { unitPrice: number; lineTotal: number }
+export type PurchaseOrderKes = Omit<PurchaseOrder, 'subtotal' | 'deliveryFee' | 'total'> & { subtotal: number; deliveryFee: number; total: number }
 
 export interface RequestWithLines extends MaterialRequest {
   lines: MaterialRequestLine[]
   quotes: QuoteDetail[]
-  orders: PurchaseOrder[]
+  orders: PurchaseOrderKes[]
 }
 
-export interface QuoteDetail extends Quote {
+export interface QuoteDetail extends Omit<Quote, 'unitPrice' | 'deliveryFee' | 'transportFee' | 'fees' | 'totalLanded'> {
+  unitPrice: number
+  deliveryFee: number
+  transportFee: number
+  fees: number
+  totalLanded: number
   supplierName: string
   requestCode: string
   /** Per-line bid detail (spec §32) — present when the quote was received multi-line. */
-  lines?: QuoteLine[]
+  lines?: QuoteLineKes[]
 }
 
 /**
@@ -64,18 +81,22 @@ export interface DeliveryWithLines extends OrderDelivery {
   photos: DeliveryPhotoWithAttachment[]
 }
 
-export interface OrderWithDetail extends PurchaseOrder {
-  lines: PurchaseOrderLine[]
+export type PurchaseOrderLineKes = Omit<PurchaseOrderLine, 'unitPrice' | 'lineTotal'> & { unitPrice: number; lineTotal: number }
+
+export interface OrderWithDetail extends PurchaseOrderKes {
+  lines: PurchaseOrderLineKes[]
   supplierName: string
   requestCode: string | null
   deliveries: DeliveryWithLines[]
 }
 
 /** The `supply` slice of ProjectPayload — populated by repository.loadSupplySlice. */
+export type ApprovalRuleKes = Omit<ApprovalRule, 'minAmount' | 'maxAmount'> & { minAmount: number; maxAmount: number | null }
+
 export interface SupplySlice {
   suppliers: SupplierWithCatalog[]
   requests: RequestWithLines[]
-  approvalRules: ApprovalRule[]
+  approvalRules: ApprovalRuleKes[]
   approvals: Approval[]
   quotes: QuoteDetail[]
   orders: OrderWithDetail[]

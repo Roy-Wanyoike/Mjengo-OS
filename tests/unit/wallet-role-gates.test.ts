@@ -75,7 +75,7 @@ vi.mock('@/backend/lib/db', () => {
 
   const P1 = {
     id: 'p-1', name: 'Riverside Villas', client: 'Mama Njeri', clientType: 'diaspora', location: 'Karen',
-    status: 'active', budget: 2_000_000, shareToken: 'tok-1',
+    status: 'active', budget: 200_000_000n /* KSh 2,000,000 */, shareToken: 'tok-1',
     startDate: d('2026-01-05T09:00:00Z'), targetDate: d('2026-05-01T09:00:00Z'), createdAt: d('2026-01-04T09:00:00Z'),
   }
   const WALLET = {
@@ -89,17 +89,17 @@ vi.mock('@/backend/lib/db', () => {
   }
   const PR1 = {
     id: 'pr-1', requestCode: 'PR-2026-000123', projectId: 'p-1', description: 'Cement delivery',
-    payee: 'Karioke Hardware', amount: 1200, method: 'mpesa', status: 'approved',
+    payee: 'Karioke Hardware', amount: 120_000n /* KSh 1,200 */, method: 'mpesa', status: 'approved',
     relatedEntityType: null, relatedEntityId: null, requestedByRole: 'supervisor', requestedByName: 'Wanjiru',
     decidedBy: 'Amina Njeri', decidedAt: d('2026-03-09T10:00:00Z'), decisionNote: null,
     paidAt: null, paidTxnId: null, createdAt: d('2026-03-08T10:00:00Z'),
   }
   const WKR1 = {
     id: 'wkr-1', projectId: 'p-1', name: 'Otieno Odhiambo', role: 'fundi', phone: '+254700111222',
-    dailyRate: 700, active: true, createdAt: d('2026-01-05T09:00:00Z'),
+    dailyRate: 70_000n /* KSh 700 */, active: true, createdAt: d('2026-01-05T09:00:00Z'),
   }
   const ATT1 = {
-    id: 'att-1', projectId: 'p-1', workerId: 'wkr-1', date: '2026-03-10', status: 'present', wage: 700,
+    id: 'att-1', projectId: 'p-1', workerId: 'wkr-1', date: '2026-03-10', status: 'present', wage: 70_000n /* KSh 700 */,
     verification: 'verified', exceptionReason: null, paid: false, version: 1, createdAt: d('2026-03-10T17:00:00Z'),
   }
   const ALERT1 = {
@@ -109,7 +109,7 @@ vi.mock('@/backend/lib/db', () => {
   // A pre-ledger single-entry row — drives the legacy compensating branch of
   // transaction.reverse.
   const TXN_LEGACY = {
-    id: 't-legacy', projectId: 'p-1', type: 'expense', amount: 400, method: 'mpesa', reference: 'MPESA-LEGACY1',
+    id: 't-legacy', projectId: 'p-1', type: 'expense', amount: 40_000n /* KSh 400 */, method: 'mpesa', reference: 'MPESA-LEGACY1',
     costCode: 'materials', phaseId: null, ledgerTxnId: null, note: 'Old single-entry row', date: d('2026-03-01T12:00:00Z'),
   }
 
@@ -345,9 +345,9 @@ vi.mock('@/backend/lib/db', () => {
           state.escrowWallets.set(where.projectId, row)
           return { ...row }
         }
-        // Prisma's { increment } data shape.
-        const delta = (update.balance as { increment?: number })?.increment
-        existing.balance = delta ? (existing.balance as number) + delta : (update.balance as number)
+        // Prisma's { increment } data shape (bigint cents, issue #122).
+        const delta = (update.balance as { increment?: bigint })?.increment
+        existing.balance = delta ? (existing.balance as bigint) + delta : (update.balance as bigint)
         return { ...existing }
       },
     },
@@ -699,7 +699,7 @@ describe('POST /api/actions — finance/admin/client succeed and the ledger reco
     expect(ledgerRows()[0].postedBy).toBe('Fatuma Kep')
     expect(ledgerRows()[0].postedRole).toBe('finance')
     expect(String(ledgerRows()[0].description)).toContain('Escrow top-up (TOP-1)')
-    expect((state.escrowWallets.get('p-1') as { balance: number }).balance).toBe(25000)
+    expect((state.escrowWallets.get('p-1') as { balance: bigint }).balance).toBe(2_500_000n)
   })
 
   it('finance session → wages.pay stamps the real session actor — never the hardcoded "Site Manager"', async () => {
@@ -739,7 +739,7 @@ describe('POST /api/actions — finance/admin/client succeed and the ledger reco
     expect(String(ledgerRows()[0].description)).toContain('REVERSAL of legacy transaction')
     // The compensating legacy row is negative and linked to the ledger txn.
     const compensating = [...state.transactionsRows.values()].find((t) => t.ledgerTxnId === ledgerRows()[0].id)
-    expect(compensating).toMatchObject({ type: 'reversal', amount: -400 })
+    expect(compensating).toMatchObject({ type: 'reversal', amount: -40_000n })
   })
 })
 

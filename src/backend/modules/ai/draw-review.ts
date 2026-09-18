@@ -53,6 +53,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'fs/promises'
 import path from 'node:path'
 import { db } from '@/backend/lib/db'
+import { centsToKes, sumCents } from '@/backend/lib/money'
 import { getDrawPackForShare, canonicalJson } from '@/backend/modules/drawpack/service'
 import { threeWayCheck } from '@/backend/modules/invoices/service'
 import { getFlags } from '@/backend/modules/intel/flags'
@@ -154,6 +155,10 @@ function parseModelJson(text: string): Record<string, unknown> | null {
  * content + live invoice verdicts + budget math). SHA-256 over canonical JSON
  * — same rows in, same hash out (the DrawPack contentHash discipline).
  * Timestamps of note CREATION are outside the hashed content.
+ *
+ * Money here is KSh NUMBERS (issue #122 rule 11: portable JSON artifacts may
+ * carry KSh; the DB rows are cents and convert once, at build — bigint must
+ * never reach canonicalJson).
  */
 export interface ReviewInputs {
   v: number
@@ -332,9 +337,11 @@ export async function runDrawReview(input: {
     }),
     db.transaction.findMany({ where: { projectId: input.projectId }, select: { amount: true } }),
   ])
+  // Money converts once at this boundary (issue #122): phase budgets and the
+  // spend sum are Cents rows → KSh numbers for the hashed JSON artifact.
   const budget = {
-    phaseBudgets: phaseRows.map((p) => ({ name: p.name, budget: p.budget })),
-    totalSpent: txnRows.reduce((s, t) => s + t.amount, 0),
+    phaseBudgets: phaseRows.map((p) => ({ name: p.name, budget: centsToKes(p.budget) })),
+    totalSpent: centsToKes(sumCents(txnRows.map((t) => t.amount))),
     transactionCount: txnRows.length,
   }
 

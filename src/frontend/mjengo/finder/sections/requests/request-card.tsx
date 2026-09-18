@@ -17,7 +17,7 @@ import { toast } from 'sonner'
 import { estimateRequestTotal } from '@/backend/modules/supply/insights'
 import { requiredApproverRoles } from '@/backend/modules/supply/policy'
 import { useT } from '@/frontend/i18n/provider'
-import type { Approval, ApprovalRule, RequestWithLines, SupplierWithCatalog } from '@/backend/modules/supply/types'
+import type { Approval, ApprovalRuleKes, RequestWithLines, SupplierWithCatalog } from '@/backend/modules/supply/types'
 import { ApprovalPill, RequestStatusBadge, RequestStatusLadder, fmtQty, formatKes, roleLabel } from './bits'
 
 export function RequestCard({
@@ -25,7 +25,7 @@ export function RequestCard({
 }: {
   request: RequestWithLines
   approvals: Approval[]
-  rules: ApprovalRule[]
+  rules: ApprovalRuleKes[]
   suppliers: SupplierWithCatalog[]
   canManage: boolean
   /** Client-role sessions decide client-band approvals too (F-PROCURE). */

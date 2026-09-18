@@ -130,9 +130,9 @@ vi.mock('@/backend/lib/db', () => {
   const applyWalletData = (w: Record<string, unknown>, data: Record<string, unknown>) => {
     for (const [key, value] of Object.entries(data)) {
       if (value && typeof value === 'object' && 'decrement' in (value as Record<string, unknown>)) {
-        w[key] = (w[key] as number) - (value as { decrement: number }).decrement
+        w[key] = (w[key] as bigint) - (value as { decrement: bigint }).decrement
       } else if (value && typeof value === 'object' && 'increment' in (value as Record<string, unknown>)) {
-        w[key] = (w[key] as number) + (value as { increment: number }).increment
+        w[key] = (w[key] as bigint) + (value as { increment: bigint }).increment
       } else {
         w[key] = value
       }
@@ -331,11 +331,11 @@ function seedProject() {
   state.projects.set(P, { id: P, name: 'Test Bungalow', client: 'Amina Test' })
 }
 
-function seedMilestone(id: string, amount: number, status = 'release_requested') {
+function seedMilestone(id: string, amount: bigint, status = 'release_requested') {
   state.milestones.set(id, { id, projectId: P, phaseId: null, name: `Milestone ${id}`, amount, status, evidencePhotoIds: '[]' })
 }
 
-function seedPaymentRequest(id: string, amount: number, method = 'wallet') {
+function seedPaymentRequest(id: string, amount: bigint, method = 'wallet') {
   state.paymentRequests.set(id, {
     id, projectId: P, requestCode: `PR-2026-${id}`, status: 'approved',
     amount, payee: 'Fundi wa Mawe', description: 'work', method,
@@ -343,10 +343,10 @@ function seedPaymentRequest(id: string, amount: number, method = 'wallet') {
   })
 }
 
-function seedInvoice(id: string, total: number) {
+function seedInvoice(id: string, total: bigint) {
   state.invoices.set(id, {
     id, invoiceCode: `INV-2026-${id}`, projectId: P, orderId: null, supplierId: null,
-    status: 'approved', subtotal: total, tax: 0, total, paymentMethod: null,
+    status: 'approved', subtotal: total, tax: 0n, total, paymentMethod: null,
   })
 }
 
@@ -357,15 +357,15 @@ function seedInvoice(id: string, total: number) {
 function escrowChip() {
   const account = [...state.accounts.values()].find((a) => a.code === `ESCROW:${P}`)
   const legs = account ? [...state.entries.values()].filter((e) => e.accountId === account.id) : []
-  const debit = legs.filter((e) => e.side === 'debit').reduce((s, e) => s + (e.amount as number), 0)
-  const credit = legs.filter((e) => e.side === 'credit').reduce((s, e) => s + (e.amount as number), 0)
+  const debit = legs.filter((e) => e.side === 'debit').reduce((s, e) => s + (e.amount as bigint), 0n)
+  const credit = legs.filter((e) => e.side === 'credit').reduce((s, e) => s + (e.amount as bigint), 0n)
   const derived = credit - debit // liability account
   const wallet = [...state.escrowWallets.values()].find((w) => w.projectId === P)
-  const projected = wallet ? (wallet.balance as number) : 0
-  return { derived, projected, consistent: Math.abs(derived - projected) < 1 }
+  const projected = wallet ? (wallet.balance as bigint) : 0n
+  return { derived, projected, consistent: derived === projected } // cents are exact — no tolerance
 }
 
-const fundEscrow = (amount: number) => postEscrowTopup(P, amount, 'Amina Test', { reference: `topup-${amount}`, role: 'client' })
+const fundEscrow = (amount: bigint) => postEscrowTopup(P, amount, 'Amina Test', { reference: `topup-${amount}`, role: 'client' })
 const txnRowOf = (ledgerTxnId: string) => [...state.transactions.values()].find((t) => t.ledgerTxnId === ledgerTxnId)
 
 // ---------------------------------------------------------------- the bug
@@ -375,20 +375,20 @@ describe('escrow-spend reversals restore the EscrowWallet projection (issue #213
 
   it('milestone release → reverse: derived == projection again, milestone stays released, original row marked', async () => {
     seedProject()
-    seedMilestone('m1', 200_000)
-    await fundEscrow(1_000_000)
+    seedMilestone('m1', 20_000_000n)
+    await fundEscrow(100_000_000n)
     const release = await releaseMilestoneAtomic(P, {
-      milestone: { id: 'm1', name: 'Milestone m1', amount: 200_000, phaseId: null },
+      milestone: { id: 'm1', name: 'Milestone m1', amount: 20_000_000n, phaseId: null },
       decider: { name: 'Amina Test', role: 'client' },
       note: null,
     })
-    expect(release.balance).toBe(800_000)
-    expect(escrowChip()).toEqual({ derived: 800_000, projected: 800_000, consistent: true })
+    expect(release.balance).toBe(80_000_000n)
+    expect(escrowChip()).toEqual({ derived: 80_000_000n, projected: 80_000_000n, consistent: true })
 
     const out = await reverseTransaction(P, { id: release.transactionId, reason: 'wrong milestone approved', by: 'Finance Fox' })
 
     // THE #213 invariant: the projection is restored in the same transaction
-    expect(escrowChip()).toEqual({ derived: 1_000_000, projected: 1_000_000, consistent: true })
+    expect(escrowChip()).toEqual({ derived: 100_000_000n, projected: 100_000_000n, consistent: true })
 
     // the mirrored ledger post: ESCROW credit / EXPENSE debit, original flipped
     const originalLedger = state.ledgerTxns.get(release.ledgerTxnId) as unknown as { status: string; reversalRef: string }
@@ -396,8 +396,8 @@ describe('escrow-spend reversals restore the EscrowWallet projection (issue #213
     expect(originalLedger.reversalRef).toBe(out.ledgerRef)
     const reversalTxn = [...state.ledgerTxns.values()].find((t) => t.ref === out.ledgerRef) as unknown as { id: string }
     const legs = [...state.entries.values()].filter((e) => e.transactionId === reversalTxn.id)
-    expect(legs.filter((e) => e.side === 'credit').map((e) => [e.amount, state.accounts.get(e.accountId as string)?.code])).toContainEqual([200_000, `ESCROW:${P}`])
-    expect(legs.filter((e) => e.side === 'debit').map((e) => [e.amount, state.accounts.get(e.accountId as string)?.code])).toContainEqual([200_000, `EXPENSE:${P}`])
+    expect(legs.filter((e) => e.side === 'credit').map((e) => [e.amount, state.accounts.get(e.accountId as string)?.code])).toContainEqual([20_000_000n, `ESCROW:${P}`])
+    expect(legs.filter((e) => e.side === 'debit').map((e) => [e.amount, state.accounts.get(e.accountId as string)?.code])).toContainEqual([20_000_000n, `EXPENSE:${P}`])
 
     // documented terminal state: the decision history is NOT rewritten
     expect(state.milestones.get('m1')?.status).toBe('released')
@@ -405,28 +405,28 @@ describe('escrow-spend reversals restore the EscrowWallet projection (issue #213
     // the compensating legacy row + the marker on the original
     const compensating = state.transactions.get(out.reversalTransactionId as string)
     expect(compensating?.type).toBe('reversal')
-    expect(compensating?.amount).toBe(-200_000)
+    expect(compensating?.amount).toBe(-20_000_000n)
     expect(String(state.transactions.get(release.transactionId)?.note)).toContain('[reversed by LX-')
   })
 
   it('release → reverse → NEW wallet payment request: the restored money is spendable again (no double-spend)', async () => {
     seedProject()
-    seedMilestone('m1', 200_000)
-    await fundEscrow(1_000_000)
+    seedMilestone('m1', 20_000_000n)
+    await fundEscrow(100_000_000n)
     const release = await releaseMilestoneAtomic(P, {
-      milestone: { id: 'm1', name: 'Milestone m1', amount: 200_000, phaseId: null },
+      milestone: { id: 'm1', name: 'Milestone m1', amount: 20_000_000n, phaseId: null },
       decider: { name: 'Amina Test', role: 'client' },
       note: null,
     })
     await reverseTransaction(P, { id: release.transactionId, reason: 'wrong milestone approved', by: 'Finance Fox' })
-    expect(escrowChip().projected).toBe(1_000_000)
+    expect(escrowChip().projected).toBe(100_000_000n)
 
     // the documented operator route: re-issue the spend as a NEW request
-    seedPaymentRequest('pr1', 200_000, 'wallet')
+    seedPaymentRequest('pr1', 20_000_000n, 'wallet')
     const paid = await payPaymentRequest(P, { id: 'pr1', method: 'wallet', paidBy: 'Finance Fox', paidByRole: 'finance' })
     expect(paid.status).toBe('paid')
-    expect(paid.balance).toBe(800_000)
-    expect(escrowChip()).toEqual({ derived: 800_000, projected: 800_000, consistent: true })
+    expect(paid.balance).toBe(80_000_000n)
+    expect(escrowChip()).toEqual({ derived: 80_000_000n, projected: 80_000_000n, consistent: true })
 
     // no double-spend: top-up + release + reversal + re-issued spend = 4
     // ledger txns; the top-up posts NO legacy row, so 3 Transaction rows
@@ -439,33 +439,33 @@ describe('escrow-spend reversals restore the EscrowWallet projection (issue #213
 
   it('wallet-method payment request → reverse: same derived-vs-projected invariant', async () => {
     seedProject()
-    await fundEscrow(500_000)
-    seedPaymentRequest('pr1', 150_000, 'wallet')
+    await fundEscrow(50_000_000n)
+    seedPaymentRequest('pr1', 15_000_000n, 'wallet')
     const paid = await payPaymentRequest(P, { id: 'pr1', method: 'wallet', paidBy: 'Finance Fox', paidByRole: 'finance' })
-    expect(escrowChip()).toEqual({ derived: 350_000, projected: 350_000, consistent: true })
+    expect(escrowChip()).toEqual({ derived: 35_000_000n, projected: 35_000_000n, consistent: true })
 
     await reverseTransaction(P, { id: paid.transactionId as string, reason: 'duplicate request', by: 'Finance Fox' })
 
-    expect(escrowChip()).toEqual({ derived: 500_000, projected: 500_000, consistent: true })
+    expect(escrowChip()).toEqual({ derived: 50_000_000n, projected: 50_000_000n, consistent: true })
     expect(String(state.transactions.get(paid.transactionId as string)?.note)).toContain('[reversed by LX-')
   })
 
   it('wallet-method invoice payment → reverse: same derived-vs-projected invariant', async () => {
     seedProject()
-    await fundEscrow(500_000)
-    seedInvoice('inv1', 150_000)
+    await fundEscrow(50_000_000n)
+    seedInvoice('inv1', 15_000_000n)
     await payInvoice(P, { id: 'inv1', method: 'wallet', by: 'Amina Test' })
-    expect(escrowChip()).toEqual({ derived: 350_000, projected: 350_000, consistent: true })
+    expect(escrowChip()).toEqual({ derived: 35_000_000n, projected: 35_000_000n, consistent: true })
 
     const invTxn = [...state.transactions.values()].find((t) => t.type === 'invoice')
     await reverseTransaction(P, { id: invTxn?.id as string, reason: 'wrong invoice', by: 'Finance Fox' })
 
-    expect(escrowChip()).toEqual({ derived: 500_000, projected: 500_000, consistent: true })
+    expect(escrowChip()).toEqual({ derived: 50_000_000n, projected: 50_000_000n, consistent: true })
   })
 
   it('direction derives from the legs: reversing a top-up-shaped escrow txn DECREMENTS the projection', async () => {
     seedProject()
-    await fundEscrow(300_000)
+    await fundEscrow(30_000_000n)
     // a second, manual top-up-shaped ledger txn with its legacy row — the
     // operator-visible handle a reversal needs (escrow.topup posts no legacy
     // row, so simulate the recorded one)
@@ -476,47 +476,47 @@ describe('escrow-spend reversals restore the EscrowWallet projection (issue #213
       postedBy: 'Amina Test',
       postedRole: 'client',
       lines: [
-        { accountCode: 'CASH_BANK', side: 'debit', amount: 100_000 },
-        { accountCode: `ESCROW:${P}`, side: 'credit', amount: 100_000 },
+        { accountCode: 'CASH_BANK', side: 'debit', amount: 10_000_000n },
+        { accountCode: `ESCROW:${P}`, side: 'credit', amount: 10_000_000n },
       ],
     })
     state.transactions.set('t-topup', {
-      id: 't-topup', projectId: P, type: 'escrow_topup', amount: 100_000, method: 'bank',
+      id: 't-topup', projectId: P, type: 'escrow_topup', amount: 10_000_000n, method: 'bank',
       reference: null, costCode: null, phaseId: null, ledgerTxnId: manual.id,
       note: 'manual top-up', date: new Date(), createdAt: new Date(),
     })
     // keep the projection honest with the extra ledger money (what a top-up
     // posting would have done)
     const wallet = [...state.escrowWallets.values()].find((w) => w.projectId === P) as Record<string, unknown>
-    wallet.balance = 400_000
-    expect(escrowChip()).toEqual({ derived: 400_000, projected: 400_000, consistent: true })
+    wallet.balance = 40_000_000n
+    expect(escrowChip()).toEqual({ derived: 40_000_000n, projected: 40_000_000n, consistent: true })
 
     await reverseTransaction(P, { id: 't-topup', reason: 'reversal of erroneous top-up', by: 'Finance Fox' })
 
     // the escrow leg was a CREDIT: the reversal takes the money back OUT
-    expect(escrowChip()).toEqual({ derived: 300_000, projected: 300_000, consistent: true })
+    expect(escrowChip()).toEqual({ derived: 30_000_000n, projected: 30_000_000n, consistent: true })
   })
 
   it('external-spend reversal never touches the escrow projection', async () => {
     seedProject()
-    await fundEscrow(500_000)
-    seedPaymentRequest('pr1', 120_000, 'cash')
+    await fundEscrow(50_000_000n)
+    seedPaymentRequest('pr1', 12_000_000n, 'cash')
     const paid = await payPaymentRequest(P, { id: 'pr1', method: 'cash', paidBy: 'Finance Fox', paidByRole: 'finance' })
-    expect(escrowChip()).toEqual({ derived: 500_000, projected: 500_000, consistent: true })
+    expect(escrowChip()).toEqual({ derived: 50_000_000n, projected: 50_000_000n, consistent: true })
 
     await reverseTransaction(P, { id: paid.transactionId as string, reason: 'correction', by: 'Finance Fox' })
 
     // no ESCROW leg on the original → projection AND derived unchanged
-    expect(escrowChip()).toEqual({ derived: 500_000, projected: 500_000, consistent: true })
+    expect(escrowChip()).toEqual({ derived: 50_000_000n, projected: 50_000_000n, consistent: true })
     expect(state.ledgerTxns.size).toBe(3) // top-up + external spend + mirrored reversal
   })
 
   it('double-reverse is refused and moves nothing', async () => {
     seedProject()
-    seedMilestone('m1', 200_000)
-    await fundEscrow(1_000_000)
+    seedMilestone('m1', 20_000_000n)
+    await fundEscrow(100_000_000n)
     const release = await releaseMilestoneAtomic(P, {
-      milestone: { id: 'm1', name: 'Milestone m1', amount: 200_000, phaseId: null },
+      milestone: { id: 'm1', name: 'Milestone m1', amount: 20_000_000n, phaseId: null },
       decider: { name: 'Amina Test', role: 'client' },
       note: null,
     })

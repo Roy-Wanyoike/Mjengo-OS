@@ -54,8 +54,8 @@ vi.mock('@/backend/lib/db', () => {
   type Row = Record<string, unknown>
   const d = (iso: string) => new Date(iso)
 
-  const SUP1 = { id: 'sup-1', businessName: 'Nairobi Hardware Centre', county: 'Nairobi', town: 'Nairobi', phone: '+254700000001', email: 'sales@nairobihardware.example', deliveryFeeBase: 2500, createdAt: d('2026-01-02T09:00:00Z') }
-  const SUP2 = { id: 'sup-2', businessName: 'Karioke Hardware', county: 'Kiambu', town: 'Ruiru', phone: '+254700000002', email: 'sales@karioke.example', deliveryFeeBase: 1500, createdAt: d('2026-01-03T09:00:00Z') }
+  const SUP1 = { id: 'sup-1', businessName: 'Nairobi Hardware Centre', county: 'Nairobi', town: 'Nairobi', phone: '+254700000001', email: 'sales@nairobihardware.example', deliveryFeeBase: 250_000n, createdAt: d('2026-01-02T09:00:00Z') }
+  const SUP2 = { id: 'sup-2', businessName: 'Karioke Hardware', county: 'Kiambu', town: 'Ruiru', phone: '+254700000002', email: 'sales@karioke.example', deliveryFeeBase: 150_000n, createdAt: d('2026-01-03T09:00:00Z') }
 
   const P1 = { id: 'p-1', name: 'Riverside Villas', client: 'Mama Njeri', clientType: 'diaspora', location: 'Karen', status: 'active', budget: 2_000_000, shareToken: 'tok-1', startDate: d('2026-01-05T09:00:00Z'), createdAt: d('2026-01-04T09:00:00Z') }
   const P2 = { id: 'p-2', name: 'Westlands Duplex', client: 'Baba Otieno', clientType: 'local', location: 'Westlands', status: 'active', budget: 3_500_000, shareToken: 'tok-2', startDate: d('2026-02-01T09:00:00Z'), createdAt: d('2026-01-20T09:00:00Z') }
@@ -123,13 +123,13 @@ vi.mock('@/backend/lib/db', () => {
     quotes = [
       {
         id: 'q-1', requestCode: 'MR-2026-000003', supplierId: 'sup-1', status: 'requested',
-        unitPrice: 0, deliveryFee: 0, transportFee: 0, fees: 0, totalLanded: 0,
+        unitPrice: 0n, deliveryFee: 0n, transportFee: 0n, fees: 0n, totalLanded: 0n,
         deliveryEta: null, stockOk: true, validUntil: null, terms: null, createdAt: d('2026-03-08T10:00:00Z'),
         request: REQUEST1, supplier: SUP1, lines: [],
       },
       {
         id: 'q-2', requestCode: 'MR-2026-000004', supplierId: 'sup-2', status: 'requested',
-        unitPrice: 0, deliveryFee: 0, transportFee: 0, fees: 0, totalLanded: 0,
+        unitPrice: 0n, deliveryFee: 0n, transportFee: 0n, fees: 0n, totalLanded: 0n,
         deliveryEta: null, stockOk: true, validUntil: null, terms: null, createdAt: d('2026-03-09T10:00:00Z'),
         request: REQUEST2, supplier: SUP2, lines: [],
       },
@@ -137,29 +137,29 @@ vi.mock('@/backend/lib/db', () => {
     orders = [
       {
         id: 'po-1', orderCode: 'PO-2026-000013', projectId: 'p-1', requestId: null, supplierId: 'sup-1',
-        subtotal: 181_500, deliveryFee: 3_500, total: 185_000, status: 'confirmed', paymentSource: 'client',
+        subtotal: 18_150_000n, deliveryFee: 350_000n, total: 18_500_000n, status: 'confirmed', paymentSource: 'client',
         createdByRole: 'contractor', note: 'Direct order — walling package', createdAt: d('2026-03-01T09:00:00Z'), updatedAt: d('2026-03-02T09:00:00Z'),
-        lines: [{ id: 'pol-1', orderId: 'po-1', name: 'Machine-cut stones (9")', unit: 'piece', qty: 3000, unitPrice: 55, lineTotal: 165_000 }],
+        lines: [{ id: 'pol-1', orderId: 'po-1', name: 'Machine-cut stones (9")', unit: 'piece', qty: 3000, unitPrice: 5_500n, lineTotal: 16_500_000n }],
         supplier: SUP1, request: null, deliveries: [], project: { id: 'p-1', name: 'Riverside Villas' },
       },
       {
         id: 'po-2', orderCode: 'PO-2026-000014', projectId: 'p-1', requestId: null, supplierId: 'sup-2',
-        subtotal: 60_000, deliveryFee: 2_000, total: 62_000, status: 'confirmed', paymentSource: 'project_wallet',
+        subtotal: 6_000_000n, deliveryFee: 200_000n, total: 6_200_000n, status: 'confirmed', paymentSource: 'project_wallet',
         createdByRole: 'supervisor', note: null, createdAt: d('2026-03-03T09:00:00Z'), updatedAt: d('2026-03-03T09:00:00Z'),
-        lines: [{ id: 'pol-2', orderId: 'po-2', name: 'River sand', unit: 'tonne', qty: 30, unitPrice: 2000, lineTotal: 60_000 }],
+        lines: [{ id: 'pol-2', orderId: 'po-2', name: 'River sand', unit: 'tonne', qty: 30, unitPrice: 200_000n, lineTotal: 6_000_000n }],
         supplier: SUP2, request: null, deliveries: [], project: { id: 'p-1', name: 'Riverside Villas' },
       },
       {
         id: 'po-3', orderCode: 'PO-2026-000015', projectId: 'p-2', requestId: null, supplierId: 'sup-1',
-        subtotal: 30_000, deliveryFee: 1_000, total: 31_000, status: 'sent', paymentSource: 'client',
+        subtotal: 3_000_000n, deliveryFee: 100_000n, total: 3_100_000n, status: 'sent', paymentSource: 'client',
         createdByRole: 'contractor', note: 'Westlands screed', createdAt: d('2026-03-04T09:00:00Z'), updatedAt: d('2026-03-04T09:00:00Z'),
-        lines: [{ id: 'pol-3', orderId: 'po-3', name: 'Ballast', unit: 'tonne', qty: 10, unitPrice: 3000, lineTotal: 30_000 }],
+        lines: [{ id: 'pol-3', orderId: 'po-3', name: 'Ballast', unit: 'tonne', qty: 10, unitPrice: 300_000n, lineTotal: 3_000_000n }],
         supplier: SUP1, request: null, deliveries: [], project: { id: 'p-2', name: 'Westlands Duplex' },
       },
     ]
     catalog = [
-      { id: 'ci-1', supplierId: 'sup-1', name: 'Machine-cut stones (9")', unit: 'piece', unitPrice: 55, stockQty: 5000, minOrderQty: 100, category: 'walling', brand: null, createdAt: d('2026-01-05T09:00:00Z') },
-      { id: 'ci-2', supplierId: 'sup-2', name: 'River sand', unit: 'tonne', unitPrice: 1800, stockQty: 40, minOrderQty: 5, category: 'aggregates', brand: null, createdAt: d('2026-01-06T09:00:00Z') },
+      { id: 'ci-1', supplierId: 'sup-1', name: 'Machine-cut stones (9")', unit: 'piece', unitPrice: 5_500n, stockQty: 5000, minOrderQty: 100, category: 'walling', brand: null, createdAt: d('2026-01-05T09:00:00Z') },
+      { id: 'ci-2', supplierId: 'sup-2', name: 'River sand', unit: 'tonne', unitPrice: 180_000n, stockQty: 40, minOrderQty: 5, category: 'aggregates', brand: null, createdAt: d('2026-01-06T09:00:00Z') },
     ]
     invoices = [
       {
@@ -924,7 +924,7 @@ describe('POST /api/actions — the supplier pin (REAL applyAction)', () => {
     )
     expect(res.status).toBe(200)
     expect(state.catalogCreated).toHaveLength(1)
-    expect(state.catalogCreated[0]).toMatchObject({ supplierId: 'sup-1', name: 'Concrete blocks (6" hollow)', unitPrice: 75 })
+    expect(state.catalogCreated[0]).toMatchObject({ supplierId: 'sup-1', name: 'Concrete blocks (6" hollow)', unitPrice: 7_500n })
   })
 
   it('payload stamp forgery (__role admin + __supplierId of another supplier) is overwritten by the session — the foreign row still refuses', async () => {
@@ -1431,10 +1431,10 @@ describe('v1 supplier-owned families — row-pinned, indistinguishable from a mi
 // --------------------------------------------------------- migration + seed
 
 describe('the migration is additive-only (house rule for the shared DB)', () => {
-  // 4_ — the web-push branch (merging first) takes 3_push_subscription; this
+  // 04_ — the web-push branch (merging first) takes 03_push_subscription; this
   // one lands after it in the sequence.
   const sql = readFileSync(
-    fileURLToPath(new URL('../../prisma/migrations/4_supplier_user_link/migration.sql', import.meta.url)),
+    fileURLToPath(new URL('../../prisma/migrations/04_supplier_user_link/migration.sql', import.meta.url)),
     'utf8',
   )
 

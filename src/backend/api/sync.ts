@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createHash } from 'crypto'
 import { db } from '@/backend/lib/db'
+import { snapCents } from '@/backend/lib/money'
 import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/backend/lib/mjengo'
 import { CLIENT_ACTIONS } from '@/shared/client-actions'
 import { route, genericError } from '@/backend/lib/route-kit'
@@ -250,7 +251,9 @@ function replayFingerprintKey(projectId: string | null | undefined, action: Queu
   return `syncfp:${projectId ?? 'global'}:${action.type}:${hash}`
 }
 
-const kes = (n: number) => `KSh ${Math.round(n).toLocaleString('en-KE')}`
+const kes = (nCents: bigint) => `KSh ${Math.round(Number(nCents) / 100).toLocaleString('en-KE')}`
+/** KSh-number twin for payload-side values (pre-cents amounts). */
+const kesKSh = (n: number) => `KSh ${Math.round(n).toLocaleString('en-KE')}`
 
 /** One worker's today-row vs the status the offline action would record. */
 async function checkAttendanceForWorker(
@@ -468,12 +471,12 @@ async function detectConflict(projectId: string, action: QueuedAction): Promise<
         orderBy: { amount: 'desc' },
         select: { amount: true },
       })
-      if (escrowLeg && Number.isFinite(amount) && escrowLeg.amount === amount) return { silent: true }
+      if (escrowLeg && Number.isFinite(amount) && escrowLeg.amount === snapCents(amount)) return { silent: true }
       return {
         rule: 'server-wins',
         reason:
           `Financial rows: the ledger already recorded this — server wins ` +
-          `(top-up ${reference} was recorded as ${escrowLeg ? kes(escrowLeg.amount) : 'a different amount'}; your queued top-up says ${Number.isFinite(amount) ? kes(amount) : 'an unknown amount'})`,
+          `(top-up ${reference} was recorded as ${escrowLeg ? kes(escrowLeg.amount) : 'a different amount'}; your queued top-up says ${Number.isFinite(amount) ? kesKSh(amount) : 'an unknown amount'})`,
       }
     }
     case 'wages.pay': {

@@ -168,7 +168,7 @@ function getState() {
 const W1 = { id: 'w-1', code: 'W-0001', label: 'Riverside main', ownerType: 'project', ownerId: 'p-1', currency: 'KES', status: 'active' }
 const W2 = { id: 'w-2', code: 'W-0002', label: 'Riverside float', ownerType: 'project', ownerId: 'p-1', currency: 'KES', status: 'active' }
 
-/** Seed: both wallets exist with backing ledger accounts; W-0001 holds 10,000. */
+/** Seed: both wallets exist with backing ledger accounts; W-0001 holds KSh 10,000 (1,000,000 cents). */
 function seedWallets() {
   state.wallets.set('w-1', { ...W1 })
   state.wallets.set('w-2', { ...W2 })
@@ -176,11 +176,11 @@ function seedWallets() {
   const la2 = { id: 'la-2', code: 'WALLET:W-0002', ownerType: 'wallet', ownerId: 'w-2' }
   state.accounts.set('la-1', la1)
   state.accounts.set('la-2', la2)
-  state.entries.set('seed-1', { id: 'seed-1', txnId: 'seed-txn', accountId: 'la-1', side: 'credit', amount: 10_000, memo: null })
+  state.entries.set('seed-1', { id: 'seed-1', txnId: 'seed-txn', accountId: 'la-1', side: 'credit', amount: 1_000_000n /* KSh 10,000 */, memo: null })
 }
 
 /** Wallet-account legs by side (the ledger rows a withdraw/transfer produces). */
-const legsOf = (accountId: string, side: 'debit' | 'credit', amount: number) =>
+const legsOf = (accountId: string, side: 'debit' | 'credit', amount: bigint) =>
   [...state.entries.values()].filter(
     (e) => e.accountId === accountId && e.side === side && e.amount === amount,
   )
@@ -202,11 +202,11 @@ describe('withdrawWallet — deterministic natural idempotency key (BE-3)', () =
     expect(retry.ledgerRef).toBe(first.ledgerRef)
     expect(retry.balance).toBe(first.balance) // 7,500 — not 5,000
     // exactly one wallet debit leg for this amount — the retry posted NOTHING
-    expect(legsOf('la-1', 'debit', 2_500)).toHaveLength(1)
+    expect(legsOf('la-1', 'debit', 250_000n)).toHaveLength(1)
     // and exactly one cash credit leg (the posting happened once, not twice)
     expect(
       [...state.entries.values()].filter(
-        (e) => e.accountId !== 'la-1' && e.accountId !== 'la-2' && e.side === 'credit' && e.amount === 2_500,
+        (e) => e.accountId !== 'la-1' && e.accountId !== 'la-2' && e.side === 'credit' && e.amount === 250_000n,
       ),
     ).toHaveLength(1)
   })
@@ -219,7 +219,7 @@ describe('withdrawWallet — deterministic natural idempotency key (BE-3)', () =
     const retry = await withdrawWallet('p-1', { walletId: 'w-1', amount: 10_000, by: 'finance' })
     expect(retry.ledgerRef).toBe(first.ledgerRef)
     expect(retry.balance).toBe(0)
-    expect(legsOf('la-1', 'debit', 10_000)).toHaveLength(1)
+    expect(legsOf('la-1', 'debit', 1_000_000n)).toHaveLength(1)
   })
 
   it('no Date.now() in the derived key: two identical calls derive the SAME key (one unique ledger idempotencyKey)', async () => {
@@ -234,16 +234,16 @@ describe('withdrawWallet — deterministic natural idempotency key (BE-3)', () =
     await withdrawWallet('p-1', { ...P, note: 'Fuel advance' })
     await withdrawWallet('p-1', { ...P, note: 'Tool repair' }) // different note = different intent
     await withdrawWallet('p-1', { ...P, amount: 1_000 }) // different amount
-    expect(legsOf('la-1', 'debit', 2_500)).toHaveLength(2)
-    expect(legsOf('la-1', 'debit', 1_000)).toHaveLength(1)
+    expect(legsOf('la-1', 'debit', 250_000n)).toHaveLength(2)
+    expect(legsOf('la-1', 'debit', 100_000n)).toHaveLength(1)
   })
 
   it('the explicit Idempotency-Key path still works: same key → replay; a DIFFERENT key → a second intentional withdrawal', async () => {
     await withdrawWallet('p-1', { ...P, idempotencyKey: 'op-42' })
     const replay = await withdrawWallet('p-1', { ...P, idempotencyKey: 'op-42' })
-    expect(legsOf('la-1', 'debit', 2_500)).toHaveLength(1)
+    expect(legsOf('la-1', 'debit', 250_000n)).toHaveLength(1)
     await withdrawWallet('p-1', { ...P, idempotencyKey: 'op-43' })
-    expect(legsOf('la-1', 'debit', 2_500)).toHaveLength(2) // distinct key = distinct event
+    expect(legsOf('la-1', 'debit', 250_000n)).toHaveLength(2) // distinct key = distinct event
     expect(replay.ledgerRef).toBeTruthy()
   })
 })
@@ -257,8 +257,8 @@ describe('transferWallet — deterministic natural idempotency key (BE-3)', () =
     expect(retry.ledgerRef).toBe(first.ledgerRef)
     expect(retry.from).toBe('W-0001')
     expect(retry.to).toBe('W-0002')
-    expect(legsOf('la-1', 'debit', 1_000)).toHaveLength(1)
-    expect(legsOf('la-2', 'credit', 1_000)).toHaveLength(1)
+    expect(legsOf('la-1', 'debit', 100_000n)).toHaveLength(1)
+    expect(legsOf('la-2', 'credit', 100_000n)).toHaveLength(1)
   })
 
   it('a transfer to a different destination wallet is a distinct movement (no false dedup)', async () => {
@@ -266,7 +266,7 @@ describe('transferWallet — deterministic natural idempotency key (BE-3)', () =
     state.accounts.set('la-3', { id: 'la-3', code: 'WALLET:W-0003', ownerType: 'wallet', ownerId: 'w-3' })
     await transferWallet('p-1', { fromWalletId: 'w-1', toWalletId: 'w-2', amount: 500, by: 'finance' })
     await transferWallet('p-1', { fromWalletId: 'w-1', toWalletId: 'w-3', amount: 500, by: 'finance' })
-    expect(legsOf('la-1', 'debit', 500)).toHaveLength(2)
+    expect(legsOf('la-1', 'debit', 50_000n)).toHaveLength(2)
   })
 })
 

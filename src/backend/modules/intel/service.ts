@@ -12,6 +12,7 @@
 // The MjengoScore describes; humans decide — it gates nothing.
 
 import { db } from '@/backend/lib/db'
+import { assertMoneyCents, centsToKes, fmtKes } from '@/backend/lib/money'
 import { notify } from '@/backend/modules/notify/service'
 import {
   computeReliability, computeRiskFindings, computePriceTrends, mondayOf, overallProgress,
@@ -337,8 +338,9 @@ export async function recordPrice(
   if (!region) throw new Error('Region required')
   if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new Error('Unit price must be a number greater than zero')
 
+  const unitPriceCents = assertMoneyCents(unitPrice, 'unitPrice')
   const row = await db.pricePoint.create({
-    data: { materialName, region, unitPrice: Math.round(unitPrice * 100) / 100, source: 'manual' },
+    data: { materialName, region, unitPrice: unitPriceCents, source: 'manual' },
   })
 
   // Deterministic event: if this manual observation is >5% above the most
@@ -349,19 +351,19 @@ export async function recordPrice(
     orderBy: { recordedAt: 'asc' },
   })
   const prevPoint = [...history].reverse().find((p) => p.recordedAt.getTime() <= cutoff.getTime())
-  if (prevPoint && prevPoint.unitPrice > 0) {
-    const deltaPct = ((unitPrice - prevPoint.unitPrice) / prevPoint.unitPrice) * 100
+  if (prevPoint && prevPoint.unitPrice > 0n) {
+    const deltaPct = Number(((unitPriceCents - prevPoint.unitPrice) * 10000n) / prevPoint.unitPrice) / 100
     if (deltaPct > 5) {
       await notify(
         projectId,
         `${materialName} price up ${deltaPct.toFixed(1)}% in ${region}`,
-        `A manual observation recorded ${kes(unitPrice)} against ${kes(prevPoint.unitPrice)} ~30 days ago (more than +5%). Consider scheduling the next order early.`,
+        `A manual observation recorded ${fmtKes(unitPriceCents)} against ${fmtKes(prevPoint.unitPrice)} ~30 days ago (more than +5%). Consider scheduling the next order early.`,
         { kind: 'price.alert', audienceRole: 'all' },
       )
     }
   }
 
-  return { id: row.id, materialName, region, unitPrice: row.unitPrice }
+  return { id: row.id, materialName, region, unitPrice: centsToKes(row.unitPrice) }
 }
 
 // ---------------- reliability.recompute ----------------

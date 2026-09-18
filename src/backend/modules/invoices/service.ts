@@ -33,6 +33,7 @@
 // Every mutation returns a plain object; applyAction() writes the AuditEvent.
 
 import { db } from '@/backend/lib/db'
+import { centsToKes, mulQtyCents, parseNonNegativeMoneyCents, parseQtyMilli, sumCents, fmtKes, type Cents } from '@/backend/lib/money'
 import { currentActor } from './session'
 import { computeLedgerConsistency, matchThreeWay } from './three-way'
 import { resolvePostingPhaseId, spendEscrowInTx, spendExternalInTx } from '@/backend/modules/wallet/service'
@@ -41,8 +42,8 @@ import type { LedgerCheck, ThreeWayReport } from './types'
 
 // ---------------- helpers (money.ts house conventions) ----------------
 
-function kes(n: number): string {
-  return `KSh ${Math.round(n).toLocaleString('en-KE')}`
+function kes(nCents: Cents): string {
+  return fmtKes(nCents)
 }
 
 /** Auto reference like MPESA-7XK2P4QA when the client doesn't supply one (money.ts helper, extended). */
@@ -64,9 +65,9 @@ function posNumber(v: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
-function money(v: unknown): number | null {
-  const n = Number(v)
-  return Number.isFinite(n) && n >= 0 ? n : null
+/** ≥0 money in KSh (zero allowed — tax, zero-priced lines) → cents, or null. */
+function money(v: unknown): Cents | null {
+  return parseNonNegativeMoneyCents(v)
 }
 
 function parseDate(v: unknown): Date | null {
@@ -110,27 +111,29 @@ async function requireClientRole(projectId: string, actionDescription: string): 
 interface LineInput {
   name: string
   qty: number
-  unitPrice: number
-  lineTotal: number
+  unitPrice: Cents
+  lineTotal: Cents
 }
 
 /** Validate + normalize lines and compute totals server-side. */
-function normalizeLines(raw: unknown): { lines: LineInput[]; subtotal: number } {
+function normalizeLines(raw: unknown): { lines: LineInput[]; subtotal: Cents } {
   if (!Array.isArray(raw) || raw.length === 0) throw new Error('At least one invoice line is required')
   const lines: LineInput[] = []
-  let subtotal = 0
+  let subtotal = 0n
   for (const item of raw) {
     const name = String((item as Record<string, unknown>)?.name ?? '').trim()
-    const qty = money((item as Record<string, unknown>)?.qty)
+    const qtyRaw = (item as Record<string, unknown>)?.qty
+    const qtyMilli = parseQtyMilli(qtyRaw)
     const unitPrice = money((item as Record<string, unknown>)?.unitPrice)
     if (!name) throw new Error('Every invoice line needs a name')
-    if (qty === null || qty <= 0) throw new Error(`Line "${name}": quantity must be greater than zero`)
+    if (qtyMilli === null) throw new Error(`Line "${name}": quantity must be greater than zero (at most 3 decimal places)`)
     if (unitPrice === null) throw new Error(`Line "${name}": unit price must be zero or more`)
-    const lineTotal = Math.round(qty * unitPrice * 100) / 100
+    const qty = Number(qtyRaw)
+    const lineTotal = mulQtyCents(qty, unitPrice) // exact: qty-thousandths × cents
     lines.push({ name, qty, unitPrice, lineTotal })
     subtotal += lineTotal
   }
-  return { lines, subtotal: Math.round(subtotal * 100) / 100 }
+  return { lines, subtotal }
 }
 
 async function getInvoiceOrThrow(id: unknown, projectId: string) {
@@ -152,9 +155,9 @@ async function notify(projectId: string, kind: string, title: string, body: stri
 /** `invoice.create` { orderId?, supplierId?, lines, tax?, dueDate?, note? } → DRAFT. */
 export async function createInvoice(projectId: string, payload: Record<string, unknown>) {
   const { lines, subtotal } = normalizeLines(payload.lines)
-  const tax = payload.tax === undefined || payload.tax === null ? 0 : money(payload.tax)
+  const tax = payload.tax === undefined || payload.tax === null ? 0n : money(payload.tax)
   if (tax === null) throw new Error('Tax must be zero or more')
-  const total = Math.round((subtotal + tax) * 100) / 100
+  const total = subtotal + tax
 
   // PO link (optional) — must belong to this project; it also implies the supplier
   let orderId: string | null = null
@@ -197,7 +200,7 @@ export async function createInvoice(projectId: string, payload: Record<string, u
     },
     include: { lines: true },
   })
-  return { id: invoice.id, invoiceCode, total }
+  return { id: invoice.id, invoiceCode, total: centsToKes(total) }
 }
 
 /** `invoice.update` — edit while DRAFT, or file a DISPUTE while SUBMITTED/APPROVED. */
@@ -241,7 +244,7 @@ export async function updateInvoice(projectId: string, payload: Record<string, u
     if (tax === null) throw new Error('Tax must be zero or more')
     data.subtotal = subtotal
     data.tax = tax
-    data.total = Math.round((subtotal + tax) * 100) / 100
+    data.total = subtotal + tax
     await db.invoiceLine.deleteMany({ where: { invoiceId: invoice.id } })
     await db.invoiceLine.createMany({
       data: lines.map((l) => ({ invoiceId: invoice.id, name: l.name, qty: l.qty, unitPrice: l.unitPrice, lineTotal: l.lineTotal })),
@@ -250,7 +253,7 @@ export async function updateInvoice(projectId: string, payload: Record<string, u
     const tax = money(payload.tax)
     if (tax === null) throw new Error('Tax must be zero or more')
     data.tax = tax
-    data.total = Math.round((invoice.subtotal + tax) * 100) / 100
+    data.total = invoice.subtotal + tax
   }
   if (payload.dueDate !== undefined) data.dueDate = parseDate(payload.dueDate)
   if (typeof payload.note === 'string') data.note = payload.note.trim() || null
@@ -363,7 +366,12 @@ export async function threeWayCheck(projectId: string, payload: Record<string, u
   }
 
   const report = matchThreeWay({
-    invoiceLines: invoiceLines.map((l) => ({ name: l.name, qty: l.qty, unitPrice: l.unitPrice, lineTotal: l.lineTotal })),
+    invoiceLines: invoiceLines.map((l) => ({
+      name: l.name,
+      qty: l.qty,
+      unitPrice: centsToKes(l.unitPrice),
+      lineTotal: centsToKes(l.lineTotal),
+    })),
     order,
     projectDeliveries,
   })
@@ -381,7 +389,7 @@ async function loadOrderForMatch(orderId: string) {
   if (!order) return null
   return {
     orderCode: order.orderCode,
-    deliveryFee: order.deliveryFee,
+    deliveryFee: centsToKes(order.deliveryFee),
     lines: order.lines.map((l) => ({ id: l.id, name: l.name, qty: l.qty })),
     deliveries: order.deliveries.map((d) => ({
       createdAt: d.createdAt,
@@ -457,7 +465,7 @@ export async function payInvoice(projectId: string, payload: Record<string, unkn
     : 'the supplier'
   const provider = getProvider(method)
   const initiation = await provider.initiatePayment({
-    amount: invoice.total,
+    amount: centsToKes(invoice.total),
     currency: 'KES',
     method: method as 'mpesa' | 'bank' | 'card' | 'wallet' | 'cash',
     payee: supplierNamePreview,
@@ -483,7 +491,7 @@ export async function payInvoice(projectId: string, payload: Record<string, unkn
       throw new Error(`Invoice must be APPROVED before payment — ${invoice.invoiceCode} is ${(fresh?.status ?? 'missing').toUpperCase()}`)
     }
 
-    const spend =
+    const spend: { ledgerTxnId: string; ledgerRef: string; balance?: Cents } =
       method === 'wallet'
         ? await spendEscrowInTx(tx, projectId, {
             amount: fresh.total,
@@ -531,7 +539,8 @@ export async function payInvoice(projectId: string, payload: Record<string, unkn
       },
     })
 
-    return { ledgerRef: spend.ledgerRef, balance: 'balance' in spend ? spend.balance : undefined }
+    const spendBalance: Cents | undefined = spend.balance
+    return { ledgerRef: spend.ledgerRef, balance: spendBalance }
   })
 
   // The acknowledged-discrepancy decision is part of the honest trail
@@ -558,7 +567,7 @@ export async function payInvoice(projectId: string, payload: Record<string, unkn
     'contractor',
     null,
   )
-  return { id: invoice.id, status: 'paid', reference, ledgerRef, balance }
+  return { id: invoice.id, status: 'paid', reference, ledgerRef, balance: balance === undefined ? undefined : centsToKes(balance) }
 }
 
 // ---------------- A-1-lite (read-only) ----------------
@@ -572,10 +581,10 @@ export async function ledgerConsistency(projectId: string): Promise<LedgerCheck 
     db.invoice.findMany({ where: { projectId, status: 'paid' }, select: { paymentReference: true } }),
   ])
   const check = computeLedgerConsistency({
-    walletBalance: wallet?.balance ?? 0,
-    transactions: transactions.map((t) => ({ type: t.type, method: t.method, amount: t.amount, reference: t.reference })),
+    walletBalance: centsToKes(wallet?.balance ?? 0n),
+    transactions: transactions.map((t) => ({ type: t.type, method: t.method, amount: centsToKes(t.amount), reference: t.reference })),
     releasedMilestoneIds: milestones.filter((m) => m.status === 'released').map((m) => m.id),
     paidInvoiceReferences: invoices.map((i) => i.paymentReference ?? ''),
   })
-  return { ...check, walletBalance: wallet?.balance ?? 0 }
+  return { ...check, walletBalance: centsToKes(wallet?.balance ?? 0n) }
 }

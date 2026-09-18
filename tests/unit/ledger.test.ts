@@ -103,7 +103,7 @@ type Posted = {
   status: string
   description: string
   reversalOfId: string | null
-  entries: { id: string; side: string; amount: number; memo: string | null }[]
+  entries: { id: string; side: string; amount: bigint; memo: string | null }[]
 }
 const asPosted = (t: unknown): Posted => t as Posted
 function getState() {
@@ -116,8 +116,8 @@ function getState() {
 }
 
 const BALANCED_LINES = [
-  { accountCode: 'CASH_MPESA', side: 'debit' as const, amount: 1000 },
-  { accountCode: 'ESCROW:proj-1', side: 'credit' as const, amount: 1000 },
+  { accountCode: 'CASH_MPESA', side: 'debit' as const, amount: 100000n },
+  { accountCode: 'ESCROW:proj-1', side: 'credit' as const, amount: 100000n },
 ]
 
 const post = (over: Record<string, unknown> = {}) =>
@@ -139,11 +139,11 @@ describe('validateLines — unbalanced or malformed transactions never post', ()
     await expect(
       post({
         lines: [
-          { accountCode: 'CASH_MPESA', side: 'debit', amount: 1000 },
-          { accountCode: 'ESCROW:proj-1', side: 'credit', amount: 999 },
+          { accountCode: 'CASH_MPESA', side: 'debit', amount: 100000n },
+          { accountCode: 'ESCROW:proj-1', side: 'credit', amount: 99900n },
         ],
       }),
-    ).rejects.toThrow(/Unbalanced ledger transaction: debits 1000 ≠ credits 999/)
+    ).rejects.toThrow(/Unbalanced ledger transaction: debits 100000 ≠ credits 99900 \(cents\)/)
   })
 
   it('rejects an empty line set', async () => {
@@ -152,16 +152,16 @@ describe('validateLines — unbalanced or malformed transactions never post', ()
 
   it('rejects non-positive amounts (zero or negative money is nonsense)', async () => {
     await expect(
-      post({ lines: [{ accountCode: 'CASH_MPESA', side: 'debit', amount: 0 }, { accountCode: 'CASH_MPESA', side: 'credit', amount: 0 }] }),
+      post({ lines: [{ accountCode: 'CASH_MPESA', side: 'debit', amount: 0n }, { accountCode: 'CASH_MPESA', side: 'credit', amount: 0n }] }),
     ).rejects.toThrow('Ledger amounts must be positive')
     await expect(
-      post({ lines: [{ accountCode: 'CASH_MPESA', side: 'debit', amount: -5 }, { accountCode: 'CASH_MPESA', side: 'credit', amount: -5 }] }),
+      post({ lines: [{ accountCode: 'CASH_MPESA', side: 'debit', amount: -500n }, { accountCode: 'CASH_MPESA', side: 'credit', amount: -500n }] }),
     ).rejects.toThrow('Ledger amounts must be positive')
   })
 
   it('rejects a nonsense side', async () => {
     await expect(
-      post({ lines: [{ accountCode: 'CASH_MPESA', side: 'up', amount: 5 } as never] }),
+      post({ lines: [{ accountCode: 'CASH_MPESA', side: 'up', amount: 500n } as never] }),
     ).rejects.toThrow('Ledger side must be debit or credit')
   })
 
@@ -175,10 +175,10 @@ describe('validateLines — unbalanced or malformed transactions never post', ()
 describe('postLedgerTransaction — balanced double entry', () => {
   it('creates one transaction whose debit legs sum to its credit legs', async () => {
     const txn = asPosted(await post())
-    const debit = txn.entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0)
-    const credit = txn.entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0)
-    expect(debit).toBe(1000)
-    expect(credit).toBe(1000)
+    const debit = txn.entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0n)
+    const credit = txn.entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0n)
+    expect(debit).toBe(100000n)
+    expect(credit).toBe(100000n)
     expect(txn.status).toBe('posted')
     expect(txn.reversalOfId).toBeNull()
   })
@@ -256,15 +256,15 @@ describe('reverseLedgerTransaction — corrections are new entries, never edits'
     expect(reversal.description).toContain('REVERSAL of')
     expect(reversal.entries.map((e) => e.side).sort()).toEqual(['credit', 'debit'])
     const bySide = (side: string) => reversal.entries.find((e) => e.side === side)
-    expect(bySide('debit')!.amount).toBe(1000) // escrow leg flipped to debit
-    expect(bySide('credit')!.amount).toBe(1000) // cash leg flipped to credit
+    expect(bySide('debit')!.amount).toBe(100000n) // escrow leg flipped to debit
+    expect(bySide('credit')!.amount).toBe(100000n) // cash leg flipped to credit
   })
 
   it('a reversal nets every touched account back to zero', async () => {
     const original = asPosted(await post())
     await reverseLedgerTransaction(original.id, 'test reversal', 'finance@mjengo.os', 'finance')
-    expect(await derivedBalance('CASH_MPESA')).toBe(0)
-    expect(await derivedBalance('ESCROW:proj-1')).toBe(0)
+    expect(await derivedBalance('CASH_MPESA')).toBe(0n)
+    expect(await derivedBalance('ESCROW:proj-1')).toBe(0n)
   })
 
   it('refuses to reverse an already-reversed transaction', async () => {
@@ -285,16 +285,16 @@ describe('reverseLedgerTransaction — corrections are new entries, never edits'
 describe('derivedBalance — balances are projections of entries', () => {
   it('asset accounts are debit-minus-credit', async () => {
     await post()
-    expect(await derivedBalance('CASH_MPESA')).toBe(1000)
+    expect(await derivedBalance('CASH_MPESA')).toBe(100000n)
   })
 
   it('liability accounts are credit-minus-debit', async () => {
     await post()
-    expect(await derivedBalance('ESCROW:proj-1')).toBe(1000)
+    expect(await derivedBalance('ESCROW:proj-1')).toBe(100000n)
   })
 
   it('an unknown account has balance 0 (no throw)', async () => {
-    expect(await derivedBalance('CASH_BANK')).toBe(0)
+    expect(await derivedBalance('CASH_BANK')).toBe(0n)
   })
 })
 

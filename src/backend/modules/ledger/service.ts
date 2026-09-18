@@ -4,12 +4,15 @@
 // new reversal transactions, never edits or deletes.
 
 import { db } from '@/backend/lib/db'
+import type { Cents } from '@/backend/lib/money'
+import { centsToKes, sumCents } from '@/backend/lib/money'
 import type { Prisma } from '@prisma/client'
 
 export interface LedgerLineInput {
   accountCode: string
   side: 'debit' | 'credit'
-  amount: number
+  /** KSh cents (issue #122) — integer money, exact by construction. */
+  amount: Cents
   memo?: string
 }
 
@@ -114,13 +117,16 @@ export function cashAccountForMethod(method: string): 'CASH_MPESA' | 'CASH_BANK'
 function validateLines(lines: LedgerLineInput[]) {
   if (!lines.length) throw new Error('Ledger transaction needs at least one line')
   for (const l of lines) {
-    if (!(l.amount > 0)) throw new Error('Ledger amounts must be positive')
+    if (!(l.amount > 0n)) throw new Error('Ledger amounts must be positive')
     if (l.side !== 'debit' && l.side !== 'credit') throw new Error('Ledger side must be debit or credit')
   }
-  const debit = lines.filter((l) => l.side === 'debit').reduce((s, l) => s + l.amount, 0)
-  const credit = lines.filter((l) => l.side === 'credit').reduce((s, l) => s + l.amount, 0)
-  if (Math.abs(debit - credit) > 0.005) {
-    throw new Error(`Unbalanced ledger transaction: debits ${debit} ≠ credits ${credit}`)
+  const debit = sumCents(lines.filter((l) => l.side === 'debit').map((l) => l.amount))
+  const credit = sumCents(lines.filter((l) => l.side === 'credit').map((l) => l.amount))
+  // EXACT equality — the float era needed a 0.005 tolerance here (DB-1);
+  // integer cents make balanced legs a bigint ===, so a one-cent
+  // imbalance can never post. "The ledger never lies."
+  if (debit !== credit) {
+    throw new Error(`Unbalanced ledger transaction: debits ${debit} ≠ credits ${credit} (cents)`)
   }
 }
 
@@ -197,7 +203,7 @@ export interface ReversibleLedgerTxn {
   ref: string
   projectId: string | null
   status: string
-  entries: { side: string; amount: number; memo: string | null; account: { code: string } }[]
+  entries: { side: string; amount: Cents; memo: string | null; account: { code: string } }[]
 }
 
 /**
@@ -241,16 +247,25 @@ export async function reverseLedgerTransaction(txnId: string, reason: string, po
   return db.$transaction((tx) => reverseLedgerTransactionInTx(tx, original, reason, postedBy, postedRole))
 }
 
-/** Derived balance for an account — the ONLY way balance is known (spec §39). */
-export async function derivedBalance(accountCode: string): Promise<number> {
+/**
+ * Derived balance for an account — the ONLY way balance is known (spec §39).
+ * Returns KSh CENTS (issue #122): entries sum exactly in bigint; callers
+ * convert to KSh only at the API/UI boundary (centsToKes).
+ */
+export async function derivedBalance(accountCode: string): Promise<Cents> {
   const account = await db.ledgerAccount.findUnique({
     where: { code: accountCode },
     include: { entries: true },
   })
-  if (!account) return 0
-  const debit = account.entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0)
-  const credit = account.entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0)
+  if (!account) return 0n
+  const debit = sumCents(account.entries.filter((e) => e.side === 'debit').map((e) => e.amount))
+  const credit = sumCents(account.entries.filter((e) => e.side === 'credit').map((e) => e.amount))
   return account.kind === 'asset' || account.kind === 'expense' ? debit - credit : credit - debit
+}
+
+/** Display-facing twin of derivedBalance — KSh number for API/UI edges. */
+export async function derivedBalanceKes(accountCode: string): Promise<number> {
+  return centsToKes(await derivedBalance(accountCode))
 }
 
 /** Tx operations used by the wallet service (kept here for reuse). */

@@ -50,20 +50,20 @@ const d = (iso: string) => new Date(iso)
 /** Six milestones walking the whole ladder (createdAt ASC: ms1 → ms6). */
 const MILESTONES = [
   {
-    id: 'mst-00000001', projectId: 'p-1', phaseId: 'ph-1', name: 'Foundation complete', amount: 800_000,
+    id: 'mst-00000001', projectId: 'p-1', phaseId: 'ph-1', name: 'Foundation complete', amount: 80000000n,
     status: 'released', evidencePhotoIds: '["photo-f1","photo-f2"]',
     requestedAt: d('2026-01-18T11:00:00Z'), decidedAt: d('2026-01-20T18:00:00Z'),
     decidedBy: 'Amina (Client)', decisionNote: 'Foundation inspected via photos — approved for release.',
     releasedAt: d('2026-01-20T18:00:00Z'), createdAt: d('2026-01-10T09:00:00Z'),
   },
   {
-    id: 'mst-00000002', projectId: 'p-1', phaseId: 'ph-2', name: 'Walling to ring beam', amount: 650_000,
+    id: 'mst-00000002', projectId: 'p-1', phaseId: 'ph-2', name: 'Walling to ring beam', amount: 65000000n,
     status: 'release_requested', evidencePhotoIds: '["photo-w1"]',
     requestedAt: d('2026-02-13T16:00:00Z'), decidedAt: null, decidedBy: null, decisionNote: null,
     releasedAt: null, createdAt: d('2026-01-20T09:00:00Z'),
   },
   {
-    id: 'mst-00000003', projectId: 'p-1', phaseId: 'ph-3', name: 'Roofing package', amount: 500_000,
+    id: 'mst-00000003', projectId: 'p-1', phaseId: 'ph-3', name: 'Roofing package', amount: 50000000n,
     status: 'locked', evidencePhotoIds: '[]',
     requestedAt: null, decidedAt: null, decidedBy: null, decisionNote: null,
     releasedAt: null, createdAt: d('2026-02-01T09:00:00Z'),
@@ -98,7 +98,7 @@ const PHASES = [
 
 /** The runtime-release Transaction row (money.ts releaseMilestoneAtomic). */
 const RELEASE_TXN = {
-  id: 'tx-rel-1', projectId: 'p-1', type: 'milestone', amount: 800_000, method: 'escrow',
+  id: 'tx-rel-1', projectId: 'p-1', type: 'milestone', amount: 80_000_000n, method: 'escrow',
   reference: 'MJP-000001', costCode: 'milestone', phaseId: 'ph-1', ledgerTxnId: 'ltx-rel-1',
   note: 'Foundation complete released to contractor — approved by Amina (Client)',
   date: d('2026-01-20T18:00:00Z'),
@@ -110,8 +110,8 @@ const ESCROW_ACCOUNTS = [
     id: 'la-esc-1', code: 'ESCROW:p-1', name: 'Project Escrow — 000001', kind: 'liability',
     normalSide: 'credit', ownerType: 'project', ownerId: 'p-1',
     entries: [
-      { side: 'credit', amount: 1_500_000 }, // top-up
-      { side: 'debit', amount: 800_000 }, // the release above
+      { side: 'credit', amount: 150_000_000n }, // top-up
+      { side: 'debit', amount: 80_000_000n }, // the release above
     ],
   },
 ]

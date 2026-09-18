@@ -1,4 +1,5 @@
 import { db } from '@/backend/lib/db'
+import { centsToKes } from '@/backend/lib/money'
 import { route } from '@/backend/lib/route-kit'
 import { milestoneSummary, parseEvidencePhotoIds } from './milestone-rows'
 import { milestoneDetailQuery, milestoneIdRef, validateQuery } from './schemas'
@@ -93,7 +94,7 @@ export const GET = route(
         ? {
             transactionId: releaseTxn.id,
             reference: releaseTxn.reference,
-            amount: releaseTxn.amount,
+            amount: centsToKes(releaseTxn.amount), // cents → KSh (issue #122)
             method: releaseTxn.method,
             ledgerTxnId: releaseTxn.ledgerTxnId,
             costCode: releaseTxn.costCode,

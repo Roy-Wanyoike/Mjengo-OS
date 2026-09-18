@@ -374,7 +374,7 @@ ${worker.name} — ${status.label}. Asante!${USSD_FOOTER}`)
           where: { workerId: worker.id, paid: false, status: { not: 'absent' } },
         }),
       ])
-      const owed = Math.round(agg._sum.wage ?? 0)
+      const owed = Number(agg._sum.wage ?? 0n) / 100
       return ussd(`${worker.name}
 Unpaid balance: KSh ${owed.toLocaleString('en-KE')} (${unpaidRows} day(s)).${USSD_FOOTER}`)
     }

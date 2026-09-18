@@ -18,6 +18,7 @@
 // type:'milestone' Transaction rows (handled by src/lib/actions/money.ts).
 
 import { PrismaClient } from '@prisma/client'
+import { fmtKes } from '@/backend/lib/money'
 
 const db = new PrismaClient()
 
@@ -36,7 +37,7 @@ async function postSeedLedger(input: {
   occurredAt: Date
   postedBy: string
   postedRole: string
-  lines: Array<{ accountId: string; side: 'debit' | 'credit'; amount: number; memo?: string }>
+  lines: Array<{ accountId: string; side: 'debit' | 'credit'; amount: bigint; memo?: string }>
 }) {
   const txn = await db.ledgerTransaction.create({
     data: {
@@ -125,8 +126,8 @@ async function main() {
     postedBy: 'Amina (Client)',
     postedRole: 'client',
     lines: [
-      { accountId: cashMpesa.id, side: 'debit', amount: 2_000_000 },
-      { accountId: p1Escrow.id, side: 'credit', amount: 2_000_000 },
+      { accountId: cashMpesa.id, side: 'debit', amount: 200000000n },
+      { accountId: p1Escrow.id, side: 'credit', amount: 200000000n },
     ],
   })
   await postSeedLedger({
@@ -137,12 +138,12 @@ async function main() {
     postedBy: 'Amina (Client)',
     postedRole: 'client',
     lines: [
-      { accountId: p1Escrow.id, side: 'debit', amount: 800_000 },
-      { accountId: p1Expense.id, side: 'credit', amount: 800_000 },
+      { accountId: p1Escrow.id, side: 'debit', amount: 80000000n },
+      { accountId: p1Expense.id, side: 'credit', amount: 80000000n },
     ],
   })
   await db.escrowWallet.create({
-    data: { projectId: p1.id, balance: 1_200_000, ledgerAccountId: p1Escrow.id },
+    data: { projectId: p1.id, balance: 120000000n, ledgerAccountId: p1Escrow.id },
   })
 
   const [p1Photos, p1Phases] = await Promise.all([
@@ -164,7 +165,7 @@ async function main() {
       projectId: p1.id,
       phaseId: phase('Site Prep & Foundation'),
       name: 'Foundation complete',
-      amount: 800_000,
+      amount: 80000000n,
       status: 'released',
       evidencePhotoIds: JSON.stringify(foundationEv),
       requestedAt: daysAgo(23, 11),
@@ -182,7 +183,7 @@ async function main() {
       projectId: p1.id,
       phaseId: phase('Walling'),
       name: 'Walling to ring beam',
-      amount: 650_000,
+      amount: 65000000n,
       status: 'release_requested',
       evidencePhotoIds: JSON.stringify(wallingEv),
       requestedAt: daysAgo(1, 16),
@@ -196,7 +197,7 @@ async function main() {
       projectId: p1.id,
       phaseId: phase('Roofing'),
       name: 'Roofing package',
-      amount: 500_000,
+      amount: 50000000n,
       status: 'locked',
       evidencePhotoIds: '[]',
       createdAt: daysAgo(10, 9),
@@ -211,7 +212,7 @@ async function main() {
       title: 'Black cotton soil — deeper foundation',
       description:
         'Excavation hit black cotton soil at 1.2m. Foundation deepened by 600mm with extra hardcore filling and blinding to guarantee bearing capacity. Quantities verified against delivery notes.',
-      budgetImpact: 180_000,
+      budgetImpact: 18000000n,
       status: 'approved',
       submittedBy: 'Mwangi Kariuki (Foreman)',
       decidedBy: 'Amina (Client)',
@@ -229,7 +230,7 @@ async function main() {
       title: 'Kitchen counter granite upgrade',
       description:
         'Swap pre-priced engineered stone for 20mm granite slab with bullnose edging, as requested by the clients during finishing selection. Includes template, fabrication and fitting.',
-      budgetImpact: 95_000,
+      budgetImpact: 9500000n,
       status: 'submitted',
       submittedBy: 'Mwangi Kariuki (Foreman)',
       createdAt: daysAgo(2, 14),
@@ -245,7 +246,7 @@ async function main() {
       requestedByRole: 'contractor',
       requestedByName: 'Site Manager',
       description: 'Walling to ring beam — contractor payout on client release',
-      amount: 650_000,
+      amount: 65000000n,
       payee: 'Mwangi Kariuki (Foreman crew)',
       method: 'wallet',
       status: 'pending',
@@ -261,7 +262,7 @@ async function main() {
       requestedByRole: 'contractor',
       requestedByName: 'Site Manager',
       description: 'Steel delivery transport — Kiambu Road to Kitengela (10-ton truck)',
-      amount: 45_000,
+      amount: 4500000n,
       payee: 'Mwangi Transport Ltd',
       method: 'mpesa',
       status: 'approved',
@@ -279,7 +280,7 @@ async function main() {
       projectId: p1.id,
       kind: 'milestone',
       title: 'Release requested: Walling to ring beam',
-      body: `Client approval needed for KSh 650,000 — ${wallingEv.length} evidence photo(s) attached`,
+      body: `Client approval needed for ${fmtKes(65_000_000n)} — ${wallingEv.length} evidence photo(s) attached`,
       recipient: p1.client,
       createdAt: daysAgo(1, 16, 5),
     },
@@ -289,7 +290,7 @@ async function main() {
       projectId: p1.id,
       kind: 'variation',
       title: 'Variation: Kitchen counter granite upgrade',
-      body: 'Budget impact KSh 95,000 — awaiting client decision',
+      body: `Budget impact ${fmtKes(9_500_000n)} — awaiting client decision`,
       recipient: p1.client,
       createdAt: daysAgo(2, 14, 5),
     },
@@ -299,7 +300,7 @@ async function main() {
       projectId: p1.id,
       kind: 'approval.requested',
       title: 'Payment request PR-2026-000001 awaiting approval',
-      body: 'KSh 650,000 to Mwangi Kariuki (Foreman crew) — Walling to ring beam — contractor payout on client release',
+      body: `${fmtKes(65_000_000n)} to Mwangi Kariuki (Foreman crew) — Walling to ring beam — contractor payout on client release`,
       recipient: p1.client,
       createdAt: daysAgo(1, 17, 5),
     },
@@ -315,12 +316,12 @@ async function main() {
     postedBy: 'Otieno (Client)',
     postedRole: 'client',
     lines: [
-      { accountId: cashMpesa.id, side: 'debit', amount: 500_000, memo: 'bank float settle (simulated)' },
-      { accountId: p2Escrow.id, side: 'credit', amount: 500_000 },
+      { accountId: cashMpesa.id, side: 'debit', amount: 50000000n, memo: 'bank float settle (simulated)' },
+      { accountId: p2Escrow.id, side: 'credit', amount: 50000000n },
     ],
   })
   await db.escrowWallet.create({
-    data: { projectId: p2.id, balance: 500_000, ledgerAccountId: p2Escrow.id },
+    data: { projectId: p2.id, balance: 50000000n, ledgerAccountId: p2Escrow.id },
   })
   const p2Phase = await db.phase.findFirst({ where: { projectId: p2.id }, orderBy: { order: 'asc' } })
   await db.milestone.create({
@@ -328,7 +329,7 @@ async function main() {
       projectId: p2.id,
       phaseId: p2Phase?.id ?? null,
       name: 'Foundation package',
-      amount: 700_000, // > wallet balance — demonstrates the escrow gate honestly
+      amount: 70000000n, // > wallet balance — demonstrates the escrow gate honestly
       status: 'locked',
       evidencePhotoIds: '[]',
       createdAt: daysAgo(9, 9),
@@ -347,8 +348,8 @@ async function main() {
     postedBy: 'Aisha (Client)',
     postedRole: 'client',
     lines: [
-      { accountId: cashMpesa.id, side: 'debit', amount: 2_520_000 },
-      { accountId: p3Escrow.id, side: 'credit', amount: 2_520_000 },
+      { accountId: cashMpesa.id, side: 'debit', amount: 252000000n },
+      { accountId: p3Escrow.id, side: 'credit', amount: 252000000n },
     ],
   })
   await postSeedLedger({
@@ -359,12 +360,12 @@ async function main() {
     postedBy: 'Aisha (Client)',
     postedRole: 'client',
     lines: [
-      { accountId: p3Escrow.id, side: 'debit', amount: 2_520_000 },
-      { accountId: p3Expense.id, side: 'credit', amount: 2_520_000 },
+      { accountId: p3Escrow.id, side: 'debit', amount: 252000000n },
+      { accountId: p3Expense.id, side: 'credit', amount: 252000000n },
     ],
   })
   await db.escrowWallet.create({
-    data: { projectId: p3.id, balance: 0, ledgerAccountId: p3Escrow.id },
+    data: { projectId: p3.id, balance: 0n, ledgerAccountId: p3Escrow.id },
   })
   const p3Photos = await db.sitePhoto.findMany({ where: { projectId: p3.id }, orderBy: { createdAt: 'asc' } })
   const p3Evidence = p3Photos.slice(0, 2).map((ph) => ph.id) // repainted walls + final walkthrough
@@ -373,7 +374,7 @@ async function main() {
       projectId: p3.id,
       phaseId: null,
       name: 'Renovation complete',
-      amount: 2_520_000,
+      amount: 252000000n,
       status: 'released',
       evidencePhotoIds: JSON.stringify(p3Evidence),
       requestedAt: daysAgo(62, 11),

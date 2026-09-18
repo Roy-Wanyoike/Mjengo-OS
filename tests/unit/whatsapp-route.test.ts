@@ -72,16 +72,16 @@ vi.mock('@/backend/lib/db', () => {
     })
     state.workers.set('w-1', {
       id: 'w-1', projectId: 'p-1', name: 'Kamau Mwangi', role: 'Fundi wa Mawe',
-      phone: '0722111222', pin: '1234', dailyRate: 1500, active: true,
+      phone: '0722111222', pin: '1234', dailyRate: 150000n, active: true,
     })
     state.workers.set('w-2', {
       id: 'w-2', projectId: 'p-1', name: 'Achieng Odhiambo', role: 'Foreman',
-      phone: '0733444555', pin: null, dailyRate: 1200, active: true,
+      phone: '0733444555', pin: null, dailyRate: 120000n, active: true,
     })
     // Inactive workers are NOT reachable from the line (active:true filter).
     state.workers.set('w-3', {
       id: 'w-3', projectId: 'p-1', name: 'Mgonjwa Fundi', role: 'Labourer',
-      phone: '0799888777', pin: null, dailyRate: 800, active: false,
+      phone: '0799888777', pin: null, dailyRate: 80000n, active: false,
     })
   }
   state.reset()
@@ -156,7 +156,7 @@ vi.mock('@/backend/lib/db', () => {
       },
       async aggregate({ where }: { where: Row }) {
         const rows = [...state.attendance.values()].filter((r) => matches(r, where))
-        const wage = rows.reduce((s, r) => s + (Number(r.wage) || 0), 0)
+        const wage = rows.reduce((s, r) => s + ((r.wage as bigint) ?? 0n), 0n)
         return { _sum: { wage } }
       },
       async count({ where }: { where: Row }) {
@@ -240,7 +240,7 @@ function waReq(
 function seedAttendance(over: Record<string, unknown> = {}): Record<string, unknown> {
   const row = {
     id: 'att-seed', workerId: 'w-1', projectId: 'p-1', date: TODAY,
-    status: 'present', wage: 1500, checkIn: new Date('2026-02-14T07:00:00Z'), checkOut: null,
+    status: 'present', wage: 150000n, checkIn: new Date('2026-02-14T07:00:00Z'), checkOut: null,
     method: 'app', verification: 'verified', recordedBy: 'App', paid: false,
     version: 2, overrideLog: '[]', evidence: null, exceptionReason: null, exceptionNote: null,
     ...over,
@@ -288,7 +288,7 @@ describe('POST /api/whatsapp — keyword grammar (real applyAction path)', () =>
     expect(row.method).toBe('whatsapp')
     expect(row.verification).toBe('verified')
     expect(JSON.parse(String(row.evidence))).toEqual(['whatsapp', 'device'])
-    expect(row.wage).toBe(1500)
+    expect(row.wage).toBe(150000n)
     expect(row.checkIn).toBeTruthy()
 
     // The ledger says the WORKER acted, from the WhatsApp channel (§43 ctx too).
@@ -307,7 +307,7 @@ describe('POST /api/whatsapp — keyword grammar (real applyAction path)', () =>
 
     const row = [...state.attendance.values()][0]
     expect(row.status).toBe('absent')
-    expect(row.wage).toBe(0)
+    expect(row.wage).toBe(0n)
     expect(row.verification).toBe('reported')
     expect(row.recordedBy).toBe('WhatsApp')
     expect(row.checkIn).toBeNull()
@@ -320,16 +320,16 @@ describe('POST /api/whatsapp — keyword grammar (real applyAction path)', () =>
 
     const row = [...state.attendance.values()][0]
     expect(row.status).toBe('half_day')
-    expect(row.wage).toBe(750) // 1500 dailyRate × 0.5
+    expect(row.wage).toBe(75000n) // 150000n cents dailyRate × 0.5
     expect(row.verification).toBe('reported')
     expect(JSON.parse(String(state.audits[0].meta)).type).toBe('attendance.record')
   })
 
   it('BALANCE → unpaid wage reply (unpaid, non-absent days) — read-only, zero rows', async () => {
-    seedAttendance({ id: 'att-1', paid: false, status: 'present', wage: 1500 })
-    seedAttendance({ id: 'att-2', paid: false, status: 'half_day', wage: 750 })
-    seedAttendance({ id: 'att-3', paid: true, status: 'present', wage: 1500 }) // paid — excluded
-    seedAttendance({ id: 'att-4', paid: false, status: 'absent', wage: 0 }) // absent — excluded
+    seedAttendance({ id: 'att-1', paid: false, status: 'present', wage: 150000n })
+    seedAttendance({ id: 'att-2', paid: false, status: 'half_day', wage: 75000n })
+    seedAttendance({ id: 'att-3', paid: true, status: 'present', wage: 150000n }) // paid — excluded
+    seedAttendance({ id: 'att-4', paid: false, status: 'absent', wage: 0n }) // absent — excluded
 
     const res = await whatsappPost(waReq(KAMAU, 'BALANCE'))
     const reply = await res.text()
@@ -433,7 +433,7 @@ describe('POST /api/whatsapp — attendance versioning (the shared appliers)', (
     const row = [...state.attendance.values()].find((r) => r.id === 'att-seed')
     expect(row).toBeDefined()
     expect(row!.status).toBe('absent')
-    expect(row!.wage).toBe(0)
+    expect(row!.wage).toBe(0n)
     expect(row!.version).toBe(3) // bumped — a stale-version offline edit now REJECTS (§41)
     // Append-only override history, same as any other correction path.
     const log = JSON.parse(String(row!.overrideLog)) as Array<Record<string, unknown>>
@@ -446,7 +446,7 @@ describe('POST /api/whatsapp — attendance versioning (the shared appliers)', (
     expect(res.status).toBe(200)
     const row = [...state.attendance.values()][0]
     expect(row.version).toBe(1)
-    expect(row.wage).toBe(1500)
+    expect(row.wage).toBe(150000n)
   })
 })
 

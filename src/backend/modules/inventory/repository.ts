@@ -2,6 +2,7 @@
 // Derived closing stock from append-only movements — never stored.
 
 import { db } from '@/backend/lib/db'
+import { centsToKes, mulQtyCents, sumCents } from '@/backend/lib/money'
 import type { InventorySlice, BoqSlice, StockMovementRow, StockMovementType } from './types'
 
 /**
@@ -38,7 +39,7 @@ export async function loadInventorySlice(projectId: string): Promise<InventorySl
     const damagedQty = sum('damaged')
     const adjustedQty = sum('adjusted')
     const closingQty = derivedClosingQty(item.movements)
-    const lastCost = item.movements.find((m) => m.unitCost != null)?.unitCost ?? 0
+    const lastCost = item.movements.find((m) => m.unitCost != null)?.unitCost ?? 0n
     const movements: StockMovementRow[] = item.movements.map((m) => ({
       id: m.id,
       inventoryItemId: m.inventoryItemId,
@@ -46,7 +47,7 @@ export async function loadInventorySlice(projectId: string): Promise<InventorySl
       unit: item.unit,
       type: m.type as StockMovementType,
       quantity: m.quantity,
-      unitCost: m.unitCost,
+      unitCost: m.unitCost === null ? null : centsToKes(m.unitCost),
       reference: m.reference,
       note: m.note,
       recordedBy: m.recordedBy,
@@ -66,7 +67,7 @@ export async function loadInventorySlice(projectId: string): Promise<InventorySl
       damagedQty,
       adjustedQty,
       closingQty,
-      stockValue: closingQty * lastCost,
+      stockValue: centsToKes(mulQtyCents(closingQty, lastCost)),
       lowStock: false,
       updatedAt: item.updatedAt.toISOString(),
       movements,
@@ -92,13 +93,13 @@ export async function loadBoqSlice(projectId: string): Promise<BoqSlice> {
       name: b.name,
       version: b.version,
       status: b.status,
-      total: b.lines.reduce((s, l) => s + l.qty * l.estUnitPrice, 0),
+      total: centsToKes(sumCents(b.lines.map((l) => mulQtyCents(l.qty, l.estUnitPrice)))),
       lines: b.lines.map((l) => ({
         id: l.id,
         materialName: l.materialName,
         unit: l.unit,
         qty: l.qty,
-        estUnitPrice: l.estUnitPrice,
+        estUnitPrice: centsToKes(l.estUnitPrice),
         category: l.category,
         note: l.note,
       })),

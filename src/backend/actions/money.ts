@@ -21,6 +21,7 @@
 
 import { db } from '@/backend/lib/db'
 import { parseMoneyAmount, MONEY_AMOUNT_ERROR } from '@/backend/lib/money-bounds'
+import { centsToKes, fmtKes, parseMoneyCents, parseSignedMoneyCents, type Cents } from '@/backend/lib/money'
 import {
   MONEY_FINANCE_ROLES,
   postEscrowTopup,
@@ -42,8 +43,8 @@ export const MONEY_ACTIONS = [
 
 // ---------------- helpers ----------------
 
-function kes(n: number): string {
-  return `KSh ${Math.round(n).toLocaleString('en-KE')}`
+function kes(nCents: Cents): string {
+  return fmtKes(nCents)
 }
 
 /** Parse the JSON evidencePhotoIds column safely. */
@@ -77,7 +78,7 @@ async function resolvePhase(phaseId: unknown, projectId: string): Promise<string
 export async function applyMoneyAction(type: string, payload: any, projectId: string): Promise<any> {
   switch (type) {
     case 'escrow.topup': {
-      const amount = parseMoneyAmount(payload?.amount)
+      const amount = parseMoneyCents(payload?.amount)
       if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
       const method = ['mpesa', 'bank', 'card'].includes(payload?.method) ? String(payload.method) : 'mpesa'
       const reference =
@@ -105,13 +106,13 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
         method,
         role: actor.role,
       })
-      return { balance, reference, ledgerRef }
+      return { balance: centsToKes(balance), reference, ledgerRef }
     }
 
     case 'milestone.create': {
       const name = String(payload?.name ?? '').trim()
       if (!name) throw new Error('Milestone name required')
-      const amount = parseMoneyAmount(payload?.amount)
+      const amount = parseMoneyCents(payload?.amount)
       if (amount === null) throw new Error(MONEY_AMOUNT_ERROR)
       const phaseId = await resolvePhase(payload?.phaseId, projectId)
       const milestone = await db.milestone.create({
@@ -229,7 +230,7 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
           ledgerTxnId: released.ledgerTxnId,
           decider,
         })
-        return { id, balance: released.balance, ledgerRef: released.ledgerRef, drawPackId: drawPack?.id ?? null }
+        return { id, balance: centsToKes(released.balance), ledgerRef: released.ledgerRef, drawPackId: drawPack?.id ?? null }
       }
 
       // reject — no money moves, decision history preserved
@@ -238,7 +239,7 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
         data: { status: 'rejected', decidedAt: new Date(), decidedBy: decider.name, decisionNote: note },
       })
       const wallet = await db.escrowWallet.findUnique({ where: { projectId } })
-      return { id, balance: wallet?.balance ?? 0 }
+      return { id, balance: centsToKes(wallet?.balance ?? 0n) }
     }
 
     case 'variation.submit': {
@@ -246,9 +247,9 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
       const description = String(payload?.description ?? '').trim()
       if (!title) throw new Error('Variation title required')
       if (!description) throw new Error('Variation description required')
-      const budgetImpact = Number(payload?.budgetImpact)
-      if (!Number.isFinite(budgetImpact) || budgetImpact === 0) {
-        throw new Error('Budget impact must be a non-zero amount (positive for extra cost, negative for saving)')
+      const budgetImpact = parseSignedMoneyCents(payload?.budgetImpact)
+      if (budgetImpact === null || budgetImpact === 0n) {
+        throw new Error('Budget impact must be a non-zero amount (positive for extra cost, negative for saving) with at most 2 decimal places')
       }
       const phaseId = await resolvePhase(payload?.phaseId, projectId)
       const submittedBy =
@@ -297,7 +298,7 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
             if (phase) {
               await tx.phase.update({
                 where: { id: phase.id },
-                data: { budget: Math.max(0, phase.budget + variation.budgetImpact) },
+                data: { budget: phase.budget + variation.budgetImpact > 0n ? phase.budget + variation.budgetImpact : 0n },
               })
             }
           }
@@ -316,7 +317,7 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
             projectId,
             kind: 'variation',
             title: `Variation approved: ${variation.title}`,
-            body: `Budget ${variation.budgetImpact >= 0 ? 'increased' : 'reduced'} by ${kes(Math.abs(variation.budgetImpact))} — approved by ${decider.name}`,
+            body: `Budget ${variation.budgetImpact >= 0n ? 'increased' : 'reduced'} by ${kes(variation.budgetImpact < 0n ? -variation.budgetImpact : variation.budgetImpact)} — approved by ${decider.name}`,
             recipient: project?.client ?? null,
           },
         })

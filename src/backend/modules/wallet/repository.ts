@@ -4,6 +4,7 @@
 // refs, and the budget → committed → spent → remaining rollup.
 
 import { db } from '@/backend/lib/db'
+import { centsToKes, sumCents, type Cents } from '@/backend/lib/money'
 import type { FinanceSlice, LedgerTxnRow, LedgerAccountRow } from './types'
 
 export async function loadFinanceSlice(projectId: string): Promise<FinanceSlice> {
@@ -22,9 +23,10 @@ export async function loadFinanceSlice(projectId: string): Promise<FinanceSlice>
   ])
 
   // Budget rollup: phase budgets are the source of truth (matches
-  // ProjectSummary.budgetTotal); project.budget is the fallback.
-  const budget = phases.length ? phases.reduce((s, p) => s + p.budget, 0) : project?.budget ?? 0
-  const spent = transactions.reduce((s, t) => s + t.amount, 0)
+  // ProjectSummary.budgetTotal); project.budget is the fallback. All in
+  // CENTS (issue #122) — exact bigint sums, KSh only at the return.
+  const budget = phases.length ? sumCents(phases.map((p) => p.budget)) : project?.budget ?? 0n
+  const spent = sumCents(transactions.map((t) => t.amount))
 
   const openPos = project ? await db.purchaseOrder.findMany({ where: { projectId } }) : []
   const openInvoices = project
@@ -34,9 +36,9 @@ export async function loadFinanceSlice(projectId: string): Promise<FinanceSlice>
     ? await db.variationOrder.findMany({ where: { projectId, status: 'submitted' } })
     : []
   const committed =
-    openPos.filter((p) => !['closed', 'cancelled'].includes(p.status)).reduce((s, p) => s + p.total, 0) +
-    openInvoices.reduce((s, i) => s + i.total, 0) +
-    pendingVariations.filter((v) => v.budgetImpact > 0).reduce((s, v) => s + v.budgetImpact, 0)
+    sumCents(openPos.filter((p) => !['closed', 'cancelled'].includes(p.status)).map((p) => p.total)) +
+    sumCents(openInvoices.map((i) => i.total)) +
+    sumCents(pendingVariations.filter((v) => v.budgetImpact > 0n).map((v) => v.budgetImpact))
 
   const txnRows: LedgerTxnRow[] = txns.map((t) => ({
     id: t.id,
@@ -51,9 +53,9 @@ export async function loadFinanceSlice(projectId: string): Promise<FinanceSlice>
       accountCode: e.account.code,
       accountName: e.account.name,
       side: e.side,
-      amount: e.amount,
+      amount: centsToKes(e.amount),
     })),
-    total: t.entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0),
+    total: centsToKes(sumCents(t.entries.filter((e) => e.side === 'debit').map((e) => e.amount))),
   }))
 
   // Ledger refs for paid payment requests (paidTxnId → Transaction.ledgerTxnId → ref)
@@ -66,22 +68,28 @@ export async function loadFinanceSlice(projectId: string): Promise<FinanceSlice>
     prLedgerRef.set(pr.id, ref ?? legacy?.reference ?? null)
   }
 
+  // Exact cents balances per account; KSh only for the row display. The
+  // escrow consistency check below reuses the CENTS form (exact compare).
+  const accountBalances = new Map<string, Cents>()
   const accountRows: LedgerAccountRow[] = accounts.map((a) => {
-    const debit = a.entries.filter((e) => e.side === 'debit').reduce((s, e) => s + e.amount, 0)
-    const credit = a.entries.filter((e) => e.side === 'credit').reduce((s, e) => s + e.amount, 0)
+    const debit = sumCents(a.entries.filter((e) => e.side === 'debit').map((e) => e.amount))
+    const credit = sumCents(a.entries.filter((e) => e.side === 'credit').map((e) => e.amount))
     const balance = a.kind === 'asset' || a.kind === 'expense' ? debit - credit : credit - debit
-    return { code: a.code, name: a.name, kind: a.kind, normalSide: a.normalSide, balance }
+    accountBalances.set(a.code, balance)
+    return { code: a.code, name: a.name, kind: a.kind, normalSide: a.normalSide, balance: centsToKes(balance) }
   })
 
   // Escrow projection vs derived ledger balance (spec §39 — the ledger wins).
+  // EXACT cents comparison (issue #122): the old < 1 KSh float tolerance is
+  // gone — a one-cent drift is a drift.
   const escrow = await db.escrowWallet.findUnique({ where: { projectId } })
-  const derivedEscrow = accountRows.find((a) => a.code === `ESCROW:${projectId}`)?.balance ?? 0
+  const derivedEscrowCents = accountBalances.get(`ESCROW:${projectId}`) ?? 0n
   const escrowSlice = escrow
     ? {
-        projected: escrow.balance,
-        derived: derivedEscrow,
-        consistent: Math.abs(derivedEscrow - escrow.balance) < 1,
-        drift: Math.round((derivedEscrow - escrow.balance) * 100) / 100,
+        projected: centsToKes(escrow.balance),
+        derived: centsToKes(derivedEscrowCents),
+        consistent: derivedEscrowCents === escrow.balance,
+        drift: centsToKes(derivedEscrowCents - escrow.balance),
         ledgerAccountId: escrow.ledgerAccountId,
       }
     : null
@@ -91,7 +99,7 @@ export async function loadFinanceSlice(projectId: string): Promise<FinanceSlice>
       id: p.id,
       requestCode: p.requestCode,
       description: p.description,
-      amount: p.amount,
+      amount: centsToKes(p.amount),
       payee: p.payee,
       method: p.method,
       status: p.status,
@@ -110,9 +118,9 @@ export async function loadFinanceSlice(projectId: string): Promise<FinanceSlice>
     wallet: null,
     escrowLedgered: txns.some((t) => t.description.startsWith('Escrow top-up')),
     escrow: escrowSlice,
-    committed,
-    remaining: budget - committed - spent,
-    budget,
-    spent,
+    committed: centsToKes(committed),
+    remaining: centsToKes(budget - committed - spent),
+    budget: centsToKes(budget),
+    spent: centsToKes(spent),
   }
 }

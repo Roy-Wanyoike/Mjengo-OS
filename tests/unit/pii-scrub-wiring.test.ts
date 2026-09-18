@@ -56,10 +56,10 @@ vi.mock('@/backend/lib/guard', async (importOriginal) => {
 vi.mock('@/backend/lib/db', () => {
   const now = new Date('2026-01-15T09:00:00Z')
   const project = {
-    id: 'p-1', name: 'Riverside Villas', location: 'Karen', budget: 5_000_000,
+    id: 'p-1', name: 'Riverside Villas', location: 'Karen', budget: 500_000_000n,
     client: 'Mama Njeri', startDate: now, createdAt: now,
   }
-  const material = { id: 'mat-1', name: 'cement', unit: 'bag', unitPrice: 750 }
+  const material = { id: 'mat-1', name: 'cement', unit: 'bag', unitPrice: 75_000n }
   const state = {
     deliveries: [] as Record<string, unknown>[],
     transactions: [] as Record<string, unknown>[],
@@ -280,8 +280,11 @@ describe('the persistence chain — db write receives the scrubbed transcript', 
 
     expect(state.deliveries).toHaveLength(1)
     expect(state.deliveries[0].rawTranscript).toBe(SCRUBBED_TEXT)
-    expect(JSON.stringify(state.deliveries)).not.toContain(RAW_NUMBER)
-    expect(JSON.stringify(state.deliveries)).not.toContain('0712345678')
+    // BigInt-safe serialization (#122: rows carry cents) — the scan still
+    // covers every field's textual form.
+    const rowJson = JSON.stringify(state.deliveries, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))
+    expect(rowJson).not.toContain(RAW_NUMBER)
+    expect(rowJson).not.toContain('0712345678')
     // the applier really ran: ledger row + audit row written alongside
     expect(state.transactions).toHaveLength(1)
     expect(state.auditEvents).toHaveLength(1)
