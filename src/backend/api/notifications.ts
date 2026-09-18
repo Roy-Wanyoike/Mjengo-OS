@@ -57,6 +57,7 @@ const PREF_KINDS: readonly string[] = [
   'delivery.dispatched', 'delivery.discrepancy', 'invoice.submitted', 'invoice.paid',
   'price.alert', 'digest.weekly', 'risk.flagged',
   'project.delayed', 'attendance.absent', 'budget.alert', 'ledger.reconciled',
+  'escrow.drift',
 ]
 
 const MAX_PREF_KINDS = 20

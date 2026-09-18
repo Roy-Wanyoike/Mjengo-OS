@@ -53,6 +53,8 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `WHATSAPP_WEBHOOK_SECRET` | hardening: optional | Same posture for the WhatsApp field line: when set, `POST /api/whatsapp` (contract documented at `GET /api/whatsapp`) must carry `X-Signature: <hex HMAC-SHA256 of the raw body>` — shared-secret auth for the relay (Meta Cloud API bridge or aggregator) that would POST `{ from, text, timestamp }`. Unset → fail-closed 503 unless `WEBHOOK_OPEN_POSTURE=1` (non-production) opts into the open demo posture (requests are still rate-limited 20/min/phone + 40/min/IP; every reply is footered "MjengoOS sim" — no WhatsApp provider is wired). |
 | `JOBS_RUN_TOKEN` | scheduler: optional | Shared secret (`openssl rand -hex 32`) that lets an external scheduler authenticate `POST /api/jobs/run` with `Authorization: Bearer <token>` (no browser session needed — compose `jobs-tick` sidecar, systemd timer, any cron). Same value must reach the app and the scheduler. **Unset = the bearer path is fully disabled** (fail closed — the endpoint then answers only to contractor/admin sessions, exactly as before). See §7.3. |
 | `JOBS_HANDLER_TIMEOUT_MS` | jobs: optional | Per-handler timeout for ONE background-job invocation during a `POST /api/jobs/run` drain — default `30000` (30 s: generous for the TTS/AI handlers, far below the route's own duration budget, so one hung handler fails its own `JobRecord` row instead of stalling the whole drain). Read at drain time, not import time — a change applies to the next drain without a restart. Invalid, zero or unset values fall back to the default (never 0 — a zero cap would fail every handler instantly). A handler that exceeds the cap is marked `failed` **terminally** (no retry — it already hung a full window and would re-hang; re-enqueue after investigating). |
+| `RECONCILIATION_CHECK_INTERVAL_MIN` | jobs: optional | Cadence of the scheduled reconciliation check (A-1-lite debit backing + the escrow projection drift alarm, issue #212) — default `1440` (daily). The `POST /api/jobs/run` callee seeds a fresh `reconciliation` job row whenever the newest one is older than this, so whatever drains that endpoint (compose `jobs-tick`, systemd timer, cron) also maintains the cadence. Never stacks rows (a queued/retrying row blocks the seed — a manual run and the schedule cannot double-book). Invalid values warn once and fall back to the daily default. See §7.3. |
+| `ESCROW_DRIFT_ALERT_CENTS` | finance alarm: optional | Alert threshold for the escrow projection drift check, in **integer cents** — default `1` (the Money-tab chip's exact-equality convention, issue #122: a one-cent drift is a drift). `|derived ledger sum − EscrowWallet.balance| ≥ threshold` emits an `escrow.drift` domain event + in-app notifications to the **finance and contractor** audiences on the drifted project. Raise it only to tolerate a KNOWN projection quirk while it is being fixed — sub-threshold drift is still recorded (un-alerted) in the job's result JSON. Invalid (non-integer / < 1) values warn once and fall back to `1`. See §7.3. |
 | `NOTIFY_SMS_WEBHOOK_URL` / `_TOKEN` | notifications: optional | The SMS webhook relay: when the URL is set, notify calls that pass `opts.sms` additionally POST JSON `{ to, text, metadata }` to it (the optional token rides as a bearer header). Credentials stay in YOUR gateway — nothing SMS-related lives in this app. Rows honestly record `sent`/`failed` + delivery detail. |
 | `AT_API_KEY` + `AT_USERNAME` (+ `AT_SENDER_ID`, `AT_ENV`) | notifications: alternative to the webhook | Direct **Africa's Talking** provider: with both values set (a partial pair is ignored, fail-closed) and no webhook URL configured, notify calls AT's REST v1 messaging endpoint directly and records the real `messageId` as `providerRef`. The API key can send and bill SMS on your AT account — keep the env file uncommitted and narrowly readable. `AT_ENV=sandbox` targets AT's sandbox host for wiring tests without billing. **Webhook wins if both are configured; with neither, nothing external is called** (rows stay `logged`). |
 | `DARAJA_RECONCILE_AFTER_MIN` / `_INTERVAL_MIN` / `_MAX_AGE_MIN` | Daraja sweep: optional | Tuning for the `wallet.reconcile` job (pending STK-intent reconciliation, §7.3): probe intents once they are `AFTER` minutes old (default 2), re-probe every `INTERVAL` minutes (default 5, matching the scheduler tick), stop probing past `MAX_AGE` minutes (default 60 — the intent stays PENDING, never an invented failure/credit). Invalid values warn and fall back to defaults; all-unset = defaults, and with no Daraja env no intents exist so the sweep does nothing. |
@@ -947,6 +949,40 @@ unresolved initiation, the candidate project's finance audience gets a
 payment manually (or re-issue) — automatic crediting of an unmatched
 checkout is a deliberate never. Definitive initiation failures (a real
 HTTP rejection) write no row: no push went out, so no money can move.
+
+**Escrow projection drift alarm (`reconciliation`, issue #212).** The same
+drain now carries the escrow safety net: `EscrowWallet.balance` is a cached
+projection, the `ESCROW:<projectId>` ledger entries are the source of truth
+(spec §39), and until #212 the only thing that ever compared them was a
+human opening the Money tab. The `reconciliation` job now ALSO sweeps every
+escrow wallet (cross-project) comparing the derived ledger sum (the #144
+SQL aggregates) against the stored projection — **read-only**: the check
+never writes wallets or ledger rows; it only records its findings on the
+`JobRecord` (per-project `derivedCents` / `projectedCents` / `driftCents` /
+`consistent`, cents as decimal strings — drifted wallets first, bounded to
+10 entries + a `projectsOmitted` count so the result column's 2000-char cap
+never truncates the JSON; **alerting is not bounded** — every drifted wallet
+gets its event) and raises the alarm. Scheduling is
+piggybacked, deliberately: `POST /api/jobs/run` keeps one `reconciliation`
+row on the books — every call seeds a fresh row iff no queued/retrying one
+exists and the newest is older than `RECONCILIATION_CHECK_INTERVAL_MIN`
+(default 1440 = daily), so ANY drain wiring above (sidecar, timer, cron)
+runs the check on that cadence with zero new infrastructure, and a manual
+`{type: "reconciliation"}` POST can never double-book (the seed's dedupe
+sees the queued row). Empty installs (no projects) seed nothing. When
+`|drift| ≥ ESCROW_DRIFT_ALERT_CENTS` (default 1 cent — the chip's
+exact-equality convention): one `escrow.drift` DomainEvent on the drifted
+project and **in-app notification rows for both the finance and contractor
+audiences** (the notification center's "Money" group, red triangle-alert
+icon); while drift persists, each scheduled run re-alerts (daily by
+default). Healthy runs are quiet by design — nothing is emitted, and the
+job's result JSON is the durable all-clear record (the Intel "Background
+jobs" card summarizes it, e.g. `Ledger consistent · escrow 0/1 wallet(s)
+drifted`). **Operator path when it fires:** open the Money tab (the chip
+shows derived vs projected), audit recent escrow writes plus the
+`DomainEvent` / `AuditEvent` trails for the project, and repair the
+projection through the normal money flows — the alarm never mutates money
+itself.
 
 ## 8. Updating a deployment
 

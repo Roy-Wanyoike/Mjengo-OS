@@ -18,6 +18,10 @@ export type NotificationKind =
   | 'invoice.paid' | 'price.alert' | 'digest.weekly' | 'risk.flagged'
   // v3 platform kinds (domain-event bus + background jobs, F-PLATFORM):
   | 'project.delayed' | 'attendance.absent' | 'budget.alert' | 'ledger.reconciled'
+  // Issue #212: the scheduled reconciliation job found |derived − projected|
+  // ≥ the alert threshold on an escrow wallet — EscrowWallet.balance no
+  // longer matches the ledger. Alert-only kind (finance + contractor).
+  | 'escrow.drift'
   // W6-2 diaspora trust digest (event policy 'digest.trust'):
   | 'trust.digest'
   // Issue #211: a verified M-Pesa settlement arrived with no matching intent

@@ -22,6 +22,7 @@ export type DomainEventType =
   | 'recap.daily'
   | 'digest.weekly'
   | 'ledger.reconciled'
+  | 'escrow.drift'
   | 'project.delayed'
   | 'attendance.absent'
   | 'budget.alert'
@@ -46,7 +47,19 @@ export interface DomainEventEnvelope {
 /** Notification policy entry: maps a domain event to a notify() row. */
 export interface NotifyPolicyEntry {
   kind: string
-  audienceRole: string
+  /**
+   * Single-audience policy (the historical shape — every pre-#212 entry).
+   * Optional only because multi-audience entries (audienceRoles below) exist
+   * since issue #212; exactly ONE of the two fields should be set.
+   */
+  audienceRole?: string
+  /**
+   * Multi-audience fan-out (issue #212): when set, emit() writes ONE
+   * notification row per role in this list (same title/body/kind, different
+   * audienceRole) instead of the single audienceRole row. Used by
+   * 'escrow.drift' → finance + contractor.
+   */
+  audienceRoles?: string[]
   channel?: string
   recipient?: (payload: DomainEventPayload) => string | undefined
   title: (payload: DomainEventPayload) => string

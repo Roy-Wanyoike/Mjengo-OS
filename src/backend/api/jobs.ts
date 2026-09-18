@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { forbidden } from '@/backend/lib/guard'
 import { route, safeError } from '@/backend/lib/route-kit'
-import { enqueue, isJobType, loadRecentJobs, runDueJobs } from '@/backend/modules/jobs/service'
+import { enqueue, ensureReconciliationScheduled, isJobType, loadRecentJobs, runDueJobs } from '@/backend/modules/jobs/service'
 
 // Background-job runner (spec §58) — the cron-callee endpoint.
 // src/app/api/jobs/run/route.ts is the shim.
@@ -14,6 +14,13 @@ import { enqueue, isJobType, loadRecentJobs, runDueJobs } from '@/backend/module
 // The handler pipeline itself is the exported handleJobsRunPost below — also
 // reused verbatim by the bearer wrapper in src/app/api/jobs/run/route.ts
 // (API-9, issue #160: ONE implementation, two auth selectors).
+//
+// Issue #212: this endpoint is also the SCHEDULE KEEPER for the periodic
+// reconciliation check (A-1-lite + escrow drift alarm) — every call first
+// ensures a 'reconciliation' row is on the books (at most one queued at a
+// time, seeded at most once per check interval), so whatever drains this
+// route (compose jobs-tick / systemd timer / cron) also maintains that
+// cadence. Best-effort: a broken seed never fails the drain.
 //
 // GET (any signed-in role): the recent JobRecord list for the project —
 // client-role sessions are pinned to their own project (tenant isolation).
@@ -60,6 +67,12 @@ export async function handleJobsRunPost(_req: NextRequest, body: unknown): Promi
     // Enqueue-then-run: the drain below picks the row up (runAt = now).
     await enqueue(type, projectId, {})
   }
+
+  // Issue #212 — schedule keeping, AFTER any explicit enqueue above so a
+  // manual {type:'reconciliation'} POST is the queued row the dedupe sees
+  // (the seed never stacks a second one). No-op unless the newest
+  // reconciliation row is older than the check interval.
+  await ensureReconciliationScheduled()
 
   const { ran, results } = await runDueJobs(10)
   return NextResponse.json({ ok: true, ran, results })
