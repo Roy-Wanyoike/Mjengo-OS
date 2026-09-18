@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { buildProjectDigest, parseDeliveryTranscript } from '@/backend/lib/ai'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
+import { log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -14,7 +15,8 @@ export const maxDuration = 120
  * validated projectId + unknown-field rejection) — the digest fed to the
  * parser now always belongs to a project the caller is allowed to inspect.
  */
-export const POST = async (req: NextRequest): Promise<NextResponse> => {
+export const POST = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/parse-text', async () => {
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:parse-text',
     fields: [
@@ -32,8 +34,8 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
     const parsed = await parseDeliveryTranscript(text.trim(), digest)
     return NextResponse.json({ ok: true, ...parsed })
   } catch (e) {
-    console.error('[api/ai/parse-text]', e)
+    log.error('api/ai/parse-text', 'Request failed', { error: e })
     // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
     return NextResponse.json({ error: safeErrorMessage(e, 'Parsing failed') }, { status: 500 })
   }
-}
+})

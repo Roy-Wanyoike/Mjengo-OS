@@ -43,6 +43,7 @@ import { cashAccountForMethod, postLedgerTransactionInTx } from '@/backend/modul
 import { notify } from '@/backend/modules/notify/service'
 import { phaseIdForMilestonePayment } from './service'
 import { getDarajaProvider, msisdnFromPayee } from './daraja'
+import { log } from '@/backend/lib/log'
 
 export const DARAJA_INTENT_KEY_PREFIX = 'daraja.intent:'
 export const DARAJA_CALLBACK_KEY_PREFIX = 'daraja.callback:'
@@ -429,8 +430,10 @@ async function completeVerifiedIntent(
 
   // Untrusted-body reconciliation log (metadata amount vs posted amount).
   if (cb.amount !== undefined && cb.amount !== centsToKes(result.amount)) {
-    console.warn(
-      `[daraja-callback] checkout ${checkoutRequestID}: callback metadata amount ${cb.amount} KSh differs from the approved ${intent.requestCode} amount ${fmtKes(result.amount)} — posted the approved amount; finance should reconcile`,
+    log.warn(
+      'daraja-callback',
+      `checkout ${checkoutRequestID}: callback metadata amount ${cb.amount} KSh differs from the approved ${intent.requestCode} amount ${fmtKes(result.amount)} — posted the approved amount; finance should reconcile`,
+      { checkoutRequestID, requestCode: intent.requestCode },
     )
   }
 
@@ -460,7 +463,7 @@ async function completeVerifiedIntent(
       { kind: 'payment.paid' },
     )
   } catch (e) {
-    console.error('[daraja-callback] notification failed after posting', e)
+    log.error('daraja-callback', 'notification failed after posting', { error: e })
   }
 
   return {
@@ -497,9 +500,11 @@ async function completeVerifiedIntent(
 async function alertUnmatchedVerifiedSuccess(cb: StkCallbackData): Promise<string> {
   const receipt = cb.receipt ?? 'unknown'
   const amount = cb.amount !== undefined ? `KSh ${cb.amount}` : 'unknown amount'
-  console.warn(
-    `[daraja-callback] verified M-Pesa success with NO pending intent — checkout ${cb.checkoutRequestID}, receipt ${receipt}, ${amount}. ` +
+  log.warn(
+    'daraja-callback',
+    `verified M-Pesa success with NO pending intent — checkout ${cb.checkoutRequestID}, receipt ${receipt}, ${amount}. ` +
       `Money may have moved on the rail while MjengoOS posted nothing (fail-closed). If this was a timed-out initiation, reconcile against the M-Pesa portal.`,
+    { checkoutRequestID: cb.checkoutRequestID, receipt, amount: cb.amount },
   )
   // No payer MSISDN in the callback metadata → nothing to correlate against
   // and no project to notify (notifications are per-project): the server log
@@ -524,7 +529,7 @@ async function alertUnmatchedVerifiedSuccess(cb: StkCallbackData): Promise<strin
       return true
     })
   } catch (e) {
-    console.error('[daraja-callback] unresolved-initiation lookup failed while alerting the orphan callback', e)
+    log.error('daraja-callback', 'unresolved-initiation lookup failed while alerting the orphan callback', { error: e })
   }
   if (candidates.length === 0) {
     return 'Operator alerted via the server log (no unresolved initiation matched the payer — reconcile against the M-Pesa portal).'
@@ -546,7 +551,7 @@ async function alertUnmatchedVerifiedSuccess(cb: StkCallbackData): Promise<strin
         { kind: 'payment.orphaned', audienceRole: 'finance' },
       )
     } catch (e) {
-      console.error('[daraja-callback] orphan-callback notification failed', e)
+      log.error('daraja-callback', 'orphan-callback notification failed', { error: e })
     }
   }
   return `Operator alerted (kind payment.orphaned) — possible source: ${names}.`

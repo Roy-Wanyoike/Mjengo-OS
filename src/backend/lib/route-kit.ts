@@ -36,6 +36,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { z, ZodIssue, ZodType } from 'zod'
 import { getSessionFromReq, safeErrorMessage, withGuard, type GuardSession } from './guard'
+import { log, withRequestLogging } from './log'
 import { mutationSafetyDenied } from './mutation-safety'
 import { enforceRateLimit } from './rate-limit'
 
@@ -267,7 +268,7 @@ async function runPipeline<C>(
     return await handler(req, session as NonNullable<GuardSession>, body, ctx)
   } catch (e) {
     if (opts.onError) return opts.onError(e, opts.scope)
-    console.error(`[${opts.scope}]`, e)
+    log.error(opts.scope, 'Request failed', { error: e })
     return safeError(400, 'Request failed')(e, opts.scope)
   }
 }
@@ -281,10 +282,16 @@ export function route<C = unknown, S extends ZodType | undefined = undefined>(
   opts: RouteOptions<S>,
   handler: GuardedHandler<C, BodyOf<S>>,
 ): NextRouteHandler<C> {
-  return withGuard<C>(
+  const guarded = withGuard<C>(
     (req, session, ctx) => runPipeline(opts, handler as GuardedHandler<C, unknown>, req, session, ctx),
     { roles: opts.roles },
   )
+  // Issue #204: EVERY request through route-kit gets the requestId
+  // treatment — mint/honor x-request-id, context for all logs under the
+  // request (the 401/403/429 early returns included), the response-header
+  // echo and the access line. The wrapper sits OUTSIDE withGuard so the
+  // auth failures are access-logged too.
+  return (req: NextRequest, ctx: C) => withRequestLogging(req, opts.scope, () => guarded(req, ctx))
 }
 
 /**
@@ -297,7 +304,7 @@ export function publicRoute<C = unknown, S extends ZodType | undefined = undefin
   opts: RouteOptions<S>,
   handler: PublicHandler<C, BodyOf<S>>,
 ): NextRouteHandler<C> {
-  return async (req: NextRequest, ctx: C): Promise<NextResponse> => {
+  const pipeline = async (req: NextRequest, ctx: C): Promise<NextResponse> => {
     let session: GuardSession = null
     try {
       session = await getSessionFromReq(req)
@@ -306,4 +313,6 @@ export function publicRoute<C = unknown, S extends ZodType | undefined = undefin
     }
     return runPipeline(opts, handler as GuardedHandler<C, unknown>, req, session, ctx)
   }
+  // Issue #204 — same request-id/access-log wrap as route() (see there).
+  return (req: NextRequest, ctx: C) => withRequestLogging(req, opts.scope, () => pipeline(req, ctx))
 }

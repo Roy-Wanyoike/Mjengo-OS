@@ -15,6 +15,7 @@ import {
   warnIfWebhookSecretUnsetInProduction,
   webhookOpenPostureOptedIn,
 } from '@/backend/lib/webhook-secret-warning'
+import { currentRequestId, log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -233,7 +234,7 @@ async function dispatchUssdAction(
   const ctx = {
     ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown',
     userAgent: `ussd-gateway (${req.headers.get('user-agent')?.slice(0, 200) ?? 'unknown'})`,
-    requestId: req.headers.get('x-request-id')?.trim() || crypto.randomUUID(),
+    requestId: currentRequestId() ?? crypto.randomUUID(),
     entity: type,
     entityId: worker.id,
   }
@@ -284,7 +285,12 @@ function verifyWebhookSignature(req: NextRequest, raw: string): NextResponse | n
   return null
 }
 
-export async function POST(req: NextRequest) {
+export function POST(req: NextRequest): Promise<NextResponse> {
+  // Issue #204: this route is deliberately NOT route-kit (text/plain
+  // aggregator contract) but still gets the full request-id treatment —
+  // mint/honor x-request-id, logs under the request carry it, the response
+  // echoes it, one access line on completion.
+  return withRequestLogging(req, 'api/ussd POST', async () => {
   // SEC-4 (audit wave 2) + issue #156: unset secret and no explicit open
   // posture → 503, no processing — FAIL CLOSED (production always; any other
   // runtime unless WEBHOOK_OPEN_POSTURE=1 opts into the demo posture).
@@ -420,11 +426,12 @@ Unpaid balance: KSh ${owed.toLocaleString('en-KE')} (${unpaidRows} day(s)).${USS
     // Unknown selection — back to the menu.
     return ussd(MENU_TEXT)
   } catch (e) {
-    console.error('[api/ussd POST]', e)
+    log.error('api/ussd POST', 'Request failed', { error: e })
     // A gateway must get text back even when the domain action failed —
     // honest failure copy, never a JSON stack.
     return ussd(`Could not record — try again or use the app.${USSD_FOOTER}`)
   }
+  })
 }
 
 /** GET: the machine-readable contract (honest — no real gateway wired). */

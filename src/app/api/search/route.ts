@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { forbidden } from '@/backend/lib/guard'
 import { route } from '@/backend/lib/route-kit'
+import { log } from '@/backend/lib/log'
 
 // Global search (spec §80) — SQLite LIKE (ASCII case-insensitive by default)
 // across the real entities: projects, land parcels, workers, suppliers +
@@ -241,7 +242,7 @@ export const GET = route(
 
       return NextResponse.json({ ok: true, q: raw, scopedTo: pinned, groups })
     } catch (e) {
-      console.error('[api/search]', e)
+      log.error('api/search', 'Request failed', { error: e })
       return NextResponse.json({ error: 'Search failed' }, { status: 500 })
     }
   },

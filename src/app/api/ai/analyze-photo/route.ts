@@ -7,11 +7,13 @@ import { applyAction, getProjectPayload } from '@/backend/lib/mjengo'
 import { AI_PHOTO_MAX_BODY_BYTES, enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
+import { log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
-export const POST = async (req: NextRequest): Promise<NextResponse> => {
+export const POST = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/analyze-photo', async () => {
   // W1-SEC gate: session → role allowlist (contractor/admin/supervisor) →
   // 10 req/min/user → 6 MB raw-body cap (BE-5, issue #105 — the dataUrl used
   // to arrive UNBOUNDED; now a declared Content-Length precheck + post-read
@@ -130,8 +132,8 @@ Be conservative and evidence-based. If uncertain, lower the confidence.`
       data,
     })
   } catch (e) {
-    console.error('[api/ai/analyze-photo]', e)
+    log.error('api/ai/analyze-photo', 'Request failed', { error: e })
     // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
     return NextResponse.json({ error: safeErrorMessage(e, 'Photo analysis failed') }, { status: 500 })
   }
-}
+})

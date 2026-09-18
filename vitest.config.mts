@@ -37,5 +37,16 @@ export default defineConfig({
     // re-imports) in tests/unit/rate-limit-store.test.ts — this override only
     // fixes what the rest of the suite runs on.
     env: { RATE_LIMIT_STORE: 'memory' },
+    // Issue #204: every route-kit/raw-route handler invocation now emits one
+    // request-access line ([http] METHOD /path STATUS Nms rid=… — JSON when
+    // LOG_FORMAT=json). Across ~2k route-level tests that is thousands of
+    // no-signal lines drowning real test output, so they are filtered HERE.
+    // The logger's own contract (shape, rid, access line) is pinned in
+    // tests/unit/log.test.ts via console spies, which replace the method and
+    // never reach this hook.
+    onConsoleLog(log) {
+      if (log.startsWith('[http] ')) return false
+      if (log.startsWith('{') && log.includes('"scope":"http"')) return false
+    },
   },
 })

@@ -4,6 +4,7 @@ import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { loadAuthenticityInsights, runAuthenticityScreen } from '@/backend/modules/ai/authenticity'
+import { log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -24,7 +25,8 @@ export const maxDuration = 60
 // 10 req/min/user → requireFlagOn('ai') (admins bypass so they can toggle and
 // test; everyone else gets the uniform 403 while the flag is off).
 
-export const POST = async (req: NextRequest): Promise<NextResponse> => {
+export const POST = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/authenticity-screen', async () => {
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:authenticity-screen',
     fields: [{ name: 'projectId', type: 'string' }],
@@ -54,13 +56,14 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
     // errorClass is leak-free (the provider contract's hygiene).
     return NextResponse.json({ ok: outcome.ok, outcome, insights })
   } catch (e) {
-    console.error('[api/ai/authenticity-screen]', e)
+    log.error('api/ai/authenticity-screen', 'Request failed', { error: e })
     // Same redaction family as the other /api/ai routes — no raw internals.
     return NextResponse.json({ error: safeErrorMessage(e, 'Authenticity screen failed') }, { status: 500 })
   }
-}
+})
 
-export const GET = async (req: NextRequest): Promise<NextResponse> => {
+export const GET = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/authenticity-screen', async () => {
   // Same gate ladder for the read leg (empty GET body passes allowEmptyBody).
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:authenticity-screen-list',
@@ -83,7 +86,7 @@ export const GET = async (req: NextRequest): Promise<NextResponse> => {
     const insights = await loadAuthenticityInsights(projectId)
     return NextResponse.json({ ok: true, insights })
   } catch (e) {
-    console.error('[api/ai/authenticity-screen GET]', e)
+    log.error('api/ai/authenticity-screen GET', 'Request failed', { error: e })
     return NextResponse.json({ error: safeErrorMessage(e, 'Could not load authenticity insights') }, { status: 500 })
   }
-}
+})

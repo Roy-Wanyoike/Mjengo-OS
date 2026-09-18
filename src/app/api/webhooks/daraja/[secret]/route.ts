@@ -49,6 +49,7 @@ import { processDarajaStkCallback } from '@/backend/modules/wallet/daraja-callba
 import { darajaWebhookSegment } from '@/backend/modules/wallet/daraja'
 import { ipAllowed, parseIpAllowlist } from '@/backend/modules/wallet/ip-allowlist'
 import { clientIpFromHeaders } from '@/backend/lib/rate-limit'
+import { log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -87,8 +88,10 @@ function sourceIpDenied(req: NextRequest): boolean {
   const { entries, invalid } = parseIpAllowlist(raw)
   if (invalid.length > 0) {
     // Honest config signal; entry VALUES are not printed (no echo).
-    console.warn(
-      `[api/webhooks/daraja] DARAJA_ALLOWED_IPS has ${invalid.length} invalid entr${invalid.length === 1 ? 'y' : 'ies'} — ignored (supported: IPv4 CIDR, bare IPv4, exact IPv6 literal; IPv6 CIDR is NOT supported). Remaining valid entries still apply; zero valid entries denies all.`,
+    log.warn(
+      'api/webhooks/daraja',
+      `DARAJA_ALLOWED_IPS has ${invalid.length} invalid entr${invalid.length === 1 ? 'y' : 'ies'} — ignored (supported: IPv4 CIDR, bare IPv4, exact IPv6 literal; IPv6 CIDR is NOT supported). Remaining valid entries still apply; zero valid entries denies all.`,
+      { invalidCount: invalid.length },
     )
   }
   const ip = clientIpFromHeaders(req.headers)
@@ -99,7 +102,10 @@ const MAX_BODY_BYTES = 64 * 1024
 
 type Ctx = { params: Promise<{ secret: string }> }
 
-export async function POST(req: NextRequest, ctx: Ctx): Promise<NextResponse> {
+export function POST(req: NextRequest, ctx: Ctx): Promise<NextResponse> {
+  // Issue #204: not route-kit (Safaricom's callback contract), same
+  // request-id treatment as every API request (see the USSD route's note).
+  return withRequestLogging(req, 'api/webhooks/daraja POST', async () => {
   try {
     const { secret } = await ctx.params
 
@@ -142,7 +148,8 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<NextResponse> {
   } catch (e) {
     // Money may or may not have committed — a 500 makes Safaricom retry, and
     // the durable dedupe + ledger idempotency key make the retry money-safe.
-    console.error('[api/webhooks/daraja POST]', e)
+    log.error('api/webhooks/daraja POST', 'Request failed', { error: e })
     return NextResponse.json({ error: 'Callback processing failed' }, { status: 500 })
   }
+  })
 }

@@ -26,6 +26,7 @@
 // unit-testable without a request (same shape as jobs-token.ts).
 
 /** Shortest secret we consider safe to sign 30-day session JWTs with. */
+import { log } from './log'
 export const MIN_NEXTAUTH_SECRET_LENGTH = 32
 
 /** The build phase Next.js sets while `next build` evaluates route modules. */
@@ -87,7 +88,7 @@ export function enforceNextAuthSecretAtBoot(): void {
 
   if (process.env.NODE_ENV === 'production') {
     // Fail closed: one clear boot error, then refuse to serve auth.
-    console.error(`[auth] ${BOOT_ERROR_MESSAGE}`)
+    log.error('auth', BOOT_ERROR_MESSAGE)
     throw new Error(
       `[auth] NEXTAUTH_SECRET boot guard: ${
         problem === 'missing' ? 'no secret is set' : `secret is shorter than ${MIN_NEXTAUTH_SECRET_LENGTH} chars`
@@ -96,8 +97,9 @@ export function enforceNextAuthSecretAtBoot(): void {
   }
 
   // Dev/test: usable, but say it once.
-  console.warn(
-    '[auth] NEXTAUTH_SECRET is not set or too short — dev sessions run on the ' +
+  log.warn(
+    'auth',
+    'NEXTAUTH_SECRET is not set or too short — dev sessions run on the ' +
       'next-auth fallback secret (sign-in AND guarded APIs verify on it — ' +
       'issue #94). Generate one (openssl rand -hex 32) before any real ' +
       'deployment; production boot fails closed without it.',

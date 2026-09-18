@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { db } from '@/backend/lib/db'
+import { currentRequestId, log } from '@/backend/lib/log'
 
 export interface AuditActor {
   name: string
@@ -59,6 +60,11 @@ function asJson(v: unknown): string | undefined {
  * ctx (optional, last param — backwards compatible): explicit per-call context,
  * merged over the ambient withAuditContext() store. Persists the §43 fields
  * ip/userAgent/requestId/entity/entityId/before/after when present.
+ *
+ * Issue #204: when NO ctx anywhere supplies a requestId, the ambient LOG
+ * context's id is used — route-kit (and the wrapped non-kit routes) run
+ * every request inside withRequestLogging, so audit rows and log lines
+ * share the ONE request id even where the caller passes no ctx.
  */
 export async function logAudit(
   projectId: string,
@@ -85,11 +91,11 @@ export async function logAudit(
         after: asJson(merged.after),
         ip: asString(merged.ip),
         userAgent: asString(merged.userAgent),
-        requestId: asString(merged.requestId),
+        requestId: asString(merged.requestId) ?? currentRequestId(),
       },
     })
   } catch (e) {
-    console.error('[audit] failed to log', kind, e)
+    log.error('audit', 'failed to log', { kind, error: e })
   }
 }
 

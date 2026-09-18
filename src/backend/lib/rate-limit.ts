@@ -5,6 +5,7 @@ import { db } from '@/backend/lib/db'
 import { getSessionFromReq, unauthorized, type GuardSession } from '@/backend/lib/guard'
 import { mutationSafetyDenied } from '@/backend/lib/mutation-safety'
 import { createSqliteStores, resolveRateLimitSqlitePath } from '@/backend/lib/rate-limit-sqlite'
+import { log } from './log'
 
 /**
  * In-process security primitives: rate limiting, login lockout and the shared
@@ -337,9 +338,11 @@ function resolveRateLimitStores(env: NodeJS.ProcessEnv): ResolvedRateLimitStores
     }
   }
   if (wanted && wanted !== 'sqlite') {
-    console.warn(
-      `[rate-limit] RATE_LIMIT_STORE="${wanted}" is not a known store (memory | sqlite) — ` +
+    log.warn(
+      'rate-limit',
+      `RATE_LIMIT_STORE="${wanted}" is not a known store (memory | sqlite) — ` +
         `using the default sqlite store (one shared file per host; init failure falls back to memory).`,
+      { wanted },
     )
   }
   const sqlite = createSqliteStores(env) // null + one console.warn on ANY init failure
@@ -357,10 +360,12 @@ const resolvedStores = resolveRateLimitStores(process.env)
 // Skipped under vitest (process.env.VITEST) — a test import is not a boot, and
 // the suite pins the resolution matrix explicitly in rate-limit-store.test.ts.
 if (!process.env.VITEST) {
-  console.info(
+  log.info(
+    'rate-limit',
     resolvedStores.kind === 'sqlite'
-      ? `[rate-limit] store: sqlite (${resolveRateLimitSqlitePath(process.env)}) — shared per host, multi-process safe`
-      : '[rate-limit] store: memory — per-process counters (set RATE_LIMIT_STORE=sqlite for multi-process sharing)',
+      ? `store: sqlite (${resolveRateLimitSqlitePath(process.env)}) — shared per host, multi-process safe`
+      : 'store: memory — per-process counters (set RATE_LIMIT_STORE=sqlite for multi-process sharing)',
+    { store: resolvedStores.kind },
   )
 }
 

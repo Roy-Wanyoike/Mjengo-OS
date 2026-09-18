@@ -38,6 +38,7 @@
 // its cadence without new infrastructure.
 
 import { db } from '@/backend/lib/db'
+import { log, mintDrainRunId, withLogContext } from '@/backend/lib/log'
 import { JOB_HANDLERS, JOB_TYPES, type JobType } from './handlers'
 
 export interface JobRunResult {
@@ -149,8 +150,9 @@ export function reconciliationCheckIntervalMinFromEnv(env: NodeJS.ProcessEnv = p
   if (!raw) return DEFAULT_RECONCILIATION_CHECK_INTERVAL_MIN
   const n = Number(raw)
   if (!Number.isFinite(n) || n <= 0) {
-    console.warn(
-      `[jobs] RECONCILIATION_CHECK_INTERVAL_MIN="${raw}" is not a positive number — using the default (${DEFAULT_RECONCILIATION_CHECK_INTERVAL_MIN} min)`,
+    log.warn(
+      'jobs',
+      `RECONCILIATION_CHECK_INTERVAL_MIN="${raw}" is not a positive number — using the default (${DEFAULT_RECONCILIATION_CHECK_INTERVAL_MIN} min)`,
     )
     return DEFAULT_RECONCILIATION_CHECK_INTERVAL_MIN
   }
@@ -205,7 +207,7 @@ export async function ensureReconciliationScheduled(
     const row = await enqueue(RECONCILIATION_JOB_TYPE, null, {}, new Date())
     return row.runAt
   } catch (e) {
-    console.error('[jobs] could not ensure the scheduled reconciliation check', e)
+    log.error('jobs', 'could not ensure the scheduled reconciliation check', { error: e })
     return null
   }
 }
@@ -224,94 +226,104 @@ export async function ensureReconciliationScheduled(
  * the jobs card.
  */
 export async function runDueJobs(limit = 10): Promise<{ ran: number; results: JobRunResult[] }> {
-  const due = await db.jobRecord.findMany({
-    where: { status: { in: ['queued', 'retrying'] }, runAt: { lte: new Date() } },
-    orderBy: { runAt: 'asc' },
-    take: Math.min(Math.max(limit, 1), 25),
-  })
-
-  const handlerTimeoutMs = resolveHandlerTimeoutMs()
-  const results: JobRunResult[] = []
-  for (const job of due) {
-    const running = await db.jobRecord.update({
-      where: { id: job.id },
-      data: { status: 'running', startedAt: new Date(), attempts: { increment: 1 }, lastAttemptAt: new Date() },
+  // Issue #204 — the no-id case: a drain is background work with NO
+  // carrying request, so it mints its OWN drain-run id (`drain-<uuid>`).
+  // Every log line under the drain (a failing handler below, the
+  // reconciliation warns above, module code the handlers call) carries it —
+  // one drain is one greppable unit even when the drain was triggered by a
+  // route whose request id stops at the HTTP boundary.
+  return withLogContext({ requestId: mintDrainRunId() }, async () => {
+    const due = await db.jobRecord.findMany({
+      where: { status: { in: ['queued', 'retrying'] }, runAt: { lte: new Date() } },
+      orderBy: { runAt: 'asc' },
+      take: Math.min(Math.max(limit, 1), 25),
     })
-    try {
-      const handler = JOB_HANDLERS[job.type as JobType]
-      if (!handler) throw new Error(`No handler registered for "${job.type}"`)
-      let payload: Record<string, unknown> = {}
-      try {
-        payload = JSON.parse(job.payload || '{}')
-      } catch {
-        payload = {}
-      }
-      const outcome = await raceWithHandlerTimeout(handler(payload, job.projectId), handlerTimeoutMs, job.type)
-      // A success after prior failures says so in the result JSON (additive
-      // `retries` key — per-type parsers in the UI ignore unknown keys).
-      const body: Record<string, unknown> =
-        outcome !== null && typeof outcome === 'object' && !Array.isArray(outcome)
-          ? { ...(outcome as Record<string, unknown>) }
-          : { value: outcome ?? null }
-      if (running.attempts > 1) body.retries = running.attempts - 1
-      const row = await db.jobRecord.update({
+
+    const handlerTimeoutMs = resolveHandlerTimeoutMs()
+    const results: JobRunResult[] = []
+    for (const job of due) {
+      const running = await db.jobRecord.update({
         where: { id: job.id },
-        data: {
-          status: 'done',
-          result: JSON.stringify(body).slice(0, 2000),
-          finishedAt: new Date(),
-        },
+        data: { status: 'running', startedAt: new Date(), attempts: { increment: 1 }, lastAttemptAt: new Date() },
       })
-      results.push({
-        id: row.id, type: row.type, projectId: row.projectId,
-        status: 'done', result: row.result, lastError: row.lastError, finishedAt: row.finishedAt,
-        attempts: row.attempts, maxAttempts: row.maxAttempts, nextRunAt: null,
-      })
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      // BE-7: a timeout is TERMINAL regardless of attempts — a handler that
-      // already hung a full window would re-hang every retry, so the row
-      // fails loud and stays failed (see header). Ordinary thrown errors keep
-      // the historical §48 ladder untouched.
-      const timedOut = e instanceof JobHandlerTimeoutError
-      const terminal = timedOut || running.attempts >= running.maxAttempts
-      if (timedOut) {
-        console.error(
-          `[jobs] ${job.type} handler TIMED OUT after ${handlerTimeoutMs}ms — row marked 'failed' (terminal, no retry; re-enqueue after investigating):`,
-          message,
-        )
-      } else {
-        console.error(
-          `[jobs] ${job.type} (${running.attempts}/${running.maxAttempts} attempt(s)) failed${terminal ? ' — terminal' : ' — will retry'}:`,
-          message,
-        )
-      }
-      if (terminal) {
+      try {
+        const handler = JOB_HANDLERS[job.type as JobType]
+        if (!handler) throw new Error(`No handler registered for "${job.type}"`)
+        let payload: Record<string, unknown> = {}
+        try {
+          payload = JSON.parse(job.payload || '{}')
+        } catch {
+          payload = {}
+        }
+        const outcome = await raceWithHandlerTimeout(handler(payload, job.projectId), handlerTimeoutMs, job.type)
+        // A success after prior failures says so in the result JSON (additive
+        // `retries` key — per-type parsers in the UI ignore unknown keys).
+        const body: Record<string, unknown> =
+          outcome !== null && typeof outcome === 'object' && !Array.isArray(outcome)
+            ? { ...(outcome as Record<string, unknown>) }
+            : { value: outcome ?? null }
+        if (running.attempts > 1) body.retries = running.attempts - 1
         const row = await db.jobRecord.update({
           where: { id: job.id },
-          data: { status: 'failed', lastError: message.slice(0, 500), finishedAt: new Date() },
+          data: {
+            status: 'done',
+            result: JSON.stringify(body).slice(0, 2000),
+            finishedAt: new Date(),
+          },
         })
         results.push({
           id: row.id, type: row.type, projectId: row.projectId,
-          status: 'failed', result: row.result, lastError: row.lastError, finishedAt: row.finishedAt,
+          status: 'done', result: row.result, lastError: row.lastError, finishedAt: row.finishedAt,
           attempts: row.attempts, maxAttempts: row.maxAttempts, nextRunAt: null,
         })
-      } else {
-        const nextRunAt = new Date(Date.now() + retryBackoffMs(running.attempts))
-        const row = await db.jobRecord.update({
-          where: { id: job.id },
-          data: { status: 'retrying', lastError: message.slice(0, 500), runAt: nextRunAt },
-        })
-        results.push({
-          id: row.id, type: row.type, projectId: row.projectId,
-          status: 'retrying', result: row.result, lastError: row.lastError, finishedAt: row.finishedAt,
-          attempts: row.attempts, maxAttempts: row.maxAttempts, nextRunAt,
-        })
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        // BE-7: a timeout is TERMINAL regardless of attempts — a handler that
+        // already hung a full window would re-hang every retry, so the row
+        // fails loud and stays failed (see header). Ordinary thrown errors keep
+        // the historical §48 ladder untouched.
+        const timedOut = e instanceof JobHandlerTimeoutError
+        const terminal = timedOut || running.attempts >= running.maxAttempts
+        if (timedOut) {
+          log.error(
+            'jobs',
+            `${job.type} handler TIMED OUT after ${handlerTimeoutMs}ms — row marked 'failed' (terminal, no retry; re-enqueue after investigating):`,
+            { jobType: job.type, error: message },
+          )
+        } else {
+          log.error(
+            'jobs',
+            `${job.type} (${running.attempts}/${running.maxAttempts} attempt(s)) failed${terminal ? ' — terminal' : ' — will retry'}:`,
+            { jobType: job.type, attempts: running.attempts, maxAttempts: running.maxAttempts, error: message },
+          )
+        }
+        if (terminal) {
+          const row = await db.jobRecord.update({
+            where: { id: job.id },
+            data: { status: 'failed', lastError: message.slice(0, 500), finishedAt: new Date() },
+          })
+          results.push({
+            id: row.id, type: row.type, projectId: row.projectId,
+            status: 'failed', result: row.result, lastError: row.lastError, finishedAt: row.finishedAt,
+            attempts: row.attempts, maxAttempts: row.maxAttempts, nextRunAt: null,
+          })
+        } else {
+          const nextRunAt = new Date(Date.now() + retryBackoffMs(running.attempts))
+          const row = await db.jobRecord.update({
+            where: { id: job.id },
+            data: { status: 'retrying', lastError: message.slice(0, 500), runAt: nextRunAt },
+          })
+          results.push({
+            id: row.id, type: row.type, projectId: row.projectId,
+            status: 'retrying', result: row.result, lastError: row.lastError, finishedAt: row.finishedAt,
+            attempts: row.attempts, maxAttempts: row.maxAttempts, nextRunAt,
+          })
+        }
       }
     }
-  }
 
-  return { ran: results.length, results }
+    return { ran: results.length, results }
+  })
 }
 
 /** Recent job rows for the UI card (type, status, finishedAt, result/error). */

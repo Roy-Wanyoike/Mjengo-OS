@@ -32,6 +32,7 @@ import { getProvider, type PaymentMethod } from './providers'
 import { recordDarajaIntent, recordDarajaUnresolvedInitiation } from './daraja-callback'
 import { seedDarajaReconcileSweep } from './daraja-reconcile'
 import { currentActor, type DeciderIdentity } from './session'
+import { log } from '@/backend/lib/log'
 
 let prCounter = 0
 export function nextPaymentRequestCode(): string {
@@ -429,7 +430,7 @@ export async function payPaymentRequest(projectId: string, p: any) {
       // Best-effort row — the callback completes the payment only when the
       // intent exists; a missing row means an honest operator fix-up, never
       // invented money.
-      console.error('[wallet] failed to record pending provider intent', e)
+      log.error('wallet', 'failed to record pending provider intent', { error: e })
     }
     throw new Error(
       `${provider.label} accepted the request but it is PENDING customer confirmation — no money has moved yet. ${initiation.detail}. The payment records automatically once the provider's VERIFIED callback confirms settlement (ref ${initiation.providerRef}).`,
@@ -470,7 +471,7 @@ export async function payPaymentRequest(projectId: string, p: any) {
       } catch (e) {
         // Best-effort row — a failed write never masks the honest failure
         // (the orphan-callback alert then degrades to console.warn only).
-        console.error('[wallet] failed to record the unresolved provider initiation', e)
+        log.error('wallet', 'failed to record the unresolved provider initiation', { error: e })
       }
     }
     throw new Error(`Provider did not accept the payment: ${initiation.detail}`)

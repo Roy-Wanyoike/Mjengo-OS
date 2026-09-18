@@ -3,6 +3,7 @@ import { getProjectPayload } from '@/backend/lib/mjengo'
 import { runAnomalyScan } from '@/backend/modules/jobs/handlers'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
+import { log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -22,7 +23,8 @@ export const maxDuration = 120
  * account could scan ANY project by passing its id. The no-JSON legacy
  * body contract is preserved (allowEmptyBody → default project).
  */
-export const POST = async (req: NextRequest): Promise<NextResponse> => {
+export const POST = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/anomaly-scan', async () => {
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:anomaly-scan',
     fields: [{ name: 'projectId', type: 'string' }],
@@ -35,8 +37,8 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
     const data = await getProjectPayload(gate.projectId)
     return NextResponse.json({ ok: true, alerts: scan.alerts, summary: scan.summary, data })
   } catch (e) {
-    console.error('[api/ai/anomaly-scan]', e)
+    log.error('api/ai/anomaly-scan', 'Request failed', { error: e })
     // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
     return NextResponse.json({ error: safeErrorMessage(e, 'Anomaly scan failed') }, { status: 500 })
   }
-}
+})

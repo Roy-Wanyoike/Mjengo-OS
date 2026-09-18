@@ -11,6 +11,7 @@ import {
   SHARE_DECISION_CONFIRM_ERROR,
 } from '@/backend/lib/share-token'
 import { kindForAction, withAuditContext } from '@/backend/lib/audit'
+import { currentRequestId } from '@/backend/lib/log'
 import { actionFlagGate } from '@/backend/lib/action-flag-gate'
 
 // Owner action endpoint — src/app/api/actions/route.ts is the shim.
@@ -57,7 +58,11 @@ import { actionFlagGate } from '@/backend/lib/action-flag-gate'
 function auditContextFor(req: NextRequest, type: ActionType, payload: any) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
   const userAgent = req.headers.get('user-agent')?.slice(0, 300) || undefined
-  const requestId = req.headers.get('x-request-id')?.trim() || crypto.randomUUID()
+  // Issue #204: the route-kit request wrapper already minted/honored the
+  // ONE x-request-id for this request — inherit it instead of minting a
+  // second UUID (logs and the audit row correlate). The fallback only
+  // fires if this handler ever runs outside withRequestLogging.
+  const requestId = currentRequestId() ?? crypto.randomUUID()
   const entityId = typeof payload?.id === 'string' && payload.id ? payload.id : undefined
   return { ip, userAgent, requestId, entity: kindForAction(type), entityId }
 }
