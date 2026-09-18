@@ -35,8 +35,8 @@ export const INVENTORY_ACTIONS = [
   'inventory.adjust', // { inventoryItemId, qty, reason } — count correction (±)
   'inventory.count', // { countedBy, countedAt?, note?, counts: [{ inventoryItemId, countedQty }] } — record a physical stock count session (issue #194)
   'inventory.count.post', // { countId, postedBy? } — post the count-linked adjustments (`adjusted` movements referencing the count)
-  'boq.create', // { name, lines?: [...] }
-  'boq.line.upsert', // { boqId, id?, materialName, unit, qty, estUnitPrice?, category?, note? }
+  'boq.create', // { name, lines?: [{ materialName, unit?, qty?, estUnitPrice?, category?, note? }] } — estUnitPrice is KSh, converted to cents at the write boundary (#285)
+  'boq.line.upsert', // { boqId, id?, materialName, unit, qty, estUnitPrice? (KSh → cents at the boundary, #285), category?, note? }
   'boq.line.delete', // { id }
   'boq.approve', // { id }
   'boq.to_request', // { id, lineIds? } — generate MaterialRequest from BOQ lines

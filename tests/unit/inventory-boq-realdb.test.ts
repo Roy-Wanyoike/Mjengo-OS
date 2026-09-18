@@ -20,11 +20,12 @@
  *    on SavedSupplier — the constraint the stub can only pretend to have:
  *    duplicate inserts are refused through Prisma (P2002) AND the raw
  *    handle, and the unsave → re-save round-trip works;
- *  · KNOWN UNIT DRIFT #285 (twin of #282), pinned as-is with fail-on-purpose
- *    notes: createBoq/upsertBoqLine store the KSh number raw into the
- *    BigInt cents column, so loadBoqSlice's centsToKes divides by 100
- *    again. If the units get normalized, the estUnitPrice/total assertions
- *    fail on purpose — update them with the fix.
+ *  · #285 RESOLVED (the BoqLine twin of #282, different column):
+ *    estUnitPrice is integer CENTS end-to-end — createBoq/upsertBoqLine
+ *    convert the KSh payload at the write boundary (nonNegativeKesToCents),
+ *    so the raw column holds KSh 650 → 65000 and loadBoqSlice's centsToKes
+ *    serves it back as exactly 650. The former fail-on-purpose assertions
+ *    (6.5 / 782.85) now assert the CORRECT units through the real engine.
  *
  * Deliberately NOT pinned here (documented in the PR coverage map): the
  * (projectId, version) pair has no unique constraint, so two concurrent
@@ -91,7 +92,9 @@ describe('BOQ lifecycle — create → lines → approve → material request (r
       .prepare('SELECT qty, estUnitPrice, boqId FROM BoqLine WHERE id = ?')
       .get(added.id) as { qty: number; estUnitPrice: bigint; boqId: string }
     expect(nailRow.qty).toBe(3)
-    expect(nailRow.estUnitPrice).toBe(95n) // stored raw — the #285 drift, see below
+    // #285 raw-SQL oracle: the KSh 95 payload is stored as 9500 integer
+    // cents on the real engine (was 95n raw — the ÷100 drift).
+    expect(nailRow.estUnitPrice).toBe(9500n)
     expect(nailRow.boqId).toBe(v2.id)
     expect(count('BoqLine', `WHERE boqId = '${v2.id}'`)).toBe(2)
 
@@ -131,17 +134,15 @@ describe('BOQ lifecycle — create → lines → approve → material request (r
     const revised = slice.boqs[0]
     expect(revised.version).toBe(2)
     expect(revised.status).toBe('approved')
-    // #285 drift (twin of #282), pinned as-is — fails on purpose when fixed:
-    // writers store the KSh number raw into the cents column, so 650 reads
-    // back as 6.5 and the total is (120×650 + 3×95)/100 = 782.85, not
-    // 78,285. The arithmetic being pinned is mulQtyCents + centsToKes over
-    // the column exactly as written.
-    expect(revised.lines.find((l) => l.materialName === 'Cement')!.estUnitPrice).toBe(6.5)
-    expect(revised.total).toBe(782.85)
+    // #285 normalized, end-to-end through the real engine: KSh 650 went in,
+    // 65000 cents are in the column, 650 KSh come back out — and the total
+    // is (120×650 + 3×95) = 78,000 + 285 = KSh 78,285, not 782.85.
+    expect(revised.lines.find((l) => l.materialName === 'Cement')!.estUnitPrice).toBe(650)
+    expect(revised.total).toBe(78285)
     // v1 is untouched by everything above.
     const original = slice.boqs[1]
     expect(original.status).toBe('draft')
-    expect(original.total).toBe((100 * 700 + 10 * 1800) / 100) // same #285 arithmetic
+    expect(original.total).toBe(100 * 700 + 10 * 1800) // KSh 88,000 — same normalized arithmetic
 
     // The MR- sequence advances with the project's real request count.
     const second = await boqToRequest(project.id, { id: v2.id })

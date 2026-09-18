@@ -25,16 +25,20 @@
  * @/backend/lib/db swapped for an in-memory stub over boq / boqLine /
  * materialRequest(+lines) / supplier / savedSupplier maps.
  *
- * KNOWN UNIT DRIFT (#285 — the BoqLine twin of #282, pinned as-is, fails
- * on purpose when normalized): boq-card.tsx sends estUnitPrice as a KSh
- * number and createBoq/upsertBoqLine store it raw into the BigInt column
- * whose comment says cents, so loadBoqSlice's centsToKes divides by 100
- * again. The total/estUnitPrice assertions pin the CURRENT arithmetic.
- *
  * KNOWN SCOPING GAP (#286 — pinned as-is, fails on purpose when fixed):
  * upsertBoqLine's update path resolves the LINE by bare id, so a foreign
  * project's line id rewrites that project's line. Pinned below with the
  * issue reference; the fix flips that pin to a scoped refusal.
+ *
+ * #285 RESOLVED (the BoqLine twin of #282, different column): estUnitPrice
+ * is integer CENTS end-to-end. The payload field stays KSh (the boq-card
+ * "Est. KSh/u" input contract) and BOTH writers (createBoq /
+ * upsertBoqLine) convert at the service boundary via money.ts
+ * nonNegativeKesToCents (nullish/empty → 0n, negative/>2-dp/garbage → the
+ * shared honest refusal). loadBoqSlice keeps reading the column as cents
+ * (centsToKes ÷100 at the DTO boundary) — the former fail-on-purpose pins
+ * now assert the CORRECT units: KSh 650 in the payload → 65000n in the
+ * column → 650 KSh in the slice.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -100,8 +104,9 @@ vi.mock('@/backend/lib/db', () => {
   }
   const boqLine = {
     async create({ data }: { data: Record<string, unknown> }) {
-      // Prisma fidelity: the estUnitPrice column is BigInt — the engine
-      // coerces the service's plain Number back to BigInt on write.
+      // Prisma fidelity: the estUnitPrice column is BigInt — since #285 the
+      // service already passes a BigInt (nonNegativeKesToCents); the engine
+      // coercion is a no-op fidelity guard for direct seeds.
       const l: Record<string, unknown> = { id: nid('bl'), ...data, estUnitPrice: BigInt(data.estUnitPrice ?? 0) }
       state.boqLines.set(l.id as string, l)
       return { ...l }
@@ -263,16 +268,19 @@ beforeEach(() => {
 
 describe('loadBoqSlice — versioned ordering + totals (stubbed tables)', () => {
   it('serves BOQs newest-first with per-line totals and cents→KSh line fields', async () => {
+    // Seed the column the way the #285-normalized writers do: TRUE cents —
+    // a KSh 650/unit cement line is stored as 65000, KSh 1,800/tonne
+    // ballast as 180000 (the seed-extras literals are the same class).
     const v1 = seedBoq(P, { name: 'Original plan', version: 1, createdAt: T(1) }, [
-      { materialName: 'Cement', unit: 'bag', qty: 100, estUnitPrice: 700n },
+      { materialName: 'Cement', unit: 'bag', qty: 100, estUnitPrice: 70000n },
     ])
     const v2 = seedBoq(P, { name: 'Revised plan', version: 2, createdAt: T(2) }, [
-      { materialName: 'Cement', unit: 'bag', qty: 120, estUnitPrice: 650n, category: 'structural', note: 'OPC 42.5' },
-      { materialName: 'Ballast', unit: 'tonne', qty: 10.5, estUnitPrice: 1800n },
+      { materialName: 'Cement', unit: 'bag', qty: 120, estUnitPrice: 65000n, category: 'structural', note: 'OPC 42.5' },
+      { materialName: 'Ballast', unit: 'tonne', qty: 10.5, estUnitPrice: 180000n },
       { materialName: 'Nails', qty: 2, estUnitPrice: 0n },
     ])
     seedBoq(OTHER, { name: 'Their BOQ', version: 1, createdAt: T(3) }, [
-      { materialName: 'Cement', qty: 5, estUnitPrice: 999n },
+      { materialName: 'Cement', qty: 5, estUnitPrice: 99900n },
     ])
     void v1
 
@@ -293,15 +301,16 @@ describe('loadBoqSlice — versioned ordering + totals (stubbed tables)', () => 
     expect(cement.qty).toBe(120)
     expect(cement.category).toBe('structural')
     expect(cement.note).toBe('OPC 42.5')
-    // #285 drift (twin of #282), pinned as-is — fails on purpose when fixed:
-    // writers store the KSh number raw into the cents column, so 650 shows
-    // as 6.5. The arithmetic being pinned is centsToKes over the column.
-    expect(cement.estUnitPrice).toBe(6.5)
+    // #285 normalized: the column holds true cents, so a KSh 650/unit line
+    // reads back as 650 — centsToKes ÷100 at the DTO boundary, never in the
+    // component (the boq-card renders this field through formatKes as-is).
+    expect(cement.estUnitPrice).toBe(650)
     expect(revised.lines.find((l) => l.materialName === 'Nails')!.estUnitPrice).toBe(0)
 
-    // The total: Σ qty × estUnitPrice, cents → KSh (same #285 arithmetic):
-    // 120×650 + 10.5×1800 + 2×0 = 78,000 + 18,900 + 0 cents → 969.
-    expect(revised.total).toBe(969)
+    // The total: Σ qty × estUnitPrice, accumulated in cents then ÷100:
+    // 120×65000 + 10.5×180000 + 2×0 = 7,800,000 + 1,890,000 + 0 cents
+    // → KSh 96,900 (the issue's own repro: 650/unit × 120 bags = 78,000).
+    expect(revised.total).toBe(96900)
   })
 
   it('an empty project yields { boqs: [] }', async () => {
@@ -331,7 +340,12 @@ describe('createBoq — version increments per project', () => {
     const cement = [...state.boqLines.values()].find((l) => l.boqId === r.id && l.materialName === 'Cement')!
     expect(cement.unit).toBe('bag')
     expect(cement.qty).toBe(120)
-    expect(cement.estUnitPrice).toBe(650n) // stored raw (#285) — Number(650)
+    // #285 normalized: the payload's KSh 650 is converted at the write
+    // boundary → 65000 integer cents in the column (was 650n raw before).
+    expect(cement.estUnitPrice).toBe(65000n)
+    // A line with NO estUnitPrice keeps the zero default (no price on file).
+    const ballast = [...state.boqLines.values()].find((l) => l.boqId === r.id && l.materialName === 'Ballast')!
+    expect(ballast.estUnitPrice).toBe(0n)
   })
 
   it('the next BOQ in the SAME project is v2; an explicit name is honored', async () => {
@@ -371,7 +385,7 @@ describe('upsertBoqLine — create vs update, scoped to the caller’s BOQ', () 
 
   it('updates the existing line in place when an id is given', async () => {
     const boqId = seedBoq(P, { name: 'BOQ v1', version: 1, createdAt: T(1) }, [
-      { materialName: 'Cement', unit: 'bag', qty: 100, estUnitPrice: 700n },
+      { materialName: 'Cement', unit: 'bag', qty: 100, estUnitPrice: 70000n },
     ])
     const lineId = [...state.boqLines.values()].find((l) => l.boqId === boqId)!.id as string
     const r = await upsertBoqLine(P, {
@@ -382,12 +396,53 @@ describe('upsertBoqLine — create vs update, scoped to the caller’s BOQ', () 
     const line = state.boqLines.get(lineId)!
     expect(line.qty).toBe(120)
     expect(line.note).toBe('price update')
+    // #285: the update path converts too — KSh 650 overwrites 70000 cents
+    // with 65000 cents (never a raw 650).
+    expect(line.estUnitPrice).toBe(65000n)
   })
 
   it('refuses an unknown or foreign-project boqId', async () => {
     const foreign = seedBoq(OTHER, { name: 'Their BOQ', version: 1, createdAt: T(1) })
     await expect(upsertBoqLine(P, { boqId: 'nope', materialName: 'Cement' })).rejects.toThrow('BOQ not found')
     await expect(upsertBoqLine(P, { boqId: foreign, materialName: 'Cement' })).rejects.toThrow('BOQ not found')
+  })
+
+  it('#285: converts the KSh payload to integer cents at the write boundary (create path)', async () => {
+    const boqId = seedBoq(P, { name: 'BOQ v1', version: 1, createdAt: T(1) })
+    // Fractional KSh survives exactly: 3,250.50 → 325050 cents.
+    const fractional = await upsertBoqLine(P, { boqId, materialName: 'Paint', unit: 'tin', qty: 3, estUnitPrice: 3250.5 })
+    expect(state.boqLines.get(fractional.id)!.estUnitPrice).toBe(325050n)
+    // Numeric strings ride the same conversion (offline outbox replays JSON).
+    const asString = await upsertBoqLine(P, { boqId, materialName: 'Nails', unit: 'kg', qty: 2, estUnitPrice: '90.25' })
+    expect(state.boqLines.get(asString.id)!.estUnitPrice).toBe(9025n)
+    // The empty/absent variants of "no price on file" all stay 0 — the
+    // legacy Number(x ?? 0) lenience, now unit-correct.
+    const empty = await upsertBoqLine(P, { boqId, materialName: 'Sand', unit: 'tonne', qty: 1, estUnitPrice: '' })
+    expect(state.boqLines.get(empty.id)!.estUnitPrice).toBe(0n)
+    const nulled = await upsertBoqLine(P, { boqId, materialName: 'Gravel', unit: 'tonne', qty: 1, estUnitPrice: null })
+    expect(state.boqLines.get(nulled.id)!.estUnitPrice).toBe(0n)
+    const zeroString = await upsertBoqLine(P, { boqId, materialName: 'Bricks', unit: 'piece', qty: 1, estUnitPrice: '0.00' })
+    expect(state.boqLines.get(zeroString.id)!.estUnitPrice).toBe(0n)
+  })
+
+  it('#285: refuses prices the integer-cents contract cannot represent — before any line is written', async () => {
+    const boqId = seedBoq(P, { name: 'BOQ v1', version: 1, createdAt: T(1) })
+    const before = state.boqLines.size
+    // Negative, >2-dp, non-finite, boolean, object and array prices are all
+    // refused with the shared honest money error (the legacy writer's
+    // BigInt(NaN) crash class becomes a readable refusal).
+    for (const bad of [-650, 650.555, Number.NaN, Number.POSITIVE_INFINITY, true, { kes: 650 }, ['650']]) {
+      await expect(
+        upsertBoqLine(P, { boqId, materialName: 'Cement', unit: 'bag', qty: 1, estUnitPrice: bad }),
+      ).rejects.toThrow(/estUnitPrice: must be a non-negative number/)
+    }
+    await expect(
+      createBoq(P, { name: 'Bad lines', lines: [{ materialName: 'Cement', qty: 1, estUnitPrice: -1 }] }),
+    ).rejects.toThrow(/estUnitPrice: must be a non-negative number/)
+    expect(state.boqLines.size).toBe(before) // no line persisted by any refusal
+    // Honest note: createBoq is NOT transactional (pre-existing semantics,
+    // unchanged by #285) — the BOQ shell row itself lands before the line
+    // loop refuses; only the line writes are pinned here.
   })
 
   it('KNOWN GAP #286 (fails on purpose when fixed): a foreign-project LINE id escapes the project scope', async () => {
@@ -473,7 +528,7 @@ describe('approveBoq — approve once, refuse forever after', () => {
 describe('boqToRequest — line selection, MR- sequence, notes-only lineage', () => {
   function seedTwoLineBoq(): string {
     return seedBoq(P, { name: 'Revised plan', version: 2, createdAt: T(1) }, [
-      { materialName: 'Cement', unit: 'bag', qty: 120, estUnitPrice: 650n, category: 'structural', note: 'OPC 42.5' },
+      { materialName: 'Cement', unit: 'bag', qty: 120, estUnitPrice: 65000n, category: 'structural', note: 'OPC 42.5' },
       { materialName: 'Ballast', unit: 'tonne', qty: 10 },
     ])
   }
@@ -642,6 +697,20 @@ describe('source pins — payload + UI wiring (house style)', () => {
     // The generated-request toast finds the draft MR by its lineage note —
     // the notes-only lineage contract, consumed client-side.
     expect(src).toContain('From BOQ "${boq.name}"')
+  })
+
+  it('#285: the boq-card keeps KSh at the DTO boundary — no cents math in the component', () => {
+    const src = read('src/frontend/mjengo/finder/sections/dashboard/boq-card.tsx')
+    // The DTO (loadBoqSlice) already serves KSh: the card renders the line
+    // price, the per-line estimate and the BOQ total through formatKes
+    // untouched — e.g. the issue's repro (KSh 650/u × 120 bags) arrives as
+    // 650 / 78,000 and prints as "KSh 650" / "KSh 78,000".
+    expect(src).toContain('formatKes(line.estUnitPrice)')
+    expect(src).toContain('formatKes(line.qty * line.estUnitPrice)')
+    expect(src).toContain('formatKes(boq.total)')
+    // ...and does NO cents→KSh division of its own — the ÷100 lives at the
+    // DTO boundary (centsToKes in loadBoqSlice), never in the component.
+    expect(src).not.toMatch(/\/\s*100/)
   })
 
   it('supplier-directory toggles the shortlist through supplier.save / supplier.unsave', () => {

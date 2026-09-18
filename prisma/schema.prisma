@@ -1289,7 +1289,7 @@ model BoqLine {
   materialName String
   unit         String
   qty          Float
-  estUnitPrice BigInt  @default(0) // cents — integer money (issue #122; was Float KSh)
+  estUnitPrice BigInt  @default(0) // cents — integer money (issue #122; was Float KSh). #285: writers normalized — payload is KSh, converted at the service write boundary (createBoq/upsertBoqLine → nonNegativeKesToCents)
   category     String? // structural, finishes, plumbing, electrical...
   note         String?
 }
