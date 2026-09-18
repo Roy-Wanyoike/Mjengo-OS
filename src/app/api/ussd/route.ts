@@ -90,13 +90,41 @@ warnIfWebhookSecretUnsetInProduction('api/ussd', 'USSD_WEBHOOK_SECRET')
  *     count after the read, BEFORE JSON.parse and before the HMAC check) —
  *     the whatsapp route's S2 gate mirrored 1:1; this was the only
  *     unauthenticated JSON route without one.
- *   · Per-PIN failure LOCKOUT: 5 wrong PINs for one phone within 15 min →
- *     a 15-minute lock for that line (honest "locked, try later" reply,
- *     correct PINs included — resolution is refused before any DB work).
- *     Keyed per phone, tracked in the SHARED rate-limit tracker store
- *     (in-process map, or db/ratelimit.db when RATE_LIMIT_STORE=sqlite —
- *     see createUssdPinLockout in rate-limit.ts). A correct PIN clears the
- *     count (consecutive-failure semantics).
+ *   · Per-PIN failure LOCKOUT (BE-9, issue #106; REKEYED by issue #176/SEC-9):
+ *     5 wrong PINs within 15 min → a 15-minute lock (honest "locked, try
+ *     later" reply, correct PINs included — resolution is refused before any
+ *     DB WRITE work). Keyed on values the attacker cannot freely choose
+ *     (issue #176: the phone-keyed budget was refreshable by rotating
+ *     MSISDNs — the 40/min per-IP throttle was the only real bound — and a
+ *     correct phone-tail PIN could clear the count):
+ *       - PRIMARY: the CLIENT-IP principal (trust-aware clientIpFromHeaders;
+ *         TRUST_PROXY unset → the ONE shared 'anon' budget — 5 wrong PINs per
+ *         15 min across ALL untrusted callers, the honest demo bound; with
+ *         TRUST_PROXY=1 → per client IP). Rotating the phone number can NEVER
+ *         refresh this budget. A correct PIN does NOT clear it either (that
+ *         was the refresh exploit) — the budget is sticky for its 15-min
+ *         window. HONEST deployment note: a real aggregator multiplexes
+ *         MSISDNs through one gateway IP, so this budget is shared per
+ *         gateway (availability traded for brute-force resistance — raise /
+ *         re-key on the aggregator's authenticated identity when wiring one,
+ *         same as the throttle above).
+ *       - SECONDARY: the RESOLVED WORKER identity for kiosk-PIN attempts —
+ *         wrong PINs attributed to a worker (the caller's line maps to an
+ *         active worker: aggregator-vouched under the shared secret;
+ *         spoofable in the open posture, where the ip budget is the real
+ *         bound) accumulate on that worker's tracker regardless of which
+ *         phone/IP sent them, and a locked worker is refused from ANY phone
+ *         (checked after resolution, before any write). A correct KIOSK pin
+ *         clears the worker's own count (consecutive semantics on the
+ *         identity that proved itself); a correct phone-tail pin clears
+ *         nothing. Honest limit: a MISSED guess names no target worker, so
+ *         per-worker accumulation keys on the caller's line — every miss
+ *         lands on the unrefreshable ip budget either way.
+ *     THE EFFECTIVE BOUND (issue #176's ask, stated plainly): wrong-PIN rate
+ *     is bounded by the lockout (5 per 15 min per ip principal), NOT by the
+ *     40/min bucket — the bucket remains only as the outer cap on total
+ *     PIN-attempt traffic (correct PINs included). Tracked in the SHARED
+ *     rate-limit tracker store (see createUssdPinLockout in rate-limit.ts).
  *   · PHONE-TAIL PIN FALLBACK IS DROPPED unless the open posture is
  *     explicitly enabled (issue #156, closing the SECURITY_BASELINE :92
  *     gap): last-4-of-phone is DEMO posture only (anyone who knows the
@@ -170,7 +198,7 @@ function bodyTooLarge(): NextResponse {
   )
 }
 
-/** The honest locked-line reply (BE-9, issue #106) — names the wait. */
+/** The honest locked reply (BE-9, issues #106 + #176) — names the wait. */
 function pinLockedText(msLeft: number): string {
   const mins = Math.max(1, Math.ceil(msLeft / 60_000))
   return `Too many wrong PINs. This line is locked for ${mins} more minute(s) — try again later.${USSD_FOOTER}`
@@ -185,6 +213,11 @@ interface UssdWorker {
   id: string
   name: string
   projectId: string
+  /** Which resolution path produced this worker (issue #176: only a KIOSK
+   *  resolution proves kiosk-PIN knowledge, so only it clears the worker's
+   *  own lockout count — a phone-tail resolution is the 10^4 demo identity
+   *  and must stay a non-refreshing event). */
+  via: 'kiosk' | 'tail'
 }
 
 /**
@@ -206,7 +239,7 @@ async function resolveWorkerByPin(pin: string): Promise<UssdWorker | null> {
     select: { id: true, name: true, projectId: true },
     take: 1,
   })
-  if (byKioskPin.length > 0) return byKioskPin[0]
+  if (byKioskPin.length > 0) return { ...byKioskPin[0], via: 'kiosk' }
   // Phone-tail fallback: explicitly opted-in open posture ONLY (issue #156).
   // Secret set → shared-secret posture (kiosk PIN only); no opt-in → the
   // fail-closed default (kiosk PIN only) — the 10^4 last-4 identity never
@@ -217,7 +250,28 @@ async function resolveWorkerByPin(pin: string): Promise<UssdWorker | null> {
     select: { id: true, name: true, projectId: true, phone: true },
     orderBy: { name: 'asc' },
   })
-  return active.find((w) => phonePin(w.phone) === pin) ?? null
+  const byTail = active.find((w) => phonePin(w.phone) === pin)
+  return byTail ? { id: byTail.id, name: byTail.name, projectId: byTail.projectId, via: 'tail' } : null
+}
+
+/**
+ * The worker the caller's LINE maps to (issue #176): the active worker whose
+ * stored phone equals the caller-supplied MSISDN. Under the shared secret the
+ * whole body is aggregator-HMAC'd, so this mapping is aggregator-vouched — a
+ * wrong kiosk-PIN attempt from that line is attributable to that worker (the
+ * per-worker lockout key). In the open posture the MSISDN is bare JSON, so the
+ * attribution is spoofable there — the ip-keyed budget remains the real bound,
+ * and a spoofed attribution can only lock the worker's identity path (in that
+ * posture knowing the number already carries the phone-tail identity).
+ */
+async function lineWorker(phoneNumber: string): Promise<{ id: string } | null> {
+  const rows = await db.worker.findMany({
+    where: { active: true, phone: phoneNumber },
+    orderBy: { name: 'asc' },
+    select: { id: true },
+    take: 1,
+  })
+  return rows[0] ?? null
 }
 
 /**
@@ -334,27 +388,31 @@ export function POST(req: NextRequest): Promise<NextResponse> {
     const rest = text.slice(SERVICE_CODE.length)
     const parts = rest ? rest.split('*').filter((p) => p !== '') : []
 
-    // PIN-bearing requests carry the worker's identity attempt — throttle them
-    // by the CLIENT-IP principal too (W-AUDIT #2: the phoneNumber is
+    // PIN-bearing requests carry the worker's identity attempt — throttle
+    // them by the CLIENT-IP principal too (W-AUDIT #2: the phoneNumber is
     // caller-supplied and rotates freely, so per-phone alone cannot stop a
-    // 4-digit brute force from one host). Trust-aware since issue #156: no
+    // 4-digit brute force from one host), and (issue #176) key the PIN
+    // LOCKOUT on the same principal. Trust-aware since issue #156: no
     // TRUST_PROXY → clientIpFromHeaders returns '' → the ONE shared 'anon'
-    // bucket (rotating XFF values cannot refresh it); TRUST_PROXY=1 → the
-    // proxy-appended last value (per-client buckets).
+    // principal (rotating XFF values cannot refresh anything keyed on it);
+    // TRUST_PROXY=1 → the proxy-appended last value (per-client keys). This
+    // is the one value in a PIN attempt the caller cannot freely choose.
+    const clientIp = clientIpFromHeaders(req.headers)
+
     if (isPinAttempt(parts)) {
-      const ip = clientIpFromHeaders(req.headers)
       const pinLimited = await enforceRateLimit(
         req,
-        `ussd-pin-ip:${ip || 'anon'}`,
+        `ussd-pin-ip:${clientIp || 'anon'}`,
         PIN_IP_LIMIT_PER_MIN,
         60_000,
       )
       if (pinLimited) return pinLimited
-      // BE-9 (issue #106): per-PIN failure lockout — 5 wrong PINs for this
-      // phone in 15 min locks the line for 15 min. Refused BEFORE any DB
-      // work, correct PIN included; the tracker lives in the shared
-      // rate-limit store (see createUssdPinLockout in rate-limit.ts).
-      const lock = checkUssdPinLockout(phoneNumber)
+      // BE-9 + issue #176: the pre-resolution lockout gate, keyed on the
+      // client-IP principal — rotating phone numbers (or worker targets)
+      // cannot refresh this budget, and a locked principal is refused BEFORE
+      // any DB work, correct PINs included (tracker store: see
+      // createUssdPinLockout in rate-limit.ts).
+      const lock = checkUssdPinLockout({ ip: clientIp })
       if (lock.locked) return ussd(pinLockedText(lock.msLeft))
     }
 
@@ -369,12 +427,25 @@ export function POST(req: NextRequest): Promise<NextResponse> {
       if (!status) return ussd(ATTEND_USAGE)
       const worker = await resolveWorkerByPin(pin)
       if (!worker) {
-        // Wrong PIN → count it; the 5th within the window trips the lock NOW.
-        const trip = recordUssdPinFailure(phoneNumber)
+        // Wrong PIN → count it (issue #176 keying): always on the client-IP
+        // principal (the unrefreshable budget), plus on the worker the
+        // caller's LINE maps to when it maps to one (the per-worker tracker —
+        // aggregator-vouched under the shared secret, best-effort in the open
+        // posture). The 5th strike within the window locks NOW.
+        const line = await lineWorker(phoneNumber)
+        const trip = recordUssdPinFailure({ ip: clientIp, workerId: line?.id })
         if (trip.locked) return ussd(pinLockedText(trip.msLeft))
         return ussd(`PIN not recognised. Dial ${SERVICE_CODE} to restart.${USSD_FOOTER}`)
       }
-      clearUssdPinFailures(phoneNumber) // a correct PIN restarts the count
+      // Issue #176: the resolved worker identity carries its own tracker — a
+      // locked worker is refused from ANY phone (this check follows the
+      // read-only PIN lookup; no write happens before it).
+      const workerLock = checkUssdPinLockout({ ip: clientIp, workerId: worker.id })
+      if (workerLock.locked) return ussd(pinLockedText(workerLock.msLeft))
+      // Only a KIOSK resolution proves kiosk-PIN knowledge → only it restarts
+      // the worker's own count (a phone-tail resolution is the 10^4 demo
+      // identity and must never refresh anything — issue #176).
+      if (worker.via === 'kiosk') clearUssdPinFailures({ workerId: worker.id })
       // dispatchUssdAction throws on domain failure — the outer catch returns
       // the honest "could not record" text instead of a confirmation.
       if (status.code === 'present') {
@@ -401,12 +472,16 @@ ${worker.name} — ${status.label}. Asante!${USSD_FOOTER}`)
       if (!pin) return ussd(BALANCE_USAGE)
       const worker = await resolveWorkerByPin(pin)
       if (!worker) {
-        // Wrong PIN → count it (balance is an identity attempt too).
-        const trip = recordUssdPinFailure(phoneNumber)
+        // Wrong PIN → count it (balance is an identity attempt too) — same
+        // issue #176 keying as the attendance branch.
+        const line = await lineWorker(phoneNumber)
+        const trip = recordUssdPinFailure({ ip: clientIp, workerId: line?.id })
         if (trip.locked) return ussd(pinLockedText(trip.msLeft))
         return ussd(`PIN not recognised. Dial ${SERVICE_CODE} to restart.${USSD_FOOTER}`)
       }
-      clearUssdPinFailures(phoneNumber) // a correct PIN restarts the count
+      const workerLock = checkUssdPinLockout({ ip: clientIp, workerId: worker.id })
+      if (workerLock.locked) return ussd(pinLockedText(workerLock.msLeft))
+      if (worker.via === 'kiosk') clearUssdPinFailures({ workerId: worker.id })
       const [agg, unpaidRows] = await Promise.all([
         db.attendance.aggregate({
           where: { workerId: worker.id, paid: false, status: { not: 'absent' } },
@@ -460,10 +535,16 @@ export async function GET() {
       'explicitly opted-in open posture (secret unset + WEBHOOK_OPEN_POSTURE=1) — secret set ' +
       '(shared-secret posture) or no opt-in → the stored kiosk PIN only (issue #156)',
     rateLimit:
-      '20 requests/min/phone + 40 PIN-attempts/min per client IP + 5 wrong PINs/phone ' +
-      'within 15 min → 15-minute line lockout (token bucket / tracker store shared per host by default, issue #158). ' +
-      'The per-IP key is trust-aware (issue #156): TRUST_PROXY unset → all callers share the one anon bucket ' +
-      '(a forgeable x-forwarded-for is ignored); TRUST_PROXY=1 → the proxy-appended value',
+      '20 requests/min/phone + 40 PIN-attempts/min per client IP (outer cap) + the EFFECTIVE wrong-PIN bound: ' +
+      '5 wrong PINs per client-IP principal within 15 min → 15-minute lockout, correct PINs refused too (issue #176 — ' +
+      'rotating phone numbers can no longer refresh the budget, and a correct PIN does not clear it). ' +
+      'Kiosk-PIN attempts additionally carry a per-worker lockout: wrong PINs attributed to a worker via the caller\'s ' +
+      'line accumulate on that worker regardless of phone, and a locked worker is refused from any phone; a correct ' +
+      'kiosk PIN clears the worker\'s own count (a phone-tail PIN never clears anything). ' +
+      'Token bucket / tracker store shared per host by default (issue #158). ' +
+      'The per-IP keying is trust-aware (issue #156): TRUST_PROXY unset → all callers share the one anon budget ' +
+      '(a forgeable x-forwarded-for is ignored); TRUST_PROXY=1 → the proxy-appended value. Honest aggregator note: ' +
+      'a real gateway multiplexes MSISDNs through one IP — raise / re-key on the aggregator\'s authenticated identity when wiring one',
     auth: 'unauthenticated by design (gateway-trust model); the worker PIN is the in-session identity',
     signature:
       'USSD_WEBHOOK_SECRET (optional env): when set, POST requires X-Signature — lowercase-hex HMAC-SHA256 of the raw request body under the secret. ' +
