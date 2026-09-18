@@ -5,6 +5,7 @@ import { seedLand } from './seed-extras/land'
 import { seedSupply } from './seed-extras/supply'
 import { seedInvoices } from './seed-extras/invoices'
 import { seedIntel } from './seed-extras/intel'
+import { withLedgerMaintenance } from './seed-extras/ledger-maintenance'
 import { assertSeedAllowed } from './seed-guard'
 
 // Production guard (#126/#180): refuse to wipe anything when
@@ -65,7 +66,13 @@ async function main() {
   await db.worker.deleteMany()
   await db.task.deleteMany()
   await db.phase.deleteMany()
-  await db.project.deleteMany()
+  // DB-3 (#124): ledger rows are append-only at the DB level (migration 14)
+  // and FK-cascade deletes fire those guards — wiping the projects cascades
+  // into LedgerTransaction/LedgerEntry, so the base-seed wipe runs under the
+  // documented maintenance exemption (the SQLite twin of
+  // mjengo.allow_maintenance). The money seed re-creates the ledger history
+  // after this. Fresh databases have no ledger rows, so this is a no-op there.
+  await withLedgerMaintenance(db, () => db.project.deleteMany())
 
   // ==========================================================================
   // PROJECT 1 — Nyumba Yangu — 3BR Bungalow (existing demo data, preserved)

@@ -213,6 +213,33 @@ describe('postLedgerTransaction — balanced double entry', () => {
     expect(row.postedBy).toBe('Fatuma Kep')
     expect(row.postedRole).toBe('finance')
   })
+
+  it('posts through the pending→posted DB gate (#124 / migration 14): born pending, marked posted last', async () => {
+    // The DB-level invariants live in migration 14 (pinned in
+    // db-integrity-constraints.test.ts against the real trigger SQL); this
+    // test pins the SERVICE-side half of the contract — the write sequence
+    // the triggers are designed around: the transaction is created with
+    // status 'pending', its legs attach, and the FINAL write marks it
+    // 'posted' (LedgerTransaction_posting_gate asserts Σdebits = Σcredits
+    // at exactly that UPDATE). A regression to born-'posted' creates would
+    // desync the service from the DB guards and fail every real posting.
+    const createSpy = vi.spyOn(db.ledgerTransaction, 'create')
+    const updateSpy = vi.spyOn(db.ledgerTransaction, 'update')
+    const txn = asPosted(await post())
+
+    // born pending …
+    expect(createSpy).toHaveBeenCalledTimes(1)
+    expect((createSpy.mock.calls[0][0] as { data: { status?: string } }).data.status).toBe('pending')
+    // … legs attached inside the same create …
+    expect(state.entries.size).toBe(2)
+    // … then marked posted as the last write of the flow
+    expect(updateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: txn.id }, data: { status: 'posted' } }),
+    )
+    expect(txn.status).toBe('posted')
+    // no transaction is left behind in the intermediate state
+    expect([...state.txns.values()].every((t) => t.status === 'posted')).toBe(true)
+  })
 })
 
 describe('ensureAccountTx — chart of accounts resolution', () => {

@@ -16,6 +16,23 @@
  *    invoiceCode) Invoice rows are rejected — while the same code in a
  *    DIFFERENT project stays legal (the generators are per-project);
  *  · every hot-path index exists in sqlite_master.
+ *
+ * Migration 14 (DB-3, issue #124) — ledger invariants, pinned the same way
+ * (direct SQL, no Prisma in the loop, so the TRIGGERS are what's under
+ * test — exactly the writer the issue worried about):
+ *  · the posting gate: pending→posted with unbalanced (or zero) legs is
+ *    REJECTED; balanced legs post — the SQLite equivalent of the Supabase
+ *    deferred balanced-legs constraint (0002_rls.sql L344-366);
+ *  · ledger rows are append-only: LedgerEntry UPDATE/DELETE and
+ *    LedgerTransaction DELETE are rejected;
+ *  · the LedgerTransaction update whitelist: only pending→posted and
+ *    posted→reversed (+reversalRef) are legal (0002_rls.sql L309-340);
+ *  · legs may only attach to a pending transaction, and transactions are
+ *    born pending — the gate cannot be skipped by direct DML;
+ *  · CHECK constraints: side ∈ {debit, credit}, amount > 0;
+ *  · the LedgerMaintenance flag is the documented maintenance exemption
+ *    (SQLite twin of mjengo.allow_maintenance) — and the balance assertion
+ *    stays ABSOLUTE even under maintenance.
  */
 import Database from 'better-sqlite3'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -65,6 +82,10 @@ describe('migration replay', () => {
 
   it('migration 10_integrity_constraints is part of the chain', () => {
     expect(migrationDirs()).toContain('10_integrity_constraints')
+  })
+
+  it('migration 14_ledger_invariants is part of the chain', () => {
+    expect(migrationDirs()).toContain('14_ledger_invariants')
   })
 })
 
@@ -131,5 +152,186 @@ describe('hot-path indexes exist (DB-6)', () => {
   it.each(EXPECTED_INDEXES)('%s exists in sqlite_master', (name) => {
     const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`).get(name)
     expect(row).toEqual({ name })
+  })
+})
+
+describe('migration 14 — ledger balance + append-only invariants (DB-3, issue #124)', () => {
+  // Direct-SQL writers, deliberately bypassing the TypeScript service — the
+  // exact threat model of the issue. Helpers mirror the service's write
+  // sequence: born pending → attach legs → mark posted.
+  const insertTxn = (id: string, status: string, ref = `LX-2026-${id}`) =>
+    db
+      .prepare(
+        `INSERT INTO LedgerTransaction (id, ref, projectId, description, occurredAt, postedBy, postedRole, status, createdAt)
+         VALUES (?, ?, 'p-1', 'test txn', '2026-09-16 10:00:00', 'tester', 'finance', ?, CURRENT_TIMESTAMP)`,
+      )
+      .run(id, ref, status)
+  const insertLeg = (id: string, txnId: string, side: string, amount: number) =>
+    db
+      .prepare(
+        `INSERT INTO LedgerEntry (id, txnId, accountId, side, amount, createdAt) VALUES (?, ?, 'acct-1', ?, ?, CURRENT_TIMESTAMP)`,
+      )
+      .run(id, txnId, side, amount)
+  const markPosted = (id: string) =>
+    db.prepare(`UPDATE LedgerTransaction SET status = 'posted' WHERE id = ?`).run(id)
+  /** A fully posted balanced transaction (500 debit / 500 credit). */
+  const postBalanced = (id: string) => {
+    insertTxn(id, 'pending')
+    insertLeg(`${id}-d`, id, 'debit', 500)
+    insertLeg(`${id}-c`, id, 'credit', 500)
+    markPosted(id)
+  }
+
+  beforeEach(() => {
+    db.prepare(
+      `INSERT INTO LedgerAccount (id, code, name, kind, normalSide, ownerType, active, createdAt)
+       VALUES ('acct-1', 'TEST:CASH', 'Test cash', 'asset', 'debit', 'platform', 1, CURRENT_TIMESTAMP)`,
+    ).run()
+  })
+
+  describe('posting gate — Σdebits = Σcredits (0002_rls.sql L344-366 parity)', () => {
+    it('rejects marking an unbalanced transaction posted', () => {
+      insertTxn('t-1', 'pending')
+      insertLeg('e-1', 't-1', 'debit', 500)
+      insertLeg('e-2', 't-1', 'credit', 300)
+      expect(() => markPosted('t-1')).toThrow(/unbalanced ledger transaction/)
+      // the failed transition leaves the row pending — never half-posted
+      expect(db.prepare(`SELECT status FROM LedgerTransaction WHERE id = 't-1'`).get()).toEqual({ status: 'pending' })
+    })
+
+    it('rejects marking a leg-less transaction posted', () => {
+      insertTxn('t-1', 'pending')
+      expect(() => markPosted('t-1')).toThrow(/unbalanced ledger transaction/)
+    })
+
+    it('accepts a balanced transaction (the service flow, replayed in raw SQL)', () => {
+      expect(() => postBalanced('t-1')).not.toThrow()
+      expect(db.prepare(`SELECT status FROM LedgerTransaction WHERE id = 't-1'`).get()).toEqual({ status: 'posted' })
+    })
+
+    it('rejects a transaction born posted — the gate cannot be skipped by direct DML', () => {
+      expect(() => insertTxn('t-1', 'posted')).toThrow(/born pending/)
+    })
+
+    it('rejects legs attached to a non-pending (posted) transaction', () => {
+      postBalanced('t-1')
+      expect(() => insertLeg('e-late', 't-1', 'debit', 100)).toThrow(/may only attach to a pending transaction/)
+    })
+  })
+
+  describe('append-only rows (0002_rls.sql L281-305 parity)', () => {
+    it('rejects LedgerEntry UPDATE', () => {
+      postBalanced('t-1')
+      expect(() => db.prepare(`UPDATE LedgerEntry SET amount = 1 WHERE id = 't-1-d'`).run()).toThrow(/append-only/)
+    })
+
+    it('rejects LedgerEntry DELETE', () => {
+      postBalanced('t-1')
+      expect(() => db.prepare(`DELETE FROM LedgerEntry WHERE id = 't-1-d'`).run()).toThrow(/append-only/)
+    })
+
+    it('rejects LedgerTransaction DELETE', () => {
+      postBalanced('t-1')
+      expect(() => db.prepare(`DELETE FROM LedgerTransaction WHERE id = 't-1'`).run()).toThrow(/append-only/)
+    })
+
+    it('rejects the Project cascade delete into ledger history (documented operational change)', () => {
+      postBalanced('t-1')
+      // FK-cascade deletes fire the guards (verified: SQLite runs BEFORE
+      // DELETE triggers for ON DELETE CASCADE actions) — deleting a project
+      // with financial history fails loudly instead of silently cascading
+      // the ledger away, mirroring the Supabase design's §5.3/§9 delta.
+      expect(() => db.prepare(`DELETE FROM Project WHERE id = 'p-1'`).run()).toThrow(/append-only/)
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM LedgerTransaction`).get()).toEqual({ n: 1 })
+    })
+  })
+
+  describe('LedgerTransaction update whitelist (0002_rls.sql L309-340 parity)', () => {
+    it('allows reversal marking: posted → reversed + reversalRef', () => {
+      postBalanced('t-1')
+      expect(() =>
+        db
+          .prepare(`UPDATE LedgerTransaction SET status = 'reversed', reversalRef = 'LX-2026-t-2' WHERE id = 't-1'`)
+          .run(),
+      ).not.toThrow()
+      const row = db.prepare(`SELECT status, reversalRef FROM LedgerTransaction WHERE id = 't-1'`).get() as {
+        status: string
+        reversalRef: string
+      }
+      expect(row).toEqual({ status: 'reversed', reversalRef: 'LX-2026-t-2' })
+    })
+
+    it('rejects editing immutable columns (description, occurredAt, ref, postedBy)', () => {
+      postBalanced('t-1')
+      expect(() => db.prepare(`UPDATE LedgerTransaction SET description = 'hack' WHERE id = 't-1'`).run()).toThrow(/immutable/)
+      expect(() =>
+        db.prepare(`UPDATE LedgerTransaction SET occurredAt = '2020-01-01 00:00:00' WHERE id = 't-1'`).run(),
+      ).toThrow(/immutable/)
+      expect(() => db.prepare(`UPDATE LedgerTransaction SET ref = 'LX-fake' WHERE id = 't-1'`).run()).toThrow(/immutable/)
+      expect(() => db.prepare(`UPDATE LedgerTransaction SET postedBy = 'attacker' WHERE id = 't-1'`).run()).toThrow(/immutable/)
+    })
+
+    it('rejects status edits outside the two legal transitions', () => {
+      postBalanced('t-1')
+      // posted → posted (no-op), posted → pending, and reversalRef without
+      // the posted → reversed move are all outside the whitelist
+      expect(() => db.prepare(`UPDATE LedgerTransaction SET status = 'posted' WHERE id = 't-1'`).run()).toThrow(/immutable/)
+      expect(() => db.prepare(`UPDATE LedgerTransaction SET status = 'pending' WHERE id = 't-1'`).run()).toThrow(/immutable/)
+      expect(() => db.prepare(`UPDATE LedgerTransaction SET reversalRef = 'X' WHERE id = 't-1'`).run()).toThrow(/immutable/)
+      // pending → reversed skips the balance gate — rejected
+      insertTxn('t-2', 'pending')
+      expect(() => db.prepare(`UPDATE LedgerTransaction SET status = 'reversed' WHERE id = 't-2'`).run()).toThrow(/immutable/)
+      // a reversed row is frozen
+      postBalanced('t-3')
+      db.prepare(`UPDATE LedgerTransaction SET status = 'reversed', reversalRef = 'LX-x' WHERE id = 't-3'`).run()
+      expect(() => db.prepare(`UPDATE LedgerTransaction SET reversalRef = 'LX-y' WHERE id = 't-3'`).run()).toThrow(/immutable/)
+    })
+  })
+
+  describe('CHECK constraints (0001_schema.sql L984-985 parity)', () => {
+    it('rejects non-positive amounts', () => {
+      insertTxn('t-1', 'pending')
+      expect(() => insertLeg('e-1', 't-1', 'debit', 0)).toThrow(/LedgerEntry_amount_check/)
+      expect(() => insertLeg('e-2', 't-1', 'debit', -5)).toThrow(/LedgerEntry_amount_check/)
+    })
+
+    it('rejects a side outside debit/credit', () => {
+      insertTxn('t-1', 'pending')
+      expect(() => insertLeg('e-1', 't-1', 'banana', 5)).toThrow(/LedgerEntry_side_check/)
+    })
+
+    it('carries both CHECKs in the table DDL (visible to introspection)', () => {
+      const sql = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'LedgerEntry'`).get() as {
+        sql: string
+      }
+      expect(sql.sql).toContain('LedgerEntry_side_check')
+      expect(sql.sql).toContain('LedgerEntry_amount_check')
+    })
+  })
+
+  describe('maintenance mode — the LedgerMaintenance exemption (mjengo.allow_maintenance twin)', () => {
+    const enable = () => db.prepare(`INSERT INTO LedgerMaintenance (id, allow) VALUES (1, 1)`).run()
+    const disable = () => db.prepare(`UPDATE LedgerMaintenance SET allow = 0 WHERE id = 1`).run()
+
+    it('pauses the append-only + birth-state guards while allow = 1', () => {
+      postBalanced('t-1')
+      enable()
+      // archival ops the seeds legitimately need: wipe + born-posted backfill
+      expect(() => db.prepare(`DELETE FROM LedgerEntry WHERE txnId = 't-1'`).run()).not.toThrow()
+      expect(() => db.prepare(`DELETE FROM LedgerTransaction WHERE id = 't-1'`).run()).not.toThrow()
+      expect(() => insertTxn('t-arch', 'posted')).not.toThrow()
+      disable()
+      // flag off ⇒ guards are live again
+      expect(() => insertTxn('t-2', 'posted')).toThrow(/born pending/)
+    })
+
+    it('does NOT bypass the balance assertion — the invariant is absolute', () => {
+      enable()
+      insertTxn('t-1', 'pending')
+      insertLeg('e-1', 't-1', 'debit', 500)
+      insertLeg('e-2', 't-1', 'credit', 499)
+      expect(() => markPosted('t-1')).toThrow(/unbalanced ledger transaction/)
+      disable()
+    })
   })
 })
