@@ -44,9 +44,56 @@ export interface StockMovementRow {
   createdAt: string
 }
 
+// ---- Stock reconciliation (issue #194) ---------------------------------------
+// Count session rows for the project payload. variance is COMPUTED on read
+// (expectedQty − countedQty — one definition, see countVariance); postedQty
+// is the adjustment actually appended from the line (null until posted).
+
+export type StockCountStatus = 'open' | 'posted'
+
+export interface StockCountItemRow {
+  id: string
+  inventoryItemId: string
+  materialName: string
+  unit: string
+  location: string
+  countedQty: number
+  expectedQty: number
+  /** Signed variance = expectedQty − countedQty (>0: book overstates). */
+  variance: number
+  /** Adjustment appended from this line (counted − expected); null until posted. */
+  postedQty: number | null
+}
+
+/** An InventoryItem that was NOT part of a count session (listed separately). */
+export interface UncountedItemRow {
+  inventoryItemId: string
+  materialName: string
+  unit: string
+  location: string
+  /** Derived closing as of the count's countedAt (history query — honest). */
+  expectedQty: number
+}
+
+export interface StockCountRow {
+  id: string
+  countedBy: string
+  countedAt: string
+  note: string | null
+  status: StockCountStatus
+  postedAt: string | null
+  postedBy: string | null
+  itemCount: number
+  items: StockCountItemRow[]
+  uncounted: UncountedItemRow[]
+  createdAt: string
+}
+
 export interface InventorySlice {
   items: InventoryItemRow[]
   movements: StockMovementRow[]
+  /** Stock reconciliation history (issue #194), newest first. */
+  counts: StockCountRow[]
 }
 
 export interface BoqLineRow {

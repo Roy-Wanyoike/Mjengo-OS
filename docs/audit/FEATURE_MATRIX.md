@@ -19,7 +19,7 @@ Status scale: DONE / PARTIAL / MISSING / BLOCKED (external) / MOCK-DEMO
 | Workforce / fundis / trust levels | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **DONE** | – |
 | Attendance (incl. USSD/WhatsApp) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **DONE*** — unique(workerId,date) added this wave | – |
 | Materials / BOQ / inventory | ✓ | ✓ | ✓ | ✓ | ✓ (DB-2 fixed this wave) | ✓ (this wave) | ✓ | ✓ | **DONE*** | – |
-| Stock reconciliation | ◐ | ✓ | ✓ | ✓ | ✓ derived | ◐ (this wave added core) | ✓ | – | **PARTIAL** — reconciliation UI/report thin | reg |
+| Stock reconciliation | ✓ | ✓ | ✓ | ✓ | ✓ derived + snapshot | ✓ (#194: count sessions, variance view, count-linked adjustments, history+CSV) | ✓ | – | **DONE*** — landed via #194 (migration 16 StockCount/StockCountItem; adjustments append `adjusted` movements referencing the count; never edits history) | – |
 | Procurement: request→RFQ→quotes→compare | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (outbox) | **DONE** | – |
 | Purchase orders + approvals | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **DONE*** — unique codes this wave | – |
 | Deliveries + proof-of-delivery photos | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **DONE** | – |

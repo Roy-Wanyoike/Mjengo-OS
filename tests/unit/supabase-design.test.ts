@@ -9,7 +9,7 @@
  *      create-table in 0001_schema.sql (parsed live from
  *      prisma/schema.prisma so the design cannot drift from the model),
  *      EXCEPT the documented SQLite-only models (§ below);
- *   2. RLS COVERAGE — every table (69 + profiles = 70) has RLS enabled and
+ *   2. RLS COVERAGE — every table (71 + profiles = 72) has RLS enabled and
  *      at least one policy; anon is revoked everywhere;
  *   3. MONEY TYPING — every money column is numeric(18,2), every quantity
  *      numeric(18,3) (the Float-money defect class stays fixed);
@@ -244,13 +244,15 @@ const QUANTITY_COLUMNS: Array<[string, string]> = [
   ['purchase_order_lines', 'qty'], ['order_delivery_lines', 'qty_ordered'],
   ['order_delivery_lines', 'qty_received'], ['order_delivery_lines', 'qty_rejected'],
   ['invoice_lines', 'qty'], ['boq_lines', 'qty'], ['stock_movements', 'quantity'],
+  ['stock_count_items', 'counted_qty'], ['stock_count_items', 'expected_qty'],
+  ['stock_count_items', 'posted_qty'],
 ]
 
 // ---------------------------------------------------------------- tests
 
 describe('1. schema completeness (design tracks the Prisma model)', () => {
-  it('parses the full model list from prisma/schema.prisma (70 models)', () => {
-    expect(PRISMA_MODELS.length).toBe(70)
+  it('parses the full model list from prisma/schema.prisma (72 models)', () => {
+    expect(PRISMA_MODELS.length).toBe(72)
   })
 
   it('the SQLite-only exemption list is exactly LedgerMaintenance (no Supabase table, by design)', () => {
@@ -322,8 +324,8 @@ describe('2. RLS coverage (fail-closed posture)', () => {
     policyTables.set(m[1], (policyTables.get(m[1]) ?? 0) + 1)
   }
 
-  it('RLS is enabled + anon revoked for exactly the 70 tables (69 + profiles)', () => {
-    expect(new Set(rlsEnabled).size).toBe(70)
+  it('RLS is enabled + anon revoked for exactly the 72 tables (71 + profiles)', () => {
+    expect(new Set(rlsEnabled).size).toBe(72)
     expect(new Set(rlsEnabled)).toEqual(new Set(allTables))
   })
 

@@ -1087,6 +1087,40 @@ create table public.stock_movements (
 create index stock_movements_item_idx on public.stock_movements (inventory_item_id, created_at desc);
 create index stock_movements_project_idx on public.stock_movements (project_id);
 
+-- StockCount / StockCountItem (issue #194) — the stock reconciliation loop:
+-- a physical count session per project + one counted line per inventory
+-- item. expected_qty is the derived-closing SNAPSHOT at count time (pinned);
+-- variance is always expected − counted (computed, never stored). status
+-- open → posted is the ONE legal state transition (posting appends
+-- `adjusted` stock_movements with reference 'count:<id>' — the ledger itself
+-- is never edited, which is why these tables are NOT in the append-only
+-- trigger set: stock_movements already is).
+create table public.stock_counts (
+  id         text primary key,
+  project_id text not null references public.projects (id) on delete cascade,
+  counted_by text not null,
+  counted_at timestamptz not null,
+  note       text,
+  status     text not null default 'open' check (status in ('open', 'posted')),
+  posted_at  timestamptz,
+  posted_by  text,
+  created_at timestamptz not null default now()
+);
+
+create index stock_counts_project_idx on public.stock_counts (project_id, created_at desc);
+
+create table public.stock_count_items (
+  id               text primary key,
+  count_id         text not null references public.stock_counts (id) on delete cascade,
+  inventory_item_id text not null references public.inventory_items (id) on delete cascade,
+  counted_qty      numeric(18,3) not null check (counted_qty >= 0),
+  expected_qty     numeric(18,3) not null,
+  posted_qty       numeric(18,3),
+  constraint stock_count_items_line_unique unique (count_id, inventory_item_id)
+);
+
+create index stock_count_items_item_idx on public.stock_count_items (inventory_item_id);
+
 create table public.boqs (
   id         text primary key,
   project_id text not null references public.projects (id) on delete cascade,

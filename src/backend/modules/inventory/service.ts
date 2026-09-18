@@ -203,6 +203,249 @@ export async function adjustStock(projectId: string, p: any): Promise<MovementRe
   })
 }
 
+// ---- Stock reconciliation (issue #194) ---------------------------------------
+// The count → variance → count-linked adjustment loop. Design invariants:
+//
+//   · EXPECTED IS A SNAPSHOT. expectedQty is the derived closing AS OF the
+//     count's countedAt (movements with createdAt ≤ countedAt). A count
+//     recorded offline and flushed hours later still snapshots the world the
+//     site actually saw when the bags were counted — movements logged in
+//     between are excluded.
+//   · VARIANCE HAS ONE DEFINITION. variance = expected − counted (>0: the
+//     book overstates physical stock). It is computed on read
+//     (repository.countVariance), never stored — the same discipline as
+//     movementDelta.
+//   · THE LEDGER NEVER EDITS HISTORY. Posting from a count APPENDS one
+//     `adjusted` movement per non-zero-variance line (qty = counted −
+//     expected, the negation of variance — the ledger moves TOWARD the
+//     count) and then flips the count row open → posted. No existing
+//     StockMovement row is ever touched.
+//   · POSTING IS IDEMPOTENT-BY-REFUSAL. A count whose status is already
+//     'posted' refuses with an honest error instead of double-adjusting.
+//     (The offline outbox's §57 idem key already stops the same queued item
+//     from applying twice; this guard is the second, payload-level lock.)
+//   · ADJUSTMENTS ARE RELATIVE TO THE SNAPSHOT. Movements recorded between
+//     the count and the post stay in the ledger on top of the adjustment —
+//     the post-count closing is expected + adjustment + everything since,
+//     and the audit trail says exactly why.
+
+/** Movement-ledger reference convention for count-linked adjustments (lineage). */
+export function countReference(countId: string): string {
+  return `count:${countId}`
+}
+
+/** One counted line as dispatched (offline payload shape — raw numbers). */
+interface CountLineInput {
+  inventoryItemId: string
+  countedQty: number
+}
+
+/** Validate + normalise one counted line: finite, ≥ 0 (a count can find zero), sane cap. */
+function parseCountedQty(line: { inventoryItemId?: unknown; countedQty?: unknown }): CountLineInput {
+  const id = String(line.inventoryItemId ?? '')
+  if (!id) throw new Error('inventory.count: every counted line needs an inventoryItemId')
+  const qty = Number(line.countedQty)
+  if (!Number.isFinite(qty) || qty < 0) {
+    throw new Error(`inventory.count: countedQty must be zero or more (got ${typeof line.countedQty === 'string' ? `"${line.countedQty}"` : String(line.countedQty)})`)
+  }
+  if (qty > MAX_MOVEMENT_QTY) {
+    throw new Error(`inventory.count: countedQty ${qty} exceeds the cap of ${MAX_MOVEMENT_QTY.toLocaleString('en-US')} — check the unit (bags, tonnes…), not the digits`)
+  }
+  return { inventoryItemId: id, countedQty: qty }
+}
+
+export interface RecordCountResult {
+  countId: string
+  countedBy: string
+  countedAt: string
+  itemCount: number
+  variances: Array<{
+    inventoryItemId: string
+    materialName: string
+    unit: string
+    expectedQty: number
+    countedQty: number
+    variance: number
+  }>
+}
+
+/**
+ * Record a physical stock count session (inventory.count): one StockCount
+ * row + one StockCountItem per counted line, with the expected snapshot
+ * pinned at countedAt. Atomic — a bad line writes nothing.
+ */
+export async function recordStockCount(projectId: string, p: any): Promise<RecordCountResult> {
+  return db.$transaction(async (tx) => {
+    const countedBy = String(p.countedBy ?? '').trim()
+    if (!countedBy) {
+      throw new Error('inventory.count: countedBy is required — record who ran the physical count')
+    }
+    const rawCounts = Array.isArray(p.counts) ? p.counts : []
+    if (rawCounts.length === 0) {
+      throw new Error('inventory.count: at least one counted line is required — an empty session records nothing')
+    }
+    const countedAt = p.countedAt ? new Date(p.countedAt) : new Date()
+    if (Number.isNaN(countedAt.getTime())) {
+      throw new Error('inventory.count: countedAt must be a valid date')
+    }
+
+    // Validate + dedupe every line BEFORE any write (the DB unique
+    // (countId, inventoryItemId) is the second lock, not the first).
+    const lines = new Map<string, number>()
+    for (const raw of rawCounts) {
+      const line = parseCountedQty(raw ?? {})
+      if (lines.has(line.inventoryItemId)) {
+        throw new Error(`inventory.count: inventory item ${line.inventoryItemId} is counted twice in one session`)
+      }
+      lines.set(line.inventoryItemId, line.countedQty)
+    }
+
+    // Project-scoped read of every counted item WITH its movement log — the
+    // snapshot is derived from exactly these rows.
+    const items = await tx.inventoryItem.findMany({
+      where: { projectId, id: { in: [...lines.keys()] } },
+      include: { movements: true },
+    })
+    if (items.length !== lines.size) {
+      throw new Error('inventory.count: one or more inventory items were not found in this project')
+    }
+
+    const count = await tx.stockCount.create({
+      data: {
+        projectId,
+        countedBy,
+        countedAt,
+        note: p.note ? String(p.note) : null,
+        status: 'open',
+      },
+    })
+
+    const variances: RecordCountResult['variances'] = []
+    for (const item of items) {
+      const countedQty = lines.get(item.id)!
+      // THE SNAPSHOT: derived closing as of countedAt (append-only log →
+      // history is queryable; later movements cannot rewrite it).
+      const expectedQty = derivedClosingQty(
+        item.movements.filter((m) => m.createdAt <= countedAt),
+      )
+      await tx.stockCountItem.create({
+        data: { countId: count.id, inventoryItemId: item.id, countedQty, expectedQty },
+      })
+      variances.push({
+        inventoryItemId: item.id,
+        materialName: item.materialName,
+        unit: item.unit,
+        expectedQty,
+        countedQty,
+        variance: expectedQty - countedQty,
+      })
+    }
+
+    return {
+      countId: count.id,
+      countedBy,
+      countedAt: countedAt.toISOString(),
+      itemCount: items.length,
+      variances,
+    }
+  })
+}
+
+export interface PostCountResult {
+  countId: string
+  postedAt: string
+  postedBy: string
+  movements: Array<{
+    inventoryItemId: string
+    materialName: string
+    unit: string
+    movementId: string | null
+    adjustment: number
+    closingQty: number
+  }>
+}
+
+/**
+ * Post the count-linked adjustments for a recorded count
+ * (inventory.count.post): append one `adjusted` StockMovement per
+ * non-zero-variance line (reference 'count:<countId>' — the auditable
+ * lineage), stamp each line's postedQty, then flip the count open → posted.
+ * Refuses an already-posted count (idempotent-by-refusal). NEVER edits an
+ * existing movement row.
+ */
+export async function postCountAdjustments(projectId: string, p: any): Promise<PostCountResult> {
+  return db.$transaction(async (tx) => {
+    const countId = String(p.countId ?? '')
+    if (!countId) throw new Error('inventory.count.post: countId is required')
+    const postedBy = String(p.postedBy ?? p.recordedBy ?? 'Site Manager')
+
+    // Project-scoped fetch with the counted lines and their items' movement logs.
+    const count = await tx.stockCount.findFirst({
+      where: { id: countId, projectId },
+      include: { items: { include: { inventoryItem: { include: { movements: true } } } } },
+    })
+    if (!count) throw new Error('Stock count not found')
+    if (count.status === 'posted') {
+      throw new Error(
+        `Stock count ${countId} is already posted${count.postedAt ? ` (${count.postedAt.toISOString()})` : ''} — posting twice would double-adjust. Record a new count instead.`,
+      )
+    }
+    if (count.items.length === 0) {
+      throw new Error(`Stock count ${countId} has no counted lines — nothing to post`)
+    }
+
+    const reference = countReference(count.id)
+    const note = `stock count ${count.id.slice(-6)} by ${count.countedBy}`
+    const movements: PostCountResult['movements'] = []
+    for (const line of count.items) {
+      // One definition, negated: the adjustment moves the ledger TOWARD the
+      // count (counted − expected). Zero-variance lines post NO movement.
+      const adjustment = line.countedQty - line.expectedQty
+      const item = line.inventoryItem
+      if (adjustment === 0) {
+        await tx.stockCountItem.update({ where: { id: line.id }, data: { postedQty: 0 } })
+        movements.push({
+          inventoryItemId: line.inventoryItemId,
+          materialName: item.materialName,
+          unit: item.unit,
+          movementId: null,
+          adjustment: 0,
+          closingQty: derivedClosingQty(item.movements),
+        })
+        continue
+      }
+      const movement = await appendMovement(
+        tx,
+        projectId,
+        line.inventoryItemId,
+        'adjusted',
+        adjustment,
+        null,
+        reference,
+        `${note}: expected ${line.expectedQty}, counted ${line.countedQty}`,
+        postedBy,
+      )
+      await tx.stockCountItem.update({ where: { id: line.id }, data: { postedQty: adjustment } })
+      movements.push({
+        inventoryItemId: line.inventoryItemId,
+        materialName: item.materialName,
+        unit: item.unit,
+        movementId: movement.id,
+        adjustment,
+        closingQty: derivedClosingQty(item.movements.concat([movement])),
+      })
+    }
+
+    const postedAt = new Date()
+    await tx.stockCount.update({
+      where: { id: count.id },
+      data: { status: 'posted', postedAt, postedBy },
+    })
+
+    return { countId: count.id, postedAt: postedAt.toISOString(), postedBy, movements }
+  })
+}
+
 // ---- BOQ ----
 
 export async function createBoq(projectId: string, p: any) {

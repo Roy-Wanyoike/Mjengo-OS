@@ -115,7 +115,7 @@ begin
     'invoice_lines','risk_assessments','mjengo_scores','intel_digests',
     'price_points','ledger_accounts','ledger_transactions','ledger_entries',
     'idempotency_records','wallet_accounts','payment_requests','inventory_items',
-    'stock_movements','boqs','boq_lines','saved_suppliers','attachments',
+    'stock_movements','stock_counts','stock_count_items','boqs','boq_lines','saved_suppliers','attachments',
     'domain_events','job_records','feature_flags','project_health',
     'ai_review_notes','photo_hashes','ai_insights','trust_digests','profiles'
   ] loop
@@ -919,6 +919,29 @@ create policy stock_movements_select on public.stock_movements for select to aut
   using (public.can_read_project(project_id));
 create policy stock_movements_insert on public.stock_movements for insert to authenticated
   with check (public.can_write_project(project_id));
+
+-- Stock reconciliation (issue #194): stock_counts carries the open → posted
+-- transition (postedAt/postedBy + status), so it needs update like boqs;
+-- stock_count_items' posted_qty is written at post time (update via parent).
+-- The MOVEMENT ledger stays append-only — these rows are workflow state.
+create policy stock_counts_select on public.stock_counts for select to authenticated
+  using (public.can_read_project(project_id));
+create policy stock_counts_insert on public.stock_counts for insert to authenticated
+  with check (public.can_write_project(project_id));
+create policy stock_counts_update on public.stock_counts for update to authenticated
+  using (public.can_write_project(project_id)) with check (public.can_write_project(project_id));
+create policy stock_counts_delete on public.stock_counts for delete to authenticated
+  using (public.is_staff());
+
+create policy stock_count_items_select on public.stock_count_items for select to authenticated
+  using (exists (select 1 from public.stock_counts c where c.id = count_id and public.can_read_project(c.project_id)));
+create policy stock_count_items_insert on public.stock_count_items for insert to authenticated
+  with check (exists (select 1 from public.stock_counts c where c.id = count_id and public.can_write_project(c.project_id)));
+create policy stock_count_items_update on public.stock_count_items for update to authenticated
+  using (exists (select 1 from public.stock_counts c where c.id = count_id and public.can_write_project(c.project_id)))
+  with check (exists (select 1 from public.stock_counts c where c.id = count_id and public.can_write_project(c.project_id)));
+create policy stock_count_items_delete on public.stock_count_items for delete to authenticated
+  using (public.is_staff());
 
 create policy boqs_select on public.boqs for select to authenticated
   using (public.can_read_project(project_id));

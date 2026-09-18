@@ -54,7 +54,10 @@ mapped 1:1 to a future extracted service (see ARCHITECTURE.md):
 - **wallet** — escrow + payment requests + `PaymentProvider` seam
   (`providers.ts`, SimulatedProvider today); atomic milestone release.
 - **supply** — requests → approvals → quotes → POs → deliveries → site store.
-- **inventory** — append-only `StockMovement` rows, derived closing stock.
+- **inventory** — append-only `StockMovement` rows, derived closing stock;
+  stock reconciliation (#194): `StockCount` sessions with expectedQty
+  snapshots → variance (expected − counted) → count-linked `adjusted`
+  movements (reference `count:<id>` lineage; posting never edits history).
 - **invoices** — lifecycle + 3-way match (PO ↔ invoice ↔ delivery) +
   decision-grade session resolution (`session.ts`).
 - **land** — parcels, documents, registry search, property passport.

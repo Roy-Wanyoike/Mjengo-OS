@@ -13,6 +13,8 @@ import {
   returnStock,
   damageStock,
   adjustStock,
+  recordStockCount,
+  postCountAdjustments,
   createBoq,
   upsertBoqLine,
   deleteBoqLine,
@@ -31,6 +33,8 @@ export const INVENTORY_ACTIONS = [
   'inventory.return', // { inventoryItemId, qty, note? }
   'inventory.damage', // { inventoryItemId, qty, damageNote }
   'inventory.adjust', // { inventoryItemId, qty, reason } — count correction (±)
+  'inventory.count', // { countedBy, countedAt?, note?, counts: [{ inventoryItemId, countedQty }] } — record a physical stock count session (issue #194)
+  'inventory.count.post', // { countId, postedBy? } — post the count-linked adjustments (`adjusted` movements referencing the count)
   'boq.create', // { name, lines?: [...] }
   'boq.line.upsert', // { boqId, id?, materialName, unit, qty, estUnitPrice?, category?, note? }
   'boq.line.delete', // { id }
@@ -62,6 +66,10 @@ export async function applyInventoryAction(
       return damageStock(projectId, p)
     case 'inventory.adjust':
       return adjustStock(projectId, p)
+    case 'inventory.count':
+      return recordStockCount(projectId, p)
+    case 'inventory.count.post':
+      return postCountAdjustments(projectId, p)
     case 'boq.create':
       return createBoq(projectId, p)
     case 'boq.line.upsert':
