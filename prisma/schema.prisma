@@ -1330,6 +1330,15 @@ model Attachment {
   entityId             String
   fileName             String
   storageKey           String // /uploads/... or /photos/... path
+  // #159 (audit API-8): the RAW storage-driver key (upp-<ts>-<hex>.<ext>) —
+  // the natural dedupe key for POST /api/upload/confirm. storageKey itself
+  // is NOT usable as that key: it records publicUrl(key), which on s3-compat
+  // without S3_PUBLIC_BASE is a per-call presigned GET (fresh SigV4 date,
+  // 7-day expiry) — two confirms of one object mint two different strings.
+  // objectKey is set ONLY by the confirm flow; every other writer (document
+  // mode, seeds) leaves it NULL, and SQLite unique indexes skip NULLs, so
+  // the constraint is additive over the legacy corpus by construction.
+  objectKey            String?         @unique
   kind                 String? // delivery_photo (linked via DeliveryPhoto), quote_doc, invoice_doc...
   uploadedBy           String
   projectId            String?

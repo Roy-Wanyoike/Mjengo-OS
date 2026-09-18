@@ -12,6 +12,16 @@
  *    from the HEAD, storageKey = the driver's publicUrl); plus every
  *    fail-closed branch (missing object, over-cap, wrong content type,
  *    non-upp key shapes, local driver answers 404 honestly);
+ *  · POST /api/upload/confirm idempotency (issue #159 / audit API-8) — the
+ *    db mock enforces the REAL constraint semantics (migration 18's unique
+ *    index on Attachment.objectKey: a second create with the same key
+ *    throws a P2002-shaped error, findUnique resolves by objectKey), so the
+ *    route's replay/conflict/race branches run against the same behavior
+ *    the engine provides: retried confirm → 200 replayed:true + the ORIGINAL
+ *    row + no re-HEAD; same key different category → 409, nothing replayed;
+ *    concurrent double-confirm (Promise.all — both lookups miss, one create
+ *    wins, the loser replays through the P2002 catch) → both 200, one row;
+ *    non-objectKey P2002s and plain errors rethrow (fail closed);
  *  · POST /api/upload (legacy photo path) — the write goes through
  *    getStorageDriver().put() (spy): same key shape, same URL contract, same
  *    caps/MIME checks, byte-identical response.
@@ -54,18 +64,52 @@ vi.mock('@/backend/lib/db', () => {
   const state = {
     seq: 0,
     attachments: [] as Array<Record<string, unknown>>,
+    /** One-shot: the next attachment.create throws this instead (error-path seam). */
+    failNextCreate: null as unknown | null,
+    /** One-shot: the next objectKey findUnique misses (race-window seam — the
+     *  lookup runs before a concurrent create has landed). */
+    missNextObjectKeyLookup: false,
     reset() {
       state.attachments.length = 0
       state.seq = 0
+      state.failNextCreate = null
+      state.missNextObjectKeyLookup = false
     },
   }
+  // Migration 18 semantics (issue #159): the mock behaves like the real
+  // engine — a create whose objectKey is already taken rejects with a
+  // P2002-shaped error (code + meta.target, the shape Prisma surfaces), so
+  // the route's unique-violation handling is tested against the contract it
+  // actually depends on, not a bespoke stub convention.
   const attachment = {
     async create({ data }: { data: Record<string, unknown> }) {
+      if (state.failNextCreate) {
+        const err = state.failNextCreate
+        state.failNextCreate = null
+        throw err
+      }
+      if (
+        typeof data.objectKey === 'string' &&
+        state.attachments.some((r) => r.objectKey === data.objectKey)
+      ) {
+        throw Object.assign(
+          new Error('Unique constraint failed on the fields: (objectKey)'),
+          { code: 'P2002', meta: { target: ['objectKey'] } },
+        )
+      }
       const row = { id: `att_${++state.seq}`, createdAt: new Date('2026-03-09T12:00:00Z'), version: 1, ...data }
       state.attachments.push(row)
       return { ...row }
     },
-    async findUnique({ where }: { where: { id: string } }) {
+    async findUnique({ where }: { where: { id?: string; objectKey?: string } }) {
+      if (where.objectKey !== undefined) {
+        if (state.missNextObjectKeyLookup) {
+          state.missNextObjectKeyLookup = false
+          return null
+        }
+        const row = state.attachments.find((r) => r.objectKey === where.objectKey)
+        return row ? { ...row } : null
+      }
       const row = state.attachments.find((r) => r.id === where.id)
       return row ? { ...row } : null
     },
@@ -97,6 +141,8 @@ function stateType() {
   return undefined as unknown as {
     attachments: Array<Record<string, unknown>>
     reset: () => void
+    failNextCreate: unknown | null
+    missNextObjectKeyLookup: boolean
   }
 }
 const state = (db as unknown as { __state: State }).__state
@@ -304,6 +350,7 @@ describe('POST /api/upload/confirm — the full client-direct flow', () => {
     expect(res.status).toBe(200)
     const body = await bodyOf(res)
     expect(body.ok).toBe(true)
+    expect(body.replayed).toBe(false) // #159: fresh confirm — the stable replay flag
     const attachment = body.attachment as Record<string, unknown>
     expect(attachment.id).toBe('att_1')
     expect(attachment.fileName).toBe(key)
@@ -317,6 +364,7 @@ describe('POST /api/upload/confirm — the full client-direct flow', () => {
     expect(row.entityId).toBe('unattached')
     expect(row.kind).toBe('receipt_photo')
     expect(row.fileName).toBe(key)
+    expect(row.objectKey).toBe(key) // #159: the RAW key — the dedupe natural key
     expect(row.storageKey).toBe(`https://cdn.test.example/mjengo-test/${key}`)
     expect(row.mimeType).toBe('image/png')
     expect(row.sizeBytes).toBe(PNG_BYTES.length)
@@ -404,6 +452,148 @@ describe('POST /api/upload/confirm — the full client-direct flow', () => {
     setStorageDriverForTests(S3_DRIVER)
     tokenState.token = null
     expect((await confirmHandler(req('/api/upload/confirm', { key: 'upp-1712345678-abcd12.png', category: 'other' }))).status).toBe(401)
+  })
+})
+
+// ------------------------------------------- confirm idempotency (issue #159)
+
+describe('POST /api/upload/confirm — idempotent on the object key (#159 / API-8)', () => {
+  const KEY = 'upp-1712345678-abcd12.png'
+
+  function headOk() {
+    fetchByMethod({
+      HEAD: () => new Response(null, { status: 200, headers: { 'content-length': '11', 'content-type': 'image/png' } }),
+    })
+  }
+
+  it('a retried confirm returns the ORIGINAL row (200, replayed: true) — one row, no re-HEAD', async () => {
+    setStorageDriverForTests(S3_DRIVER)
+    headOk()
+    const first = await bodyOf(await confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'receipt' })))
+    expect(first.ok).toBe(true)
+    expect(first.replayed).toBe(false)
+
+    // The retry: same key, same category. The replay must NOT hit storage —
+    // the row is the durable answer — so no further fetch after this clear.
+    fetchMock.mockClear()
+    const res = await confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'receipt' }))
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    expect(body.ok).toBe(true)
+    expect(body.replayed).toBe(true) // the family's replay idiom
+    expect((body.attachment as Record<string, unknown>).id).toBe('att_1') // the ORIGINAL row
+    expect((body.attachment as Record<string, unknown>).category).toBe('receipt')
+    expect(fetchMock).not.toHaveBeenCalled() // replay answered from the record, not the bucket
+    expect(state.attachments).toHaveLength(1) // no second row — the whole point of #159
+    expect(state.attachments[0].objectKey).toBe(KEY)
+  })
+
+  it('a conflicting retry (same key, DIFFERENT category) → 409, nothing replayed, nothing rewritten', async () => {
+    setStorageDriverForTests(S3_DRIVER)
+    headOk()
+    await confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'receipt' }))
+
+    const res = await confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'invoice' }))
+    expect(res.status).toBe(409)
+    const body = await bodyOf(res)
+    expect(String(body.error)).toContain('already confirmed as category "receipt"')
+    expect(String(body.error)).toContain('NOT replayed')
+    expect(body.attachment).toBeUndefined()
+    expect(state.attachments).toHaveLength(1)
+    expect(state.attachments[0].category).toBe('receipt') // the row keeps its classification
+    expect(state.attachments[0].kind).toBe('receipt_photo')
+  })
+
+  it('concurrent double-confirm: both 200, ONE row — the unique index breaks the race', async () => {
+    setStorageDriverForTests(S3_DRIVER)
+    headOk()
+    // Promise.all interleaves at every await: BOTH replay lookups miss (the
+    // race window), both verifies pass, one create wins, the loser's create
+    // rejects P2002 on the unique index and replays the winner's row.
+    const [a, b] = await Promise.all([
+      confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'other' })),
+      confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'other' })),
+    ])
+    expect(a.status).toBe(200)
+    expect(b.status).toBe(200)
+    const bodyA = await bodyOf(a)
+    const bodyB = await bodyOf(b)
+    expect([bodyA.replayed, bodyB.replayed].sort()).toEqual([false, true]) // exactly one replay
+    expect((bodyA.attachment as Record<string, unknown>).id).toBe(
+      (bodyB.attachment as Record<string, unknown>).id,
+    ) // both point at the ONE row
+    expect(state.attachments).toHaveLength(1)
+  })
+
+  it('distinct keys are unaffected — two rows, both fresh', async () => {
+    setStorageDriverForTests(S3_DRIVER)
+    headOk()
+    const a = await bodyOf(await confirmHandler(req('/api/upload/confirm', { key: 'upp-1712345678-aaaaaa.png', category: 'other' })))
+    const b = await bodyOf(await confirmHandler(req('/api/upload/confirm', { key: 'upp-1712345678-bbbbbb.png', category: 'receipt' })))
+    expect(a.replayed).toBe(false)
+    expect(b.replayed).toBe(false)
+    expect(state.attachments).toHaveLength(2)
+    expect(new Set(state.attachments.map((r) => r.id)).size).toBe(2)
+  })
+
+  it('fail closed: a plain create error is NOT swallowed (500 via the route contract)', async () => {
+    setStorageDriverForTests(S3_DRIVER)
+    headOk()
+    state.failNextCreate = new Error('database exploded')
+    const res = await confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'other' }))
+    expect(res.status).toBe(500)
+    expect(await bodyOf(res)).toEqual({ error: 'Confirm failed' })
+    expect(state.attachments).toHaveLength(0)
+  })
+
+  it('fail closed: a P2002 naming a DIFFERENT constraint is NOT treated as a replay (rethrown → 500)', async () => {
+    setStorageDriverForTests(S3_DRIVER)
+    headOk()
+    state.failNextCreate = Object.assign(new Error('Unique constraint failed on the fields: (id)'), {
+      code: 'P2002',
+      meta: { target: ['id'] },
+    })
+    const res = await confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'other' }))
+    expect(res.status).toBe(500)
+    expect(await bodyOf(res)).toEqual({ error: 'Confirm failed' })
+    expect(state.attachments).toHaveLength(0)
+  })
+
+  it('fail closed: a string-target P2002 (index-name shape) on objectKey IS a replay', async () => {
+    setStorageDriverForTests(S3_DRIVER)
+    headOk()
+    await confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'drawing' }))
+    const row = state.attachments[0]
+    // Simulate the race window: the pre-lookup MISSES (a concurrent confirm
+    // has not landed yet from this request's viewpoint), the create then hits
+    // the unique index — reported by its INDEX NAME (the string target shape
+    // some engine versions surface) — still recognized, still a replay.
+    state.missNextObjectKeyLookup = true
+    state.failNextCreate = Object.assign(new Error('Unique constraint failed on the fields: (objectKey)'), {
+      code: 'P2002',
+      meta: { target: 'Attachment_objectKey_key' },
+    })
+    const res = await confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'drawing' }))
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    expect(body.replayed).toBe(true)
+    expect((body.attachment as Record<string, unknown>).id).toBe(row.id)
+    expect(state.attachments).toHaveLength(1)
+  })
+
+  it('fail closed: the race window with a VANISHED row (P2002 then no row) rethrows — honest 500', async () => {
+    setStorageDriverForTests(S3_DRIVER)
+    headOk()
+    // Pre-lookup misses, create collides, and the re-read finds nothing
+    // (row deleted between violation and re-read) — the route must not
+    // invent a replay; it rethrows and the route contract answers 500.
+    state.failNextCreate = Object.assign(new Error('Unique constraint failed on the fields: (objectKey)'), {
+      code: 'P2002',
+      meta: { target: ['objectKey'] },
+    })
+    const res = await confirmHandler(req('/api/upload/confirm', { key: KEY, category: 'other' }))
+    expect(res.status).toBe(500)
+    expect(await bodyOf(res)).toEqual({ error: 'Confirm failed' })
   })
 })
 
