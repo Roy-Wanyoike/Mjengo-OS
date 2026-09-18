@@ -4,10 +4,15 @@
 
 - **Root** (`app/layout.tsx`): `metadataBase` = `NEXT_PUBLIC_SITE_URL` **joined
   with the serving base path** (`NEXT_PUBLIC_BASE_PATH`, `/website` in
-  integrated mode) — so canonicals, OG/Twitter images and icons carry the
-  `/website` prefix when the site is proxied. Title template `%s — MjengoOS`,
-  site description, keywords, Open Graph (1200×630 `og.png`), Twitter card,
-  robots `index,follow`, icons (favicon.ico + 192/512 PNGs), themeColor
+  integrated mode) — so canonicals and OG/Twitter images carry the
+  `/website` prefix when the site is proxied. Icons and the manifest link
+  are passed through verbatim by Next, so each goes through `asset()` for
+  the same prefix. Title template `%s — MjengoOS`, site description,
+  keywords, Open Graph (1200×630 `og.png`), Twitter card, robots
+  `index,follow`, icons (favicon.ico + 192/512 PNGs via `asset()`),
+  `manifest.webmanifest` (192+512 icons, theme `#123C32` over the paper
+  `#f3f2ee` background, standalone display, relative `start_url`/`scope`/
+  icon srcs so one file serves `/` and `/website` alike), themeColor
   `#123C32`
 - **Per page**: every route exports `metadata` with `title`, `description`,
   and `alternates.canonical` (root-relative; resolved against metadataBase)
@@ -45,5 +50,9 @@ placement per page, no repetition stuffing.
 - `curl localhost:3001/sitemap.xml` lists all 24 routes; robots.txt disallows
   `/api/` (in integrated mode both live under `/website`)
 - OG image `/images/og.png` is a real 1200×630 PNG (39KB)
+- `curl localhost:3001/manifest.webmanifest` returns the manifest (in
+  integrated mode: `/website/manifest.webmanifest`); its icon URLs are
+  relative, so they resolve under either serving path — no 404s in the
+  network log
 - Semantic HTML throughout (one `h1` per page, hierarchical `h2/h3`,
   landmark regions, `section[aria-label]`)

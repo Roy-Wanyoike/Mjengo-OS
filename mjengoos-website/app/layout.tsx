@@ -5,6 +5,7 @@ import { Navbar } from "@/components/navbar";
 import { Footer } from "@/components/footer";
 import { PageAnalytics } from "@/components/page-analytics";
 import { SITE } from "@/lib/site";
+import { asset } from "@/lib/utils";
 
 const geist = Geist({
   variable: "--font-geist",
@@ -18,10 +19,13 @@ const grotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  // Origin + base path, so every root-relative metadata URL (canonicals,
-  // OG/Twitter images, icons) resolves WITH the /website prefix when the
-  // site is served in integrated mode (MW-9): Next joins the base's pathname
-  // with each relative URL via path.posix.join.
+  // Origin + base path, so every root-relative metadata URL the Next
+  // resolver JOINs (canonicals, OG/Twitter images) resolves WITH the
+  // /website prefix when the site is served in integrated mode (MW-9):
+  // Next joins the base's pathname with each relative URL via
+  // path.posix.join. NOTE: icons and manifest are NOT in that resolver —
+  // Next passes those hrefs through verbatim — so they must carry the
+  // prefix themselves via asset() (issue #142), like plain <img> tags.
   metadataBase: new URL(`${SITE.url}${SITE.basePath}`),
   title: {
     default: "MjengoOS — Build with evidence.",
@@ -55,12 +59,18 @@ export const metadata: Metadata = {
     images: ["/images/og.png"],
   },
   robots: { index: true, follow: true },
+  // PWA install metadata (issue #142): the manifest is a static public file,
+  // so its own URLs are RELATIVE (start_url/scope/icon srcs) — one file
+  // serves both the standalone root and the /website integrated path. This
+  // link, however, is emitted verbatim by Next and therefore needs asset().
+  manifest: asset("/manifest.webmanifest"),
   icons: {
     icon: [
-      { url: "/favicon.ico", sizes: "48x48" },
-      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: asset("/favicon.ico"), sizes: "48x48" },
+      { url: asset("/icons/icon-192.png"), sizes: "192x192", type: "image/png" },
+      { url: asset("/icons/icon-512.png"), sizes: "512x512", type: "image/png" },
     ],
-    apple: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: [{ url: asset("/icons/icon-192.png"), sizes: "192x192", type: "image/png" }],
   },
 };
 
