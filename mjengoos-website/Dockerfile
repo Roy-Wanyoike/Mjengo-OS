@@ -65,10 +65,19 @@ COPY . .
 ARG NEXT_PUBLIC_BASE_PATH=/website
 ARG NEXT_PUBLIC_APP_URL=/
 ARG NEXT_PUBLIC_SITE_URL=
+# Sitemap lastModified (issue #143): the repo's .git never enters the build
+# context, so the git-derived date that source builds use is unavailable
+# here. Pass the last commit date that touched the site when building from
+# a checkout — computed, never hand-edited:
+#   --build-arg SITEMAP_LAST_MODIFIED="$(git log -1 --format=%cI -- mjengoos-website)"
+# Without it the sitemap omits lastModified rather than invent a date.
+# Not NEXT_PUBLIC_*: read server-side at build, not inlined client-side.
+ARG SITEMAP_LAST_MODIFIED=
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH} \
     NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL} \
-    NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
+    NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL} \
+    SITEMAP_LAST_MODIFIED=${SITEMAP_LAST_MODIFIED}
 
 # Production build; then place the static assets + public/ inside the
 # standalone tree (what the root app's build script does with cp — done

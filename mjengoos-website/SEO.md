@@ -22,12 +22,19 @@
 
 | File | Serves |
 |---|---|
-| `app/sitemap.ts` | `/sitemap.xml` — 24 routes with priorities (home 1.0, platform 0.9, signup 0.9 …). URLs = origin + basePath; `lastModified` is a fixed build-date constant (`SITE_LAST_MODIFIED`), bumped when page content actually changes |
+| `app/sitemap.ts` | `/sitemap.xml` — 24 routes with priorities (home 1.0, platform 0.9, signup 0.9 …). URLs = origin + basePath. `lastModified` is derived at build time (issue #143, audit WD-6), never hand-bumped: `SITEMAP_LAST_MODIFIED` override → last commit that touched the site (`git log -1 --format=%cI -- .`) → omitted entirely when neither is available. `changeFrequency` is removed — a uniform "monthly" claim was noise, and Google ignores the element |
 | `app/robots.ts` | `/robots.txt` — allow all, disallow `/api/`, sitemap link (origin + basePath) |
 
 **Deployment note:** `NEXT_PUBLIC_SITE_URL` is inlined at build time — a Docker
 build must pass it as the `NEXT_PUBLIC_SITE_URL` build arg (see
 `.env.example`), or every absolute URL falls back to `http://localhost:3001`.
+
+**Sitemap date note:** `lastModified` is derived at build time — from the
+last commit that touched `mjengoos-website/` when building inside a checkout,
+or from the `SITEMAP_LAST_MODIFIED` build ARG in Docker (the repo's `.git` is
+outside the image build context; the Dockerfile documents the one-line
+`--build-arg` form). With neither available the sitemap omits `lastModified`
+(honest absence) rather than stamp a made-up date.
 
 ## Structured data
 

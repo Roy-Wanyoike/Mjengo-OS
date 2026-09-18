@@ -446,7 +446,9 @@ out):
   serving modes is a rebuild, not a re-run; defaults = integrated mode,
   `NEXT_PUBLIC_BASE_PATH=/website` + `NEXT_PUBLIC_APP_URL=/` + an empty
   `NEXT_PUBLIC_SITE_URL`, whose SEO/sitemap origin then falls back to the
-  dev default — set it for any indexed deployment, §6.6).
+  dev default — set it for any indexed deployment, §6.6). A fourth,
+  server-side build ARG `SITEMAP_LAST_MODIFIED` feeds the sitemap's
+  lastModified (issue #143 — see below).
 - **runner** — `node:20-slim`, non-root `node` user, **standalone output**
   (`output: "standalone"` in `mjengoos-website/next.config.ts`, mirroring the
   root app): ships `.next/standalone` + `.next/static` + `public/` only —
@@ -465,13 +467,29 @@ docker run -d --name mjengoos-website -p 3001:3001 mjengoos-website
 curl http://localhost:3001/website     # 200 (default integrated basePath)
 ```
 
+The sitemap's `lastModified` is derived at build time (issue #143 / audit
+WD-6 — no hand-bumped date): from the last commit that touched
+`mjengoos-website/` when building inside a checkout, or from the
+`SITEMAP_LAST_MODIFIED` build ARG — the image context contains no `.git`,
+so building from a checkout passes it explicitly (computed, never
+hand-edited):
+
+```bash
+docker build -t mjengoos-website ./mjengoos-website \
+  --build-arg SITEMAP_LAST_MODIFIED="$(git log -1 --format=%cI -- mjengoos-website)"
+```
+
+Without the ARG the sitemap omits `lastModified` (an honest absence crawlers
+ignore) rather than stamp a made-up date.
+
 For a standalone-domain image instead (§6.6):
 
 ```bash
 docker build -t mjengoos-website ./mjengoos-website \
   --build-arg NEXT_PUBLIC_BASE_PATH= \
   --build-arg NEXT_PUBLIC_APP_URL=https://app.yourdomain.example \
-  --build-arg NEXT_PUBLIC_SITE_URL=https://yourdomain.example
+  --build-arg NEXT_PUBLIC_SITE_URL=https://yourdomain.example \
+  --build-arg SITEMAP_LAST_MODIFIED="$(git log -1 --format=%cI -- mjengoos-website)"
 docker run -d --name mjengoos-website -p 3001:3001 mjengoos-website
 curl http://localhost:3001/            # 200, site served at /
 ```
