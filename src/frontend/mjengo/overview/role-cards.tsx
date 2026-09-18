@@ -185,6 +185,14 @@ export function FinanceSnapshotCard() {
 
 // ---------------- Admin · system health (live /api/health probe) ----------------
 
+// Issue #164: the probe endpoint is SPLIT — the public body is the minimal
+// liveness set ({ ok, db, timestamp }), and the full diagnostics this card
+// renders (dbLatencyMs, uptimeSec, jobs, counts) live behind the detail
+// gate. This fetch rides the admin session cookie (same-origin), which is
+// one of the three gates (X-Health-Detail + HEALTH_DETAIL_TOKEN and
+// HEALTH_PUBLIC_DETAIL=1 are the other two) — so the card keeps working
+// for admins with zero extra wiring, and everyone else sees only liveness.
+
 interface HealthJson {
   ok: boolean
   db?: string
@@ -207,7 +215,9 @@ export function SystemHealthCard() {
     setLoading(true)
     setError(null)
     try {
-      // /api/health is an unauthenticated liveness probe (W2) — no session needed
+      // /api/health is the public liveness probe (W2) — no auth HEADER
+      // needed; the admin session cookie sent by this same-origin fetch is
+      // what unlocks the #164 gated detail (see the comment above).
       const res = await fetch('/api/health', { cache: 'no-store' })
       const json = (await res.json()) as HealthJson
       setHealth(json)

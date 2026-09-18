@@ -16,8 +16,9 @@
 - Boot: `lib/mjengo.ts` boot guard fails closed on missing/short
   `NEXTAUTH_SECRET` in production (#74); dev quickstart works without it
   (fallback secret, now restricted to development/test runtimes — SEC-2 fix).
-- Health: `/api/health` performs a real DB roundtrip + queue counts, 503 on
-  down (verified in code by infra auditor).
+- Health: `/api/health` performs a real DB roundtrip, 503 on down; the
+  queue/entity-count detail is #164-gated (admin session / machine header /
+  env opt-in) — the public body is the probe minimum.
 - Jobs: systemd timer (5 min, `Persistent=true`, fail-closed curl) →
   `/api/jobs/run` (bearer `JOBS_RUN_TOKEN`, constant-time compare) drains
   ≤10 jobs/call with 2→8→30 min backoff and 30 s handler caps.

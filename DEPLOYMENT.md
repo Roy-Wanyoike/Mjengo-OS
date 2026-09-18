@@ -53,6 +53,8 @@ Copy `.env.example` → `.env` (gitignored — **never commit real secrets**).
 | `WHATSAPP_WEBHOOK_SECRET` | hardening: optional | Same posture for the WhatsApp field line: when set, `POST /api/whatsapp` (contract documented at `GET /api/whatsapp`) must carry `X-Signature: <hex HMAC-SHA256 of the raw body>` — shared-secret auth for the relay (Meta Cloud API bridge or aggregator) that would POST `{ from, text, timestamp }`. Unset → fail-closed 503 unless `WEBHOOK_OPEN_POSTURE=1` (non-production) opts into the open demo posture (requests are still rate-limited 20/min/phone + 40/min/IP; every reply is footered "MjengoOS sim" — no WhatsApp provider is wired). |
 | `JOBS_RUN_TOKEN` | scheduler: optional | Shared secret (`openssl rand -hex 32`) that lets an external scheduler authenticate `POST /api/jobs/run` with `Authorization: Bearer <token>` (no browser session needed — compose `jobs-tick` sidecar, systemd timer, any cron). Same value must reach the app and the scheduler. **Unset = the bearer path is fully disabled** (fail closed — the endpoint then answers only to contractor/admin sessions, exactly as before). See §7.3. |
 | `JOBS_HANDLER_TIMEOUT_MS` | jobs: optional | Per-handler timeout for ONE background-job invocation during a `POST /api/jobs/run` drain — default `30000` (30 s: generous for the TTS/AI handlers, far below the route's own duration budget, so one hung handler fails its own `JobRecord` row instead of stalling the whole drain). Read at drain time, not import time — a change applies to the next drain without a restart. Invalid, zero or unset values fall back to the default (never 0 — a zero cap would fail every handler instantly). A handler that exceeds the cap is marked `failed` **terminally** (no retry — it already hung a full window and would re-hang; re-enqueue after investigating). |
+| `HEALTH_DETAIL_TOKEN` | health detail: optional | Shared secret (`openssl rand -hex 32`) that unlocks the GATED diagnostics on `GET /api/health` (issue #164 / audit API-13) for ops dashboards and curl: send `X-Health-Detail: <token>` and the full pre-split body (job-queue counts, entity counts, package version, uptime, DB latency — plus the error text when the DB is down) comes back; the public body stays the probe minimum `{"ok":true,"db":"up","timestamp":…}` that compose healthchecks and the CI smoke test assert on. Constant-time compare, same discipline as `JOBS_RUN_TOKEN`. **Unset = the header path is fully disabled** (fail closed). The in-app admin SystemHealthCard needs no token — an admin session is its own gate. See §7.2. |
+| `HEALTH_PUBLIC_DETAIL` | health detail: demo opt-in | Set to `1` (or `true`) to serve the FULL `/api/health` detail body to every unauthenticated caller — the explicit demo/trusted-intranet posture (issue #164). Deliberate opt-in only: anything else (unset, `0`, `yes`, `on`…) keeps the minimal public shape. Never set on an internet-fronted deployment — the counts/version are exactly what API-13 said not to hand to strangers. |
 | `RECONCILIATION_CHECK_INTERVAL_MIN` | jobs: optional | Cadence of the scheduled reconciliation check (A-1-lite debit backing + the escrow projection drift alarm, issue #212) — default `1440` (daily). The `POST /api/jobs/run` callee seeds a fresh `reconciliation` job row whenever the newest one is older than this, so whatever drains that endpoint (compose `jobs-tick`, systemd timer, cron) also maintains the cadence. Never stacks rows (a queued/retrying row blocks the seed — a manual run and the schedule cannot double-book). Invalid values warn once and fall back to the daily default. See §7.3. |
 | `ESCROW_DRIFT_ALERT_CENTS` | finance alarm: optional | Alert threshold for the escrow projection drift check, in **integer cents** — default `1` (the Money-tab chip's exact-equality convention, issue #122: a one-cent drift is a drift). `|derived ledger sum − EscrowWallet.balance| ≥ threshold` emits an `escrow.drift` domain event + in-app notifications to the **finance and contractor** audiences on the drifted project. Raise it only to tolerate a KNOWN projection quirk while it is being fixed — sub-threshold drift is still recorded (un-alerted) in the job's result JSON. Invalid (non-integer / < 1) values warn once and fall back to `1`. See §7.3. |
 | `ERROR_SINK_URL` | observability: optional | The error sink gate (issue #202, audit OBS-1): when set, every captured error (route-kit error path, job-handler failures, webhook catch blocks) additionally makes ONE fire-and-forget JSON POST to this endpoint — `{ ts, service, environment?, scope, requestId?, route?, method?, error: { class, message, stack?, internal }, context? }` — with a 5s abort bound, no retries, and Prisma/framework internals redacted before the wire (the `safeErrorMessage` discipline; stacks omitted on internal errors). **Unset (the default) = journal-only: nothing external is contacted and `captureError()` is a no-op that warns once per process** — exactly the behavior of every prior release. Secret-class (a bearer capability into your collector); `ERROR_SINK_TOKEN` adds an optional Authorization header; `ERROR_SINK_ENV` is a non-secret deployment tag (falls back to `NODE_ENV`). See §10. |
@@ -284,7 +286,7 @@ docker run -d --name mjengoos -p 3000:3000 \
   -v mjengoos-db:/app/db \
   -v mjengoos-photos:/app/public/photos \
   mjengoos
-curl http://localhost:3000/api/health   # {"ok":true,"db":"up",...}
+curl http://localhost:3000/api/health   # {"ok":true,"db":"up","timestamp":"…"} (minimal liveness — see §7.2)
 ```
 
 ### 6.3 docker compose (recommended)
@@ -548,9 +550,23 @@ server {
 
 ### 7.2 Health, backups, secrets
 
-- **Health:** `GET /api/health` → `{"ok":true,"db":"up","dbLatencyMs":…,
-  "jobs":{…},"counts":{…}}`. Wire uptime monitoring to it (the compose
-  healthcheck already does).
+- **Health (issue #164 — liveness split from gated detail):** the public
+  `GET /api/health` answers the probe minimum —
+  `{"ok":true,"db":"up","timestamp":"…"}` (503 `{"ok":false,"db":"down",…}`
+  when the DB is down; the error text does not leak to the public). Wire
+  uptime monitoring to exactly that (the compose healthcheck and the CI
+  smoke test already do — status + `ok`/`db`, nothing more). The full
+  diagnostics (job-queue counts, entity counts, version, uptime,
+  `dbLatencyMs`) are GATED behind one of three credentials:
+  1. an **admin session** — the in-app Overview SystemHealthCard, zero
+     config;
+  2. an ops **machine header** — set `HEALTH_DETAIL_TOKEN` in `.env`, then
+     `curl -H "X-Health-Detail: $HEALTH_DETAIL_TOKEN" http://your-host/api/health`
+     (constant-time compare, fail closed when unset — dashboards should
+     use this);
+  3. `HEALTH_PUBLIC_DETAIL=1` — the explicit demo/trusted-intranet opt-in
+     that re-opens the detail for everyone (what a sandbox preview wants;
+     never an internet-fronted deployment).
 - **Backups — scheduled (issue #199):** `deploy/backup/` ships the whole
   thing — a script + a systemd timer covering all three stateful volumes:
   an **online** `sqlite3` `.backup` snapshot of the DB (WAL-safe, no app

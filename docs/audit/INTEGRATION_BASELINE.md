@@ -119,7 +119,7 @@ DEPLOYMENT.md §3 documents the same set plus `PORT`/`HOSTNAME`. Website `.env.e
 
 | Dimension | State | Evidence |
 |---|---|---|
-| Health endpoint | **GOOD** — real `SELECT 1` DB roundtrip, `dbLatencyMs`, job-queue counts (queued/retrying/failed), coarse entity counts, uptime, version; 503 + honest detail when DB down; no auth by design (probes); consumed by compose healthchecks | `api/health/route.ts:21–63` |
+| Health endpoint | **GOOD** — real `SELECT 1` DB roundtrip; public body is the probe minimum `{ok,db,timestamp}` with 503 when down (issue #164 / API-13: the job-queue counts, entity counts, uptime, version and `dbLatencyMs` are GATED behind an admin session / `X-Health-Detail` + `HEALTH_DETAIL_TOKEN` / `HEALTH_PUBLIC_DETAIL` — no auth by design for the probe itself); consumed by compose healthchecks | `api/health/route.ts` |
 | Audit trail | **GOOD (domain-level)** — `AuditEvent` rows carry actor/role/ip/userAgent/**requestId**/entity/before/after via `AsyncLocalStorage` (`withAuditContext`), never throws | `lib/audit.ts:24–80` |
 | Structured logging | **WEAK** — plain `console.error/warn` with scope tags (route-kit `scope`, `[api/whatsapp POST]`); no JSON logs, **no correlation IDs on log lines** (requestId lives only in audit rows), no request access log | `route-kit.ts:88–103`, `whatsapp/route.ts:325` |
 | Metrics | **NONE** — no Prometheus exporter (honestly stated in the health route header) | `api/health/route.ts:16–19` |
