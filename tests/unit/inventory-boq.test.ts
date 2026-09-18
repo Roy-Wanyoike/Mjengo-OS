@@ -12,7 +12,8 @@
  *  · createBoq — version increments PER PROJECT (count + 1), generated
  *    `BOQ v<n>` name, lines created from the payload;
  *  · upsertBoqLine — create-with-defaults vs update-by-id, BOQ looked up
- *    in the caller's project;
+ *    in the caller's project AND the updated line resolved through that
+ *    scope + scoped-BOQ membership (#286);
  *  · deleteBoqLine — line resolved through the BOQ's project (scoping);
  *  · approveBoq — approve-once refusal (`BOQ already approved`);
  *  · boqToRequest — full-vs-selected lineIds, `MR-<1000 + count + 1>` code
@@ -25,10 +26,12 @@
  * @/backend/lib/db swapped for an in-memory stub over boq / boqLine /
  * materialRequest(+lines) / supplier / savedSupplier maps.
  *
- * KNOWN SCOPING GAP (#286 — pinned as-is, fails on purpose when fixed):
- * upsertBoqLine's update path resolves the LINE by bare id, so a foreign
- * project's line id rewrites that project's line. Pinned below with the
- * issue reference; the fix flips that pin to a scoped refusal.
+ * #286 RESOLVED (upsertBoqLine scoped-line fix): the update path resolves
+ * the LINE through the caller's project scope (deleteBoqLine's findFirst
+ * pattern) and requires it to belong to the scoped BOQ. The former
+ * fail-on-purpose pin — a foreign project's line id rewriting that
+ * project's line — now asserts the scoped refusal (honest error, no row
+ * touched), plus same-project other-BOQ and unknown-id refusal pins.
  *
  * #285 RESOLVED (the BoqLine twin of #282, different column): estUnitPrice
  * is integer CENTS end-to-end. The payload field stays KSh (the boq-card
@@ -445,30 +448,60 @@ describe('upsertBoqLine — create vs update, scoped to the caller’s BOQ', () 
     // loop refuses; only the line writes are pinned here.
   })
 
-  it('KNOWN GAP #286 (fails on purpose when fixed): a foreign-project LINE id escapes the project scope', async () => {
+  it('#286 (flipped pin): refuses a foreign-project LINE id — the update stays in the caller’s scope, no row touched', async () => {
     const mine = seedBoq(P, { name: 'My BOQ', version: 1, createdAt: T(1) }, [
       { materialName: 'Cement', qty: 100 },
     ])
-    const foreignLine = [...state.boqLines.values()].find(
-      (l) => (state.boqs.get(l.boqId as string) as { projectId: string }).projectId === OTHER,
-    )
-    expect(foreignLine).toBeUndefined() // fixture sanity: OTHER has no lines yet
-
     const theirBoq = seedBoq(OTHER, { name: 'Their BOQ', version: 1, createdAt: T(1) }, [
       { materialName: 'Ballast', qty: 5, unit: 'tonne' },
     ])
     const theirLineId = [...state.boqLines.values()].find((l) => l.boqId === theirBoq)!.id as string
 
-    // The BOQ lookup is scoped (mine), but the line update resolves by bare
-    // id — the foreign project's line gets rewritten. Filed as #286; when
-    // the fix lands, this pin flips to a scoped refusal.
-    await upsertBoqLine(P, {
-      boqId: mine, id: theirLineId, materialName: 'Hacked', qty: 999,
-    })
+    // The crafted payload from the issue: my (scoped) boqId + THEIR line
+    // id. Pre-fix, the bare-id update rewrote their row (pinned
+    // fail-on-purpose as #286); now the line resolves through the project
+    // scope and the call is refused — their row keeps its exact state.
+    await expect(
+      upsertBoqLine(P, {
+        boqId: mine, id: theirLineId, materialName: 'Hacked', qty: 999,
+      }),
+    ).rejects.toThrow('BOQ line not found')
     const theirLine = state.boqLines.get(theirLineId)!
-    expect(theirLine.materialName).toBe('Hacked')
-    expect(theirLine.qty).toBe(999)
-    void foreignLine
+    expect(theirLine.materialName).toBe('Ballast') // untouched
+    expect(theirLine.qty).toBe(5)
+    expect(theirLine.unit).toBe('tonne')
+    // And the caller's own BOQ gained nothing from the refused call.
+    expect([...state.boqLines.values()].filter((l) => l.boqId === mine)).toHaveLength(1)
+  })
+
+  it('#286: refuses a line id from ANOTHER BOQ in the same project — only the scoped BOQ’s lines are upsertable', async () => {
+    const v1 = seedBoq(P, { name: 'BOQ v1', version: 1, createdAt: T(1) }, [
+      { materialName: 'Cement', qty: 100 },
+    ])
+    const v2 = seedBoq(P, { name: 'BOQ v2', version: 2, createdAt: T(2) }, [
+      { materialName: 'Ballast', qty: 5 },
+    ])
+    const v1LineId = [...state.boqLines.values()].find((l) => l.boqId === v1)!.id as string
+
+    // Same project, but the line belongs to v1 while the caller targets
+    // v2 — the scoped-BOQ membership check refuses the rewrite.
+    await expect(
+      upsertBoqLine(P, {
+        boqId: v2, id: v1LineId, materialName: 'Hacked', qty: 999,
+      }),
+    ).rejects.toThrow('BOQ line not found')
+    const v1Line = state.boqLines.get(v1LineId)!
+    expect(v1Line.materialName).toBe('Cement') // untouched
+    expect(v1Line.qty).toBe(100)
+    expect(v1Line.boqId).toBe(v1) // not moved into v2 either
+  })
+
+  it('#286: refuses an unknown line id with the honest error — nothing is written', async () => {
+    const boqId = seedBoq(P, { name: 'BOQ v1', version: 1, createdAt: T(1) })
+    await expect(
+      upsertBoqLine(P, { boqId, id: 'nope', materialName: 'Ghost', qty: 1 }),
+    ).rejects.toThrow('BOQ line not found')
+    expect(state.boqLines.size).toBe(0) // no line persisted by the refusal
   })
 })
 

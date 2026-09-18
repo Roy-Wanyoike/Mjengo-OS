@@ -26,6 +26,11 @@
  *    so the raw column holds KSh 650 → 65000 and loadBoqSlice's centsToKes
  *    serves it back as exactly 650. The former fail-on-purpose assertions
  *    (6.5 / 782.85) now assert the CORRECT units through the real engine.
+ *  · #286 RESOLVED (upsertBoqLine scoped-line fix): the update path
+ *    resolves the LINE through the caller's project scope + scoped-BOQ
+ *    membership, so a crafted payload (own boqId + a foreign project's
+ *    line id) is refused by the REAL engine and no row is touched —
+ *    the stub-suite pin's engine-side companion.
  *
  * Deliberately NOT pinned here (documented in the PR coverage map): the
  * (projectId, version) pair has no unique constraint, so two concurrent
@@ -148,6 +153,33 @@ describe('BOQ lifecycle — create → lines → approve → material request (r
     const second = await boqToRequest(project.id, { id: v2.id })
     expect(second.requestCode).toBe('MR-1002')
     expect(count('MaterialRequest', `WHERE projectId = '${project.id}'`)).toBe(2)
+  })
+
+  it('#286: upsertBoqLine refuses a foreign project’s line id on real tables — scoped, no row touched', async () => {
+    const mine = await seedProject(prisma, { name: 'Scoped House' })
+    const theirs = await seedProject(prisma, { name: 'Scoped Other' })
+    const myBoq = await createBoq(mine.id, { name: 'My scoped BOQ' })
+    const theirBoq = await createBoq(theirs.id, { name: 'Their scoped BOQ' })
+    const theirLine = await upsertBoqLine(theirs.id, {
+      boqId: theirBoq.id, materialName: 'Ballast', unit: 'tonne', qty: 5, estUnitPrice: 1800,
+    })
+
+    // The crafted payload from the issue: MY boqId + THEIR line id. The
+    // pre-fix bare-id update rewrote their row on real tables too; the
+    // scoped resolution must refuse it and leave every row exactly as it
+    // was (raw-SQL oracle on their line, zero lines in my BOQ).
+    await expect(
+      upsertBoqLine(mine.id, {
+        boqId: myBoq.id, id: theirLine.id, materialName: 'Hacked', unit: 'tonne', qty: 999,
+      }),
+    ).rejects.toThrow('BOQ line not found')
+    const row = sqlite
+      .prepare('SELECT materialName, unit, qty, estUnitPrice, boqId FROM BoqLine WHERE id = ?')
+      .get(theirLine.id) as { materialName: string; unit: string; qty: number; estUnitPrice: bigint; boqId: string }
+    expect(row).toEqual({
+      materialName: 'Ballast', unit: 'tonne', qty: 5, estUnitPrice: 180000n, boqId: theirBoq.id,
+    })
+    expect(count('BoqLine', `WHERE boqId = '${myBoq.id}'`)).toBe(0)
   })
 
   it('createBoq versions increment per project; another project counts independently', async () => {
