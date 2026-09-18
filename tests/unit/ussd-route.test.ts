@@ -33,11 +33,16 @@
  *     principals, keeping the per-test uniqueIp() bucket isolation
  *     honest), and a dedicated test pins the UNSET posture — rotating XFF
  *     values share the one anon bucket and cannot refresh it;
- *   · PIN LOCKOUT (BE-9, issue #106): 5 wrong PINs for one phone → the line
- *     is locked 15 minutes (the reply names the wait); the correct PIN
- *     during the lock is STILL refused and writes nothing; after the window
- *     the same PIN works again; the lock is keyed per phone; a correct PIN
- *     resets the count (consecutive-failure semantics);
+ *   · PIN LOCKOUT (BE-9, issue #106; REKEYED by issue #176/SEC-9): 5 wrong
+ *     PINs per CLIENT-IP principal within 15 min → a 15-minute lock (the
+ *     reply names the wait; correct PINs refused too, before any write);
+ *     rotating phone numbers from one IP can no longer refresh the budget
+ *     (AC1), and a correct PIN does not clear it either (the phone-tail
+ *     refresh vehicle is closed). Kiosk-PIN attempts additionally carry a
+ *     PER-WORKER lock (AC2): wrong PINs from a worker's own line accumulate
+ *     on that worker regardless of phone/IP, a locked worker is refused from
+ *     ANY phone, and a correct KIOSK pin clears the worker's own count
+ *     (a phone-tail pin never clears anything);
  *   · PHONE-TAIL FALLBACK POLICY (BE-9 + issue #156): resolves ONLY in the
  *     explicitly opted-in open posture (secret unset +
  *     WEBHOOK_OPEN_POSTURE=1). Secret set → kiosk PIN only (the
@@ -46,7 +51,8 @@
  *   · every USSD text reply carries the sim footer.
  *
  * @/backend/lib/db is swapped for an in-memory stub (whatsapp-route.test
- * idioms — worker.findMany also honors `take` for the kiosk-PIN lookup).
+ * idioms — worker.findMany also honors `take` for the kiosk-PIN and
+ * line-attribution lookups).
  */
 import { createHmac } from 'node:crypto'
 import { NextRequest } from 'next/server'
@@ -78,6 +84,11 @@ vi.mock('@/backend/lib/db', () => {
     })
     // w-1 carries a stored kiosk PIN; w-2 resolves ONLY via the phone-tail
     // demo fallback (pin: null); w-3 is inactive (active:false filter).
+    // w-4/w-5/w-6 (issue #176) are dedicated kiosk-PIN workers for the
+    // per-worker lockout pins — each lockout test owns its own worker, so the
+    // (module-persistent, fake-clock) worker-keyed trackers never bleed a
+    // lock state between tests: w-4 = the lock/refusal pins, w-5 = the
+    // kiosk-clear pin, w-6 = the tail-never-clears pin.
     state.workers.set('w-1', {
       id: 'w-1', projectId: 'p-1', name: 'Kamau Mwangi', role: 'Fundi wa Mawe',
       phone: '0722111222', pin: '1234', dailyRate: 150000n, active: true,
@@ -89,6 +100,18 @@ vi.mock('@/backend/lib/db', () => {
     state.workers.set('w-3', {
       id: 'w-3', projectId: 'p-1', name: 'Mgonjwa Fundi', role: 'Labourer',
       phone: '0799888777', pin: null, dailyRate: 80000n, active: false,
+    })
+    state.workers.set('w-4', {
+      id: 'w-4', projectId: 'p-1', name: 'Baraka Test', role: 'Fundi wa Chuma',
+      phone: '0755111333', pin: '9119', dailyRate: 90000n, active: true,
+    })
+    state.workers.set('w-5', {
+      id: 'w-5', projectId: 'p-1', name: 'Neema Test', role: 'Msaidizi',
+      phone: '0755222444', pin: '9229', dailyRate: 85000n, active: true,
+    })
+    state.workers.set('w-6', {
+      id: 'w-6', projectId: 'p-1', name: 'Juma Test', role: 'Fundi wa Mabati',
+      phone: '0755333666', pin: '9339', dailyRate: 88000n, active: true,
     })
   }
   state.reset()
@@ -206,11 +229,21 @@ function uniqueIp(): string {
   return `10.9.${Math.floor(ipSeq / 250)}.${(ipSeq % 250) + 1}`
 }
 
-/** Unique per-test phone numbers keep the phone-keyed PIN lockout isolated. */
+/** Unique per-test phone numbers keep per-phone rate buckets isolated. */
 let phoneSeq = 0
 function uniquePhone(): string {
   phoneSeq += 1
   return `0711${String(2000000 + phoneSeq).slice(1)}` // 0711200001, 0711200002, …
+}
+
+/** Unique-per-test FIXED client IPs for the ip-keyed PIN lockout pins — each
+ * test owns its own principal so the (module-persistent) tracker store never
+ * bleeds lock state across tests (the per-request uniqueIp() default would
+ * give every request a fresh principal and never accumulate). */
+let lockIpSeq = 0
+function uniqueLockIp(): string {
+  lockIpSeq += 1
+  return `10.176.${Math.floor(lockIpSeq / 250)}.${(lockIpSeq % 250) + 1}`
 }
 
 function ussdReq(
@@ -609,12 +642,20 @@ describe('rate limits — 20/min/phone + 40 PIN-attempts/min/IP (fake-timer dete
     expect(await blocked.json()).toMatchObject({ error: 'Too many requests' })
   })
 
-  it('the 41st PIN attempt from ONE client IP (rotating phones) → 429 — the IP bucket throttles', async () => {
+  it('the 41st PIN attempt from ONE client IP (rotating phones) → 429 — the lockout is the effective wrong-PIN bound, the bucket the outer cap (issue #176)', async () => {
     const ip = '10.7.0.3'
     for (let i = 0; i < 40; i++) {
       const phone = `0711${String(3000000 + i).slice(1)}` // unique per request
       const res = await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`, { ip }))
-      expect(res.status, `request ${i + 1} should pass`).toBe(200) // honest "PIN not recognised"
+      expect(res.status, `request ${i + 1} should pass (text either way)`).toBe(200)
+      if (i < 4) {
+        // first 4 wrong PINs: the ip principal's budget is not exhausted
+        expect(await res.text()).toContain('PIN not recognised')
+      } else {
+        // from the 5th on, the ip-keyed LOCKOUT answers (rotating phones
+        // could not refresh the budget) — still 200 text, never a row written
+        expect(await res.text()).toContain('Too many wrong PINs')
+      }
     }
     const blocked = await ussdPost(ussdReq('0713999999', `*384#*2*${WRONG_PIN}`, { ip }))
     expect(blocked.status).toBe(429)
@@ -622,11 +663,12 @@ describe('rate limits — 20/min/phone + 40 PIN-attempts/min/IP (fake-timer dete
     expect(state.writes).toBe(0) // 40 wrong-PIN replies — never a single row
   })
 
-  it('issue #156: TRUST_PROXY UNSET → rotating x-forwarded-for does NOT refresh the per-IP PIN bucket', async () => {
+  it('issue #156 + #176: TRUST_PROXY UNSET → rotating x-forwarded-for refreshes NEITHER the per-IP PIN bucket NOR the anon lockout budget', async () => {
     // The old first-XFF semantics let a scripted client mint a fresh PIN
     // bucket per request by rotating the forgeable header. Now (TRUST_PROXY
     // unset — direct exposure) the header is ignored: every request shares
-    // the ONE anon bucket, so the 40/min limit actually binds.
+    // the ONE anon bucket AND the ONE anon lockout budget, so the 40/min cap
+    // and the 5-wrong-PINs/15-min lock actually bind.
     delete process.env.TRUST_PROXY
     try {
       for (let i = 0; i < 40; i++) {
@@ -634,6 +676,11 @@ describe('rate limits — 20/min/phone + 40 PIN-attempts/min/IP (fake-timer dete
         const spoofedXff = `198.51.${Math.floor(i / 250)}.${(i % 250) + 1}` // ROTATING "IP"
         const res = await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`, { ip: spoofedXff }))
         expect(res.status, `request ${i + 1} should pass despite rotation`).toBe(200)
+        if (i >= 4) {
+          // the 5th wrong PIN under rotation already tripped the ANON
+          // lockout principal — no header rotation mints a fresh budget
+          expect(await res.text()).toContain('Too many wrong PINs')
+        }
       }
       // a brand-new spoofed "IP" is still the same anon principal → blocked
       const blocked = await ussdPost(ussdReq('0713999999', `*384#*2*${WRONG_PIN}`, { ip: '203.0.113.99' }))
@@ -656,11 +703,11 @@ describe('rate limits — 20/min/phone + 40 PIN-attempts/min/IP (fake-timer dete
 
 // ---------------------------------------------------------------- PIN lockout
 
-describe('per-PIN failure lockout — 5 wrong PINs → 15-minute line lock (BE-9, issue #106)', () => {
-  it('4 wrong PINs do NOT lock; each gets the honest "PIN not recognised" reply', async () => {
-    const phone = uniquePhone()
+describe('per-PIN failure lockout — 5 wrong PINs per client-IP principal → 15-minute lock (BE-9 + issue #176)', () => {
+  it('4 wrong PINs from ONE ip do NOT lock; each gets the honest "PIN not recognised" reply', async () => {
+    const ip = uniqueLockIp()
     for (let i = 0; i < 4; i++) {
-      const res = await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`))
+      const res = await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
       expect(res.status).toBe(200)
       const reply = await res.text()
       expect(reply).toContain('PIN not recognised')
@@ -669,10 +716,10 @@ describe('per-PIN failure lockout — 5 wrong PINs → 15-minute line lock (BE-9
     expect(state.writes).toBe(0)
   })
 
-  it('the 5th wrong PIN trips the lock — the reply names the wait (15 minutes)', async () => {
-    const phone = uniquePhone()
-    for (let i = 0; i < 4; i++) await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`))
-    const fifth = await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`))
+  it('the 5th wrong PIN from one ip trips the lock — the reply names the wait (15 minutes)', async () => {
+    const ip = uniqueLockIp()
+    for (let i = 0; i < 4; i++) await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
+    const fifth = await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
     expect(fifth.status).toBe(200) // a gateway always gets text back
     const reply = await fifth.text()
     expect(reply).toContain('Too many wrong PINs')
@@ -681,24 +728,44 @@ describe('per-PIN failure lockout — 5 wrong PINs → 15-minute line lock (BE-9
     expect(state.writes).toBe(0)
   })
 
-  it('the lock is keyed PER PHONE: another line keeps working while one is locked', async () => {
-    const locked = uniquePhone()
-    for (let i = 0; i < 5; i++) await ussdPost(ussdReq(locked, `*384#*2*${WRONG_PIN}`))
-    // A different phone: same wrong PIN, fresh tracker — honest reply, no lock.
-    const other = await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`))
-    expect(other.status).toBe(200)
-    expect(await other.text()).toContain('PIN not recognised')
-    // And a correct PIN from the OTHER phone still records attendance.
-    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*1*1234*1'))
+  it('issue #176 AC1 — ROTATING PHONE NUMBERS from one ip cannot refresh the failure budget', async () => {
+    const ip = uniqueLockIp()
+    // five wrong PINs, each from a DIFFERENT (freshly rotated) phone — one
+    // shared ip-keyed budget: the 5th strike trips exactly as if the phone
+    // had never changed.
+    for (let i = 0; i < 4; i++) {
+      const res = await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
+      expect(await res.text()).toContain('PIN not recognised')
+    }
+    const fifth = await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
+    expect(await fifth.text()).toContain('Too many wrong PINs')
+    // …and a SIXTH rotated phone from the same ip is refused the same way.
+    const sixth = await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
+    expect(await sixth.text()).toContain('Too many wrong PINs')
+    expect(state.writes).toBe(0)
+  })
+
+  it('the lock follows the ip principal, not the phone: a fresh phone from the same ip is refused; another ip keeps working', async () => {
+    const lockedIp = uniqueLockIp()
+    for (let i = 0; i < 5; i++) await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip: lockedIp }))
+    // Same ip, brand-new phone (the OLD per-phone semantics would have let
+    // this through — that was the bug): still locked.
+    const sameIp = await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip: lockedIp }))
+    expect(await sameIp.text()).toContain('Too many wrong PINs')
+    // A different ip: its own budget — honest miss reply, no lock.
+    const otherIp = await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip: uniqueLockIp() }))
+    expect(await otherIp.text()).toContain('PIN not recognised')
+    // And a correct PIN from that other ip still records attendance.
+    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*1*1234*1', { ip: uniqueLockIp() }))
     expect(await res.text()).toContain('Attendance recorded.')
     expect(state.attendance.size).toBe(1)
   })
 
   it('the CORRECT PIN during the lock is still refused — zero rows written', async () => {
-    const phone = uniquePhone()
-    for (let i = 0; i < 5; i++) await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`))
-    // Now the line's OWN worker keys the correct kiosk PIN — still locked.
-    const res = await ussdPost(ussdReq(phone, '*384#*1*1234*1'))
+    const ip = uniqueLockIp()
+    for (let i = 0; i < 5; i++) await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
+    // The correct kiosk PIN from the locked principal — still refused.
+    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*1*1234*1', { ip }))
     expect(res.status).toBe(200)
     const reply = await res.text()
     expect(reply).toContain('Too many wrong PINs')
@@ -709,10 +776,10 @@ describe('per-PIN failure lockout — 5 wrong PINs → 15-minute line lock (BE-9
   })
 
   it('after the 15-minute window the same correct PIN works again (lock served, clean slate)', async () => {
-    const phone = uniquePhone()
-    for (let i = 0; i < 5; i++) await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`))
+    const ip = uniqueLockIp()
+    for (let i = 0; i < 5; i++) await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
     vi.advanceTimersByTime(15 * 60 * 1000 + 1_000) // serve the lock
-    const res = await ussdPost(ussdReq(phone, '*384#*1*1234*1'))
+    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*1*1234*1', { ip }))
     expect(res.status).toBe(200)
     const reply = await res.text()
     expect(reply).toContain('Attendance recorded.')
@@ -720,27 +787,90 @@ describe('per-PIN failure lockout — 5 wrong PINs → 15-minute line lock (BE-9
     expect(state.attendance.size).toBe(1)
   })
 
-  it('consecutive semantics: a CORRECT PIN between failures resets the count', async () => {
-    const phone = uniquePhone()
-    for (let i = 0; i < 4; i++) await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`))
-    // A correct balance lookup on the same line wipes the tracker…
-    const ok = await ussdPost(ussdReq(phone, '*384#*2*1234'))
+  it('issue #176: a correct PIN does NOT reset the ip-keyed budget (the phone-tail refresh exploit is closed)', async () => {
+    const ip = uniqueLockIp()
+    for (let i = 0; i < 4; i++) await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
+    // A correct kiosk-PIN balance lookup from the same ip works (the worker
+    // key is cleared, the request itself is legitimate)…
+    const ok = await ussdPost(ussdReq(uniquePhone(), '*384#*2*1234', { ip }))
     expect(await ok.text()).toContain('Kamau Mwangi')
-    // …so four MORE wrong PINs stay under the limit.
+    // …but it does NOT wipe the ip principal's budget: the very next wrong
+    // PIN is the 5th strike and trips the lock. (Under the pre-#176 phone
+    // keying, alternating correct phone-tail PINs and wrong guesses kept the
+    // count reset forever — that refresh vehicle is gone.)
+    const next = await ussdPost(ussdReq(uniquePhone(), `*384#*2*${WRONG_PIN}`, { ip }))
+    expect(await next.text()).toContain('Too many wrong PINs')
+  })
+
+  it('issue #176 AC2 — PER-WORKER lock: 5 wrong kiosk PINs from the worker\'s own line lock the worker identity — the CORRECT kiosk PIN is then refused from ANY phone', async () => {
+    // Five wrong kiosk-PIN guesses from Baraka's own line (each request from
+    // a different ip, so only the WORKER key accumulates — exactly the
+    // per-worker budget): the 5th trips the worker lock.
     for (let i = 0; i < 4; i++) {
-      const res = await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`))
+      const res = await ussdPost(ussdReq('0755111333', `*384#*2*${WRONG_PIN}`)) // uniqueIp() default
       expect(await res.text()).toContain('PIN not recognised')
     }
-    // The 5th wrong after the reset is what trips it.
-    const fifth = await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`))
+    const fifth = await ussdPost(ussdReq('0755111333', `*384#*2*${WRONG_PIN}`))
+    expect(await fifth.text()).toContain('Too many wrong PINs')
+    // Now the CORRECT kiosk PIN for that worker — from a FRESH phone and a
+    // FRESH ip (nothing else is locked): the worker identity itself is
+    // locked, so the resolution is refused regardless of which phone sent it.
+    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*1*9119*1'))
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain('Too many wrong PINs')
+    expect(state.attendance.size).toBe(0) // refused before any write
+    expect(state.writes).toBe(0)
+  })
+
+  it('a locked worker does not block other workers (the per-worker lock is surgical, not a line/global lock)', async () => {
+    // Lock Baraka's identity from his own line (fresh ips per request).
+    for (let i = 0; i < 5; i++) await ussdPost(ussdReq('0755111333', `*384#*2*${WRONG_PIN}`))
+    // Kamau's kiosk PIN from an unrelated line still records attendance.
+    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*1*1234*1', { ip: uniqueLockIp() }))
+    expect(await res.text()).toContain('Attendance recorded.')
+    expect(state.attendance.size).toBe(1)
+  })
+
+  it('a correct KIOSK pin clears the WORKER\'s own count (consecutive semantics, keyed on the worker identity)', async () => {
+    // Neema's line: 4 wrong kiosk-PIN guesses (fresh ips — only the worker
+    // key accumulates)…
+    for (let i = 0; i < 4; i++) {
+      const res = await ussdPost(ussdReq('0755222444', `*384#*2*${WRONG_PIN}`))
+      expect(await res.text()).toContain('PIN not recognised')
+    }
+    // …then the correct kiosk PIN from her own line: resolves, and clears
+    // HER worker count (the identity that proved itself restarts).
+    const ok = await ussdPost(ussdReq('0755222444', '*384#*2*9229'))
+    expect(await ok.text()).toContain('Neema Test')
+    // …so four MORE wrong guesses from her line stay under the limit…
+    for (let i = 0; i < 4; i++) {
+      const res = await ussdPost(ussdReq('0755222444', `*384#*2*${WRONG_PIN}`))
+      expect(await res.text()).toContain('PIN not recognised')
+    }
+    // …and the 5th wrong AFTER the clear is what trips it.
+    const fifth = await ussdPost(ussdReq('0755222444', `*384#*2*${WRONG_PIN}`))
     expect(await fifth.text()).toContain('Too many wrong PINs')
   })
 
-  it('the attendance branch records failures too (wrong PIN → not recognised → counted)', async () => {
-    const phone = uniquePhone()
-    for (let i = 0; i < 5; i++) await ussdPost(ussdReq(phone, `*384#*1*${WRONG_PIN}*1`))
+  it('a correct PHONE-TAIL pin never clears anything (the 10^4 demo identity is not kiosk knowledge)', async () => {
+    // Juma's line: 4 wrong kiosk-PIN guesses (worker key at 4)…
+    for (let i = 0; i < 4; i++) {
+      await ussdPost(ussdReq('0755333666', `*384#*2*${WRONG_PIN}`))
+    }
+    // …then his phone-tail PIN (3666) resolves in the open posture — the
+    // balance reply comes back, but the worker count is NOT cleared…
+    const tail = await ussdPost(ussdReq('0755333666', '*384#*2*3666'))
+    expect(await tail.text()).toContain('Juma Test')
+    // …so the very next wrong kiosk guess is the 5th strike: locked.
+    const next = await ussdPost(ussdReq('0755333666', `*384#*2*${WRONG_PIN}`))
+    expect(await next.text()).toContain('Too many wrong PINs')
+  })
+
+  it('the attendance branch records failures on the ip key too (wrong PIN → not recognised → counted)', async () => {
+    const ip = uniqueLockIp()
+    for (let i = 0; i < 5; i++) await ussdPost(ussdReq(uniquePhone(), `*384#*1*${WRONG_PIN}*1`, { ip }))
     // Attendance attempts tripped the lock exactly like balance attempts.
-    const res = await ussdPost(ussdReq(phone, '*384#*1*1234*1'))
+    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*1*1234*1', { ip }))
     expect(await res.text()).toContain('Too many wrong PINs')
     expect(state.attendance.size).toBe(0)
   })
@@ -830,7 +960,9 @@ describe('GET /api/ussd — the machine-readable contract', () => {
     expect(String(doc.pinResolution)).toContain('WEBHOOK_OPEN_POSTURE=1')
     expect(String(doc.rateLimit)).toContain('20 requests/min/phone')
     expect(String(doc.rateLimit)).toContain('40 PIN-attempts/min per client IP')
-    expect(String(doc.rateLimit)).toContain('15-minute line lockout')
+    expect(String(doc.rateLimit)).toContain('5 wrong PINs per client-IP principal')
+    expect(String(doc.rateLimit)).toContain('15-minute lockout')
+    expect(String(doc.rateLimit)).toContain('per-worker lockout')
     expect(String(doc.rateLimit)).toContain('trust-aware')
     expect(String(doc.rateLimit)).toContain('TRUST_PROXY unset')
     expect(String(doc.bodyCap)).toContain('64 KB')

@@ -456,46 +456,93 @@ const defaultLoginLockout = createLoginLockout(loginTrackerStore)
 // ------------------------------------------------------------- USSD PIN lockout
 
 /**
- * USSD PIN brute-force lockout (issue #106 / audit BE-9): 5 wrong PINs for
- * one phone within 15 min → a 15-minute lock for that line.
+ * USSD PIN brute-force lockout (issue #106 / audit BE-9; REKEYED by issue
+ * #176 / SEC-9): 5 wrong PINs within 15 min → a 15-minute lock.
  *
- * Design (issue #106 "keyed per phone" + "reuse the rate-limit store infra"):
- *   · SINGLE tracker, keyed by the CALLER-SUPPLIED phoneNumber — the phone
- *     IS the account under attack (a coworker who knows the number is the
- *     recorded threat model). No second (phone|ip) key, unlike the login
- *     lockout: the route's existing 40/min per-IP PIN throttle already
- *     covers the rotating-source case.
+ * KEYING (issue #176 — "key the lockout on a value the attacker cannot
+ * freely choose"): the historical engine keyed its single tracker on the
+ * CALLER-SUPPLIED phoneNumber, so rotating MSISDNs minted a fresh budget per
+ * guess (the per-IP 40/min throttle was the only real bound), a correct
+ * phone-tail PIN could CLEAR the count (a refresh vehicle in the open
+ * posture), and 5 wrong PINs spoofing a victim's number locked the victim's
+ * line. The engine now mirrors createLoginLockout's dual-key architecture
+ * over the same 'ussd' tracker kind:
+ *
+ *   · PRIMARY — the CLIENT-IP principal (`ip:` keys): every wrong PIN
+ *     records here and the pre-resolution gate checks here, so rotating the
+ *     phone number (or the worker target) can never refresh the budget
+ *     (issue #176 AC1). The principal is the trust-aware
+ *     clientIpFromHeaders value: with TRUST_PROXY unset it is '' → the ONE
+ *     shared 'anon' budget for every untrusted caller (the strongest honest
+ *     bound for the demo posture — rotating a forgeable x-forwarded-for
+ *     changes nothing); with TRUST_PROXY=1 it is the proxy-appended client
+ *     IP. DEPLOYMENT REALITY, documented honestly: a real USSD aggregator
+ *     multiplexes many MSISDNs through one gateway IP, so the ip-keyed
+ *     budget is shared per gateway — one malicious caller can keep the
+ *     gateway's PIN attempts locked out (availability traded for brute-force
+ *     resistance). Wiring a real aggregator means raising the per-IP bucket
+ *     and re-keying on the aggregator's authenticated identity (the same
+ *     honesty note the route contract already carries for the throttle).
+ *   · SECONDARY — the RESOLVED WORKER identity (`worker:` keys), the
+ *     per-worker lock for kiosk-PIN attempts (issue #176 AC2): a wrong PIN
+ *     attributed to a worker (the caller's line maps to that worker —
+ *     aggregator-vouched under the shared secret; spoofable in the open
+ *     posture, where the ip key is the real bound) accumulates on the
+ *     worker's tracker REGARDLESS of which phone/IP sent it, and once
+ *     locked, attempts that would resolve that worker are refused from ANY
+ *     phone. A CORRECT kiosk PIN clears the worker's tracker (consecutive
+ *     semantics, keyed on the identity that proved itself) — it does NOT
+ *     clear the ip tracker (that was the refresh exploit), and a correct
+ *     phone-tail PIN clears nothing (the 10^4 demo identity proves nothing
+ *     about the kiosk PIN). HONEST LIMIT, documented rather than pretended:
+ *     a MISSED kiosk-PIN guess names no target worker (a wrong 4-digit
+ *     string carries zero target information), so per-worker accumulation
+ *     keys on what the deployment can attribute — the caller's line; every
+ *     miss also lands on the unrefreshable ip key either way.
+ *
  *   · SAME LoginTrackerStore seam (the shared sqlite file by default — the
  *     5th failure on process A is visible to process B; in-process map when
- *     RATE_LIMIT_STORE=memory), tracked under the 'ussd' kind, same
- *     5/15min/15min
- *     lifecycle shape as the login lockout so the semantics cannot drift.
- *     CONSECUTIVE-failure semantics: the route clears the tracker on every
- *     successful PIN resolution, so only 5 wrong PINs IN A ROW trip it.
+ *     RATE_LIMIT_STORE=memory), tracked under the 'ussd' kind with PREFIXED
+ *     keys ('ip:<principal>' / 'worker:<id>') — deliberately NOT new tracker
+ *     kinds, so existing ratelimit.db files (CHECK kind IN
+ *     ('email','pair','ussd')) keep enforcing with zero migration; legacy
+ *     bare-phone 'ussd' rows from the #106 engine become dead letters (the
+ *     new engine never reads them) and age out via the sweep.
  *   · `now` is injectable (default Date.now) so tests drive the window
  *     without sleeping — the engine is a pure function of (store, now).
- *   · Old sqlite store files created before the 'ussd' kind keep the legacy
- *     CHECK(kind IN ('email','pair')) schema: those rows fail the constraint,
- *     the store degrades to fail-open with its ONE warning, and deleting the
- *     disposable db/ratelimit.db while stopped restores enforcement (the
- *     store's documented reset semantics).
  */
+
+/** Which non-attacker-supplied identities a USSD PIN attempt is keyed on.
+ * Either field may be absent (the engine consults/clears exactly the keys
+ * present); at least one MUST be present — an empty scope is a programmer
+ * error and throws rather than silently recording nothing. */
+export interface UssdPinLockoutScope {
+  /** Trust-aware client-IP principal ('' = the shared anon bucket). */
+  ip?: string
+  /** The worker the attempt belongs to, when attributable/resolved. */
+  workerId?: string
+}
+
 export const USSD_PIN_FAILURE_LIMIT = 5
 export const USSD_PIN_WINDOW_MS = 15 * 60 * 1000
 export const USSD_PIN_LOCKOUT_MS = 15 * 60 * 1000
 
 export interface UssdPinLockout {
-  /** Is this line currently locked out? `msLeft` > 0 while locked. */
-  checkUssdPinLockout(phone: string): { locked: boolean; msLeft: number }
-  /** Record a wrong-PIN attempt; reports when THIS attempt trips the lock. */
-  recordUssdPinFailure(phone: string): { locked: boolean; msLeft: number }
-  /** A correct PIN: wipe the tracker (consecutive-failure semantics). */
-  clearUssdPinFailures(phone: string): void
+  /** Is this attempt currently locked out? `msLeft` > 0 while locked. */
+  checkUssdPinLockout(scope: UssdPinLockoutScope): { locked: boolean; msLeft: number }
+  /** Record a wrong-PIN attempt on every present key; reports when THIS
+   *  attempt trips a lock. */
+  recordUssdPinFailure(scope: UssdPinLockoutScope): { locked: boolean; msLeft: number }
+  /** Wipe the trackers for the present keys ONLY (the route clears the
+   *  worker key on a correct kiosk PIN while leaving the ip budget sticky). */
+  clearUssdPinFailures(scope: UssdPinLockoutScope): void
 }
 
-const ussdPhoneLockKey = (phone: string): string => phone.trim()
+const ussdIpLockKey = (ip: string): string => `ip:${ip.trim() || 'anon'}`
+const ussdWorkerLockKey = (workerId: string): string => `worker:${workerId}`
 
-/** Lockout engine for the USSD line — mirrors createLoginLockout, phone-keyed.
+/** Lockout engine for the USSD line — mirrors createLoginLockout's
+ * dual-key shape, keyed on the client-IP principal + resolved worker id.
  * (`now` defaults to a CLOSURE over Date.now, not the Date.now reference, so
  * vitest fake timers — which replace the global Date per test — are honored.) */
 export function createUssdPinLockout(
@@ -503,6 +550,18 @@ export function createUssdPinLockout(
   now: () => number = () => Date.now(),
 ): UssdPinLockout {
   const kind: LoginTrackerKind = 'ussd'
+
+  const keys = (scope: UssdPinLockoutScope): string[] => {
+    const ks: string[] = []
+    if (scope.ip !== undefined) ks.push(ussdIpLockKey(scope.ip))
+    if (scope.workerId !== undefined) ks.push(ussdWorkerLockKey(scope.workerId))
+    if (ks.length === 0) {
+      // A security primitive must never silently no-op: a scope with no key
+      // would record nothing and check nothing (an unbounded budget).
+      throw new Error('createUssdPinLockout: scope must carry an ip and/or a workerId')
+    }
+    return ks
+  }
 
   const bump = (key: string, at: number): { locked: boolean; msLeft: number } => {
     const t = store.getTracker(kind, key) ?? { failures: 0, lastFailureAt: 0, lockedUntil: 0 }
@@ -516,24 +575,37 @@ export function createUssdPinLockout(
   }
 
   return {
-    checkUssdPinLockout(phone) {
-      const key = ussdPhoneLockKey(phone)
-      const t = store.getTracker(kind, key)
-      if (!t) return { locked: false, msLeft: 0 }
+    checkUssdPinLockout(scope) {
       const at = now()
-      if (t.lockedUntil > at) return { locked: true, msLeft: t.lockedUntil - at }
-      if (t.lockedUntil) store.deleteTracker(kind, key) // lock served → clean slate
-      return { locked: false, msLeft: 0 }
+      let msLeft = 0
+      for (const key of keys(scope)) {
+        const t = store.getTracker(kind, key)
+        if (!t) continue
+        if (t.lockedUntil > at) {
+          msLeft = Math.max(msLeft, t.lockedUntil - at)
+        } else if (t.lockedUntil) {
+          store.deleteTracker(kind, key) // this tracker's lock is served → clean slate for it
+        }
+      }
+      return { locked: msLeft > 0, msLeft }
     },
 
-    recordUssdPinFailure(phone) {
-      const key = ussdPhoneLockKey(phone)
+    recordUssdPinFailure(scope) {
       const at = now()
-      return store.transact(() => bump(key, at))
+      return store.transact(() => {
+        let locked = false
+        let msLeft = 0
+        for (const key of keys(scope)) {
+          const r = bump(key, at)
+          locked = locked || r.locked
+          msLeft = Math.max(msLeft, r.msLeft)
+        }
+        return { locked, msLeft }
+      })
     },
 
-    clearUssdPinFailures(phone) {
-      store.deleteTracker(kind, ussdPhoneLockKey(phone))
+    clearUssdPinFailures(scope) {
+      for (const key of keys(scope)) store.deleteTracker(kind, key)
     },
   }
 }
@@ -541,24 +613,26 @@ export function createUssdPinLockout(
 /** The live USSD PIN lockout — bound to the env-resolved tracker store. */
 const defaultUssdPinLockout = createUssdPinLockout(loginTrackerStore)
 
-/** Is this USSD line currently locked out? `msLeft` > 0 while locked. */
-export function checkUssdPinLockout(phone: string): { locked: boolean; msLeft: number } {
-  return defaultUssdPinLockout.checkUssdPinLockout(phone)
+/** Is this USSD PIN attempt currently locked out? `msLeft` > 0 while locked. */
+export function checkUssdPinLockout(scope: UssdPinLockoutScope): { locked: boolean; msLeft: number } {
+  return defaultUssdPinLockout.checkUssdPinLockout(scope)
 }
 
 /**
- * Record a wrong-PIN attempt against the phone-keyed tracker. When the count
- * reaches USSD_PIN_FAILURE_LIMIT inside the window the lock starts NOW — the
- * return value says so, so the route can answer the honest locked reply on
- * the very attempt that tripped it.
+ * Record a wrong-PIN attempt against the client-IP principal (always) and
+ * the resolved worker identity (when attributable). When a count reaches
+ * USSD_PIN_FAILURE_LIMIT inside the window the lock starts NOW — the return
+ * value says so, so the route can answer the honest locked reply on the very
+ * attempt that tripped it.
  */
-export function recordUssdPinFailure(phone: string): { locked: boolean; msLeft: number } {
-  return defaultUssdPinLockout.recordUssdPinFailure(phone)
+export function recordUssdPinFailure(scope: UssdPinLockoutScope): { locked: boolean; msLeft: number } {
+  return defaultUssdPinLockout.recordUssdPinFailure(scope)
 }
 
-/** A correct PIN resolution wipes the tracker (consecutive-failure semantics). */
-export function clearUssdPinFailures(phone: string): void {
-  defaultUssdPinLockout.clearUssdPinFailures(phone)
+/** Wipe the trackers for the scope's present keys (a correct kiosk PIN
+ * clears the worker's own count; the ip-keyed budget is deliberately sticky). */
+export function clearUssdPinFailures(scope: UssdPinLockoutScope): void {
+  defaultUssdPinLockout.clearUssdPinFailures(scope)
 }
 
 function sweepLoginTrackers(now: number): void {

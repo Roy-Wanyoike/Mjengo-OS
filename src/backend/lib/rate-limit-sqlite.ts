@@ -185,13 +185,17 @@ CREATE TABLE IF NOT EXISTS rl_bucket (
   refill_per_ms REAL    NOT NULL
 );
 CREATE TABLE IF NOT EXISTS rl_login_tracker (
-  -- 'ussd' = the phone-keyed USSD PIN lockout (issue #106) — same seam, same
-  -- lifecycle, third key space. ADDITIVE SCHEMA NOTE: CREATE TABLE IF NOT
-  -- EXISTS never alters an existing file, so a ratelimit.db created before
-  -- this kind keeps the legacy ('email','pair') CHECK — its USSD lockout
-  -- writes fail the constraint, the store degrades to fail-open with its ONE
-  -- warning, and deleting the disposable file while stopped (the store's
-  -- documented reset) recreates it with the new CHECK.
+  -- 'ussd' = the USSD PIN lockout (issue #106; rekeyed by issue #176 on the
+  -- client-IP principal + resolved worker id via PREFIXED keys — 'ip:<principal>'
+  -- / 'worker:<id>' — deliberately still the ONE 'ussd' kind, so existing
+  -- ratelimit.db files keep enforcing with zero migration; legacy bare-phone
+  -- rows from the #106 engine are dead letters the new engine never reads).
+  -- ADDITIVE SCHEMA NOTE: CREATE TABLE IF NOT EXISTS never alters an existing
+  -- file, so a ratelimit.db created before the 'ussd' kind keeps the legacy
+  -- ('email','pair') CHECK — its USSD lockout writes fail the constraint, the
+  -- store degrades to fail-open with its ONE warning, and deleting the
+  -- disposable file while stopped (the store's documented reset) recreates it
+  -- with the current CHECK.
   kind            TEXT    NOT NULL CHECK (kind IN ('email', 'pair', 'ussd')),
   track_key       TEXT    NOT NULL,
   failures        INTEGER NOT NULL,
@@ -377,11 +381,12 @@ export class SqliteRateLimitStore implements RateLimitStore {
 type TrackerRow = { failures: number; last_failure_at: number; locked_until: number }
 
 /**
- * Login lockout trackers persisted in one SQLite file — the three key
- * spaces of the in-memory maps ('email' kind: the account key, 'pair' kind:
- * the `email|ip` key, 'ussd' kind: the phone-keyed USSD PIN lockout), the
- * same 5-strikes/window/lockout lifecycle (the engines live in rate-limit.ts
- * and are shared by both stores, so the semantics cannot drift).
+ * Login lockout trackers persisted in one SQLite file — the key spaces of
+ * the in-memory maps ('email' kind: the account key, 'pair' kind: the
+ * `email|ip` key, 'ussd' kind: the USSD PIN lockout's prefixed
+ * `ip:`/`worker:` keys — issue #176), the same 5-strikes/window/lockout
+ * lifecycle (the engines live in rate-limit.ts and are shared by both
+ * stores, so the semantics cannot drift).
  * Read-modify-write cycles run inside transact() (BEGIN IMMEDIATE) so two
  * processes recording the same account's 4th+5th failure cannot lose the
  * count.

@@ -10,9 +10,12 @@
  *  · Login lockout: 5 failures in 15 min (per email+IP) lock for 15 min —
  *    not one failure earlier, not after the lock is served, and a cold
  *    window restarts the count. Success resets everything.
- *  · USSD PIN lockout (issue #106 / BE-9): the same 5/15min/15min lifecycle,
- *    keyed per PHONE, driven through createUssdPinLockout with an injected
- *    clock — no sleeping, no fake timers needed.
+ *  · USSD PIN lockout (issue #106 / BE-9, rekeyed by issue #176 / SEC-9): the
+ *    same 5/15min/15min lifecycle, keyed on the CLIENT-IP principal (the
+ *    unrefreshable budget — '' is the one shared anon principal) plus the
+ *    resolved worker identity (the per-worker lock), driven through
+ *    createUssdPinLockout with an injected clock — no sleeping, no fake
+ *    timers needed.
  * Also pinned: the /api/ai/* policy gate's per-route raw-body caps
  * (issue #105 / BE-5) — default 128 KB, 13 MB voice-log, 6 MB analyze-photo,
  * declared-Content-Length precheck + post-read count, whatsapp-family error.
@@ -288,7 +291,7 @@ describe('login lockout (5 failures / 15 min, per email+IP)', () => {
 
 // -------------------------------------------------------- USSD PIN lockout
 
-describe('USSD PIN lockout engine (createUssdPinLockout, issue #106 / BE-9)', () => {
+describe('USSD PIN lockout engine (createUssdPinLockout, issue #106 / BE-9; keying per issue #176)', () => {
   /** A fresh engine over a fresh store with an INJECTED clock — deterministic. */
   function makeEngine() {
     let at = new Date('2026-01-05T09:00:00Z').getTime()
@@ -299,75 +302,109 @@ describe('USSD PIN lockout engine (createUssdPinLockout, issue #106 / BE-9)', ()
     }
   }
 
-  it('does not lock before the failure limit is reached', () => {
+  it('does not lock before the failure limit is reached (one ip principal)', () => {
     const { lock } = makeEngine()
     for (let i = 1; i < USSD_PIN_FAILURE_LIMIT; i++) {
-      const { locked } = lock.recordUssdPinFailure('0722111222')
+      const { locked } = lock.recordUssdPinFailure({ ip: '203.0.113.7' })
       expect(locked, `failure #${i} must not lock`).toBe(false)
-      expect(lock.checkUssdPinLockout('0722111222').locked).toBe(false)
+      expect(lock.checkUssdPinLockout({ ip: '203.0.113.7' }).locked).toBe(false)
     }
   })
 
   it('locks exactly on the 5th failure for 15 minutes', () => {
     const { lock } = makeEngine()
-    for (let i = 1; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure('0722111222')
-    const tripped = lock.recordUssdPinFailure('0722111222')
+    for (let i = 1; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure({ ip: '203.0.113.7' })
+    const tripped = lock.recordUssdPinFailure({ ip: '203.0.113.7' })
     expect(tripped.locked).toBe(true)
     expect(tripped.msLeft).toBeGreaterThan(0)
     expect(tripped.msLeft).toBeLessThanOrEqual(USSD_PIN_LOCKOUT_MS)
-    const state = lock.checkUssdPinLockout('0722111222')
+    const state = lock.checkUssdPinLockout({ ip: '203.0.113.7' })
     expect(state.locked).toBe(true)
     expect(state.msLeft).toBeGreaterThan(0)
   })
 
-  it('keyed PER PHONE: another line is never blocked by one line failing', () => {
+  it('issue #176 AC1 — keyed on the CLIENT IP: the budget is one per principal (rotating phones/ip-adjacent noise cannot mint fresh budgets)', () => {
     const { lock } = makeEngine()
-    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure('0722111222')
-    expect(lock.checkUssdPinLockout('0722111222').locked).toBe(true)
-    expect(lock.checkUssdPinLockout('0733444555').locked).toBe(false)
-    // The other line can even fail freely — its own tracker.
-    expect(lock.recordUssdPinFailure('0733444555').locked).toBe(false)
+    // The engine never sees the phone: 5 wrong PINs land on the same ip key
+    // regardless of what phone the route carried them on.
+    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure({ ip: '203.0.113.7' })
+    expect(lock.checkUssdPinLockout({ ip: '203.0.113.7' }).locked).toBe(true)
+    // A DIFFERENT principal has its own budget — never blocked by another's.
+    expect(lock.checkUssdPinLockout({ ip: '198.51.100.4' }).locked).toBe(false)
+    expect(lock.recordUssdPinFailure({ ip: '198.51.100.4' }).locked).toBe(false)
   })
 
-  it('serves the lock: after 15 min the line is unlocked with a clean slate', () => {
-    const { lock, advance } = makeEngine()
-    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure('0722111222')
-    expect(lock.checkUssdPinLockout('0722111222').locked).toBe(true)
-    advance(USSD_PIN_LOCKOUT_MS + 1)
-    expect(lock.checkUssdPinLockout('0722111222').locked).toBe(false)
-    // clean slate: the counter restarted with the served lock
-    expect(lock.recordUssdPinFailure('0722111222').locked).toBe(false)
+  it("ip '' (TRUST_PROXY unset) = the ONE shared anon principal — every untrusted caller shares one budget", () => {
+    const { lock } = makeEngine()
+    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure({ ip: '' })
+    expect(lock.checkUssdPinLockout({ ip: '' }).locked).toBe(true)
+    // every caller collapses onto the same '' principal — even with a
+    // differently-trimmed value (whitespace-tolerant, same tracker).
+    expect(lock.checkUssdPinLockout({ ip: '  ' }).locked).toBe(true)
+  })
+
+  it('issue #176 AC2 — per-worker tracker: attributed wrong PINs accumulate on the worker REGARDLESS of which ip (hence phone) sent them', () => {
+    const { lock } = makeEngine()
+    for (let i = 0; i < 2; i++) lock.recordUssdPinFailure({ ip: '203.0.113.7', workerId: 'w-9' })
+    for (let i = 0; i < 2; i++) lock.recordUssdPinFailure({ ip: '198.51.100.4', workerId: 'w-9' })
+    expect(lock.checkUssdPinLockout({ ip: '198.51.100.4', workerId: 'w-9' }).locked).toBe(false)
+    // the 5th attributed strike — from a THIRD ip — trips the WORKER lock…
+    const tripped = lock.recordUssdPinFailure({ ip: '192.0.2.9', workerId: 'w-9' })
+    expect(tripped.locked).toBe(true)
+    // …which follows the worker identity from ANY ip/phone ("regardless of
+    // which phone sent them" — the check refuses the resolution, not the line).
+    expect(lock.checkUssdPinLockout({ ip: '203.0.113.7', workerId: 'w-9' }).locked).toBe(true)
+    expect(lock.checkUssdPinLockout({ ip: '198.51.100.4', workerId: 'w-9' }).locked).toBe(true)
+    expect(lock.checkUssdPinLockout({ ip: '192.0.2.9', workerId: 'w-9' }).locked).toBe(true)
+    // another worker resolving from the same ips is untouched.
+    expect(lock.checkUssdPinLockout({ ip: '203.0.113.7', workerId: 'w-other' }).locked).toBe(false)
+  })
+
+  it('clear({workerId}) wipes ONLY the worker tracker — the ip-keyed budget stays sticky (the #176 refresh exploit stays closed)', () => {
+    const { lock } = makeEngine()
+    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT; i++) {
+      lock.recordUssdPinFailure({ ip: '203.0.113.7', workerId: 'w-9' })
+    }
+    lock.clearUssdPinFailures({ workerId: 'w-9' }) // a correct kiosk PIN, per the route
+    // the WORKER's own count restarted: resolving w-9 from a FRESH ip is fine…
+    expect(lock.checkUssdPinLockout({ ip: '192.0.2.9', workerId: 'w-9' }).locked).toBe(false)
+    // …but the ip principal is STILL locked — a success cannot refresh the
+    // attacker's guessing budget (the phone-tail refresh vehicle is dead).
+    expect(lock.checkUssdPinLockout({ ip: '203.0.113.7' }).locked).toBe(true)
   })
 
   it('a cold window restarts the count (4 failures + 15 min idle + 1 ≠ lock)', () => {
     const { lock, advance } = makeEngine()
-    for (let i = 1; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure('0722111222')
+    for (let i = 1; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure({ ip: '203.0.113.7' })
     advance(USSD_PIN_WINDOW_MS + 1)
-    expect(lock.recordUssdPinFailure('0722111222').locked).toBe(false)
-    expect(lock.checkUssdPinLockout('0722111222').locked).toBe(false)
+    expect(lock.recordUssdPinFailure({ ip: '203.0.113.7' }).locked).toBe(false)
+    expect(lock.checkUssdPinLockout({ ip: '203.0.113.7' }).locked).toBe(false)
   })
 
-  it('a CORRECT PIN wipes the tracker (consecutive-failure semantics)', () => {
-    const { lock } = makeEngine()
-    for (let i = 1; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure('0722111222')
-    lock.clearUssdPinFailures('0722111222')
-    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT - 1; i++) lock.recordUssdPinFailure('0722111222')
-    expect(lock.checkUssdPinLockout('0722111222').locked).toBe(false)
+  it('serves the lock: after 15 min the principal is unlocked with a clean slate', () => {
+    const { lock, advance } = makeEngine()
+    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure({ ip: '203.0.113.7' })
+    expect(lock.checkUssdPinLockout({ ip: '203.0.113.7' }).locked).toBe(true)
+    advance(USSD_PIN_LOCKOUT_MS + 1)
+    expect(lock.checkUssdPinLockout({ ip: '203.0.113.7' }).locked).toBe(false)
+    // clean slate: the counter restarted with the served lock
+    expect(lock.recordUssdPinFailure({ ip: '203.0.113.7' }).locked).toBe(false)
   })
 
   it('checking does not consume or extend the lock (a probe during the lock)', () => {
     const { lock, advance } = makeEngine()
-    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure('0722111222')
-    const before = lock.checkUssdPinLockout('0722111222').msLeft
-    for (let i = 0; i < 10; i++) expect(lock.checkUssdPinLockout('0722111222').locked).toBe(true)
+    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure({ ip: '203.0.113.7' })
+    const before = lock.checkUssdPinLockout({ ip: '203.0.113.7' }).msLeft
+    for (let i = 0; i < 10; i++) expect(lock.checkUssdPinLockout({ ip: '203.0.113.7' }).locked).toBe(true)
     advance(1000)
-    expect(lock.checkUssdPinLockout('0722111222').msLeft).toBe(before - 1000)
+    expect(lock.checkUssdPinLockout({ ip: '203.0.113.7' }).msLeft).toBe(before - 1000)
   })
 
-  it('phone keys are trimmed (whitespace-tolerant, same tracker)', () => {
+  it('an empty scope is a programmer error, not a silent no-op (throws — never an unbounded budget)', () => {
     const { lock } = makeEngine()
-    for (let i = 0; i < USSD_PIN_FAILURE_LIMIT; i++) lock.recordUssdPinFailure(' 0722111222 ')
-    expect(lock.checkUssdPinLockout('0722111222').locked).toBe(true)
+    expect(() => lock.checkUssdPinLockout({})).toThrow()
+    expect(() => lock.recordUssdPinFailure({})).toThrow()
+    expect(() => lock.clearUssdPinFailures({})).toThrow()
   })
 })
 
