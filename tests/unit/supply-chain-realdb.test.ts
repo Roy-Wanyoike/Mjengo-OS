@@ -35,6 +35,9 @@ vi.mock('@/backend/lib/db', async () => (await import('../helpers/db')).realDbMo
 
 import { disposeRealDb, getRealTestDb, seedProject } from '../helpers/db'
 import {
+  cancelOrder,
+  cancelRequest,
+  closeOrder,
   confirmOrder,
   createOrder,
   createRequest,
@@ -47,6 +50,7 @@ import {
   submitRequest,
   upsertCatalogItem,
   upsertSupplier,
+  voidDelivery,
 } from '@/backend/modules/supply/service'
 import {
   createInvoice,
@@ -389,5 +393,194 @@ describe('TEST-6: the full procurement walk on a real database', () => {
     const slice = await loadInventorySlice(project.id)
     expect(slice.items[0].closingQty).toBe(10)
     expect(count('OrderDelivery')).toBeGreaterThanOrEqual(2)
+  })
+})
+
+// ------------------------------------------------------------------ #206
+// cancelled-PO / stale-dispatch lifecycle gaps (issue #206): the cancelled
+// order can never be stocked, the delivering order has a cancel path that
+// voids its in-flight dispatch, a mistaken dispatch has a void path that
+// steps the PO back for a corrected re-dispatch, and a request can be
+// withdrawn pre-conversion with its PENDING approvals settled honestly.
+
+describe('#206: cancelled-PO / stale-dispatch lifecycle', () => {
+  /** One project + supplier + catalog + APPROVED request + SENT+CONFIRMED order, ready to dispatch. */
+  async function orderReadyToDispatch(name: string, qty = 20) {
+    const project = await seedProject(prisma, { name })
+    const supplier = await upsertSupplier(project.id, { businessName: `${name} Supplies`, county: 'Nairobi' })
+    await upsertCatalogItem(project.id, { supplierId: supplier.id, name: 'Cement', unit: 'bag', unitPrice: 700, stockQty: 80 })
+    const request = await createRequest(project.id, { lines: [{ materialName: 'Cement', unit: 'bag', qty }] })
+    await submitRequest(project.id, { id: request.id })
+    await decideApproval(project.id, { id: request.id, decision: 'approve' })
+    const order = await createOrder(project.id, { requestId: request.id, supplierId: supplier.id })
+    await sendOrder(project.id, { id: order.id })
+    await confirmOrder(project.id, { id: order.id })
+    const poRow = await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id }, include: { lines: true } })
+    return { project, supplier, request, order, poRow }
+  }
+
+  it('cancel from DELIVERING voids the in-flight dispatch — nothing receivable, nothing stocked, no path re-flips the PO', async () => {
+    const { project, order, poRow } = await orderReadyToDispatch('TEST-206 cancel')
+    const dispatch = await dispatchOrder(project.id, { orderId: order.id })
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('delivering')
+
+    // Reason required (the cancelOrder pattern).
+    await expect(cancelOrder(project.id, { id: order.id })).rejects.toThrow(/cancellation reason is required/)
+
+    const cancelled = await cancelOrder(project.id, { id: order.id, reason: 'truck turned around at Machakos' })
+    expect(cancelled).toMatchObject({ status: 'cancelled', orderCode: order.orderCode, deliveriesVoided: 1 })
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })))
+      .toMatchObject({ status: 'cancelled', note: 'Cancelled — truck turned around at Machakos' })
+    const deliveryRow = await prisma.orderDelivery.findUniqueOrThrow({ where: { id: dispatch.deliveryId } })
+    expect(deliveryRow.status).toBe('cancelled')
+    expect(deliveryRow.note).toContain('order cancelled: truck turned around at Machakos')
+    // No stock was ever posted; both audiences were notified.
+    expect(await prisma.stockMovement.findMany({ where: { projectId: project.id } })).toHaveLength(0)
+    const notes = await prisma.notification.findMany({ where: { projectId: project.id, kind: 'order.cancelled' } })
+    expect(notes.map((n) => n.audienceRole).sort()).toEqual(['client', 'contractor'])
+    expect(notes[0].body).toContain('truck turned around at Machakos')
+
+    // The voided dispatch is no longer receivable …
+    await expect(
+      receiveDelivery(project.id, {
+        deliveryId: dispatch.deliveryId,
+        lines: [{ orderLineId: poRow.lines[0].id, qtyReceived: 20 }],
+      }),
+    ).rejects.toThrow(/Delivery is already CANCELLED — it cannot be re-received/)
+
+    // … and NO path can re-flip the cancelled PO (the old bug: a receive
+    // silently turned cancelled → delivered while posting stock).
+    await expect(sendOrder(project.id, { id: order.id })).rejects.toThrow(/Only APPROVED orders can be sent.*CANCELLED/)
+    await expect(confirmOrder(project.id, { id: order.id })).rejects.toThrow(/Only SENT orders can be confirmed.*CANCELLED/)
+    await expect(dispatchOrder(project.id, { orderId: order.id })).rejects.toThrow(/Only SENT or CONFIRMED orders can be dispatched.*CANCELLED/)
+    await expect(cancelOrder(project.id, { id: order.id, reason: 'again' })).rejects.toThrow(/Only SENT, CONFIRMED or DELIVERING orders can be cancelled.*CANCELLED/)
+    await expect(closeOrder(project.id, { id: order.id })).rejects.toThrow(/Only DELIVERED orders can be closed.*CANCELLED/)
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('cancelled')
+    expect(await prisma.stockMovement.findMany({ where: { projectId: project.id } })).toHaveLength(0)
+  })
+
+  it('the post-race stranded state (cancelled PO + still-dispatched delivery) refuses the receive and never re-flips', async () => {
+    const { project, order, poRow } = await orderReadyToDispatch('TEST-206 stranded')
+    const dispatch = await dispatchOrder(project.id, { orderId: order.id })
+    // The exact stranded shape the cancel+dispatch race used to create (both
+    // reads passed on 'sent', then both wrote): PO cancelled, delivery still
+    // 'dispatched'. Reproduced directly — the receive must refuse on the
+    // PARENT order's state and must not stock or re-flip anything.
+    await prisma.purchaseOrder.update({
+      where: { id: order.id },
+      data: { status: 'cancelled', note: 'Cancelled — concurrent cancel won the race' },
+    })
+    await expect(
+      receiveDelivery(project.id, {
+        deliveryId: dispatch.deliveryId,
+        lines: [{ orderLineId: poRow.lines[0].id, qtyReceived: 20 }],
+      }),
+    ).rejects.toThrow(
+      /is CANCELLED — a cancelled purchase order can never be received or stocked.*concurrent cancel won the race/s,
+    )
+    expect((await prisma.orderDelivery.findUniqueOrThrow({ where: { id: dispatch.deliveryId } })).status).toBe('dispatched') // untouched
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('cancelled') // never re-flipped
+    expect(await prisma.stockMovement.findMany({ where: { projectId: project.id } })).toHaveLength(0)
+    // No receive notifications either — only the walk's own approval/order.sent rows.
+    expect(await prisma.notification.findMany({ where: { projectId: project.id, kind: { in: ['delivery.received', 'delivery.discrepancy'] } } })).toHaveLength(0)
+  })
+
+  it('delivery.void — a mistaken dispatch dies, the PO steps back to CONFIRMED, a corrected re-dispatch lands and receives cleanly', async () => {
+    const { project, order, poRow } = await orderReadyToDispatch('TEST-206 void')
+    const dispatch = await dispatchOrder(project.id, { orderId: order.id })
+
+    // Reason required.
+    await expect(voidDelivery(project.id, { deliveryId: dispatch.deliveryId })).rejects.toThrow(/void reason is required/)
+
+    const voided = await voidDelivery(project.id, { deliveryId: dispatch.deliveryId, reason: 'recorded against the wrong purchase order' })
+    expect(voided).toMatchObject({ status: 'cancelled', orderStatus: 'confirmed', orderCode: order.orderCode })
+    expect((await prisma.orderDelivery.findUniqueOrThrow({ where: { id: dispatch.deliveryId } })))
+      .toMatchObject({ status: 'cancelled', note: 'Dispatch voided — recorded against the wrong purchase order' })
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('confirmed')
+    // Nothing was received into stock; both audiences were notified.
+    expect(await prisma.stockMovement.findMany({ where: { projectId: project.id } })).toHaveLength(0)
+    const notes = await prisma.notification.findMany({ where: { projectId: project.id, kind: 'delivery.voided' } })
+    expect(notes.map((n) => n.audienceRole).sort()).toEqual(['client', 'contractor'])
+
+    // The voided delivery is no longer receivable (dispatch-void then receive refused).
+    await expect(
+      receiveDelivery(project.id, {
+        deliveryId: dispatch.deliveryId,
+        lines: [{ orderLineId: poRow.lines[0].id, qtyReceived: 20 }],
+      }),
+    ).rejects.toThrow(/Delivery is already CANCELLED — it cannot be re-received/)
+
+    // A corrected re-dispatch creates a FRESH delivery row; the cancelled one
+    // stays for the audit trail.
+    const redispatch = await dispatchOrder(project.id, { orderId: order.id, note: 'Corrected dispatch — right truck' })
+    expect(redispatch.status).toBe('delivering')
+    expect(redispatch.deliveryId).not.toBe(dispatch.deliveryId)
+    expect((await prisma.orderDelivery.findMany({ where: { orderId: order.id } })).map((d) => d.status).sort())
+      .toEqual(['cancelled', 'dispatched'])
+
+    // The receive on the corrected row completes once — stock posted exactly once.
+    const received = await receiveDelivery(project.id, {
+      deliveryId: redispatch.deliveryId,
+      lines: [{ orderLineId: poRow.lines[0].id, qtyReceived: 20 }],
+    })
+    expect(received.status).toBe('received')
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('delivered')
+    const movements = await prisma.stockMovement.findMany({ where: { projectId: project.id, type: 'received' } })
+    expect(movements).toHaveLength(1)
+    expect(movements[0].quantity).toBe(20)
+
+    // A received record is physical ground truth — it can never be voided.
+    await expect(voidDelivery(project.id, { deliveryId: redispatch.deliveryId, reason: 'x' })).rejects.toThrow(
+      /Only DISPATCHED, IN_TRANSIT or ARRIVED deliveries can be voided.*RECEIVED/s,
+    )
+  })
+
+  it('request.cancel — withdrawal settles PENDING approvals honestly; approved-unconverted dies; converted refuses', async () => {
+    const project = await seedProject(prisma, { name: 'TEST-206 withdraw' })
+    const supplier = await upsertSupplier(project.id, { businessName: 'Withdraw Works', county: 'Kiambu' })
+    await upsertCatalogItem(project.id, { supplierId: supplier.id, name: 'Ballast', unit: 'tonne', unitPrice: 900, stockQty: 30 })
+
+    // 1) SUBMITTED → withdrawn: the PENDING client rung settles as 'withdrawn'.
+    const r1 = await createRequest(project.id, { lines: [{ materialName: 'Ballast', unit: 'tonne', qty: 5 }] })
+    await submitRequest(project.id, { id: r1.id })
+    const pending = await prisma.approval.findFirstOrThrow({
+      where: { entityId: r1.id, entityType: 'request', decision: 'pending' },
+    })
+    expect(pending.approverRole).toBe('client') // conservative default chain
+    await expect(cancelRequest(project.id, { id: r1.id })).rejects.toThrow(/withdrawal reason is required/)
+    const withdrawn = await cancelRequest(project.id, { id: r1.id, reason: 'no longer needed — slab done' })
+    expect(withdrawn).toMatchObject({ status: 'cancelled', requestCode: r1.requestCode, approvalsSettled: 1 })
+    expect((await prisma.materialRequest.findUniqueOrThrow({ where: { id: r1.id } })))
+      .toMatchObject({ status: 'cancelled', notes: 'Withdrawn — no longer needed — slab done' })
+    const settledRow = await prisma.approval.findUniqueOrThrow({ where: { id: pending.id } })
+    expect(settledRow.decision).toBe('withdrawn') // honest settlement, not a silent drop
+    expect(settledRow.decidedAt).toBeTruthy()
+    expect(settledRow.note).toContain('no longer needed — slab done')
+    // The settled chain is no longer decidable, and the withdrawn request can
+    // neither be re-submitted nor ordered.
+    await expect(decideApproval(project.id, { id: r1.id, decision: 'approve' })).rejects.toThrow(/not awaiting a decision/)
+    await expect(submitRequest(project.id, { id: r1.id })).rejects.toThrow(/Only DRAFT requests can be submitted.*CANCELLED/)
+    await expect(createOrder(project.id, { requestId: r1.id, supplierId: supplier.id })).rejects.toThrow(/APPROVED requests.*CANCELLED/)
+    // The first pending rung's camp was notified.
+    const notes = await prisma.notification.findMany({ where: { projectId: project.id, kind: 'request.cancelled' } })
+    expect(notes.map((n) => n.audienceRole)).toEqual(['client'])
+    expect(String(notes[0].body)).toContain('1 pending approval(s) were settled as withdrawn')
+
+    // 2) APPROVED-unconverted → withdrawn; ordering from it now refuses.
+    const r2 = await createRequest(project.id, { lines: [{ materialName: 'Ballast', unit: 'tonne', qty: 6 }] })
+    await submitRequest(project.id, { id: r2.id })
+    await decideApproval(project.id, { id: r2.id, decision: 'approve' })
+    expect((await cancelRequest(project.id, { id: r2.id, reason: 'budget reallocated' })).status).toBe('cancelled')
+    expect((await prisma.materialRequest.findUniqueOrThrow({ where: { id: r2.id } })).status).toBe('cancelled')
+    await expect(createOrder(project.id, { requestId: r2.id, supplierId: supplier.id })).rejects.toThrow(/APPROVED requests.*CANCELLED/)
+
+    // 3) CONVERTED refuses — a live purchase order owns the request now.
+    const r3 = await createRequest(project.id, { lines: [{ materialName: 'Ballast', unit: 'tonne', qty: 7 }] })
+    await submitRequest(project.id, { id: r3.id })
+    await decideApproval(project.id, { id: r3.id, decision: 'approve' })
+    await createOrder(project.id, { requestId: r3.id, supplierId: supplier.id })
+    await expect(cancelRequest(project.id, { id: r3.id, reason: 'too late' })).rejects.toThrow(
+      /Only DRAFT, SUBMITTED or APPROVED \(not yet ordered\) requests can be withdrawn.*CONVERTED/,
+    )
   })
 })

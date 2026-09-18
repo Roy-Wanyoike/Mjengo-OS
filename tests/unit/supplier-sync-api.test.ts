@@ -78,13 +78,26 @@ vi.mock('@/backend/lib/db', () => {
     },
   }
 
-  /** Just enough of Prisma's where for the supplier sync path (equality + the request relation filter). */
+  /** Just enough of Prisma's where for the supplier sync path (equality, { in },
+   *  { not } and the request relation filter). */
   function matches(row: Row, where: Row = {}): boolean {
     for (const [key, cond] of Object.entries(where)) {
       if (key === 'request') {
         const request = state.requests.get(row.requestId as string)
         if (!request || !matches(request, cond as Row)) return false
         continue
+      }
+      if (cond !== null && typeof cond === 'object' && !Array.isArray(cond)) {
+        const c = cond as Row
+        if ('in' in c) {
+          if (!(c.in as unknown[]).includes(row[key])) return false
+          continue
+        }
+        // #206: dispatchOrder's duplicate check sends status: { not: 'cancelled' }.
+        if ('not' in c) {
+          if (row[key] === c.not) return false
+          continue
+        }
       }
       if (row[key] !== cond) return false
     }
@@ -93,6 +106,11 @@ vi.mock('@/backend/lib/db', () => {
 
   const db = {
     __state: state,
+    // #206: order.dispatch now runs inside db.$transaction with a conditional
+    // PO claim — pass the tx through (no rollback semantics needed here).
+    async $transaction(fn: (tx: typeof db) => unknown) {
+      return fn(db)
+    },
     project: {
       async findUnique({ where }: { where: Row }) { return state.projects.get(String(where.id)) ?? null },
       async findFirst() { return [...state.projects.values()][0] ?? null },
@@ -151,11 +169,20 @@ vi.mock('@/backend/lib/db', () => {
           deliveries: state.orderDeliveries.filter((d) => d.orderId === row.id).map((d) => ({ ...d })),
         }
       },
+      async findUnique({ where }: { where: Row }) {
+        return state.orders.get(String(where.id)) ?? null
+      },
       async update({ where, data }: { where: Row; data: Row }) {
         const row = state.orders.get(String(where.id))
         if (!row) throw new Error(`stub: order ${String(where.id)} not found`)
         Object.assign(row, data)
         return { ...row }
+      },
+      // #206: the dispatch claim — updateMany honors { in } / { not } conditions.
+      async updateMany({ where, data }: { where: Row; data: Row }) {
+        const matched = [...state.orders.values()].filter((r) => matches(r, where))
+        for (const r of matched) Object.assign(r, data)
+        return { count: matched.length }
       },
     },
     orderDelivery: {

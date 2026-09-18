@@ -25,6 +25,16 @@
 //     available for future flows), lines priced from the supplier's catalog
 //     by name match with quote-price fallback, PO-YYYY-000NNN codes, then
 //     send → confirm (simulated supplier) → dispatch → receive
+//   - cancellation is COMPLETE and SAFE (#206): a cancelled PO can never be
+//     stocked (receiveDelivery refuses on the parent order's state),
+//     dispatch and cancel are CONDITIONAL single-transaction claims (the
+//     cancel+dispatch race can no longer strand a receivable delivery on a
+//     cancelled order), a DELIVERING order can be cancelled (its in-flight
+//     dispatch is voided — no stock was posted yet, so nothing reverses), a
+//     mistaken dispatch can be voided (delivery.void: the delivery dies,
+//     the PO steps back to CONFIRMED for a corrected re-dispatch), and a
+//     request can be withdrawn pre-conversion (request.cancel settles its
+//     PENDING approvals honestly as 'withdrawn')
 //   - delivery receive: PHYSICAL GROUND TRUTH (§13) — per-line ordered vs
 //     received, evidence photos (real Attachment links, see receiveDelivery),
 //     GPS, note; ANY short line → 'discrepancy'
@@ -617,6 +627,75 @@ export async function decideApproval(projectId: string, payload: Record<string, 
   return { id: request.id, status: 'submitted', decided }
 }
 
+/**
+ * `request.cancel` { id, reason } — #206: withdraw a material request in any
+ * pre-conversion state (draft / submitted / approved-but-not-yet-ordered).
+ * Reason required (the cancelOrder pattern). A submitted request's PENDING
+ * Approval rows are settled HONESTLY — decision 'withdrawn' with a decidedAt
+ * stamp and the reason on the row — never left dangling as decidable work
+ * (decideApproval's submitted-guard makes them undecidable anyway). The
+ * status flip is a CONDITIONAL claim, so a concurrent order.create (whose
+ * approved→converted flip is itself conditional, same transaction) can never
+ * leave a live purchase order on a withdrawn request: whoever commits first
+ * wins and the loser's claim matches zero rows and fails with the winner's
+ * status. converted/rejected/cancelled requests refuse with their state.
+ */
+export async function cancelRequest(projectId: string, payload: Record<string, unknown>) {
+  const request = await getRequestOrThrow(payload.id, projectId)
+  if (!['draft', 'submitted', 'approved'].includes(request.status)) {
+    throw new Error(
+      `Only DRAFT, SUBMITTED or APPROVED (not yet ordered) requests can be withdrawn — ${request.requestCode} is ${request.status.toUpperCase()}`,
+    )
+  }
+  const reason = str(payload.reason)
+  if (!reason) throw new Error('A withdrawal reason is required')
+
+  const now = new Date()
+  return db.$transaction(async (tx) => {
+    const claim = await tx.materialRequest.updateMany({
+      where: { id: request.id, status: { in: ['draft', 'submitted', 'approved'] } },
+      data: { status: 'cancelled', notes: `Withdrawn — ${reason}` },
+    })
+    if (claim.count === 0) {
+      const winner = await tx.materialRequest.findUnique({ where: { id: request.id } })
+      throw new Error(
+        `Only DRAFT, SUBMITTED or APPROVED (not yet ordered) requests can be withdrawn — ${request.requestCode} is ${(winner?.status ?? request.status).toUpperCase()}`,
+      )
+    }
+    // Settle the chain: every PENDING approval row becomes 'withdrawn' with a
+    // stamp + the reason (the requester pulled the request — nobody decided).
+    const pending = await tx.approval.findMany({
+      where: {
+        projectId,
+        entityId: request.id,
+        decision: 'pending',
+        entityType: { in: ['request', 'material_request'] },
+      },
+      orderBy: { createdAt: 'asc' },
+    })
+    if (pending.length > 0) {
+      await tx.approval.updateMany({
+        where: { id: { in: pending.map((p) => p.id) } },
+        data: { decision: 'withdrawn', decidedAt: now, note: `Withdrawn by the requester — ${reason}` },
+      })
+    }
+    // Notify the affected role: whoever still owed a decision (the first
+    // pending rung) when settling a chain, else the requester's own camp
+    // (their raised/approved request is now dead).
+    const audience = pending[0]?.approverRole ?? (request.requestedByRole || 'contractor')
+    await notify(
+      projectId,
+      'request.cancelled',
+      `Request withdrawn: ${request.requestCode}`,
+      `${request.requestCode} was withdrawn — ${reason}.${pending.length > 0 ? ` Its ${pending.length} pending approval(s) were settled as withdrawn.` : ''}`,
+      audience,
+      null,
+      tx,
+    )
+    return { id: request.id, status: 'cancelled', requestCode: request.requestCode, approvalsSettled: pending.length }
+  })
+}
+
 // ---------------- quotes ----------------
 
 /** `quote.request` { requestId, supplierIds: string[] } — Quote rows REQUESTED. */
@@ -794,23 +873,41 @@ export async function createOrder(projectId: string, payload: Record<string, unk
   const createdByRole = actor.role ?? str(payload.createdByRole) ?? 'contractor'
   const orderCode = await nextOrderCode(projectId)
 
-  const order = await db.purchaseOrder.create({
-    data: {
-      orderCode,
-      projectId,
-      requestId: request.id,
-      supplierId,
-      subtotal,
-      deliveryFee,
-      total,
-      status: 'approved', // the request's approval counts (documented)
-      paymentSource,
-      createdByRole,
-      note: str(payload.note),
-      lines: { create: lineData },
-    },
+  // #206: the PO create and the request's approved→converted flip are ONE
+  // transaction, and the flip is CONDITIONAL on the request still being
+  // approved — a concurrent request.cancel (withdrawal) that commits in
+  // between cannot leave a live purchase order on a withdrawn request.
+  // Whoever commits first wins; the loser's conditional update matches zero
+  // rows, the honest status error throws, and the whole create rolls back.
+  const order = await db.$transaction(async (tx) => {
+    const created = await tx.purchaseOrder.create({
+      data: {
+        orderCode,
+        projectId,
+        requestId: request.id,
+        supplierId,
+        subtotal,
+        deliveryFee,
+        total,
+        status: 'approved', // the request's approval counts (documented)
+        paymentSource,
+        createdByRole,
+        note: str(payload.note),
+        lines: { create: lineData },
+      },
+    })
+    const converted = await tx.materialRequest.updateMany({
+      where: { id: request.id, status: 'approved' },
+      data: { status: 'converted' },
+    })
+    if (converted.count === 0) {
+      const winner = await tx.materialRequest.findUnique({ where: { id: request.id } })
+      throw new Error(
+        `Purchase orders are created from APPROVED requests — ${request.requestCode} is ${(winner?.status ?? request.status).toUpperCase()}`,
+      )
+    }
+    return created
   })
-  await db.materialRequest.update({ where: { id: request.id }, data: { status: 'converted' } })
   return { id: order.id, orderCode, total: centsToKes(total), subtotal: centsToKes(subtotal), deliveryFee: centsToKes(deliveryFee) }
 }
 
@@ -902,38 +999,180 @@ export async function confirmOrder(projectId: string, payload: Record<string, un
   return { id: order.id, status: 'confirmed', orderCode: order.orderCode }
 }
 
-/** `order.dispatch` { orderId } → DELIVERING + OrderDelivery DISPATCHED. */
+/**
+ * `order.dispatch` { orderId, note? } → DELIVERING + OrderDelivery DISPATCHED.
+ * #206: the PO flip is a CONDITIONAL claim (sent/confirmed → delivering) and
+ * the delivery row is created in the SAME transaction — the cancel+dispatch
+ * race (both reads pass on 'sent', then both write) can no longer strand a
+ * receivable delivery on a cancelled order: whoever commits first wins and
+ * the loser's claim matches zero rows, failing with the winner's status. A
+ * VOIDED delivery (delivery.void) does not block a corrected re-dispatch —
+ * only a live (non-cancelled) dispatch record does; the cancelled row stays
+ * for the audit trail.
+ */
 export async function dispatchOrder(projectId: string, payload: Record<string, unknown>) {
   const order = await getOrderOrThrow(payload.orderId ?? payload.id, projectId)
   if (!['sent', 'confirmed'].includes(order.status)) {
     throw new Error(`Only SENT or CONFIRMED orders can be dispatched — ${order.orderCode} is ${order.status.toUpperCase()}`)
   }
-  const existing = await db.orderDelivery.findFirst({ where: { orderId: order.id } })
+  const existing = await db.orderDelivery.findFirst({ where: { orderId: order.id, status: { not: 'cancelled' } } })
   if (existing) throw new Error(`${order.orderCode} already has a dispatch record`)
 
   const now = new Date()
-  await db.purchaseOrder.update({ where: { id: order.id }, data: { status: 'delivering' } })
-  const delivery = await db.orderDelivery.create({
-    data: {
-      orderId: order.id,
-      status: 'dispatched',
-      dispatchedAt: now,
-      note: str(payload.note) ?? `Truck dispatched — ${order.lines.length} line(s), ${kes(order.total)}`,
-    },
+  return db.$transaction(async (tx) => {
+    // The dispatch claim: the flip only lands while the order is still in a
+    // pre-dispatch state. Winning it is what authorizes the delivery row.
+    const claim = await tx.purchaseOrder.updateMany({
+      where: { id: order.id, status: { in: ['sent', 'confirmed'] } },
+      data: { status: 'delivering' },
+    })
+    if (claim.count === 0) {
+      const winner = await tx.purchaseOrder.findUnique({ where: { id: order.id } })
+      throw new Error(
+        `Only SENT or CONFIRMED orders can be dispatched — ${order.orderCode} is ${(winner?.status ?? order.status).toUpperCase()}`,
+      )
+    }
+    const delivery = await tx.orderDelivery.create({
+      data: {
+        orderId: order.id,
+        status: 'dispatched',
+        dispatchedAt: now,
+        note: str(payload.note) ?? `Truck dispatched — ${order.lines.length} line(s), ${kes(order.total)}`,
+      },
+    })
+    return { id: order.id, deliveryId: delivery.id, status: 'delivering', orderCode: order.orderCode }
   })
-  return { id: order.id, deliveryId: delivery.id, status: 'delivering', orderCode: order.orderCode }
 }
 
-/** `order.cancel` { id, reason } — from SENT/CONFIRMED, with a reason. */
+/**
+ * `order.cancel` { id, reason } — from SENT/CONFIRMED/DELIVERING, with a
+ * reason. #206 closes the delivering gap ("trucks turn around"): cancelling
+ * a DELIVERING order also VOIDS its in-flight dispatch — every still-
+ * receivable OrderDelivery row (dispatched/in_transit/arrived, a refused-at-
+ * the-gate truck included) flips to 'cancelled' in the SAME transaction, so
+ * the PO status and the delivery states move together and nothing is left
+ * receivable (no stock was posted yet — receive is the only stock path and
+ * it flips deliveries out of those states, so there is nothing to reverse).
+ * Both audiences are notified. The PO flip itself is a CONDITIONAL claim, so
+ * the cancel+dispatch and cancel+receive races lose honestly instead of
+ * stranding state; DELIVERED/CLOSED orders refuse (their goods are ground
+ * truth — reversing stock is the inventory module's job).
+ */
 export async function cancelOrder(projectId: string, payload: Record<string, unknown>) {
   const order = await getOrderOrThrow(payload.id, projectId)
-  if (!['sent', 'confirmed'].includes(order.status)) {
-    throw new Error(`Only SENT or CONFIRMED orders can be cancelled — ${order.orderCode} is ${order.status.toUpperCase()}`)
+  if (!['sent', 'confirmed', 'delivering'].includes(order.status)) {
+    throw new Error(`Only SENT, CONFIRMED or DELIVERING orders can be cancelled — ${order.orderCode} is ${order.status.toUpperCase()}`)
   }
   const reason = str(payload.reason)
   if (!reason) throw new Error('A cancellation reason is required')
-  await db.purchaseOrder.update({ where: { id: order.id }, data: { status: 'cancelled', note: `Cancelled — ${reason}` } })
-  return { id: order.id, status: 'cancelled', orderCode: order.orderCode }
+
+  return db.$transaction(async (tx) => {
+    const claim = await tx.purchaseOrder.updateMany({
+      where: { id: order.id, status: { in: ['sent', 'confirmed', 'delivering'] } },
+      data: { status: 'cancelled', note: `Cancelled — ${reason}` },
+    })
+    if (claim.count === 0) {
+      const winner = await tx.purchaseOrder.findUnique({ where: { id: order.id } })
+      throw new Error(
+        `Only SENT, CONFIRMED or DELIVERING orders can be cancelled — ${order.orderCode} is ${(winner?.status ?? order.status).toUpperCase()}`,
+      )
+    }
+    // Void the in-flight dispatch: every still-receivable delivery of this
+    // order dies with it, note carrying the reason (the row stays for audit).
+    const voided = await tx.orderDelivery.updateMany({
+      where: { orderId: order.id, status: { in: ['dispatched', 'in_transit', 'arrived'] } },
+      data: { status: 'cancelled', note: `Dispatch voided — order cancelled: ${reason}` },
+    })
+    await notify(
+      projectId,
+      'order.cancelled',
+      `PO cancelled: ${order.orderCode}`,
+      `${kes(order.total)} to ${order.supplier.businessName} cancelled — ${reason}.` +
+        (voided.count > 0 ? ' The in-flight dispatch was voided — nothing was received into stock.' : ''),
+      'contractor',
+      null,
+      tx,
+    )
+    await notify(
+      projectId,
+      'order.cancelled',
+      `PO cancelled: ${order.orderCode}`,
+      `${kes(order.total)} to ${order.supplier.businessName} cancelled — ${reason}.` +
+        (voided.count > 0 ? ' The in-flight dispatch was voided — nothing was received into stock.' : ''),
+      'client',
+      null,
+      tx,
+    )
+    return { id: order.id, status: 'cancelled', orderCode: order.orderCode, deliveriesVoided: voided.count }
+  })
+}
+
+/**
+ * `delivery.void` { deliveryId, reason } — #206: void a mistaken or reversed
+ * dispatch. The delivery (dispatched/in_transit/arrived — the receivable
+ * states) flips to 'cancelled' with the reason on the row, and the parent PO
+ * steps back ONE rung on the documented ladder (delivering → confirmed, the
+ * pre-dispatch state) so a CORRECTED dispatch can be recorded —
+ * dispatchOrder's duplicate check ignores cancelled deliveries. Reason
+ * required (the cancelOrder pattern); both audiences notified; NOTHING is
+ * posted (receive never ran — that is the point). One transaction: the
+ * delivery void and the PO flip live or die together, and both claims are
+ * conditional so a concurrent receive, driver-leg move or order.cancel loses
+ * honestly. Fail-closed when the PO is not DELIVERING: any other state with a
+ * receivable delivery is legacy/manual data, and inventing e.g.
+ * delivered→confirmed would un-receive stock that was already posted.
+ */
+export async function voidDelivery(projectId: string, payload: Record<string, unknown>) {
+  const deliveryId = str(payload.deliveryId)
+  if (!deliveryId) throw new Error('deliveryId required')
+  const delivery = await db.orderDelivery.findFirst({
+    where: { id: deliveryId, order: { projectId } },
+    include: { order: { include: { supplier: true } } },
+  })
+  if (!delivery) throw new Error('Delivery not found in this project')
+  if (!['dispatched', 'in_transit', 'arrived'].includes(delivery.status)) {
+    throw new Error(
+      `Only DISPATCHED, IN_TRANSIT or ARRIVED deliveries can be voided — this one is ${delivery.status.toUpperCase()} ` +
+        '(a received/discrepancy record is physical ground truth; reversing stock is the inventory module\'s job)',
+    )
+  }
+  const reason = str(payload.reason)
+  if (!reason) throw new Error('A void reason is required')
+  const order = delivery.order
+
+  return db.$transaction(async (tx) => {
+    // The void claim: only while the delivery is still receivable. Winning
+    // it is what authorizes the PO step-back that follows.
+    const claim = await tx.orderDelivery.updateMany({
+      where: { id: delivery.id, status: { in: ['dispatched', 'in_transit', 'arrived'] } },
+      data: { status: 'cancelled', note: `Dispatch voided — ${reason}` },
+    })
+    if (claim.count === 0) {
+      const winner = await tx.orderDelivery.findUnique({ where: { id: delivery.id } })
+      throw new Error(
+        `Only DISPATCHED, IN_TRANSIT or ARRIVED deliveries can be voided — this one is ${(winner?.status ?? delivery.status).toUpperCase()}`,
+      )
+    }
+    // The PO steps back to its pre-dispatch rung — CONFIRMED. Conditional on
+    // DELIVERING, so the PO flip and the delivery void move together.
+    const poClaim = await tx.purchaseOrder.updateMany({
+      where: { id: order.id, status: 'delivering' },
+      data: { status: 'confirmed' },
+    })
+    if (poClaim.count === 0) {
+      const poNow = await tx.purchaseOrder.findUnique({ where: { id: order.id } })
+      throw new Error(
+        `${order.orderCode} is ${(poNow?.status ?? order.status).toUpperCase()} — only a DELIVERING order's dispatch can be voided. ` +
+          'Cancel the order instead, or correct already-received stock through the inventory module.',
+      )
+    }
+    const body =
+      `${order.orderCode} (${order.supplier.businessName}): the dispatch was voided — ${reason}. ` +
+      'The order is back to CONFIRMED and nothing was received into stock; record the corrected dispatch when the truck actually leaves.'
+    await notify(projectId, 'delivery.voided', `Dispatch voided: ${order.orderCode}`, body, 'contractor', null, tx)
+    await notify(projectId, 'delivery.voided', `Dispatch voided: ${order.orderCode}`, body, 'client', null, tx)
+    return { id: delivery.id, orderId: order.id, status: 'cancelled', orderStatus: 'confirmed', orderCode: order.orderCode }
+  })
 }
 
 /** `order.close` { id, note? } — from DELIVERED. */
@@ -953,6 +1192,21 @@ export async function closeOrder(projectId: string, payload: Record<string, unkn
 
 /** Honest cap on one receive's photo set (uploads are rate-limited 10/min; payloads stay sane). */
 const MAX_DELIVERY_PHOTOS = 24
+
+/**
+ * The #206 honest refusal when a receive targets a delivery whose parent
+ * order was cancelled — names the PO, its state and the recorded cancellation
+ * reason (cancelOrder writes `Cancelled — <reason>` into the note), and says
+ * what to do instead. Shared by the fast-fail read, the transactional
+ * re-check and the lost-claim branch so every path refuses identically.
+ */
+function cancelledOrderReceiveError(order: { orderCode: string; note: string | null }): string {
+  return (
+    `${order.orderCode} is CANCELLED — a cancelled purchase order can never be received or stocked ` +
+    `(cancellation on record: "${order.note ?? 'no reason recorded'}"). ` +
+    'If the goods are genuinely still coming, agree a fresh purchase order with the supplier first.'
+  )
+}
 
 /** Validated photo refs for one receive — attachment ids from PRIOR /api/upload calls. */
 export interface DeliveryPhotoRefs {
@@ -1145,6 +1399,18 @@ export async function linkDeliveryPhotos(
  * posted movements before flipping the status, so a retry double-counted the
  * derived stock), and two concurrent receives cannot both win — the loser's
  * conditional update matches zero rows and fails honestly.
+ *
+ * PARENT-ORDER GUARD (#206): the PO's state is part of the receive guard, not
+ * just the delivery's. A CANCELLED order can never be stocked — the fast-fail
+ * read refuses it up front, the transactional re-check refuses it again, and
+ * the claim itself is conditional on the order NOT being cancelled, so an
+ * order.cancel that commits between the read and the claim makes the receive
+ * lose honestly (the cancel+receive race) instead of silently erasing the
+ * cancellation by flipping the PO to 'delivered'. DOCUMENTED: a DELIVERED
+ * order's re-staged delivery (the demo replay posture — seed-extras/domain.ts
+ * resets the truck so the receive flow can replay, history living in the
+ * audit ledger) stays receivable; 'cancelled' is the one PO state that must
+ * never post stock.
  */
 export async function receiveDelivery(projectId: string, payload: Record<string, unknown>) {
   const deliveryId = str(payload.deliveryId)
@@ -1164,6 +1430,12 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
   }
   if (delivery.status !== 'dispatched' && delivery.status !== 'arrived') {
     throw new Error(`Delivery is already ${delivery.status.toUpperCase()} — it cannot be re-received`)
+  }
+  // #206: the parent order's state is part of the guard — a cancelled PO can
+  // never be stocked, however receivable its delivery row reads (the
+  // cancel+dispatch race used to strand exactly that shape).
+  if (delivery.order.status === 'cancelled') {
+    throw new Error(cancelledOrderReceiveError(delivery.order))
   }
   const rawLines = Array.isArray(payload.lines) ? payload.lines : []
   if (!rawLines.length) throw new Error('Per-line received quantities are required — count what physically arrived')
@@ -1262,9 +1534,11 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
   // stock, PO flip, notifications) rolls the whole receive back to zero.
   return db.$transaction(async (tx) => {
     // Transactional re-check of the guard — the fast-fail read above is not
-    // the guard; this one races inside the transaction that writes.
+    // the guard; this one races inside the transaction that writes. The
+    // parent order rides along (#206): its cancelled state refuses here too.
     const fresh = await tx.orderDelivery.findFirst({
       where: { id: deliveryId, order: { projectId } },
+      include: { order: true },
     })
     if (!fresh) throw new Error('Delivery not found in this project')
     if (fresh.status === 'in_transit') {
@@ -1275,16 +1549,33 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
     if (fresh.status !== 'dispatched' && fresh.status !== 'arrived') {
       throw new Error(`Delivery is already ${fresh.status.toUpperCase()} — it cannot be re-received`)
     }
-    // The claim: flip to the FINAL status only while still awaiting receive.
+    if (fresh.order.status === 'cancelled') {
+      throw new Error(cancelledOrderReceiveError(fresh.order))
+    }
+    // The claim: flip to the FINAL status only while still awaiting receive
+    // AND the parent order is not cancelled (#206 — this is the guard that
+    // closes the cancel+receive race: an order.cancel committing after the
+    // re-check above makes this conditional update match zero rows).
     // Winning the claim is what authorizes every write that follows.
     const claim = await tx.orderDelivery.updateMany({
-      where: { id: fresh.id, status: { in: ['dispatched', 'arrived'] } },
+      where: {
+        id: fresh.id,
+        status: { in: ['dispatched', 'arrived'] },
+        order: { status: { not: 'cancelled' } },
+      },
       data: { status: targetStatus, receivedAt: now, receivedBy },
     })
     if (claim.count === 0) {
-      // Lost a race with a concurrent receive / driver-leg transition —
-      // nothing of ours was written; report the winner's status honestly.
-      const winner = await tx.orderDelivery.findFirst({ where: { id: fresh.id } })
+      // Lost a race with a concurrent receive / driver-leg transition / the
+      // order being cancelled — nothing of ours was written; report the
+      // winner's state honestly.
+      const winner = await tx.orderDelivery.findFirst({
+        where: { id: fresh.id },
+        include: { order: true },
+      })
+      if (winner?.order.status === 'cancelled') {
+        throw new Error(cancelledOrderReceiveError(winner.order))
+      }
       throw new Error(
         `Delivery is already ${(winner?.status ?? fresh.status).toUpperCase()} — it cannot be re-received`,
       )

@@ -2142,6 +2142,7 @@ export const swDict = {
   'finder.req.status.submitted': 'Imewasilishwa',
   'finder.req.status.approved': 'Imeidhinishwa',
   'finder.req.status.rejected': 'Imekataliwa',
+  'finder.req.status.cancelled': 'Imejiondoa',
   'finder.req.status.converted': 'Imegeuzwa kuwa PO',
   'finder.req.status.po': 'PO',
   'finder.req.decide.audit': 'Ombi {decision}: {code}',
@@ -2204,6 +2205,7 @@ export const swDict = {
 
   'finder.delivery.status.received': 'Imepokelewa kikamilifu',
   'finder.delivery.status.discrepancy': 'Tofauti — ukaguzi',
+  'finder.delivery.status.cancelled': 'Utumaji umebatilishwa',
   'finder.delivery.status.dispatched': 'Imetumwa na malori',
 
   // ------------------------------------------------------------- #107: kichupo cha Intel

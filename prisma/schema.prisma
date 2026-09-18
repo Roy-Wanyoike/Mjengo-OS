@@ -735,7 +735,7 @@ model MaterialRequest {
   requestedByRole String // supervisor, contractor, client, procurement, finance
   requestedByName String
   notes           String?
-  status          String                @default("draft") // draft, submitted, approved, rejected, converted
+  status          String                @default("draft") // draft, submitted, approved, rejected, converted, cancelled (withdrawn pre-conversion — #206; request.cancel settles PENDING approvals as 'withdrawn')
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
   lines           MaterialRequestLine[]
@@ -784,7 +784,7 @@ model Approval {
   entityId     String // id of the entity (no FK — audited via ledger)
   approverRole String // supervisor, contractor, client, finance
   approverName String
-  decision     String    @default("pending") // pending, approved, rejected
+  decision     String    @default("pending") // pending, approved, rejected, withdrawn (#206: request.cancel settles PENDING rows as 'withdrawn' — the requester pulled the request, nobody decided)
   note         String?
   decidedAt    DateTime?
   createdAt    DateTime  @default(now())
@@ -873,7 +873,7 @@ model OrderDelivery {
   id           String              @id @default(cuid())
   orderId      String
   order        PurchaseOrder       @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  status       String              @default("dispatched") // dispatched, in_transit, arrived, received, discrepancy
+  status       String              @default("dispatched") // dispatched, in_transit, arrived, received, discrepancy, cancelled (#206: voided dispatch — order.cancel from delivering, or delivery.void; not receivable, no stock posted)
   dispatchedAt DateTime?
   receivedAt   DateTime?
   receivedBy   String? // who confirmed receipt on the ground

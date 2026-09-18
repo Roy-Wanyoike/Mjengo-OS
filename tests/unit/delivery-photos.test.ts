@@ -80,7 +80,7 @@ vi.mock('@/backend/lib/db', () => {
     }
   }
 
-  /** Just enough of Prisma's where: equality, { in: [...] }, relation order.projectId. */
+  /** Just enough of Prisma's where: equality, { in: [...] }, { not: ... }, relation order.projectId. */
   function matches(row: Row, where: Row = {}): boolean {
     for (const [key, cond] of Object.entries(where)) {
       if (key === 'order') {
@@ -92,6 +92,11 @@ vi.mock('@/backend/lib/db', () => {
         const c = cond as Record<string, unknown>
         if ('in' in c) {
           if (!(c.in as unknown[]).includes(row[key])) return false
+          continue
+        }
+        // #206: the receive claim's order: { status: { not: 'cancelled' } }
+        if ('not' in c) {
+          if (row[key] === c.not) return false
           continue
         }
       }
@@ -795,6 +800,112 @@ describe('over-delivery (#201) — beyond the ordered qty is REJECTED, never sil
   })
 })
 
+describe('#206 — the parent order\'s state guards the receive (a cancelled PO can never stock)', () => {
+  const fullLines = [
+    { orderLineId: 'pl_1', qtyReceived: 100 },
+    { orderLineId: 'pl_2', qtyReceived: 20 },
+  ]
+
+  it('a delivery on a CANCELLED order is refused with the honest PO-naming error — nothing is written, the PO is never re-flipped', async () => {
+    const deliveryId = seed()
+    const po = state.orders.get('po_1') as Record<string, unknown>
+    po.status = 'cancelled'
+    po.note = 'Cancelled — truck turned around at Machakos'
+    await expect(receiveDelivery(P1, { deliveryId, lines: fullLines })).rejects.toThrow(
+      /PO-2026-000101 is CANCELLED — a cancelled purchase order can never be received or stocked.*truck turned around at Machakos/s,
+    )
+    // Zero partial state: the delivery is untouched, no Site Store rows, no
+    // notifications — and the cancellation was NOT silently erased by a
+    // PO → 'delivered' flip (the exact #206 bug).
+    expect((state.deliveries.get(deliveryId) as Record<string, unknown>).status).toBe('dispatched')
+    expect(state.stockMovements).toHaveLength(0)
+    expect(state.inventoryItems.size).toBe(0)
+    expect(state.notifications).toHaveLength(0)
+    expect(state.writes.deliveryClaim).toBe(0)
+    expect(po.status).toBe('cancelled')
+  })
+
+  it('the cancel+receive race: an order cancelled AFTER the fast-fail read is refused INSIDE the transaction', async () => {
+    const deliveryId = seed()
+    // The cancellation commits between the fast-fail read and the
+    // transactional re-check — modeled at the SECOND findFirst (the tx
+    // re-check), the exact interleaving the in-transaction guard exists for.
+    const original = db.orderDelivery.findFirst.bind(db.orderDelivery)
+    let calls = 0
+    ;(db as unknown as { orderDelivery: Record<string, unknown> }).orderDelivery.findFirst = async (args: unknown) => {
+      calls += 1
+      if (calls === 2) {
+        const po = state.orders.get('po_1') as Record<string, unknown>
+        po.status = 'cancelled'
+        po.note = 'Cancelled — lost the race'
+      }
+      return (original as (a: unknown) => Promise<unknown>)(args)
+    }
+    try {
+      await expect(receiveDelivery(P1, { deliveryId, lines: fullLines })).rejects.toThrow(
+        /PO-2026-000101 is CANCELLED.*lost the race/s,
+      )
+    } finally {
+      ;(db as unknown as { orderDelivery: Record<string, unknown> }).orderDelivery.findFirst = original
+    }
+    // The rolled-back receive wrote nothing.
+    expect((state.deliveries.get(deliveryId) as Record<string, unknown>).status).toBe('dispatched')
+    expect(state.stockMovements).toHaveLength(0)
+    expect(state.notifications).toHaveLength(0)
+  })
+
+  it('the claim itself refuses a cancelled order: a cancel committing between the re-check and the claim loses honestly', async () => {
+    const deliveryId = seed()
+    // The cancellation lands between the transactional re-check and the
+    // conditional claim — the claim's order: { status: { not: 'cancelled' } }
+    // matches zero rows and the lost-claim branch names the cancellation.
+    const original = db.orderDelivery.updateMany.bind(db.orderDelivery)
+    ;(db as unknown as { orderDelivery: Record<string, unknown> }).orderDelivery.updateMany = async (args: unknown) => {
+      const po = state.orders.get('po_1') as Record<string, unknown>
+      po.status = 'cancelled'
+      po.note = 'Cancelled — won the claim race'
+      return (original as (a: unknown) => Promise<unknown>)(args)
+    }
+    try {
+      await expect(receiveDelivery(P1, { deliveryId, lines: fullLines })).rejects.toThrow(
+        /PO-2026-000101 is CANCELLED.*won the claim race/s,
+      )
+    } finally {
+      ;(db as unknown as { orderDelivery: Record<string, unknown> }).orderDelivery.updateMany = original
+    }
+    // Nothing of the receive survived the rollback (the delivery never left
+    // 'dispatched', no stock posted, nobody notified).
+    expect((state.deliveries.get(deliveryId) as Record<string, unknown>).status).toBe('dispatched')
+    expect(state.stockMovements).toHaveLength(0)
+    expect(state.notifications).toHaveLength(0)
+  })
+
+  it('a VOIDED delivery is no longer receivable (dispatch-void then receive refused)', async () => {
+    const deliveryId = seed()
+    const delivery = state.deliveries.get(deliveryId) as Record<string, unknown>
+    delivery.status = 'cancelled'
+    delivery.note = 'Dispatch voided — recorded in error'
+    await expect(receiveDelivery(P1, { deliveryId, lines: fullLines })).rejects.toThrow(
+      /Delivery is already CANCELLED — it cannot be re-received/,
+    )
+    expect(state.stockMovements).toHaveLength(0)
+    expect(state.notifications).toHaveLength(0)
+  })
+
+  it('happy path unchanged: a DELIVERING order\'s dispatched delivery still receives in full (stock posted)', async () => {
+    const deliveryId = seed()
+    const result = await receiveDelivery(P1, { deliveryId, lines: fullLines })
+    expect(result.status).toBe('received')
+    expect((state.deliveries.get(deliveryId) as Record<string, unknown>).status).toBe('received')
+    expect((state.orders.get('po_1') as Record<string, unknown>).status).toBe('delivered')
+    const cementItem = [...state.inventoryItems.values()].find((i) => i.materialName === 'Cement')
+    const netCement = state.stockMovements
+      .filter((m) => m.type === 'received' && m.inventoryItemId === cementItem?.id)
+      .reduce((s, m) => s + (m.quantity as number), 0)
+    expect(netCement).toBe(100)
+  })
+})
+
 describe('role policy — who may attach is decided upstream; the service enforces ownership', () => {
   it('supplyCan: only the site team may run delivery.receive (the guards\u2019 matrix)', () => {
     for (const role of ['contractor', 'supervisor', 'procurement', 'finance', 'admin'] as const) {
@@ -802,6 +913,20 @@ describe('role policy — who may attach is decided upstream; the service enforc
     }
     expect(supplyCan('client', 'delivery.receive')).toBe(false)
     expect(supplyCan('share_client' as 'client', 'delivery.receive')).toBe(false)
+  })
+
+  it('supplyCan: the #206 cancellation pair (request.cancel, delivery.void) is site-team only', () => {
+    for (const role of ['contractor', 'supervisor', 'procurement', 'finance', 'admin'] as const) {
+      expect(supplyCan(role, 'request.cancel')).toBe(true)
+      expect(supplyCan(role, 'delivery.void')).toBe(true)
+    }
+    // The §24 seam stays narrow: a client may RAISE requests, never pull them
+    // out of an in-flight approval chain; the supplier portal keeps
+    // confirm/dispatch only, so a supplier cannot erase its own dispatch.
+    expect(supplyCan('client', 'request.cancel')).toBe(false)
+    expect(supplyCan('client', 'delivery.void')).toBe(false)
+    expect(supplyCan('share_client' as 'client', 'request.cancel')).toBe(false)
+    expect(supplyCan('share_client' as 'client', 'delivery.void')).toBe(false)
   })
 
   it('the service runs for any caller the guards let through (no role re-check) — but a foreign project\u2019s file is never attached', async () => {

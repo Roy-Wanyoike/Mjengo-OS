@@ -2139,6 +2139,7 @@ export const enDict = {
   'finder.req.status.submitted': 'Submitted',
   'finder.req.status.approved': 'Approved',
   'finder.req.status.rejected': 'Rejected',
+  'finder.req.status.cancelled': 'Withdrawn',
   'finder.req.status.converted': 'Converted to PO',
   'finder.req.status.po': 'PO',
   'finder.req.decide.audit': 'Request {decision}: {code}',
@@ -2201,6 +2202,7 @@ export const enDict = {
 
   'finder.delivery.status.received': 'Received in full',
   'finder.delivery.status.discrepancy': 'Discrepancy — review',
+  'finder.delivery.status.cancelled': 'Dispatch voided',
   'finder.delivery.status.dispatched': 'Dispatched',
 
   // ------------------------------------------------------------- #107: Intel tab

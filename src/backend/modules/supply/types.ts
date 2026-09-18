@@ -20,15 +20,19 @@ export type { ApprovalRule, Approval, Quote, QuoteLine, PurchaseOrder, PurchaseO
 
 // ---- domain enums ----
 
-export type RequestStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'converted'
+export type RequestStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'converted' | 'cancelled'
 export type QuoteStatus = 'requested' | 'received' | 'declined'
 export type OrderStatus =
   | 'draft' | 'pending_approval' | 'approved' | 'sent' | 'confirmed'
   | 'delivering' | 'delivered' | 'closed' | 'cancelled'
 export type PaymentSource = 'client' | 'contractor' | 'project_wallet' | 'finance'
-export type DeliveryStatus = 'dispatched' | 'received' | 'discrepancy'
+// The full OrderDelivery ladder (schema comment): in_transit/arrived are the
+// §26 driver legs; cancelled is the #206 voided dispatch (not receivable).
+export type DeliveryStatus = 'dispatched' | 'in_transit' | 'arrived' | 'received' | 'discrepancy' | 'cancelled'
 export type ApproverRole = 'supervisor' | 'contractor' | 'client' | 'finance'
-export type ApprovalDecision = 'pending' | 'approved' | 'rejected'
+// 'withdrawn' (#206): request.cancel settles PENDING rows when the requester
+// pulls the request — a settlement, not a decision.
+export type ApprovalDecision = 'pending' | 'approved' | 'rejected' | 'withdrawn'
 
 // ---- slice shapes ----
 

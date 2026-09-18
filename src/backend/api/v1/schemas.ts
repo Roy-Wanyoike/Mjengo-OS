@@ -215,10 +215,10 @@ export const orderStatusFilter = z.enum(
   },
 )
 
-/** OrderDelivery status filter (the model comment's documented set). */
+/** OrderDelivery status filter (the model comment's documented set — #206 added 'cancelled', the voided-dispatch terminal state). */
 export const deliveryStatusFilter = z.enum(
-  ['dispatched', 'in_transit', 'arrived', 'received', 'discrepancy'],
-  { error: 'status must be one of dispatched, in_transit, arrived, received, discrepancy' },
+  ['dispatched', 'in_transit', 'arrived', 'received', 'discrepancy', 'cancelled'],
+  { error: 'status must be one of dispatched, in_transit, arrived, received, discrepancy, cancelled' },
 )
 
 /** PurchaseOrder id OR orderCode — both are 2-40 chars of [A-Za-z0-9_-]. */

@@ -607,7 +607,7 @@ const deliveryVerificationSchema = {
     id: { type: 'string', description: 'OrderDelivery id (cuid) — the pagination cursor value.' },
     orderId: { type: 'string' },
     orderCode: { type: 'string', description: 'The owning purchase order code, e.g. PO-2026-000012.' },
-    status: { type: 'string', enum: ['dispatched', 'in_transit', 'arrived', 'received', 'discrepancy'] },
+    status: { type: 'string', enum: ['dispatched', 'in_transit', 'arrived', 'received', 'discrepancy', 'cancelled'], description: 'cancelled = voided dispatch (issue #206: order.cancel from delivering, or delivery.void) — never receivable, no stock posted.' },
     dispatchedAt: { type: ['string', 'null'], format: 'date-time' },
     receivedAt: { type: ['string', 'null'], format: 'date-time', description: 'When the site team confirmed receipt (ground truth).' },
     receivedBy: { type: ['string', 'null'] },
@@ -2157,7 +2157,8 @@ const spec = {
         summary: 'Delivery verification records of a project (cursor-paginated)',
         description:
           'Every OrderDelivery against every purchase order of the project — the supply loop\'s physical ground ' +
-          'truth: status (dispatched → in_transit → arrived → received | discrepancy), the §26 driver leg, per-line ' +
+          'truth: status (dispatched → in_transit → arrived → received | discrepancy, or cancelled — a voided ' +
+          'dispatch, issue #206), the §26 driver leg, per-line ' +
           'ordered vs received vs rejected counts with inspection condition, and discrepancy flags (shortLines = ' +
           'receiveDelivery\'s exact short-line predicate). EVIDENCE PHOTOS are referenced by ATTACHMENT ID ONLY — ' +
           'no photo bytes and no storage URLs are served by /api/v1; fetch them through the app\'s own storage seam. ' +
@@ -2171,7 +2172,7 @@ const spec = {
         security,
         parameters: [
           projectIdPathParam,
-          statusParam(['dispatched', 'in_transit', 'arrived', 'received', 'discrepancy'], 'delivery status'),
+          statusParam(['dispatched', 'in_transit', 'arrived', 'received', 'discrepancy', 'cancelled'], 'delivery status'),
           limitParam,
           cursorParam('a delivery id'),
         ],

@@ -26,6 +26,7 @@ import {
   updateRequest,
   submitRequest,
   decideApproval,
+  cancelRequest,
   requestQuotes,
   receiveQuote,
   declineQuote,
@@ -38,6 +39,7 @@ import {
   cancelOrder,
   closeOrder,
   receiveDelivery,
+  voidDelivery,
   updateDispatch,
   upsertRule,
   deleteRule,
@@ -50,6 +52,7 @@ export const SUPPLY_ACTIONS = [
   'request.update', // { id, lines?, notes? } — edit while DRAFT
   'request.submit', // { id } — enters the approval engine (§11 bands, est from quotes/catalog)
   'request.decide', // { id, decision: 'approve'|'reject', note? } — actor role must match a PENDING approval
+  'request.cancel', // { id, reason } — withdraw draft/submitted/approved-unconverted; PENDING approvals settle as 'withdrawn' (#206)
   'quote.request', // { requestId, supplierIds: string[] } — ask suppliers to quote
   'quote.receive', // { id, unitPrice, deliveryFee?, transportFee?, fees?, deliveryEta?, stockOk?, validUntil?, terms?, lines?: [{ unitPrice }] } — landed-cost inputs (multi-line when the request has >1 line)
   'quote.decline', // { id, reason? } — supplier declined
@@ -59,10 +62,11 @@ export const SUPPLY_ACTIONS = [
   'order.send', // { id } — PO sent to supplier (+notification)
   'order.confirm', // { id, note? } — supplier confirms availability/delivery/charge (simulated)
   'order.dispatch', // { orderId } — dispatch creates an OrderDelivery (DISPATCHED)
-  'order.cancel', // { id, reason } — cancel with reason (from SENT/CONFIRMED)
+  'order.cancel', // { id, reason } — cancel with reason (from SENT/CONFIRMED/DELIVERING; an in-flight dispatch is voided in the same transaction — #206)
   'order.close', // { id, note? } — close after verified delivery (from DELIVERED)
   'delivery.receive', // { deliveryId, lines: [{ orderLineId, qtyReceived, qtyRejected?, damageNote?, condition?, photoIds?: string[] }], note?, photoIds?: string[], gpsLat?, gpsLng? } — per-line counts + inspection → discrepancy + Site Store movements. photoIds are Attachment ids from PRIOR /api/upload calls (photoRefs validated + linked as DeliveryPhoto rows; photoCount is derived — a client count is ignored)
   'delivery.dispatch', // { deliveryId, note? } — update dispatch info
+  'delivery.void', // { deliveryId, reason } — void a mistaken/reversed dispatch; the PO steps back to CONFIRMED for a corrected re-dispatch (#206)
   'rule.upsert', // { id?, minAmount, maxAmount?, approverRole, priority?, active? } — approval policy (§11)
   'rule.delete', // { id } — remove an approval rule
   'supply.compare', // { materialName, qty, radiusKm?, deliveryDay? } — landed-cost compare + ranking (read-side)
@@ -84,6 +88,8 @@ export async function applySupplyAction(type: string, payload: any, projectId: s
       return submitRequest(projectId, payload ?? {})
     case 'request.decide':
       return decideApproval(projectId, payload ?? {})
+    case 'request.cancel':
+      return cancelRequest(projectId, payload ?? {})
     case 'quote.request':
       return requestQuotes(projectId, payload ?? {})
     case 'quote.receive':
@@ -110,6 +116,8 @@ export async function applySupplyAction(type: string, payload: any, projectId: s
       return receiveDelivery(projectId, payload ?? {})
     case 'delivery.dispatch':
       return updateDispatch(projectId, payload ?? {})
+    case 'delivery.void':
+      return voidDelivery(projectId, payload ?? {})
     case 'rule.upsert':
       return upsertRule(projectId, payload ?? {})
     case 'rule.delete':

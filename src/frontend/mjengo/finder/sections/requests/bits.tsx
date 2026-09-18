@@ -23,7 +23,7 @@ export function fmtQty(n: number | null): string {
 
 // ---------------- request status ladder ----------------
 
-/** DRAFT grey · SUBMITTED amber · APPROVED green · REJECTED rose · CONVERTED forest */
+/** DRAFT grey · SUBMITTED amber · APPROVED green · REJECTED rose · CONVERTED forest · CANCELLED slate (#206 withdrawal) */
 export function RequestStatusBadge({ status }: { status: string }) {
   const t = useT()
   switch (status) {
@@ -35,24 +35,37 @@ export function RequestStatusBadge({ status }: { status: string }) {
       return <Badge className="border-0 gap-1 bg-rose-100 text-rose-800 hover:bg-rose-100"><X className="h-3 w-3" aria-hidden /> {t('finder.req.status.rejected')}</Badge>
     case 'converted':
       return <Badge className="border-0 gap-1 bg-emerald-700 text-emerald-50 hover:bg-emerald-700"><ClipboardList className="h-3 w-3" aria-hidden /> {t('finder.req.status.converted')}</Badge>
+    case 'cancelled':
+      return <Badge className="border-0 gap-1 bg-stone-200 text-stone-600 hover:bg-stone-200"><X className="h-3 w-3" aria-hidden /> {t('finder.req.status.cancelled')}</Badge>
     default:
       return <Badge className="border-0 gap-1 bg-stone-100 text-stone-600 hover:bg-stone-100"><FileText className="h-3 w-3" aria-hidden /> {t('finder.req.status.draft')}</Badge>
   }
 }
 
-/** Mini ladder DRAFT → SUBMITTED → APPROVED/REJECTED → CONVERTED. */
+/** Mini ladder DRAFT → SUBMITTED → APPROVED/REJECTED/CANCELLED → CONVERTED. */
 export function RequestStatusLadder({ status }: { status: string }) {
   const t = useT()
+  // A withdrawn request shows its own third rung (#206) — the ladder reads
+  // DRAFT → SUBMITTED → CANCELLED with the PO rung left greyed ahead.
+  const terminal =
+    status === 'rejected' ? 'rejected'
+    : status === 'cancelled' ? 'cancelled'
+    : 'approved'
+  const terminalLabel =
+    status === 'rejected' ? t('finder.req.status.rejected')
+    : status === 'cancelled' ? t('finder.req.status.cancelled')
+    : t('finder.req.status.approved')
   const steps: Array<{ key: string; label: string }> = [
     { key: 'draft', label: t('finder.req.status.draft') },
     { key: 'submitted', label: t('finder.req.status.submitted') },
-    { key: status === 'rejected' ? 'rejected' : 'approved', label: t(status === 'rejected' ? 'finder.req.status.rejected' : 'finder.req.status.approved') },
+    { key: terminal, label: terminalLabel },
     { key: 'converted', label: t('finder.req.status.po') },
   ]
   const activeIndex =
     status === 'draft' ? 0
     : status === 'submitted' ? 1
     : status === 'rejected' ? 2
+    : status === 'cancelled' ? 2
     : status === 'approved' ? 2
     : 3
   return (
@@ -101,13 +114,15 @@ export function ApprovalPill({
       ? 'bg-emerald-100 text-emerald-800'
       : decision === 'rejected'
         ? 'bg-rose-100 text-rose-800'
-        : 'bg-amber-100 text-amber-900'
+        : decision === 'withdrawn'
+          ? 'bg-stone-100 text-stone-500' // #206: settled by withdrawal — nobody decided
+          : 'bg-amber-100 text-amber-900'
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${tone}`}>
-        {decision === 'approved' ? <Check className="h-3 w-3" aria-hidden /> : decision === 'rejected' ? <X className="h-3 w-3" aria-hidden /> : <Hourglass className="h-3 w-3" aria-hidden />}
+        {decision === 'approved' ? <Check className="h-3 w-3" aria-hidden /> : decision === 'pending' ? <Hourglass className="h-3 w-3" aria-hidden /> : <X className="h-3 w-3" aria-hidden />}
         {roleLabel(t, role)}
-        {decision === 'pending' ? ` ${t('finder.approval.decides')}` : decision === 'approved' ? ' ✓' : ' ✕'}
+        {decision === 'pending' ? ` ${t('finder.approval.decides')}` : decision === 'approved' ? ' ✓' : decision === 'withdrawn' ? ' —' : ' ✕'}
       </span>
       {note && <span className="max-w-[16rem] truncate text-[10px] italic text-stone-400" title={note}>{note}</span>}
       {isMine && decision === 'pending' && onDecide && (
@@ -163,6 +178,8 @@ export function DeliveryStatusBadge({ status }: { status: string }) {
       return <Badge className="border-0 gap-1 bg-emerald-100 text-emerald-800 hover:bg-emerald-100"><PackageCheck className="h-3 w-3" aria-hidden /> {t('finder.delivery.status.received')}</Badge>
     case 'discrepancy':
       return <Badge className="border-0 gap-1 bg-orange-100 text-orange-800 hover:bg-orange-100"><AlertTriangle className="h-3 w-3" aria-hidden /> {t('finder.delivery.status.discrepancy')}</Badge>
+    case 'cancelled':
+      return <Badge className="border-0 gap-1 bg-stone-200 text-stone-600 hover:bg-stone-200"><X className="h-3 w-3" aria-hidden /> {t('finder.delivery.status.cancelled')}</Badge>
     default:
       return <Badge className="border-0 gap-1 bg-stone-100 text-stone-600 hover:bg-stone-100"><Truck className="h-3 w-3" aria-hidden /> {t('finder.delivery.status.dispatched')}</Badge>
   }
