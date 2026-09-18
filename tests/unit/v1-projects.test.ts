@@ -594,7 +594,9 @@ describe('GET /api/openapi.json — Phase B projects paths + structural validity
     const operationIds: string[] = []
     for (const [path, ops] of Object.entries<Record<string, any>>(doc.paths)) {
       for (const [method, op] of Object.entries<Record<string, any>>(ops)) {
-        expect(['get', 'post'].includes(method)).toBe(true)
+        // get/post = the v1 surface; put = /api/ai/extract-document's human
+        // review gate (issue #153 — the one non-v1 mutation in the doc).
+        expect(['get', 'post', 'put'].includes(method)).toBe(true)
         expect(typeof op.operationId).toBe('string')
         operationIds.push(op.operationId)
         expect(Array.isArray(op.tags)).toBe(true)
@@ -607,6 +609,7 @@ describe('GET /api/openapi.json — Phase B projects paths + structural validity
     }
     expect(new Set(operationIds).size).toBe(operationIds.length)
     expect(operationIds).toContain('listSupplyOrders') // Phase B supply ops present too
+    expect(operationIds).toContain('reviewDocumentDraft') // #153 document-intelligence ops present too
   })
 
   it('every $ref in the document resolves to a declared component schema', async () => {

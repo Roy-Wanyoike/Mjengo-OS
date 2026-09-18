@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { db } from '@/backend/lib/db'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
 import {
   extractDocument,
+  listDocuments,
   reviewDocument,
 } from '@/backend/modules/documents/service'
-import { isReviewDecision } from '@/backend/modules/documents/types'
+import { isReviewDecision, isReviewStatus, type DocumentExtraction } from '@/backend/modules/documents/types'
 
 // Document intelligence API (MjengoOS backend wave B3, Doc A §60).
 //
@@ -25,12 +27,83 @@ import { isReviewDecision } from '@/backend/modules/documents/types'
 //   reviewStatus/reviewBy/reviewedAt and logs an AuditEvent (kind
 //   'document') on the linked project.
 //
-// Both verbs share the W1-SEC /api/ai/* gate (mirrors analyze-photo):
+// GET ?projectId=<id>&reviewStatus=pending|approved|rejected (issue #153) →
+//   the REVIEW QUEUE the panel renders: document-mode attachments for one
+//   project with their extraction drafts (parsed extractedJson) and review
+//   state. projectId is REQUIRED — no default-project guessing on a queue a
+//   human decides from. This is the read that finally gives the whole route
+//   family its consumer surface (the Copilot "Documents" panel) and the
+//   service's listDocuments its caller.
+//
+// All verbs share the W1-SEC /api/ai/* gate (mirrors analyze-photo):
 // session → role allowlist [contractor, admin, supervisor] → 10 req/min/user
-// → strict body shape (unknown/mistyped fields → 400).
+// (GET: 30/min — one queue read per review round-trip, not a model call)
+// → strict body shape (unknown/mistyped fields → 400; GET has no body).
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
+
+/** Parse the stored extractedJson column into the draft object — never throws
+ * (a corrupt/legacy value renders as "no draft", it cannot 500 the queue). */
+function parseExtractionDraft(raw: unknown): DocumentExtraction | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    const v = JSON.parse(raw)
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as DocumentExtraction) : null
+  } catch {
+    return null
+  }
+}
+
+export const GET = async (req: NextRequest): Promise<NextResponse> => {
+  // Same shared gate as POST/PUT: session → role allowlist → rate limit.
+  // The mutation-safety step passes GETs untouched by design, and a GET has
+  // no body, so the gate's body-shape check sees {} (fields: [] → any body
+  // field would 400; the query params below are validated separately).
+  const gate = await enforceAiRoutePolicy(req, {
+    bucket: 'ai:document-queue',
+    fields: [],
+    // Read-side: roomier than the 10/min model-call default — the panel
+    // reads the queue once per mount and once per review round-trip.
+    limit: 30,
+  })
+  if (!gate.ok) return gate.response
+
+  try {
+    const sp = req.nextUrl.searchParams
+    const projectId = sp.get('projectId')?.trim()
+    if (!projectId) {
+      return NextResponse.json(
+        { error: 'projectId is required — the review queue is always project-scoped (no default-project guessing)' },
+        { status: 400 },
+      )
+    }
+    const reviewStatus = sp.get('reviewStatus')?.trim() || undefined
+    if (reviewStatus !== undefined && !isReviewStatus(reviewStatus)) {
+      return NextResponse.json(
+        { error: `reviewStatus must be one of: pending, approved, rejected (got ${JSON.stringify(reviewStatus)})` },
+        { status: 400 },
+      )
+    }
+    const exists = await db.project.findUnique({ where: { id: projectId }, select: { id: true } })
+    if (!exists) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
+
+    const rows = await listDocuments({ projectId, ...(reviewStatus ? { reviewStatus } : {}) })
+    return NextResponse.json({
+      ok: true,
+      documents: rows.map((row) => {
+        const { extractedJson, ...rest } = row as Record<string, unknown> & { extractedJson?: string | null }
+        return { ...rest, extraction: parseExtractionDraft(extractedJson) }
+      }),
+    })
+  } catch (e) {
+    console.error('[api/ai/extract-document GET]', e)
+    return NextResponse.json(
+      { ok: false, error: safeErrorMessage(e, 'Could not load the document review queue') },
+      { status: 500 },
+    )
+  }
+}
 
 export const POST = async (req: NextRequest): Promise<NextResponse> => {
   const gate = await enforceAiRoutePolicy(req, {

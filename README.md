@@ -405,7 +405,7 @@ prisma/            # schema.prisma (68 models), migrations/ (0–8; +9 drift
 ### REST API — `/api/v1`
 
 The typed integration surface, documented live as **OpenAPI 3.1** at
-`/api/openapi.json` (29 documented paths): **27 `/api/v1` paths** — wallets
+`/api/openapi.json` (30 documented paths): **27 `/api/v1` paths** — wallets
 (7 routes incl. deposit/transfer/withdraw with idempotency keys), payments,
 projects (list/detail/tasks/deliveries), supply orders, **milestones**
 (list/detail with the full release ladder), **invoices** (list/detail with
@@ -414,7 +414,9 @@ the **3-way-match verdict**: PO ↔ invoice ↔ delivery) and **escrow**
 never a stored projection), plus the Phase-D read surface — **workers**
 (list/detail), **attendance**, task detail, **suppliers**, **parcels**
 (land), project **intel** and **budget-variance** — plus two app-level GETs
-(`/api/audit`, `/api/reports/budget-variance`). One error shape
+(`/api/audit`, `/api/reports/budget-variance`) and the document-intelligence
+route `/api/ai/extract-document` (GET review queue / POST extraction draft /
+PUT human review gate — issue #153). One error shape
 (`{ error, field? }`), zod strictObject validation, keyset pagination,
 per-principal rate limits and scope pinning (a client session can only ever
 see its own project).
@@ -712,7 +714,7 @@ the README wins on current status); the live issue-level roadmap is the
 
 | Path | What |
 |---|---|
-| `src/app/` | App Router: one page (`page.tsx`) + `/api/**` (auth, projects, actions, sync, share, upload, search, flags, notifications, jobs/run, audit, reports, health, ussd, whatsapp, 7 AI routes) + the `/api/v1` REST surface (27 OpenAPI-documented paths) + `/api/openapi.json` |
+| `src/app/` | App Router: one page (`page.tsx`) + `/api/**` (auth, projects, actions, sync, share, upload, search, flags, notifications, jobs/run, audit, reports, health, ussd, whatsapp, 7 AI routes) + the `/api/v1` REST surface + `/api/openapi.json` (30 documented paths: 27 `/api/v1` + audit + budget-variance report + `/api/ai/extract-document`) |
 | `src/frontend/` | Web UI: `mjengo/` tab surfaces, `ui/` shadcn primitives, `auth/`, `i18n/`, `hooks/` (use-mjengo payload facade + offline outbox) |
 | `src/backend/` | Server-only: `lib/` (guard, auth, audit, rate-limit, db, ai, mjengo dispatcher, perceptual-hash), `actions/`, `modules/` per domain — incl. `modules/ai/` (the Wave-6 seam + draw-review / authenticity / trust-digest engines) |
 | `src/mobile/` | Phone-first bottom nav |

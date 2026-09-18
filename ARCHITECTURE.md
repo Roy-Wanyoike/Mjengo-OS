@@ -16,7 +16,8 @@ Next.js 16 (App Router, RSC shell + client app)
   ├── app/           src/app/** — pages + /api HTTP routes (framework-fixed):
   │                  guarded app routes + the ussd/whatsapp field-line webhooks
   │                  + the /api/v1 REST surface (27 OpenAPI-documented paths,
-  │                  29 incl. /api/audit + /api/reports/budget-variance —
+  │                  30 incl. /api/audit + /api/reports/budget-variance
+  │                  + /api/ai/extract-document — issue #153 —
   │                  contract served at /api/openapi.json)
   ├── frontend/      src/frontend/** — web UI: mjengo/ (tab surfaces, role-aware),
   │                  ui/ (shadcn primitives), auth/, i18n/, hooks/
@@ -38,7 +39,10 @@ Next.js 16 (App Router, RSC shell + client app)
         ├── invoices  lifecycle, 3-way match (PO ↔ invoice ↔ delivery)
         ├── documents document intelligence: uploads → Attachment rows with
         │            provenance, DRAFT-only extraction (VLM for images, PDF
-        │            text layer — no OCR), human approve/reject gate
+        │            text layer — no OCR), human approve/reject gate — with an
+        │            operator surface since #153: the Copilot "Documents"
+        │            panel (GET review queue → run extraction → approve/reject;
+        │            fetch contract in frontend/mjengo/copilot/document-review.ts)
         ├── drawpack  evidence draw packs — immutable, SHA-256-stamped proof
         │            bundles frozen at milestone release, served via the share
         │            link (one pack per release, DB-enforced unique)
@@ -131,6 +135,24 @@ never degrades the text). Entry points: the `ai.drawReview` /
 GET legs (`drawPack` + `trustDigest=latest[&audio=1]`). No action, score or
 ledger path reads any AI row — the non-influence property is grep-pinned in
 tests (`tests/unit/ai-*.test.ts`, 5 files).
+
+**Document-intelligence review flow (issue #153) — the operator surface.**
+The Copilot route family's fifth member, `/api/ai/extract-document`, now has
+the consumer the audit flagged as missing (API-2): a **"Documents" sub-tab in
+the Copilot tab** (`src/frontend/mjengo/copilot/documents-panel.tsx` +
+`document-review.ts`, the pure fetch-contract module). The flow:
+`GET ?projectId&reviewStatus=pending` (the queue read, 30/min, project-scoped
+— no default-project guessing) lists document-mode Attachments with their
+parsed `extractedJson` drafts; POST re-runs the extraction (draft-only, resets
+review); **PUT is the human gate** — approve/reject stamped with the signed-in
+session identity (the UI never sends a `reviewer` claim) and logged as an
+AuditEvent (kind `document`) that the Evidence tab and the admin Audit tab
+both surface. The panel's visibility mirrors the route's shared
+`AI_ROUTE_ROLES` allowlist (contractor/admin/supervisor) twice over: the
+Copilot tab is only in those roles' tab sets, and the panel itself fails
+closed with a locked card for any other session role. The route is now in
+the OpenAPI document (the one non-v1 mutation surface there — documented
+because its review gate *is* the "AI assists, humans decide" control).
 
 **Rules that are non-negotiable in this codebase:**
 

@@ -50,11 +50,12 @@
 
 ### P3 (non-blocking improvements)
 
-API-2 wire-or-remove `/api/ai/extract-document` orphan · API-7 default the
+API-2 ~~wire-or-remove `/api/ai/extract-document` orphan~~ — landed 2026-09-19 via #153 (option (a): Copilot "Documents" review panel + GET review-queue read + OpenAPI path) · API-7 default the
 SQLite rate-limit store · API-8 idempotent upload/confirm · API-9 dedupe
 jobs/run POST handler · API-10 typed /api/actions payload at route · API-11
 audit POST /api/projects · API-12 real search index (replace in-memory
-300-row window) · API-14 extend OpenAPI to the app surface · FE-6 outbox
+300-row window) · API-14 extend OpenAPI to the app surface (the
+document-intelligence route joined the doc via #153; the rest remains open) · FE-6 outbox
 auto-retry with backoff · FE-7 hide offline-simulation toggle in prod ·
 FE-8 runtime DOM a11y suite · FE-9 USSD body i18n · FE-11 SW staleness cue ·
 FE-12 offline worklist for online-only flows · WD-3 "escrow-style" wording ·

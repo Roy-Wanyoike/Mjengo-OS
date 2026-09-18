@@ -496,6 +496,11 @@ export async function listDocuments(filter: {
       extractionModel: true,
       uploadedBy: true,
       createdAt: true,
+      // Issue #153 (review-queue consumer): the queue MUST show the draft, so
+      // the structured extraction rides along (parsed by the route — the raw
+      // column is a JSON string). ocrText stays OUT: it can be 200 KB of raw
+      // text and the queue never renders it.
+      extractedJson: true,
     },
   })
 }
