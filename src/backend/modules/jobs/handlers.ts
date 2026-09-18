@@ -10,6 +10,10 @@
 //                           is off — the job has no session, the engine's
 //                           own flag gate is the switch)
 //   · runReconciliation   — reuses invoices computeLedgerConsistency
+//                           (A-1-lite debit backing) PLUS the escrow
+//                           projection drift sweep (issue #212): derived
+//                           ESCROW ledger sum vs EscrowWallet.balance for
+//                           EVERY wallet — read-only, alerts on drift
 //   · runOverdueCheck     — overdue tasks + absent workers today
 //   · runBudgetCheck      — budget pace watch (90% / 100%)
 //   · runDarajaReconcile  — wallet: re-drive missed M-Pesa STK callbacks
@@ -37,6 +41,7 @@ import {
 } from '@/backend/modules/intel/engine'
 import { runDarajaReconcile } from '@/backend/modules/wallet/daraja-reconcile'
 import { buildTrustDigest } from '@/backend/modules/ai/trust-digest'
+import { derivedBalance } from '@/backend/modules/ledger/service'
 
 /** Nairobi/EAT date string (UTC+3) — the platform's "today". */
 function todayEAT(): string {
@@ -408,21 +413,178 @@ export interface ReconciliationResult {
   drift: number
   note: string
   breakdown: LedgerCheck['breakdown']
+  /** Escrow projection drift sweep (issue #212) — additive field. */
+  escrowDrift: EscrowDriftResult
+}
+
+/**
+ * One escrow wallet's derived-vs-projected comparison (issue #212). All
+ * money fields are CENTS serialized as decimal strings — BigInts do not
+ * survive JSON.stringify, and the JobRecord result column is JSON.
+ */
+export interface EscrowDriftProjectEntry {
+  projectId: string
+  /** Derived ESCROW:<projectId> ledger sum (SQL Σ, issue #144), cents. */
+  derivedCents: string
+  /** Stored EscrowWallet.balance projection, cents. */
+  projectedCents: string
+  /** derived − projected, cents (sign kept: + = ledger ahead). */
+  driftCents: string
+  /** EXACT cents equality — the Money-tab chip's convention (issue #122:
+   *  a one-cent drift is a drift; the old < 1 KSh float tolerance is gone). */
+  consistent: boolean
+}
+
+/** Aggregate escrow drift outcome, persisted in the JobRecord payload JSON. */
+export interface EscrowDriftResult {
+  /** Escrow wallets examined — every project with a wallet (cross-project). */
+  checked: number
+  /** Wallets with ANY drift ≠ 0 (sub-threshold drift included — recorded
+   *  honestly in `projects`, just not alerted on). */
+  drifted: number
+  /** Wallets whose |drift| ≥ thresholdCents → 'escrow.drift' event +
+   *  finance/contractor notifications were emitted. */
+  alerted: number
+  /** Alert threshold in cents (ESCROW_DRIFT_ALERT_CENTS, default 1). */
+  thresholdCents: number
+  /** Per-wallet entries, DRIFTED FIRST, bounded (see MAX_PERSISTED_ENTRIES)
+   *  so the JobRecord result JSON never truncates mid-array — the runner
+   *  caps the stored result at 2000 chars and a cut-off array would be
+   *  unparseable. Alerts are NOT bounded: every drifted wallet gets its
+   *  event + notifications regardless of this cap. */
+  projects: EscrowDriftProjectEntry[]
+  /** Entries beyond the persistence cap (checked − projects.length). */
+  projectsOmitted: number
+  note: string
+}
+
+/** Drifted wallets persisted before consistent ones; at most this many
+ *  entries ride the JobRecord result (≈130 chars each + header ≈ well under
+ *  the runner's 2000-char result cap). */
+const MAX_PERSISTED_ENTRIES = 10
+
+/** Default escrow drift alert threshold: 1 cent — the chip's exact-equality
+ *  convention (issue #122). Any nonzero drift alerts; raise it only to
+ *  tolerate a KNOWN projection quirk while it is being fixed. */
+export const DEFAULT_ESCROW_DRIFT_ALERT_CENTS = 1
+
+/**
+ * Alert threshold from env, in CENTS. Invalid (non-integer / < 1) values warn
+ * once and fall back to the default — the daraja-reconcile ignore-invalid
+ * rule: never crash a money-adjacent job over a tuning knob.
+ */
+export function escrowDriftThresholdCentsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.ESCROW_DRIFT_ALERT_CENTS ?? '').trim()
+  if (!raw) return DEFAULT_ESCROW_DRIFT_ALERT_CENTS
+  const n = Number(raw)
+  if (!Number.isSafeInteger(n) || n < 1) {
+    console.warn(
+      `[reconciliation] ESCROW_DRIFT_ALERT_CENTS="${raw}" is not an integer ≥ 1 — using the default (${DEFAULT_ESCROW_DRIFT_ALERT_CENTS} cent)`,
+    )
+    return DEFAULT_ESCROW_DRIFT_ALERT_CENTS
+  }
+  return n
+}
+
+/**
+ * Escrow projection drift sweep (issue #212) — READ-ONLY by construction:
+ * derivedBalance (ledger/service) is findUnique + SQL groupBy, no writer is
+ * touched, and the check deliberately does NOT use wallet escrowDerivedBalance()
+ * because its ensureAccount() would CREATE a ledger account (a write). The
+ * ledger is the source of truth (spec §39); EscrowWallet.balance is a cached
+ * projection — any difference means a bypassing writer, a partial write
+ * outside the posting core, or a seed script went around the ledger.
+ *
+ * For every escrow wallet (cross-project): derived vs projected, exact cents.
+ * Drift ≥ threshold (env, default 1 cent) → one 'escrow.drift' DomainEvent on
+ * the drifted project (its policy notifies finance + contractor). Sub-threshold
+ * drift is recorded in the result but not alerted.
+ */
+async function runEscrowDriftCheck(): Promise<EscrowDriftResult> {
+  const thresholdCents = escrowDriftThresholdCentsFromEnv()
+  const threshold = BigInt(thresholdCents)
+  const wallets = await db.escrowWallet.findMany({ orderBy: { projectId: 'asc' } })
+
+  const projects: EscrowDriftProjectEntry[] = []
+  let drifted = 0
+  let alerted = 0
+  for (const w of wallets) {
+    // The read-only aggregate (issue #144 SQL SUM, kind-keyed sign) — the
+    // exact math the Money-tab chip's `derived` field uses.
+    const derived = await derivedBalance(`ESCROW:${w.projectId}`)
+    const drift = derived - w.balance
+    const absDrift = drift < 0n ? -drift : drift
+    const consistent = drift === 0n
+    if (!consistent) drifted += 1
+
+    const entry: EscrowDriftProjectEntry = {
+      projectId: w.projectId,
+      derivedCents: derived.toString(),
+      projectedCents: w.balance.toString(),
+      driftCents: drift.toString(),
+      consistent,
+    }
+    projects.push(entry)
+
+    if (absDrift >= threshold) {
+      alerted += 1
+      await emit(w.projectId, 'escrow.drift', {
+        ...entry,
+        thresholdCents,
+        derivedKes: centsToKes(derived),
+        projectedKes: centsToKes(w.balance),
+        driftKes: centsToKes(absDrift),
+        note:
+          `Ledger-derived KSh ${centsToKes(derived).toLocaleString('en-KE')} ≠ stored projection KSh ${centsToKes(w.balance).toLocaleString('en-KE')} (drift KSh ${centsToKes(absDrift).toLocaleString('en-KE')}). ` +
+          'The ledger is the source of truth — check the Money tab and recent escrow writes before releasing more funds.',
+      })
+    }
+  }
+
+  const note =
+    wallets.length === 0
+      ? 'No escrow wallets — nothing to check.'
+      : drifted === 0
+        ? `${wallets.length} escrow wallet(s) consistent — projection matches the ledger exactly.`
+        : `${drifted} of ${wallets.length} escrow wallet(s) drifted (${alerted} at or above the ${thresholdCents}-cent alert threshold) — ledger sum vs stored projection.`
+
+  // Drifted entries first (the actionable rows), then the persistence cap —
+  // see MAX_PERSISTED_ENTRIES. The sort is stable, so projectId-asc order
+  // survives within each group.
+  const ordered = [...projects].sort((a, b) => Number(a.consistent) - Number(b.consistent))
+  const persisted = ordered.slice(0, MAX_PERSISTED_ENTRIES)
+
+  return {
+    checked: wallets.length,
+    drifted,
+    alerted,
+    thresholdCents,
+    projects: persisted,
+    projectsOmitted: projects.length - persisted.length,
+    note,
+  }
 }
 
 /**
  * Ledger consistency recompute — same projection the invoices module feeds
- * the 3-way match chip (computeLedgerConsistency, imported). Emits
- * 'ledger.reconciled' so the notification center records the outcome.
+ * the 3-way match chip (computeLedgerConsistency, imported), PLUS the escrow
+ * projection drift sweep (issue #212). Emissions are DRIFT-GATED: the job
+ * runs on a schedule now (the POST /api/jobs/run callee keeps a periodic
+ * 'reconciliation' row on the books — jobs/service.ts
+ * ensureReconciliationScheduled), so a consistent run stays quiet — the
+ * JobRecord result JSON is the durable all-clear record and the bell only
+ * rings when something is wrong ('ledger.reconciled' on A-1-lite drift,
+ * 'escrow.drift' on projection drift ≥ threshold).
  */
 export async function runReconciliation(projectId?: string | null): Promise<ReconciliationResult> {
   const pid = await resolveProjectId(projectId)
 
-  const [transactions, wallet, milestones, invoices] = await Promise.all([
+  const [transactions, wallet, milestones, invoices, escrowDrift] = await Promise.all([
     db.transaction.findMany({ where: { projectId: pid }, orderBy: { date: 'desc' } }),
     db.escrowWallet.findUnique({ where: { projectId: pid } }),
     db.milestone.findMany({ where: { projectId: pid }, select: { id: true, status: true } }),
     db.invoice.findMany({ where: { projectId: pid }, select: { status: true, paymentReference: true } }),
+    runEscrowDriftCheck(),
   ])
 
   const check = computeLedgerConsistency({
@@ -439,13 +601,22 @@ export async function runReconciliation(projectId?: string | null): Promise<Reco
       .map((i) => i.paymentReference ?? ''),
   })
 
-  await emit(pid, 'ledger.reconciled', {
+  if (!check.consistent) {
+    await emit(pid, 'ledger.reconciled', {
+      consistent: check.consistent,
+      drift: check.drift,
+      note: check.note,
+    })
+  }
+
+  return {
+    projectId: pid,
     consistent: check.consistent,
     drift: check.drift,
     note: check.note,
-  })
-
-  return { projectId: pid, consistent: check.consistent, drift: check.drift, note: check.note, breakdown: check.breakdown }
+    breakdown: check.breakdown,
+    escrowDrift,
+  }
 }
 
 // ---------------- overdue.check ----------------

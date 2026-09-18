@@ -36,6 +36,10 @@ import type {
 //   · trust digest            → kind trust.digest, client (weekly EN/SW
 //                               "what your money did" — in-app 'logged' only)
 //   · ledger reconciled       → kind ledger.reconciled, contractor
+//   · escrow drift             → kind escrow.drift, finance + contractor
+//                               (issue #212 — the projection mismatch is
+//                               both audiences' problem: finance owns the
+//                               money trail, the contractor acts on site)
 //   · project delayed         → kind project.delayed, contractor
 //   · attendance absent       → kind attendance.absent, contractor
 //   · budget alert            → kind budget.alert, contractor
@@ -114,6 +118,18 @@ const NOTIFY_POLICY: Record<string, NotifyPolicyEntry | null> = {
     title: (p) => (p.consistent === true ? 'Ledger reconciliation — consistent' : 'Ledger reconciliation — drift found'),
     body: (p) => String(p.note ?? 'Ledger consistency recomputed.'),
   },
+  // Issue #212 — the escrow projection drift alarm. Emitted per drifted
+  // project by the scheduled reconciliation job when |derived − projected|
+  // ≥ the alert threshold (default 1 cent). Multi-audience: finance AND the
+  // contractor each get their own in-app row (the only event today that
+  // needs two audiences — hence the additive audienceRoles field).
+  'escrow.drift': {
+    kind: 'escrow.drift',
+    audienceRoles: ['finance', 'contractor'],
+    title: (p) => `Escrow projection drift — KSh ${String(p.driftKes ?? '?')}`,
+    body: (p) =>
+      String(p.note ?? 'EscrowWallet.balance no longer matches the ledger-derived sum.'),
+  },
   'project.delayed': {
     kind: 'project.delayed',
     audienceRole: 'contractor',
@@ -182,20 +198,25 @@ export async function emit(
     occurredAt: row.occurredAt,
   }
 
-  // Default subscriber: notification policy map.
+  // Default subscriber: notification policy map. Multi-audience policies
+  // (audienceRoles, issue #212) fan out to ONE row per role — same title/
+  // body/kind, different audienceRole so each audience's bell is its own.
   let processed = true
   const policy = NOTIFY_POLICY[type]
   if (policy && projectId) {
-    try {
-      await notify(projectId, policy.title(payload), policy.body(payload), {
-        kind: policy.kind,
-        audienceRole: policy.audienceRole,
-        channel: policy.channel ?? 'in_app',
-        ...(policy.recipient ? { recipient: policy.recipient(payload) } : {}),
-      })
-    } catch (e) {
-      processed = false
-      console.error(`[events] notify policy failed for ${type}`, e)
+    const roles = policy.audienceRoles ?? (policy.audienceRole ? [policy.audienceRole] : [])
+    for (const audienceRole of roles) {
+      try {
+        await notify(projectId, policy.title(payload), policy.body(payload), {
+          kind: policy.kind,
+          audienceRole,
+          channel: policy.channel ?? 'in_app',
+          ...(policy.recipient ? { recipient: policy.recipient(payload) } : {}),
+        })
+      } catch (e) {
+        processed = false
+        console.error(`[events] notify policy failed for ${type} (audience ${audienceRole})`, e)
+      }
     }
   }
 

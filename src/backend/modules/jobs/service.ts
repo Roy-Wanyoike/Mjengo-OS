@@ -30,7 +30,12 @@
 // HONEST execution model: jobs run on demand (the Intel "Background jobs"
 // card + POST /api/jobs/run). There is NO in-process scheduler today — in
 // production a cron (Vercel Cron, systemd timer, k8s CronJob) calls
-// POST /api/jobs/run to drain the queue.
+// POST /api/jobs/run to drain the queue. The ONE scheduled-by-the-app
+// exception (issue #212): the reconciliation check (A-1-lite + escrow drift
+// alarm) is kept on the books by ensureReconciliationScheduled() — the
+// /api/jobs/run callee seeds a fresh row at most once per check interval,
+// so ANY drain wiring (compose sidecar, systemd timer, cron) also maintains
+// its cadence without new infrastructure.
 
 import { db } from '@/backend/lib/db'
 import { JOB_HANDLERS, JOB_TYPES, type JobType } from './handlers'
@@ -124,6 +129,85 @@ export async function enqueue(
     },
   })
   return { id: row.id, type: row.type, status: row.status, runAt: row.runAt }
+}
+
+// ---------------- scheduled reconciliation (issue #212) ----------------
+
+/** The job type the A-1-lite + escrow drift check runs as. */
+export const RECONCILIATION_JOB_TYPE = 'reconciliation'
+
+/** Default cadence of the scheduled reconciliation check: daily. */
+export const DEFAULT_RECONCILIATION_CHECK_INTERVAL_MIN = 1440
+
+/**
+ * Check interval from env, in minutes. Invalid (non-positive / non-numeric)
+ * values warn once and fall back to the daily default — the daraja-reconcile
+ * ignore-invalid rule: a broken tuning knob never crashes the scheduler path.
+ */
+export function reconciliationCheckIntervalMinFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.RECONCILIATION_CHECK_INTERVAL_MIN ?? '').trim()
+  if (!raw) return DEFAULT_RECONCILIATION_CHECK_INTERVAL_MIN
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0) {
+    console.warn(
+      `[jobs] RECONCILIATION_CHECK_INTERVAL_MIN="${raw}" is not a positive number — using the default (${DEFAULT_RECONCILIATION_CHECK_INTERVAL_MIN} min)`,
+    )
+    return DEFAULT_RECONCILIATION_CHECK_INTERVAL_MIN
+  }
+  return n
+}
+
+/**
+ * Keep the periodic reconciliation check (A-1-lite debit backing + the
+ * issue #212 escrow projection drift alarm) on the books — the schedule-keeping
+ * half of the Daraja self-chain pattern, minus the chain: instead of a row
+ * re-scheduling itself, the /api/jobs/run callee (which ANY drain wiring —
+ * compose jobs-tick, systemd timer, cron — already calls every ~5 min) seeds
+ * ONE fresh 'reconciliation' row whenever the newest one is older than the
+ * check interval (RECONCILIATION_CHECK_INTERVAL_MIN, default 1440 = daily).
+ *
+ * Never stacks rows (the scheduleDarajaReconcile discipline):
+ *  · a queued/retrying 'reconciliation' row exists → skip. This also covers
+ *    the manual POST {type:'reconciliation'} racing the seed — whichever
+ *    enqueued first is the row the drain runs;
+ *  · the newest row (any status, incl. 'running'/'done'/'failed') is younger
+ *    than the interval → skip — the check ran recently enough;
+ *  · no Project rows exist at all → skip (the handler would only throw
+ *    'No project found'; nothing to reconcile on an empty install).
+ * Best-effort by design: storage errors are logged and swallowed — a broken
+ * seed must never fail the drain it lives in (the next tick retries it).
+ *
+ * Read-heavy but write-cheap: two findFirst + (rarely) one enqueue per drain.
+ */
+export async function ensureReconciliationScheduled(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Date | null> {
+  try {
+    const pending = await db.jobRecord.findFirst({
+      where: { type: RECONCILIATION_JOB_TYPE, status: { in: ['queued', 'retrying'] } },
+      select: { id: true },
+    })
+    if (pending) return null
+
+    // Nothing to reconcile on an empty install — and the handler's
+    // resolveProjectId would throw 'No project found' on one.
+    const anyProject = await db.project.findFirst({ select: { id: true } })
+    if (!anyProject) return null
+
+    const latest = await db.jobRecord.findFirst({
+      where: { type: RECONCILIATION_JOB_TYPE },
+      orderBy: { runAt: 'desc' },
+      select: { runAt: true },
+    })
+    const intervalMs = reconciliationCheckIntervalMinFromEnv(env) * 60_000
+    if (latest && Date.now() - latest.runAt.getTime() < intervalMs) return null
+
+    const row = await enqueue(RECONCILIATION_JOB_TYPE, null, {}, new Date())
+    return row.runAt
+  } catch (e) {
+    console.error('[jobs] could not ensure the scheduled reconciliation check', e)
+    return null
+  }
 }
 
 /**

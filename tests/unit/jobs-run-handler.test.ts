@@ -79,6 +79,11 @@ const svc = vi.hoisted(() => ({
   isJobType: vi.fn((t: string) => t === 'digest.trust'),
   runDueJobs: vi.fn(),
   loadRecentJobs: vi.fn(),
+  // Issue #212: the schedule-keeper the shared handler now calls before the
+  // drain — mocked as a no-op here so this file's enqueue/drain counts pin
+  // the POST contract exactly as before (its own logic is pinned in
+  // reconciliation-job.test.ts).
+  ensureReconciliationScheduled: vi.fn(async () => null),
 }))
 vi.mock('@/backend/modules/jobs/service', () => svc)
 
@@ -112,6 +117,7 @@ beforeEach(() => {
   svc.enqueue.mockReset()
   svc.runDueJobs.mockReset()
   svc.runDueJobs.mockResolvedValue({ ran: 1, results: [{ id: 'job-1', status: 'done' }] })
+  svc.ensureReconciliationScheduled.mockClear()
 })
 
 afterEach(() => {
@@ -181,5 +187,31 @@ describe('session path — the SAME shared handler, identical behavior (API-9 / 
     expect(res.status).toBe(403)
     expect(svc.enqueue).not.toHaveBeenCalled()
     expect(svc.runDueJobs).not.toHaveBeenCalled()
+  })
+})
+
+describe('schedule keeping — the shared handler seeds the periodic reconciliation check (issue #212)', () => {
+  it('a drain-only POST calls ensureReconciliationScheduled before runDueJobs, never via enqueue', async () => {
+    const res = await routePost(jobsReq('10.8.2.1', {}), undefined)
+    expect(res.status).toBe(200)
+    expect(svc.ensureReconciliationScheduled).toHaveBeenCalledTimes(1)
+    expect(svc.enqueue).not.toHaveBeenCalled() // the seed is its own writer, not a second enqueue
+    expect(svc.runDueJobs).toHaveBeenCalledTimes(1)
+    // order: seed BEFORE the drain (same-call pickup), after any explicit enqueue
+    expect(svc.ensureReconciliationScheduled.mock.invocationCallOrder[0]).toBeLessThan(
+      svc.runDueJobs.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('a manual {type: reconciliation} POST also passes the schedule keeper (it dedupes inside)', async () => {
+    const res = await routePost(jobsReq('10.8.2.2', { type: 'digest.trust', projectId: 'p-1' }), undefined)
+    expect(res.status).toBe(200)
+    expect(svc.enqueue).toHaveBeenCalledTimes(1)
+    expect(svc.ensureReconciliationScheduled).toHaveBeenCalledTimes(1)
+    // the explicit enqueue happens BEFORE the seed — the seed's queued-row
+    // dedupe is what prevents a second reconciliation row
+    expect(svc.enqueue.mock.invocationCallOrder[0]).toBeLessThan(
+      svc.ensureReconciliationScheduled.mock.invocationCallOrder[0],
+    )
   })
 })

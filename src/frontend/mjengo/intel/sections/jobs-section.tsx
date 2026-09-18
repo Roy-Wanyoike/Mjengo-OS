@@ -75,9 +75,16 @@ function resultSummary(job: JobRow): string | null {
     if (job.type === 'digest.weekly') return String(parsed.summary ?? '').slice(0, 200)
     if (job.type === 'recap.daily') return `Day ${String(parsed.day ?? '?')} recap written (${String(parsed.content ?? '').length} chars)`
     if (job.type === 'reconciliation') {
+      // Issue #212: the escrow drift sweep rides the same job — surface it
+      // next to the A-1-lite verdict (older rows without the field render
+      // exactly as before).
+      const escrow = parsed.escrowDrift as { checked?: unknown; drifted?: unknown } | undefined
+      const escrowNote = escrow
+        ? ` · escrow ${Number(escrow.drifted ?? 0)}/${Number(escrow.checked ?? 0)} wallet(s) drifted`
+        : ''
       return parsed.consistent === true
-        ? `Ledger consistent — drift KSh 0`
-        : `Drift KSh ${String(parsed.drift ?? '?')} — ${String(parsed.note ?? '').slice(0, 160)}`
+        ? `Ledger consistent — drift KSh 0${escrowNote}`
+        : `Drift KSh ${String(parsed.drift ?? '?')} — ${String(parsed.note ?? '').slice(0, 160)}${escrowNote}`
     }
     if (job.type === 'overdue.check') {
       const overdue = Array.isArray(parsed.overdueTasks) ? parsed.overdueTasks.length : 0
