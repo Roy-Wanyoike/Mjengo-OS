@@ -72,14 +72,38 @@ afterEach(() => {
   delete process.env.NEXTAUTH_SECRET
 })
 
-describe('clientIpFromHeaders', () => {
-  it('reads the FIRST x-forwarded-for hop, trimmed', () => {
-    expect(clientIpFromHeaders(new Headers({ 'x-forwarded-for': ' 203.0.113.7 , 10.0.0.1' }))).toBe('203.0.113.7')
+describe('clientIpFromHeaders — trust-aware since issue #156', () => {
+  let prevTrustProxy: string | undefined
+
+  beforeEach(() => {
+    prevTrustProxy = process.env.TRUST_PROXY
+    delete process.env.TRUST_PROXY
+  })
+  afterEach(() => {
+    if (prevTrustProxy === undefined) delete process.env.TRUST_PROXY
+    else process.env.TRUST_PROXY = prevTrustProxy
   })
 
-  it('accepts plain records too (lower- and upper-case)', () => {
-    expect(clientIpFromHeaders({ 'x-forwarded-for': '198.51.100.9, 10.0.0.2' })).toBe('198.51.100.9')
+  it('TRUST_PROXY unset → "" even when x-forwarded-for is present — the forgeable header is ignored (issue #156)', () => {
+    expect(clientIpFromHeaders(new Headers({ 'x-forwarded-for': ' 203.0.113.7 , 10.0.0.1' }))).toBe('')
+    expect(clientIpFromHeaders({ 'x-forwarded-for': '198.51.100.9, 10.0.0.2' })).toBe('')
+    expect(clientIpFromHeaders({ 'X-Forwarded-For': '198.51.100.10' })).toBe('')
+    expect(clientIpFromHeaders(new Headers({ 'x-forwarded-for': '203.0.113.7' }))).toBe('')
+  })
+
+  it('TRUST_PROXY set → the LAST (proxy-appended) hop, trimmed', () => {
+    process.env.TRUST_PROXY = '1'
+    expect(clientIpFromHeaders(new Headers({ 'x-forwarded-for': ' 203.0.113.7 , 10.0.0.1' }))).toBe('10.0.0.1')
+    expect(clientIpFromHeaders({ 'x-forwarded-for': '198.51.100.9, 10.0.0.2' })).toBe('10.0.0.2')
+    // a single value is the proxy-appended view too
     expect(clientIpFromHeaders({ 'X-Forwarded-For': '198.51.100.10' })).toBe('198.51.100.10')
+  })
+
+  it('TRUST_PROXY=0/false → same as unset (the header stays ignored)', () => {
+    process.env.TRUST_PROXY = '0'
+    expect(clientIpFromHeaders(new Headers({ 'x-forwarded-for': '203.0.113.7' }))).toBe('')
+    process.env.TRUST_PROXY = 'false'
+    expect(clientIpFromHeaders(new Headers({ 'x-forwarded-for': '203.0.113.7' }))).toBe('')
   })
 
   it('returns "" for missing headers or missing values (never throws)', () => {
@@ -129,12 +153,57 @@ describe('enforceRateLimit token bucket', () => {
     expect(await enforceRateLimit(req('10.9.0.3'), 't-half', LIMIT, 60_000)).not.toBeNull()
   })
 
-  it('separates principals: one IP exhausting its bucket does not block another', async () => {
-    const LIMIT = 1
-    expect(await enforceRateLimit(req('10.9.1.1'), 't-keysep', LIMIT, 60_000)).toBeNull()
-    expect(await enforceRateLimit(req('10.9.1.1'), 't-keysep', LIMIT, 60_000)).not.toBeNull()
-    // different principal, same bucket name — fresh bucket
-    expect(await enforceRateLimit(req('10.9.1.2'), 't-keysep', LIMIT, 60_000)).toBeNull()
+  it('separates principals behind a trusted proxy (TRUST_PROXY=1): one IP exhausting its bucket does not block another', async () => {
+    // Distinct x-forwarded-for values are distinct principals ONLY in the
+    // trusted-proxy posture — the one topology where per-client keys are
+    // honest (issue #156 made the untrusted header ignorable, see below).
+    const prev = process.env.TRUST_PROXY
+    process.env.TRUST_PROXY = '1'
+    try {
+      const LIMIT = 1
+      expect(await enforceRateLimit(req('10.9.1.1'), 't-keysep', LIMIT, 60_000)).toBeNull()
+      expect(await enforceRateLimit(req('10.9.1.1'), 't-keysep', LIMIT, 60_000)).not.toBeNull()
+      // different principal, same bucket name — fresh bucket
+      expect(await enforceRateLimit(req('10.9.1.2'), 't-keysep', LIMIT, 60_000)).toBeNull()
+    } finally {
+      if (prev === undefined) delete process.env.TRUST_PROXY
+      else process.env.TRUST_PROXY = prev
+    }
+  })
+
+  it('issue #156: TRUST_PROXY unset → XFF ROTATION does not refresh the bucket — all callers share the one anon principal', async () => {
+    // The old first-XFF semantics let a client mint a fresh bucket per
+    // request by rotating the (forgeable) left-most value. Now the header is
+    // ignored entirely without TRUST_PROXY: every request lands on the same
+    // anon bucket, so the limit actually binds.
+    const prev = process.env.TRUST_PROXY
+    delete process.env.TRUST_PROXY
+    try {
+      const LIMIT = 3
+      for (let i = 0; i < LIMIT; i++) {
+        const rotating = `198.51.100.${i + 1}` // a DIFFERENT spoofed XFF per request
+        expect(await enforceRateLimit(req(rotating), 't-xff-rotation', LIMIT, 60_000), `request ${i + 1} should pass`).toBeNull()
+      }
+      // a brand-new "IP" is still the same anon principal → blocked
+      expect(await enforceRateLimit(req('198.51.99.99'), 't-xff-rotation', LIMIT, 60_000)).not.toBeNull()
+    } finally {
+      if (prev === undefined) delete process.env.TRUST_PROXY
+      else process.env.TRUST_PROXY = prev
+    }
+  })
+
+  it('issue #156: TRUST_PROXY unset → no XFF at all shares that same anon bucket (one honest bucket)', async () => {
+    const prev = process.env.TRUST_PROXY
+    delete process.env.TRUST_PROXY
+    try {
+      const LIMIT = 2
+      expect(await enforceRateLimit(req('203.0.113.5'), 't-anon-collapse', LIMIT, 60_000)).toBeNull()
+      expect(await enforceRateLimit(req(undefined), 't-anon-collapse', LIMIT, 60_000)).toBeNull()
+      expect(await enforceRateLimit(req(undefined), 't-anon-collapse', LIMIT, 60_000)).not.toBeNull()
+    } finally {
+      if (prev === undefined) delete process.env.TRUST_PROXY
+      else process.env.TRUST_PROXY = prev
+    }
   })
 
   it('separates buckets: exhausting bucket A leaves bucket B untouched', async () => {

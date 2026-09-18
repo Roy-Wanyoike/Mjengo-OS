@@ -4,14 +4,23 @@ import { db } from '@/backend/lib/db'
 import { applyAction, type ActionType } from '@/backend/lib/mjengo'
 import { withAuditContext } from '@/backend/lib/audit'
 import { clientIpFromHeaders, enforceRateLimit } from '@/backend/lib/rate-limit'
-import { warnIfWebhookSecretUnsetInProduction } from '@/backend/lib/webhook-secret-warning'
+import {
+  unauthenticatedWebhookWritesRefused,
+  warnIfWebhookSecretUnsetInProduction,
+} from '@/backend/lib/webhook-secret-warning'
 
 export const dynamic = 'force-dynamic'
 
-// BE-6 (issue #76) + SEC-4 (audit wave 2): the production posture signal —
-// ONE loud line when this route's secret is unset. No-op in dev/test and
-// once the secret is set. Since SEC-4 the warning announces the FAIL-CLOSED
-// state (POST → 503 until the secret is set), not an accepted open posture.
+// BE-6 (issue #76) + SEC-4 (audit wave 2) + the open-posture opt-in
+// (issue #156): the posture signal — ONE loud line whenever this route is
+// in a state an operator must know about. No-op once the secret is set.
+//   · production + unset secret → announces the FAIL-CLOSED state
+//     (POST → 503 until the secret is set) — SEC-4, unchanged;
+//   · any non-production runtime + unset secret + WEBHOOK_OPEN_POSTURE=1
+//     → announces the ACTIVE open posture (unauthenticated writes ARE
+//     being accepted) — issue #156;
+//   · non-production + unset secret + no opt-in → silent (the route fails
+//     closed with 503, the safe default — nothing is being accepted).
 warnIfWebhookSecretUnsetInProduction('api/whatsapp', 'WHATSAPP_WEBHOOK_SECRET')
 
 /**
@@ -57,21 +66,26 @@ warnIfWebhookSecretUnsetInProduction('api/whatsapp', 'WHATSAPP_WEBHOOK_SECRET')
  * to this route — every text reply carries the '— MjengoOS sim' footer and
  * GET /api/whatsapp documents this contract for the future wiring.
  *
- * Hardening (demo-safe — unset = open demo posture OUTSIDE production):
+ * Hardening (issue #156 — the open posture is now an explicit opt-in):
  *   · WHATSAPP_WEBHOOK_SECRET: when set, POSTs must carry `X-Signature:`
  *     lowercase-hex HMAC-SHA256 of the RAW request body under the secret
  *     (timing-safe compare — the same verifyWebhookSignature mechanics as
- *     the USSD route). Unset keeps the open demo posture in dev/test.
- *     In production an unset secret FAILS CLOSED (SEC-4, audit wave 2):
- *     POST returns 503 before any body read or processing — the route
- *     refuses unauthenticated writes rather than accepting them, and the
- *     BE-6 startup warning names the misconfiguration.
+ *     the USSD route). Unset keeps the open demo posture ONLY when it is
+ *     explicitly opted into outside production: WEBHOOK_OPEN_POSTURE=1.
+ *     Otherwise an unset secret FAILS CLOSED in EVERY runtime (SEC-4
+ *     extended beyond production, issue #156): POST returns 503 before any
+ *     body read or processing — the route refuses unauthenticated writes
+ *     rather than accepting them, and the startup warning names the posture.
  *   · Rate limits: 20 req/min per phone PLUS 40 req/min per CLIENT-IP for
  *     EVERY POST (unlike USSD's PIN-only IP throttle — every WhatsApp POST
  *     carries a worker-identity attempt, so the IP bucket always applies).
- *     Per-IP is honest for the demo posture; a real relay multiplexes many
- *     MSISDNs per gateway IP, so it would be raised or keyed on the relay's
- *     authenticated identity.
+ *     Since issue #156 the per-IP key is trust-aware: with TRUST_PROXY unset
+ *     the (forgeable) x-forwarded-for header is IGNORED and every caller
+ *     shares the one 'anon' bucket — rotating XFF values can no longer
+ *     refresh it; set TRUST_PROXY=1 behind a proxy you control for
+ *     per-client keys. Honest for the demo posture either way; a real relay
+ *     multiplexes many MSISDNs per gateway IP, so it would be raised or
+ *     keyed on the relay's authenticated identity.
  *   · 64 KB raw-body cap (declared Content-Length precheck + actual byte
  *     count after read, BEFORE JSON.parse — the S2/ Daraja webhook gate):
  *     a lying client cannot push a huge payload into the parser.
@@ -109,20 +123,25 @@ function wa(text: string): NextResponse {
 }
 
 /**
- * SEC-4 (audit wave 2): the production fail-closed posture. When
- * NODE_ENV=production and WHATSAPP_WEBHOOK_SECRET is unset, POST is refused
- * with 503 BEFORE any body read or processing — a missing secret must never
- * mean "accept unauthenticated writes" (real attendance rows and notes) in
- * production. Dev/test/demo runtimes keep the documented open
- * gateway-trust posture exactly (warn-and-accept; vitest runs NODE_ENV=test,
- * which relies on it).
+ * SEC-4 (audit wave 2) + issue #156: the fail-closed posture. When
+ * WHATSAPP_WEBHOOK_SECRET is unset and the open posture has NOT been
+ * explicitly opted into (WEBHOOK_OPEN_POSTURE=1, non-production only), POST
+ * is refused with 503 BEFORE any body read or processing — a missing secret
+ * must never mean "accept unauthenticated writes" (real attendance rows and
+ * notes) in ANY runtime. Production always fails closed without the secret
+ * (SEC-4, unchanged — the opt-in is ignored there); dev/test/demo keep the
+ * open gateway-trust posture only as an explicit choice (vitest runs
+ * NODE_ENV=test and sets WEBHOOK_OPEN_POSTURE=1 in its route fixtures).
  */
 function unconfiguredWebhookSecret(): NextResponse {
   return NextResponse.json(
     {
       error:
-        'WHATSAPP_WEBHOOK_SECRET is not configured — this webhook refuses unauthenticated writes in production. ' +
-        'Set the relay shared secret (POST then requires X-Signature: lowercase-hex HMAC-SHA256 of the raw request body) and restart the app.',
+        'WHATSAPP_WEBHOOK_SECRET is not configured — this webhook refuses unauthenticated writes. ' +
+        'Set the relay shared secret (POST then requires X-Signature: lowercase-hex HMAC-SHA256 of the raw request body) and restart the app' +
+        (process.env.NODE_ENV === 'production'
+          ? '.'
+          : ', or explicitly opt into the open demo posture outside production with WEBHOOK_OPEN_POSTURE=1.'),
     },
     { status: 503 },
   )
@@ -237,9 +256,10 @@ function bodyTooLarge(): NextResponse {
 }
 
 export async function POST(req: NextRequest) {
-  // SEC-4 (audit wave 2): production + unset secret → 503, no processing —
-  // FAIL CLOSED. Non-production keeps the open demo posture unchanged.
-  if (process.env.NODE_ENV === 'production' && !process.env.WHATSAPP_WEBHOOK_SECRET) {
+  // SEC-4 (audit wave 2) + issue #156: unset secret and no explicit open
+  // posture → 503, no processing — FAIL CLOSED (production always; any other
+  // runtime unless WEBHOOK_OPEN_POSTURE=1 opts into the demo posture).
+  if (unauthenticatedWebhookWritesRefused('WHATSAPP_WEBHOOK_SECRET')) {
     return unconfiguredWebhookSecret()
   }
   try {
@@ -273,7 +293,10 @@ export async function POST(req: NextRequest) {
     // And per CLIENT-IP (40/min): every POST carries a worker-identity
     // attempt, so the IP bucket always applies (the phone is caller-supplied
     // and rotates freely — per-phone alone cannot stop scripted abuse from
-    // one host). No XFF → 'anon' principal (loopback).
+    // one host). Trust-aware since issue #156: no TRUST_PROXY →
+    // clientIpFromHeaders returns '' → the ONE shared 'anon' bucket
+    // (rotating XFF values cannot refresh it); TRUST_PROXY=1 → the
+    // proxy-appended last value (per-client buckets).
     const ip = clientIpFromHeaders(req.headers)
     const ipLimited = await enforceRateLimit(req, `whatsapp-ip:${ip || 'anon'}`, 40, 60_000)
     if (ipLimited) return ipLimited
@@ -402,16 +425,20 @@ the relay is trusted to have authenticated the phone; the number is the
 in-session identity. Optional hardening:
   WHATSAPP_WEBHOOK_SECRET: when set, POST requires
     X-Signature: <lowercase-hex HMAC-SHA256 of the RAW request body under the secret>
-  (timing-safe compare). Unsigned or mismatched → 401. Unset = documented open
-  demo posture in dev/test only; in production (NODE_ENV=production) an unset
-  secret FAILS CLOSED — POST returns 503 with a configuration error before
-  any processing (SEC-4).
+  (timing-safe compare). Unsigned or mismatched → 401. Unset FAILS CLOSED in
+  EVERY runtime unless WEBHOOK_OPEN_POSTURE=1 explicitly opts into the open
+  demo posture OUTSIDE production (issue #156): production + unset → 503
+  always (SEC-4, the opt-in is ignored); non-prod + unset + no opt-in → 503;
+  non-prod + unset + opt-in → open posture (warn-and-accept).
 
 Rate limits (token-bucket store shared per host by default, issue #158; see
 src/backend/lib/rate-limit.ts):
   20 requests/min per phone (bucket whatsapp:<from>)
   40 requests/min per client IP (bucket whatsapp-ip:<ip> — every POST carries a
-  worker-identity attempt, so the IP bucket always applies)
+  worker-identity attempt, so the IP bucket always applies). The per-IP key is
+  trust-aware (issue #156): TRUST_PROXY unset → all callers share the one anon
+  bucket (a forgeable x-forwarded-for is ignored); TRUST_PROXY=1 → the
+  proxy-appended value.
   Exhaustion → 429 { error: "Too many requests", retryAfterSec } + Retry-After.
 
 Body cap: 64 KB raw (Content-Length precheck + actual byte count, before

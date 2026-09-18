@@ -49,8 +49,9 @@ services:
       # Fixed public domain instead of a proxy? Set in .env:
       #   NEXTAUTH_URL=https://your-domain.example
       # Webhook HMAC secrets for the two public field channels (USSD *384# and
-      # WhatsApp). Unset = the documented open demo posture; in production the
-      # app logs ONE loud warning per route until they are set (BE-6, issue #76).
+      # WhatsApp). The image runs NODE_ENV=production, so an unset secret means
+      # the routes FAIL CLOSED (POST → 503, one loud warning per route — SEC-4;
+      # the WEBHOOK_OPEN_POSTURE opt-in is ignored in production, issue #156).
       # Set in .env (env_file passes them through, like JOBS_RUN_TOKEN):
       #   USSD_WEBHOOK_SECRET=<openssl rand -hex 32>
       #   WHATSAPP_WEBHOOK_SECRET=<openssl rand -hex 32>

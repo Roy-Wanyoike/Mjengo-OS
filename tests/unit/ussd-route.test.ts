@@ -18,22 +18,31 @@
  *     parser (honest menu/invalid-code reply, not a size error);
  *   · HMAC (USSD_WEBHOOK_SECRET): secret set + unsigned/mismatched
  *     X-Signature → 401 (timing-safe compare); correct hex HMAC of the RAW
- *     body → 200; unset → documented open demo posture;
- *   · PRODUCTION FAIL-CLOSED (SEC-4, audit wave 2): NODE_ENV=production +
- *     unset secret → 503 JSON configuration error BEFORE any processing
- *     (zero writes, zero audits, zero rate-limit consumption); production +
- *     secret set keeps working (503 never shadows the HMAC gate);
- *     NODE_ENV=test + unset keeps the open demo posture exactly;
+ *     body → 200; unset → the open demo posture, now an EXPLICIT opt-in
+ *     (issue #156: the fixtures set WEBHOOK_OPEN_POSTURE=1);
+ *   · FAIL-CLOSED POSTURE (SEC-4 + issue #156): an unset secret refuses
+ *     POST with 503 in EVERY runtime unless WEBHOOK_OPEN_POSTURE=1 opts
+ *     into the open demo posture OUTSIDE production. Pinned: production +
+ *     unset → 503 (the opt-in is IGNORED there); non-prod + unset + no
+ *     opt-in → 503 before any processing (zero writes, zero audits, zero
+ *     rate-limit consumption); non-prod + opt-in → open posture; secret
+ *     set → the HMAC gate answers, never the 503 gate;
  *   · PIN THROTTLE: 20/min/phone and 40 PIN-attempts/min per client IP,
- *     429 + Retry-After;
+ *     429 + Retry-After. The per-IP key is trust-aware (issue #156): the
+ *     fixtures run TRUST_PROXY=1 (distinct XFF values = distinct
+ *     principals, keeping the per-test uniqueIp() bucket isolation
+ *     honest), and a dedicated test pins the UNSET posture — rotating XFF
+ *     values share the one anon bucket and cannot refresh it;
  *   · PIN LOCKOUT (BE-9, issue #106): 5 wrong PINs for one phone → the line
  *     is locked 15 minutes (the reply names the wait); the correct PIN
  *     during the lock is STILL refused and writes nothing; after the window
  *     the same PIN works again; the lock is keyed per phone; a correct PIN
  *     resets the count (consecutive-failure semantics);
- *   · PHONE-TAIL FALLBACK POLICY: USSD_WEBHOOK_SECRET set → last-4-of-phone
- *     no longer resolves (kiosk PIN only — the shared-secret posture);
- *     unset → the documented demo fallback keeps working;
+ *   · PHONE-TAIL FALLBACK POLICY (BE-9 + issue #156): resolves ONLY in the
+ *     explicitly opted-in open posture (secret unset +
+ *     WEBHOOK_OPEN_POSTURE=1). Secret set → kiosk PIN only (the
+ *     shared-secret posture, even with the opt-in env set); no opt-in →
+ *     the route fails closed before any PIN resolution. Off by default.
  *   · every USSD text reply carries the sim footer.
  *
  * @/backend/lib/db is swapped for an in-memory stub (whatsapp-route.test
@@ -233,17 +242,30 @@ function seedAttendance(workerId: string, over: Record<string, unknown> = {}): R
   return row
 }
 
+// The route-test fixture posture (issue #156): vitest runs NODE_ENV=test,
+// and since #156 an unset secret fails closed in EVERY runtime unless the
+// open posture is explicitly opted into. These fixtures set exactly what a
+// dev/demo deployment would: WEBHOOK_OPEN_POSTURE=1 (the open
+// gateway-trust posture under test — without it every test below would
+// rightly get the 503) and TRUST_PROXY=1 (the one topology where distinct
+// x-forwarded-for values are distinct throttle principals — keeps the
+// per-test uniqueIp() bucket isolation honest). The TRUST_PROXY-unset
+// collapse has its own dedicated tests below.
 beforeEach(() => {
   vi.useFakeTimers({ now: T0 })
   vi.clearAllMocks()
   process.env.NEXTAUTH_SECRET = 'unit-test-secret'
   delete process.env.USSD_WEBHOOK_SECRET
+  process.env.WEBHOOK_OPEN_POSTURE = '1'
+  process.env.TRUST_PROXY = '1'
   state.reset()
 })
 
 afterEach(() => {
   vi.useRealTimers()
   delete process.env.USSD_WEBHOOK_SECRET
+  delete process.env.WEBHOOK_OPEN_POSTURE
+  delete process.env.TRUST_PROXY
   delete process.env.NEXTAUTH_SECRET
 })
 
@@ -427,11 +449,12 @@ describe('X-Signature — HMAC shared-secret verification (USSD_WEBHOOK_SECRET)'
     expect((await res.text()).endsWith(FOOTER)).toBe(true)
   })
 
-  it('UNSET secret → documented open demo posture: plain POST goes through', async () => {
+  it('UNSET secret + WEBHOOK_OPEN_POSTURE=1 (the fixture opt-in) → open demo posture: plain POST goes through', async () => {
     delete process.env.USSD_WEBHOOK_SECRET
     const res = await ussdPost(ussdReq(KAMAU, '*384#*3'))
     expect(res.status).toBe(200)
     expect((await res.text()).endsWith(FOOTER)).toBe(true)
+    expect(process.env.WEBHOOK_OPEN_POSTURE).toBe('1') // the explicit opt-in, not an accident
   })
 })
 
@@ -466,6 +489,18 @@ describe('production fail-closed — unset secret → 503, no processing (SEC-4)
     expect(process.env.NODE_ENV).not.toBe('production') // restored for the file
   })
 
+  it('production IGNORES the opt-in: WEBHOOK_OPEN_POSTURE=1 + unset secret → STILL 503 (issue #156)', async () => {
+    // The beforeEach fixture already sets WEBHOOK_OPEN_POSTURE=1 — production
+    // must not read it. (Set it explicitly anyway so the intent is visible.)
+    process.env.WEBHOOK_OPEN_POSTURE = '1'
+    await asProduction(async () => {
+      const res = await ussdPost(ussdReq(KAMAU, '*384#*3'))
+      expect(res.status).toBe(503)
+      expect(state.writes).toBe(0)
+      expect(state.audits).toEqual([])
+    })
+  })
+
   it('production refuses BEFORE the grammar: an attendance attempt writes nothing', async () => {
     await asProduction(async () => {
       const res = await ussdPost(ussdReq(KAMAU, '*384#*1*1234*1'))
@@ -496,18 +531,64 @@ describe('production fail-closed — unset secret → 503, no processing (SEC-4)
       expect(state.writes).toBe(0)
     })
   })
+})
 
-  it("NODE_ENV='test' + UNSET secret → the open demo posture is untouched (dev/demo keeps warn-and-accept)", async () => {
+// ------------------------------------------- open-posture opt-in (issue #156)
+
+describe('open-posture opt-in — WEBHOOK_OPEN_POSTURE gates unauthenticated writes (issue #156)', () => {
+  it('non-production + unset secret + NO opt-in → 503 (the new fail-closed default), zero processing', async () => {
+    delete process.env.WEBHOOK_OPEN_POSTURE
+    const res = await ussdPost(ussdReq(KAMAU, '*384#*3'))
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { error?: string }
+    expect(body.error).toContain('USSD_WEBHOOK_SECRET is not configured')
+    expect(body.error).toContain('WEBHOOK_OPEN_POSTURE') // the honest remedy is named
+    expect(state.writes).toBe(0)
+    expect(state.audits).toEqual([])
+  })
+
+  it('a runtime with NO NODE_ENV at all (bare container) + no opt-in → 503 too', async () => {
+    delete process.env.WEBHOOK_OPEN_POSTURE
     const prev = process.env.NODE_ENV
-    process.env.NODE_ENV = 'test'
+    delete process.env.NODE_ENV // `docker run` of the image without NODE_ENV
     try {
-      const res = await ussdPost(ussdReq(KAMAU, '*384#*3'))
-      expect(res.status).toBe(200)
-      expect((await res.text()).endsWith(FOOTER)).toBe(true)
+      const res = await ussdPost(ussdReq(KAMAU, '*384#*1*1234*1'))
+      expect(res.status).toBe(503)
+      expect(state.attendance.size).toBe(0)
+      expect(state.writes).toBe(0)
     } finally {
       if (prev === undefined) delete process.env.NODE_ENV
       else process.env.NODE_ENV = prev
     }
+  })
+
+  it('opt-in set to 0/false/blank is NOT an opt-in → 503', async () => {
+    for (const v of ['', '0', 'false']) {
+      process.env.WEBHOOK_OPEN_POSTURE = v
+      const res = await ussdPost(ussdReq(KAMAU, '*384#*3'))
+      expect(res.status, `WEBHOOK_OPEN_POSTURE="${v}"`).toBe(503)
+    }
+    expect(state.writes).toBe(0)
+  })
+
+  it('non-production + unset secret + WEBHOOK_OPEN_POSTURE=1 → 200 (the explicit open demo posture)', async () => {
+    process.env.WEBHOOK_OPEN_POSTURE = '1' // the beforeEach default, restated
+    const res = await ussdPost(ussdReq(KAMAU, '*384#*3'))
+    expect(res.status).toBe(200)
+    expect((await res.text()).endsWith(FOOTER)).toBe(true)
+  })
+
+  it('non-production + secret SET → the HMAC gate answers regardless of the opt-in (503 never shadows it)', async () => {
+    process.env.USSD_WEBHOOK_SECRET = 'ussd-unit-secret'
+    delete process.env.WEBHOOK_OPEN_POSTURE
+    const rawBody = JSON.stringify({ sessionId: 'sess-1', phoneNumber: KAMAU, text: '*384#*3' })
+    const unsigned = await ussdPost(ussdReq(KAMAU, '*384#*3', { raw: rawBody }))
+    expect(unsigned.status).toBe(401)
+    const signed = await ussdPost(ussdReq(KAMAU, '*384#*3', {
+      raw: rawBody,
+      headers: { 'x-signature': createHmac('sha256', 'ussd-unit-secret').update(rawBody).digest('hex') },
+    }))
+    expect(signed.status).toBe(200)
   })
 })
 
@@ -539,6 +620,29 @@ describe('rate limits — 20/min/phone + 40 PIN-attempts/min/IP (fake-timer dete
     expect(blocked.status).toBe(429)
     expect(await blocked.json()).toMatchObject({ error: 'Too many requests' })
     expect(state.writes).toBe(0) // 40 wrong-PIN replies — never a single row
+  })
+
+  it('issue #156: TRUST_PROXY UNSET → rotating x-forwarded-for does NOT refresh the per-IP PIN bucket', async () => {
+    // The old first-XFF semantics let a scripted client mint a fresh PIN
+    // bucket per request by rotating the forgeable header. Now (TRUST_PROXY
+    // unset — direct exposure) the header is ignored: every request shares
+    // the ONE anon bucket, so the 40/min limit actually binds.
+    delete process.env.TRUST_PROXY
+    try {
+      for (let i = 0; i < 40; i++) {
+        const phone = `0712${String(4000000 + i).slice(1)}` // unique per request
+        const spoofedXff = `198.51.${Math.floor(i / 250)}.${(i % 250) + 1}` // ROTATING "IP"
+        const res = await ussdPost(ussdReq(phone, `*384#*2*${WRONG_PIN}`, { ip: spoofedXff }))
+        expect(res.status, `request ${i + 1} should pass despite rotation`).toBe(200)
+      }
+      // a brand-new spoofed "IP" is still the same anon principal → blocked
+      const blocked = await ussdPost(ussdReq('0713999999', `*384#*2*${WRONG_PIN}`, { ip: '203.0.113.99' }))
+      expect(blocked.status).toBe(429)
+      expect(await blocked.json()).toMatchObject({ error: 'Too many requests' })
+      expect(state.writes).toBe(0)
+    } finally {
+      process.env.TRUST_PROXY = '1' // restore the fixture posture
+    }
   })
 
   it('PIN-less requests do NOT consume the per-IP PIN bucket (menu from one IP passes 41 times)', async () => {
@@ -644,9 +748,19 @@ describe('per-PIN failure lockout — 5 wrong PINs → 15-minute line lock (BE-9
 
 // --------------------------------------------------- phone-tail fallback policy
 
-describe('phone-tail PIN fallback — demo posture vs shared-secret posture (BE-9)', () => {
-  it('UNSET secret → last-4-of-phone resolves the worker (documented demo posture)', async () => {
+describe('phone-tail PIN fallback — gated behind the explicit open posture (BE-9 + issue #156)', () => {
+  it('OFF BY DEFAULT: no opt-in → the route fails closed (503) before any PIN resolution — the 10^4 keyspace identity is closed', async () => {
+    delete process.env.WEBHOOK_OPEN_POSTURE
+    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*2*4555')) // Achieng's phone-tail
+    expect(res.status).toBe(503)
+    expect(state.writes).toBe(0)
+    expect(state.audits).toEqual([])
+  })
+
+  it('ON in the explicit open posture: secret unset + WEBHOOK_OPEN_POSTURE=1 → last-4 resolves the worker', async () => {
     delete process.env.USSD_WEBHOOK_SECRET
+    // WEBHOOK_OPEN_POSTURE=1 is the beforeEach fixture — the only state where
+    // the demo fallback legitimately resolves.
     const res = await ussdPost(ussdReq(uniquePhone(), '*384#*2*4555')) // Achieng's phone-tail
     expect(res.status).toBe(200)
     const reply = await res.text()
@@ -668,6 +782,20 @@ describe('phone-tail PIN fallback — demo posture vs shared-secret posture (BE-
     expect(state.audits).toEqual([])
   })
 
+  it('secret SET + WEBHOOK_OPEN_POSTURE=1 → the fallback is STILL dropped (the shared-secret posture wins over the opt-in)', async () => {
+    process.env.USSD_WEBHOOK_SECRET = 'ussd-unit-secret'
+    // WEBHOOK_OPEN_POSTURE=1 is the fixture — the opt-in must not leak the
+    // 10^4 last-4 identity into the shared-secret posture.
+    const rawBody = JSON.stringify({ phoneNumber: uniquePhone(), text: '*384#*2*4555' })
+    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*2*4555', {
+      raw: rawBody,
+      headers: { 'x-signature': createHmac('sha256', 'ussd-unit-secret').update(rawBody).digest('hex') },
+    }))
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain('PIN not recognised')
+    expect(state.writes).toBe(0)
+  })
+
   it('secret SET → the stored KIOSK PIN still resolves (shared-secret posture works)', async () => {
     process.env.USSD_WEBHOOK_SECRET = 'ussd-unit-secret'
     const rawBody = JSON.stringify({ phoneNumber: uniquePhone(), text: '*384#*1*1234*1' })
@@ -678,6 +806,13 @@ describe('phone-tail PIN fallback — demo posture vs shared-secret posture (BE-
     expect(res.status).toBe(200)
     expect(await res.text()).toContain('Attendance recorded.')
     expect(state.attendance.size).toBe(1)
+  })
+
+  it('no opt-in + secret unset → the KIOSK PIN path is closed too (the whole route is 503 — kiosk PIN is the default only once a posture is chosen)', async () => {
+    delete process.env.WEBHOOK_OPEN_POSTURE
+    const res = await ussdPost(ussdReq(uniquePhone(), '*384#*1*1234*1'))
+    expect(res.status).toBe(503)
+    expect(state.attendance.size).toBe(0)
   })
 })
 
@@ -691,12 +826,17 @@ describe('GET /api/ussd — the machine-readable contract', () => {
     expect(doc.ok).toBe(true)
     expect(doc.endpoint).toBe('POST /api/ussd')
     expect(String(doc.pinResolution)).toContain('kiosk PIN (Worker.pin) first')
-    expect(String(doc.pinResolution)).toContain('dropped when USSD_WEBHOOK_SECRET is set')
+    expect(String(doc.pinResolution)).toContain('ONLY in the explicitly opted-in open posture')
+    expect(String(doc.pinResolution)).toContain('WEBHOOK_OPEN_POSTURE=1')
     expect(String(doc.rateLimit)).toContain('20 requests/min/phone')
     expect(String(doc.rateLimit)).toContain('40 PIN-attempts/min per client IP')
     expect(String(doc.rateLimit)).toContain('15-minute line lockout')
+    expect(String(doc.rateLimit)).toContain('trust-aware')
+    expect(String(doc.rateLimit)).toContain('TRUST_PROXY unset')
     expect(String(doc.bodyCap)).toContain('64 KB')
     expect(String(doc.signature)).toContain('USSD_WEBHOOK_SECRET')
+    expect(String(doc.signature)).toContain('WEBHOOK_OPEN_POSTURE=1')
+    expect(String(doc.signature)).toContain('FAILS CLOSED in EVERY runtime')
     expect(String(doc.honest)).toContain('No SMS/USSD aggregator is wired')
   })
 })

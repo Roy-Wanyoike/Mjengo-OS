@@ -11,7 +11,11 @@
  *   · request 61 → the honest 429 'Too many requests' + Retry-After — the
  *     db is NOT touched for the denied request;
  *   · a DIFFERENT principal has a fresh bucket (the denial is per-principal,
- *     not global);
+ *     not global) — distinct x-forwarded-for values are distinct principals
+ *     ONLY behind TRUST_PROXY=1, so the file runs in that trusted-proxy
+ *     posture (issue #156: with TRUST_PROXY unset the forgeable header is
+ *     ignored and every caller shares the one anon bucket — pinned in a
+ *     dedicated test below);
  *   · the search semantics are unchanged: still session-guarded, still
  *     client-pinned, still strips LIKE wildcards, same 200 body shape.
  *
@@ -99,11 +103,17 @@ beforeEach(() => {
   vi.useFakeTimers({ now: T0 })
   searchCalls.length = 0
   process.env.NEXTAUTH_SECRET = 'unit-test-secret'
+  // Trusted-proxy fixture (issue #156): distinct x-forwarded-for values are
+  // distinct throttle principals only in this posture, which the per-principal
+  // tests below need. Restored in afterEach; the default (header-ignored,
+  // one anon bucket) has its own dedicated test.
+  process.env.TRUST_PROXY = '1'
 })
 
 afterEach(() => {
   vi.useRealTimers()
   delete process.env.NEXTAUTH_SECRET
+  delete process.env.TRUST_PROXY
 })
 
 describe('GET /api/search — the standard rate limiter (BE-11)', () => {
@@ -127,12 +137,40 @@ describe('GET /api/search — the standard rate limiter (BE-11)', () => {
     expect(searchCalls).toHaveLength(0)
   })
 
-  it('a different principal has a FRESH bucket (per-principal, not global)', async () => {
-    for (let i = 0; i < 60; i++) await searchGet(searchReq('10.9.0.3'), undefined)
-    expect((await searchGet(searchReq('10.9.0.3'), undefined)).status).toBe(429)
-    // another principal, same bucket — searches fine
-    const other = await searchGet(searchReq('10.9.0.4'), undefined)
-    expect(other.status).toBe(200)
+  it('a different principal has a FRESH bucket (per-principal, not global — behind TRUST_PROXY=1)', async () => {
+    // Distinct x-forwarded-for values are distinct principals ONLY in the
+    // trusted-proxy posture (issue #156 made the untrusted header ignorable
+    // — with TRUST_PROXY unset every caller shares the one anon bucket).
+    const prev = process.env.TRUST_PROXY
+    process.env.TRUST_PROXY = '1'
+    try {
+      for (let i = 0; i < 60; i++) await searchGet(searchReq('10.9.0.3'), undefined)
+      expect((await searchGet(searchReq('10.9.0.3'), undefined)).status).toBe(429)
+      // another principal, same bucket — searches fine
+      const other = await searchGet(searchReq('10.9.0.4'), undefined)
+      expect(other.status).toBe(200)
+    } finally {
+      if (prev === undefined) delete process.env.TRUST_PROXY
+      else process.env.TRUST_PROXY = prev
+    }
+  })
+
+  it('issue #156: TRUST_PROXY UNSET → rotating x-forwarded-for shares the ONE anon bucket (60/min binds)', async () => {
+    delete process.env.TRUST_PROXY
+    try {
+      for (let i = 0; i < 60; i++) {
+        const rotating = `198.51.${Math.floor(i / 250)}.${(i % 250) + 1}` // a DIFFERENT spoofed XFF per request
+        const res = await searchGet(searchReq(rotating), undefined)
+        expect(res.status, `request ${i + 1} should pass despite rotation`).toBe(200)
+      }
+      searchCalls.length = 0 // only the DENIED request's scans matter below
+      // a brand-new spoofed "IP" is still the same anon principal → throttled
+      const blocked = await searchGet(searchReq('203.0.113.99'), undefined)
+      expect(blocked.status).toBe(429)
+      expect(searchCalls).toHaveLength(0) // the denied request never scans
+    } finally {
+      process.env.TRUST_PROXY = '1' // restore the fixture posture
+    }
   })
 
   it('search semantics unchanged: session-guarded, wildcard-stripped query, same 200 shape', async () => {

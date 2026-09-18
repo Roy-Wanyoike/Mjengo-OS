@@ -10,11 +10,14 @@
  *
  * Then the ROUTE gate, pinned with the mpesa-daraja.test.ts stub pattern
  * (in-memory db, notify mocked, global fetch stubbed, env saved/restored):
- * unset env = the current posture unchanged; set+match = pass; set+no-match
- * = 403 BEFORE the body is parsed (a malformed body under a non-matching IP
- * 403s instead of 400-ing); unresolvable IP = 403; zero-valid-entries =
- * deny-all; invalid entries ignored while valid ones still apply; TRUST_PROXY
- * flips which x-forwarded-for hop is the client.
+ * unset env = the current posture unchanged; set+match (behind TRUST_PROXY=1)
+ * = pass; set+no-match = 403 BEFORE the body is parsed (a malformed body
+ * under a non-matching IP 403s instead of 400-ing); unresolvable IP = 403;
+ * zero-valid-entries = deny-all; invalid entries ignored while valid ones
+ * still apply; TRUST_PROXY flips the x-forwarded-for semantics — unset the
+ * forgeable header is IGNORED entirely (issue #156: a set allowlist without
+ * the trusted-proxy posture denies all traffic, fail closed), set the
+ * proxy-appended rightmost hop is the client.
  */
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -396,16 +399,29 @@ describe('webhook route — DARAJA_ALLOWED_IPS gate', () => {
     expect(state.txns.size).toBe(1)
   })
 
-  it('set + matching CIDR → passes and credits', async () => {
+  it('set + matching CIDR (behind TRUST_PROXY=1) → passes and credits', async () => {
     process.env.DARAJA_ALLOWED_IPS = '196.201.214.0/24'
+    process.env.TRUST_PROXY = '1' // the allowlist is only sound in the trusted-proxy posture
     const res = await post(JSON.stringify(callbackBody()), { 'x-forwarded-for': '196.201.214.100' })
     expect(res.status).toBe(200)
     expect((await jsonOf(res)).action).toBe('credited')
     expect(state.txns.size).toBe(1)
   })
 
-  it('set + non-matching IP → 403 generic body, nothing processed (fetch, ledger untouched)', async () => {
+  it('issue #156: set + TRUST_PROXY UNSET → the forgeable header is ignored → unresolvable IP → 403 (fail closed)', async () => {
+    // A set allowlist without the trusted-proxy posture denies ALL traffic:
+    // the x-forwarded-for value is client-controlled and must never key an
+    // allowlist decision (previously the first, spoofable value was used).
     process.env.DARAJA_ALLOWED_IPS = '196.201.214.0/24'
+    const res = await post(JSON.stringify(callbackBody()), { 'x-forwarded-for': '196.201.214.100' })
+    expect(res.status).toBe(403)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(state.txns.size).toBe(0)
+  })
+
+  it('set + non-matching IP (behind TRUST_PROXY=1) → 403 generic body, nothing processed (fetch, ledger untouched)', async () => {
+    process.env.DARAJA_ALLOWED_IPS = '196.201.214.0/24'
+    process.env.TRUST_PROXY = '1'
     const res = await post(JSON.stringify(callbackBody()), { 'x-forwarded-for': '203.0.113.9' })
     expect(res.status).toBe(403)
     const body = await jsonOf(res)
@@ -419,6 +435,7 @@ describe('webhook route — DARAJA_ALLOWED_IPS gate', () => {
 
   it('403 happens BEFORE body parsing — a malformed body under a denied IP 403s, never 400s', async () => {
     process.env.DARAJA_ALLOWED_IPS = '196.201.214.0/24'
+    process.env.TRUST_PROXY = '1'
     const res = await post('not-json{', { 'x-forwarded-for': '203.0.113.9' })
     expect(res.status).toBe(403)
     expect(fetchMock).not.toHaveBeenCalled()
@@ -445,8 +462,9 @@ describe('webhook route — DARAJA_ALLOWED_IPS gate', () => {
     warn.mockRestore()
   })
 
-  it('invalid entries are ignored while valid entries still apply (mixed config)', async () => {
+  it('invalid entries are ignored while valid entries still apply (mixed config, behind TRUST_PROXY=1)', async () => {
     process.env.DARAJA_ALLOWED_IPS = '196.201.214.0/24, oops'
+    process.env.TRUST_PROXY = '1'
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const res = await post(JSON.stringify(callbackBody()), { 'x-forwarded-for': '196.201.214.100' })
     expect(res.status).toBe(200)
@@ -455,8 +473,9 @@ describe('webhook route — DARAJA_ALLOWED_IPS gate', () => {
     warn.mockRestore()
   })
 
-  it('bare IPv4 entry (= /32) and exact IPv6 entry both work as entries', async () => {
+  it('bare IPv4 entry (= /32) and exact IPv6 entry both work as entries (behind TRUST_PROXY=1)', async () => {
     process.env.DARAJA_ALLOWED_IPS = '196.201.214.34,2001:db8::1'
+    process.env.TRUST_PROXY = '1'
     const res = await post(JSON.stringify(callbackBody()), { 'x-forwarded-for': '196.201.214.34' })
     expect(res.status).toBe(200)
     // reset the credited state so the second POST re-runs the full path
@@ -467,10 +486,11 @@ describe('webhook route — DARAJA_ALLOWED_IPS gate', () => {
     expect(res3.status).toBe(403)
   })
 
-  it('TRUST_PROXY flips the trusted x-forwarded-for hop (rightmost vs first)', async () => {
+  it('TRUST_PROXY flips the trusted x-forwarded-for hop (rightmost vs ignored)', async () => {
     process.env.DARAJA_ALLOWED_IPS = '196.201.214.0/24'
     const chain = { 'x-forwarded-for': '203.0.113.9, 196.201.214.100' }
-    // unset (default): FIRST value — spoofable left value wins → denied
+    // unset (default): the forgeable header is IGNORED entirely (issue #156) —
+    // unresolvable IP, denied, even though the right-most value would match
     const res = await post(JSON.stringify(callbackBody()), chain)
     expect(res.status).toBe(403)
     // set: RIGHTMOST value — the trusted proxy's view of the client → allowed

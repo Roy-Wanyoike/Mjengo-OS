@@ -543,7 +543,21 @@ Recruiter-friendly, and all of it verifiable in the repo:
   project, AI and sync routes backed by a SHARED SQLite store per host by
   default (multi-process safe — `RATE_LIMIT_STORE=memory` opts back into
   per-process counters); lockout after repeated failures
-  (`src/backend/lib/rate-limit.ts`).
+  (`src/backend/lib/rate-limit.ts`). IP-derived keys are trust-aware
+  (issue #156): with `TRUST_PROXY` unset the client-forgeable
+  `X-Forwarded-For` header is ignored and unauthenticated callers share the
+  one `anon` bucket — rotating spoofed values can't mint fresh buckets; set
+  `TRUST_PROXY=1` behind a proxy you control for per-client keys.
+- **Fail-closed webhook posture (issue #156)** — the unauthenticated
+  field-line webhooks (`POST /api/ussd`, `POST /api/whatsapp`) refuse writes
+  with 503 whenever their HMAC secret is unset, in EVERY runtime, unless
+  `WEBHOOK_OPEN_POSTURE=1` explicitly opts into the demo posture OUTSIDE
+  production (production ignores the opt-in — SEC-4). The full matrix
+  (secret set/unset × prod/non-prod × opt-in) is in
+  [DEPLOYMENT.md §3.1](./DEPLOYMENT.md); a loud startup warning fires in any
+  runtime where unauthenticated writes are actually being accepted, and the
+  USSD phone-tail PIN fallback resolves only in the explicitly opted-in open
+  posture (kiosk PIN is the default identity path).
 - **Login-timing equalization** — a burn-hash comparison runs even when the
   user doesn't exist, so response timing can't distinguish "no such user"
   from "wrong password" (`src/backend/lib/auth.ts`).

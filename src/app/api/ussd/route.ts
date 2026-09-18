@@ -10,14 +10,24 @@ import {
   enforceRateLimit,
   recordUssdPinFailure,
 } from '@/backend/lib/rate-limit'
-import { warnIfWebhookSecretUnsetInProduction } from '@/backend/lib/webhook-secret-warning'
+import {
+  unauthenticatedWebhookWritesRefused,
+  warnIfWebhookSecretUnsetInProduction,
+  webhookOpenPostureOptedIn,
+} from '@/backend/lib/webhook-secret-warning'
 
 export const dynamic = 'force-dynamic'
 
-// BE-6 (issue #76) + SEC-4 (audit wave 2): the production posture signal —
-// ONE loud line when this route's secret is unset. No-op in dev/test and
-// once the secret is set. Since SEC-4 the warning announces the FAIL-CLOSED
-// state (POST → 503 until the secret is set), not an accepted open posture.
+// BE-6 (issue #76) + SEC-4 (audit wave 2) + the open-posture opt-in
+// (issue #156): the posture signal — ONE loud line whenever this route is
+// in a state an operator must know about. No-op once the secret is set.
+//   · production + unset secret → announces the FAIL-CLOSED state
+//     (POST → 503 until the secret is set) — SEC-4, unchanged;
+//   · any non-production runtime + unset secret + WEBHOOK_OPEN_POSTURE=1
+//     → announces the ACTIVE open posture (unauthenticated writes ARE
+//     being accepted) — issue #156;
+//   · non-production + unset secret + no opt-in → silent (the route fails
+//     closed with 503, the safe default — nothing is being accepted).
 warnIfWebhookSecretUnsetInProduction('api/ussd', 'USSD_WEBHOOK_SECRET')
 
 /**
@@ -55,17 +65,23 @@ warnIfWebhookSecretUnsetInProduction('api/ussd', 'USSD_WEBHOOK_SECRET')
  *   · Rate limits: 20 req/min/phone (unchanged) PLUS 40 req/min per CLIENT-IP
  *     for PIN-bearing requests — the phone number is caller-supplied and
  *     rotates freely, so it alone could never throttle a 4-digit-PIN brute
- *     force from one host. The per-IP limit is honest for the demo posture;
- *     a real aggregator multiplexes many MSISDNs per gateway IP, so it would
- *     be raised or keyed on the aggregator's authenticated identity.
+ *     force from one host. Since issue #156 the per-IP key is trust-aware:
+ *     with TRUST_PROXY unset the (forgeable) x-forwarded-for header is
+ *     IGNORED and every caller shares the one 'anon' bucket — rotating XFF
+ *     values can no longer refresh it; set TRUST_PROXY=1 behind a proxy you
+ *     control for per-client keys. The honest limit for the demo posture
+ *     either way; a real aggregator multiplexes many MSISDNs per gateway IP,
+ *     so it would be raised or keyed on the aggregator's authenticated
+ *     identity.
  *   · USSD_WEBHOOK_SECRET: when set, POSTs must carry `X-Signature:`
  *     lowercase-hex HMAC-SHA256 of the RAW request body under the secret —
  *     aggregator authentication (the demo gateway-trust model then becomes
- *     a shared-secret one). Unset keeps the open demo posture in dev/test.
- *     In production an unset secret FAILS CLOSED (SEC-4, audit wave 2):
- *     POST returns 503 before any body read or processing — the route
- *     refuses unauthenticated writes rather than accepting them, and the
- *     BE-6 startup warning names the misconfiguration.
+ *     a shared-secret one). Unset keeps the open demo posture ONLY when it
+ *     is explicitly opted into outside production: WEBHOOK_OPEN_POSTURE=1
+ *     (issue #156). Otherwise an unset secret FAILS CLOSED in EVERY runtime
+ *     (SEC-4 extended beyond production): POST returns 503 before any body
+ *     read or processing — the route refuses unauthenticated writes rather
+ *     than accepting them, and the startup warning names the posture.
  *
  * Audit-wave-2 hardening (issues #105 BE-4 / #106 BE-9):
  *   · 64 KB raw-body cap (declared Content-Length precheck + actual byte
@@ -79,12 +95,15 @@ warnIfWebhookSecretUnsetInProduction('api/ussd', 'USSD_WEBHOOK_SECRET')
  *     (in-process map, or db/ratelimit.db when RATE_LIMIT_STORE=sqlite —
  *     see createUssdPinLockout in rate-limit.ts). A correct PIN clears the
  *     count (consecutive-failure semantics).
- *   · PHONE-TAIL PIN FALLBACK IS DROPPED when USSD_WEBHOOK_SECRET is set:
- *     last-4-of-phone is DEMO posture only (anyone who knows the worker's
- *     number can key it). With a real aggregator secret set — i.e. the
- *     operator is running the shared-secret posture — only the stored kiosk
- *     PIN (Worker.pin) resolves a worker. Secret unset → fallback stays
- *     (documented demo posture, unchanged).
+ *   · PHONE-TAIL PIN FALLBACK IS DROPPED unless the open posture is
+ *     explicitly enabled (issue #156, closing the SECURITY_BASELINE :92
+ *     gap): last-4-of-phone is DEMO posture only (anyone who knows the
+ *     worker's number can key it — a 10^4 keyspace identity for attendance
+ *     writes and wage-balance disclosure). It resolves a worker ONLY when
+ *     USSD_WEBHOOK_SECRET is unset AND WEBHOOK_OPEN_POSTURE=1 is set (the
+ *     explicitly chosen open demo posture); otherwise only the stored kiosk
+ *     PIN (Worker.pin) does — secret set (shared-secret posture) or no
+ *     opt-in (the fail-closed default) alike.
  * All rate limiting + lockout use the shared limiter/tracker stores (single
  * instance — see src/backend/lib/rate-limit.ts).
  */
@@ -114,19 +133,25 @@ function ussd(text: string): NextResponse {
 }
 
 /**
- * SEC-4 (audit wave 2): the production fail-closed posture. When
- * NODE_ENV=production and USSD_WEBHOOK_SECRET is unset, POST is refused
+ * SEC-4 (audit wave 2) + issue #156: the fail-closed posture. When
+ * USSD_WEBHOOK_SECRET is unset and the open posture has NOT been explicitly
+ * opted into (WEBHOOK_OPEN_POSTURE=1, non-production only), POST is refused
  * with 503 BEFORE any body read or processing — a missing secret must never
- * mean "accept unauthenticated writes" (real attendance rows) in production.
- * Dev/test/demo runtimes keep the documented open gateway-trust posture
- * exactly (warn-and-accept; vitest runs NODE_ENV=test, which relies on it).
+ * mean "accept unauthenticated writes" (real attendance rows) in ANY
+ * runtime. Production always fails closed without the secret (SEC-4,
+ * unchanged — the opt-in is ignored there); dev/test/demo keep the open
+ * gateway-trust posture only as an explicit choice (vitest runs
+ * NODE_ENV=test and sets WEBHOOK_OPEN_POSTURE=1 in its route fixtures).
  */
 function unconfiguredWebhookSecret(): NextResponse {
   return NextResponse.json(
     {
       error:
-        'USSD_WEBHOOK_SECRET is not configured — this webhook refuses unauthenticated writes in production. ' +
-        'Set the aggregator shared secret (POST then requires X-Signature: lowercase-hex HMAC-SHA256 of the raw request body) and restart the app.',
+        'USSD_WEBHOOK_SECRET is not configured — this webhook refuses unauthenticated writes. ' +
+        'Set the aggregator shared secret (POST then requires X-Signature: lowercase-hex HMAC-SHA256 of the raw request body) and restart the app' +
+        (process.env.NODE_ENV === 'production'
+          ? '.'
+          : ', or explicitly opt into the open demo posture outside production with WEBHOOK_OPEN_POSTURE=1.'),
     },
     { status: 503 },
   )
@@ -165,9 +190,11 @@ interface UssdWorker {
  * last-4 — the same two-step the in-app simulation uses). First match wins;
  * PIN collisions across projects are possible in demo data (honest limit).
  *
- * BE-9 (issue #106): the phone-tail fallback is DEMO posture — when
- * USSD_WEBHOOK_SECRET is set (a real aggregator secret, the shared-secret
- * posture) it is SKIPPED and only the stored kiosk PIN resolves a worker.
+ * BE-9 (issue #106) + issue #156: the phone-tail fallback is DEMO posture —
+ * it resolves a worker ONLY when the open posture is explicitly active
+ * (USSD_WEBHOOK_SECRET unset — a shared-secret posture means kiosk PIN only
+ * — AND WEBHOOK_OPEN_POSTURE=1). Default (no opt-in): kiosk PIN only, the
+ * same identity path the shared-secret posture uses.
  */
 async function resolveWorkerByPin(pin: string): Promise<UssdWorker | null> {
   if (!pin) return null
@@ -178,7 +205,11 @@ async function resolveWorkerByPin(pin: string): Promise<UssdWorker | null> {
     take: 1,
   })
   if (byKioskPin.length > 0) return byKioskPin[0]
-  if (process.env.USSD_WEBHOOK_SECRET) return null // shared-secret posture: kiosk PIN only
+  // Phone-tail fallback: explicitly opted-in open posture ONLY (issue #156).
+  // Secret set → shared-secret posture (kiosk PIN only); no opt-in → the
+  // fail-closed default (kiosk PIN only) — the 10^4 last-4 identity never
+  // silently re-activates.
+  if (process.env.USSD_WEBHOOK_SECRET || !webhookOpenPostureOptedIn()) return null
   const active = await db.worker.findMany({
     where: { active: true },
     select: { id: true, name: true, projectId: true, phone: true },
@@ -254,9 +285,10 @@ function verifyWebhookSignature(req: NextRequest, raw: string): NextResponse | n
 }
 
 export async function POST(req: NextRequest) {
-  // SEC-4 (audit wave 2): production + unset secret → 503, no processing —
-  // FAIL CLOSED. Non-production keeps the open demo posture unchanged.
-  if (process.env.NODE_ENV === 'production' && !process.env.USSD_WEBHOOK_SECRET) {
+  // SEC-4 (audit wave 2) + issue #156: unset secret and no explicit open
+  // posture → 503, no processing — FAIL CLOSED (production always; any other
+  // runtime unless WEBHOOK_OPEN_POSTURE=1 opts into the demo posture).
+  if (unauthenticatedWebhookWritesRefused('USSD_WEBHOOK_SECRET')) {
     return unconfiguredWebhookSecret()
   }
   try {
@@ -298,7 +330,10 @@ export async function POST(req: NextRequest) {
     // PIN-bearing requests carry the worker's identity attempt — throttle them
     // by the CLIENT-IP principal too (W-AUDIT #2: the phoneNumber is
     // caller-supplied and rotates freely, so per-phone alone cannot stop a
-    // 4-digit brute force from one host). No XFF → 'anon' principal (loopback).
+    // 4-digit brute force from one host). Trust-aware since issue #156: no
+    // TRUST_PROXY → clientIpFromHeaders returns '' → the ONE shared 'anon'
+    // bucket (rotating XFF values cannot refresh it); TRUST_PROXY=1 → the
+    // proxy-appended last value (per-client buckets).
     if (isPinAttempt(parts)) {
       const ip = clientIpFromHeaders(req.headers)
       const pinLimited = await enforceRateLimit(
@@ -410,14 +445,20 @@ export async function GET() {
       '*384#*3': 'help text',
     },
     pinResolution:
-      'kiosk PIN (Worker.pin) first, else last 4 digits of the worker phone — ' +
-      'the phone-tail fallback is DEMO posture: it is dropped when USSD_WEBHOOK_SECRET is set ' +
-      '(shared-secret posture → only the stored kiosk PIN resolves)',
+      'kiosk PIN (Worker.pin) first; the last-4-of-phone fallback resolves ONLY in the ' +
+      'explicitly opted-in open posture (secret unset + WEBHOOK_OPEN_POSTURE=1) — secret set ' +
+      '(shared-secret posture) or no opt-in → the stored kiosk PIN only (issue #156)',
     rateLimit:
       '20 requests/min/phone + 40 PIN-attempts/min per client IP + 5 wrong PINs/phone ' +
-      'within 15 min → 15-minute line lockout (token bucket / tracker store shared per host by default, issue #158)',
+      'within 15 min → 15-minute line lockout (token bucket / tracker store shared per host by default, issue #158). ' +
+      'The per-IP key is trust-aware (issue #156): TRUST_PROXY unset → all callers share the one anon bucket ' +
+      '(a forgeable x-forwarded-for is ignored); TRUST_PROXY=1 → the proxy-appended value',
     auth: 'unauthenticated by design (gateway-trust model); the worker PIN is the in-session identity',
-    signature: 'USSD_WEBHOOK_SECRET (optional env): when set, POST requires X-Signature — lowercase-hex HMAC-SHA256 of the raw request body under the secret; unset = open demo posture in dev/test only; in production (NODE_ENV=production) an unset secret FAILS CLOSED — POST returns 503 with a configuration error before any processing (SEC-4)',
+    signature:
+      'USSD_WEBHOOK_SECRET (optional env): when set, POST requires X-Signature — lowercase-hex HMAC-SHA256 of the raw request body under the secret. ' +
+      'Unset FAILS CLOSED in EVERY runtime unless WEBHOOK_OPEN_POSTURE=1 explicitly opts into the open demo posture OUTSIDE production ' +
+      '(issue #156): production + unset → 503 always (SEC-4, the opt-in is ignored); non-prod + unset + no opt-in → 503; ' +
+      'non-prod + unset + opt-in → open posture (warn-and-accept, documented demo posture)',
     bodyCap: '64 KB raw (Content-Length precheck + actual byte count, before JSON.parse) → 400 beyond',
     honest:
       'No SMS/USSD aggregator is wired to this route — it speaks an Africa\'s Talking-style contract so one can be attached later. Attendance dispatches through the same domain actions (applyAction) as the app UI; every menu response is footered "MjengoOS sim".',

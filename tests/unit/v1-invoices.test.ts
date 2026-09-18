@@ -274,6 +274,12 @@ const VERDICT_DEFAULT = {
 }
 
 beforeEach(() => {
+  // Trusted-proxy fixture (issue #156): these route tests isolate rate-limit
+  // buckets with per-test unique x-forwarded-for values, which are distinct
+  // principals only behind TRUST_PROXY=1 — the default posture now ignores
+  // the forgeable header and shares one anon bucket (pinned in
+  // tests/unit/rate-limit.test.ts). Restored in afterEach.
+  process.env.TRUST_PROXY = '1'
   vi.clearAllMocks()
   h.session = null
   delete process.env.NEXT_FLAGS_OFF
@@ -283,6 +289,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  delete process.env.TRUST_PROXY
   delete process.env.NEXT_FLAGS_OFF
   invalidateFlagCache()
   vi.useRealTimers()
