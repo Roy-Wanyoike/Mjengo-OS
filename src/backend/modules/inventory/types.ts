@@ -101,6 +101,7 @@ export interface BoqLineRow {
   materialName: string
   unit: string
   qty: number
+  /** Estimated unit price in KSh — cents in the column, ÷100 at this DTO boundary (#285). */
   estUnitPrice: number
   category: string | null
   note: string | null
@@ -112,6 +113,7 @@ export interface BoqRow {
   version: number
   status: string
   lines: BoqLineRow[]
+  /** Σ qty × estUnitPrice in KSh — accumulated in integer cents (mulQtyCents/sumCents), ÷100 at this DTO boundary (#285). */
   total: number
   createdAt: string
 }

@@ -127,6 +127,22 @@ export function signedKesToCents(kes: number): Cents {
 }
 
 /**
+ * Convert an OPTIONAL non-negative KSh price at a write boundary to cents
+ * (added for issue #285 — BoqLine.estUnitPrice). The column is NOT nullable,
+ * so "no price on file" is represented by ZERO: null / undefined / 0 / an
+ * empty (or whitespace-only) string all snap to 0n — exactly the lenience
+ * the legacy `Number(x ?? 0)` writer had. Every other value must parse as a
+ * non-negative ≤2-dp KSh amount (number or numeric string — the offline
+ * outbox replays JSON) or the shared honest error is thrown. Booleans,
+ * objects and >2-dp fractions are refused instead of silently coerced.
+ */
+export function nonNegativeKesToCents(v: unknown, field = 'estUnitPrice'): Cents {
+  if (v === null || v === undefined || v === 0) return 0n
+  if (typeof v === 'string' && v.trim() === '') return 0n
+  return assertNonNegativeMoneyCents(v, field)
+}
+
+/**
  * Cents → KSh number for API/UI responses. Exact for every value within the
  * platform bound (1e11 cents ≪ 2^53): cents/100 with ≤2 dp is exactly
  * representable… as a decimal, and the returned float is the closest

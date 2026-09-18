@@ -20,6 +20,7 @@
 // by design), inside sane bounds. unitCost (where accepted) is finite ≥ 0.
 
 import { db } from '@/backend/lib/db'
+import { nonNegativeKesToCents } from '@/backend/lib/money'
 import type { TxClient } from '@/backend/modules/ledger/service'
 import { derivedClosingQty } from './repository'
 
@@ -448,6 +449,13 @@ export async function postCountAdjustments(projectId: string, p: any): Promise<P
 
 // ---- BOQ ----
 
+// #285 (twin of #282, different column): BoqLine.estUnitPrice is integer
+// CENTS end-to-end. The action payload contract stays KSh (the boq-card
+// price input — "Est. KSh/u"), so BOTH writers convert at this boundary
+// through nonNegativeKesToCents (nullish/empty → 0n, >2-dp/negative/garbage
+// refused with the shared honest error). Readers (loadBoqSlice, the intel
+// BOQ estimate, jobs) already assume cents and stay untouched.
+
 export async function createBoq(projectId: string, p: any) {
   const count = await db.boq.count({ where: { projectId } })
   const boq = await db.boq.create({
@@ -461,7 +469,8 @@ export async function createBoq(projectId: string, p: any) {
           materialName: String(l.materialName),
           unit: String(l.unit ?? 'unit'),
           qty: Number(l.qty ?? 1),
-          estUnitPrice: Number(l.estUnitPrice ?? 0),
+          // #285: KSh in the payload → integer cents in the column.
+          estUnitPrice: nonNegativeKesToCents(l.estUnitPrice),
           category: l.category ?? null,
           note: l.note ?? null,
         },
@@ -478,7 +487,8 @@ export async function upsertBoqLine(projectId: string, p: any) {
     materialName: String(p.materialName),
     unit: String(p.unit ?? 'unit'),
     qty: Number(p.qty ?? 1),
-    estUnitPrice: Number(p.estUnitPrice ?? 0),
+    // #285: KSh in the payload → integer cents in the column.
+    estUnitPrice: nonNegativeKesToCents(p.estUnitPrice),
     category: p.category ?? null,
     note: p.note ?? null,
   }

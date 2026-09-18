@@ -8,7 +8,10 @@
  *  · cents ↔ KSh conversion round-trips every representable amount;
  *  · sums are exact for adversarial float-drift inputs (0.1+0.2 class);
  *  · qty × unit price is exact with half-up rounding at the half-cent;
- *  · formatting is stable (no float artifacts).
+ *  · formatting is stable (no float artifacts);
+ *  · optional non-negative prices (the #285 BoqLine.estUnitPrice contract)
+ *    convert at write boundaries: nullish/empty/zero → 0n, everything
+ *    unverifiable refused with the honest error.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -19,6 +22,7 @@ import {
   centsToKesString,
   fmtKes,
   mulQtyCents,
+  nonNegativeKesToCents,
   parseMoneyCents,
   parseQtyMilli,
   parseSignedMoneyCents,
@@ -80,6 +84,34 @@ describe('parseSignedMoneyCents — variation-order budget impact', () => {
     expect(parseSignedMoneyCents(-0.005)).toBeNull()
     expect(parseSignedMoneyCents(-(MAX_MONEY_KES + 0.01))).toBeNull()
     expect(parseSignedMoneyCents(-MAX_MONEY_KES)).toBe(-MAX_MONEY_CENTS)
+  })
+})
+
+describe('nonNegativeKesToCents — optional price fields at write boundaries (#285)', () => {
+  it('converts every valid non-negative KSh value (number or numeric string)', () => {
+    expect(nonNegativeKesToCents(650)).toBe(65000n) // the #285 repro: KSh 650/u cement
+    expect(nonNegativeKesToCents(3250.5)).toBe(325050n)
+    expect(nonNegativeKesToCents('90.25')).toBe(9025n) // outbox replays JSON
+    expect(nonNegativeKesToCents('0.00')).toBe(0n)
+    expect(nonNegativeKesToCents(MAX_MONEY_KES)).toBe(MAX_MONEY_CENTS)
+  })
+
+  it('treats nullish / empty / zero as "no price on file" → 0n (legacy Number(x ?? 0) lenience)', () => {
+    expect(nonNegativeKesToCents(undefined)).toBe(0n)
+    expect(nonNegativeKesToCents(null)).toBe(0n)
+    expect(nonNegativeKesToCents(0)).toBe(0n)
+    expect(nonNegativeKesToCents('')).toBe(0n)
+    expect(nonNegativeKesToCents('   ')).toBe(0n)
+  })
+
+  it('refuses what integer cents cannot represent — with the field-named honest error', () => {
+    for (const bad of [-650, 650.555, NaN, Infinity, true, { kes: 650 }, ['650']]) {
+      expect(() => nonNegativeKesToCents(bad)).toThrow('estUnitPrice: must be a non-negative number')
+    }
+    // The bound rule rides through: a price above the platform cap refuses.
+    expect(() => nonNegativeKesToCents(MAX_MONEY_KES + 0.01)).toThrow(/at most 1000000000/)
+    // The field name is a parameter — callers name their own payload field.
+    expect(() => nonNegativeKesToCents(-1, 'unitPrice')).toThrow('unitPrice: must be a non-negative number')
   })
 })
 
