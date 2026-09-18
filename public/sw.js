@@ -399,3 +399,28 @@ self.addEventListener('notificationclick', (event) => {
     })(),
   )
 })
+
+// ---------------- message (SKIP_WAITING — issue #148 staleness cue) --------
+//
+// The update prompt (src/frontend/pwa/sw-update-prompt.tsx over the watch in
+// sw-update-watch.ts) asks a WAITING worker to take over NOW: the user
+// clicked Reload, so the page posts { type: 'SKIP_WAITING' } at the worker,
+// this handler calls skipWaiting(), and the page reloads on controllerchange.
+// The install handler above ALREADY skipWaiting()'s (v3 behavior — a new
+// deploy activates as soon as its install finishes), so a worker is normally
+// active long before the click and the prompt just reloads; this is the
+// belt-and-braces path for one still waiting when the click lands.
+// isSkipWaitingMessage semantics (sw-handlers.ts, unit-tested) mirrored
+// inline — a static script cannot import the module, and any OTHER message
+// posted at the worker is ignored.
+
+self.addEventListener('message', (event) => {
+  if (
+    event.data !== null &&
+    typeof event.data === 'object' &&
+    !Array.isArray(event.data) &&
+    event.data.type === 'SKIP_WAITING'
+  ) {
+    self.skipWaiting()
+  }
+})

@@ -5,6 +5,7 @@ import "./globals.css";
 import { Toaster } from "@/frontend/ui/sonner";
 import { AuthSessionProvider } from "@/frontend/auth/session-provider";
 import { I18nProvider } from "@/frontend/i18n/provider";
+import { SwUpdatePrompt } from "@/frontend/pwa/sw-update-prompt";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -41,9 +42,10 @@ export default async function RootLayout({
 }>) {
   // Per-request CSP nonce (issue #178): src/proxy.ts stamps it on every
   // request; Next applies it to the scripts IT renders, and this layout passes
-  // it to its one hand-written inline script below so the enforced CSP never
-  // blocks the SW registration. Reading headers() makes / dynamic — inherent
-  // to nonce-based CSP (a per-request nonce cannot be statically cached).
+  // it to its one hand-written inline script below (the pre-hydration <html
+  // lang> flip) so the enforced CSP never blocks it. Reading headers() makes
+  // / dynamic — inherent to nonce-based CSP (a per-request nonce cannot be
+  // statically cached).
   const nonce = (await headers()).get("x-nonce") ?? undefined;
 
   return (
@@ -72,19 +74,17 @@ export default async function RootLayout({
             SAME `mjengo-os-settings` store the Settings tab writes. */}
         <I18nProvider>
           <AuthSessionProvider>{children}</AuthSessionProvider>
+          {/* Service-worker registration + staleness cue (PWA · issue #148 /
+              audit FE-11). /api/* is never cached — see public/sw.js. The
+              registration moved here from the old nonce'd inline script into
+              a unit-tested client module (src/frontend/pwa/) that also
+              watches for a new worker installing under the running tab and
+              toasts "app updated — reload" — an inline script could never
+              show that prompt (no React, no toast system, no i18n). Inside
+              I18nProvider because the prompt needs useT(); renders null. */}
+          <SwUpdatePrompt />
         </I18nProvider>
         <Toaster richColors position="top-center" />
-        {/* Service-worker registration (PWA). /api/* is never cached — see
-            public/sw.js. Registered on window load so it never competes with
-            first paint, and guarded so non-SW browsers skip it. Like the
-            lang-sync script above, it carries the CSP nonce. */}
-        <script
-          nonce={nonce}
-          dangerouslySetInnerHTML={{
-            __html:
-              "if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/sw.js').catch(function(e){console.warn('SW registration skipped:',e)})})}",
-          }}
-        />
       </body>
     </html>
   );

@@ -3750,4 +3750,14 @@ export const enDict = {
   'uikit.reassurance': 'Nothing was lost — the rest of MjengoOS keeps working.',
   'uikit.noRows': 'No rows to show',
   'uikit.tableRegion': '{columns} — scrollable rows',
+
+  // --------------------------------------------- #148 · SW staleness cue
+  // The "app updated — reload" toast (src/frontend/pwa/sw-update-prompt.tsx),
+  // shown when a new service worker finishes installing under the running
+  // tab. Kept short: title + body render inside a sonner toast, reload /
+  // later inside its action row.
+  'sw.update.title': 'A new version is ready',
+  'sw.update.body': 'Reload to update MjengoOS.',
+  'sw.update.reload': 'Reload',
+  'sw.update.later': 'Later',
 } satisfies Dict

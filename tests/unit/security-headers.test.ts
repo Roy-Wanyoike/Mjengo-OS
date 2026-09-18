@@ -423,7 +423,7 @@ describe('proxy config — the matcher skips', () => {
 // ------------------------------------------------- layout nonce threading
 
 describe('root layout — the nonce reaches the one hand-written inline script', () => {
-  it('reads x-nonce from the request headers and passes it to the SW-registration script (source pin)', () => {
+  it('reads x-nonce from the request headers and passes it to the pre-hydration lang-sync script (source pin)', () => {
     expect(LAYOUT_SRC).toContain('headers()).get("x-nonce")')
     expect(LAYOUT_SRC).toMatch(/<script\s+nonce=\{nonce\}/)
   })
