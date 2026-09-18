@@ -15,7 +15,7 @@
 | SEC-4 | USSD/WhatsApp webhooks fail-open when secrets unset | P2 | `fix/audit2-security` @ c8635ad | +503 fail-closed pins |
 | FE-1/MD-1 | Demo quick-fill credentials ship in every bundle | **P1**/Med | `fix/audit2-security` @ 82564f8 | +static gate pin |
 | DB-2 | consumeStock persisted before negative-stock throw; hardcoded closingQty 0; non-atomic transfers | **High** | `fix/audit2-data` @ 638f8aa | +atomicity suite |
-| DB-6/7/8 | No unique (workerId,date); non-unique PO/invoice codes; 1 index in whole DB | Med | `fix/audit2-data` @ 5b0caad (migration `10_integrity_constraints`) | +real-sqlite constraint tests |
+| DB-6/7/8 | No unique (workerId,date); non-unique PO/invoice codes; 1 index in whole DB | Med | `fix/audit2-data` @ 5b0caad (migration `10_integrity_constraints`) | +real-sqlite constraint tests — DB-6 fully closed 2026-09-19 by #144 (SQL SUM balances + migration `15_hot_path_indexes`) |
 | DB-4 | v1 money mutations bypassed the audit trail | Med-High | `fix/audit2-data` @ 35bbb33 | +audit pins ×4 routes |
 
 ## 2. Proposed issues — not started this wave (prioritized)

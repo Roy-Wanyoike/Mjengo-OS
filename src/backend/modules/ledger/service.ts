@@ -278,18 +278,55 @@ export async function reverseLedgerTransaction(txnId: string, reason: string, po
 }
 
 /**
+ * Σdebit / Σcredit for one account, computed IN SQL (issue #144 — the
+ * aggregation half of DB-6). One grouped SUM over the LedgerEntry(accountId)
+ * index (migration 10): constant memory, index-backed, and the cost stops
+ * growing with account age. Before #144 every balance read loaded the
+ * account's ENTIRE entry history into JS and reduced it — O(history) rows
+ * crossed the seam per read on a ledger that is append-only by design.
+ *
+ * Accepts the db client OR a transaction client — the wallet ops call it on
+ * the SAME tx client as their posting so the in-transaction balance re-check
+ * keeps seeing uncommitted rows (race safety unchanged).
+ *
+ * Semantics preserved bit-for-bit from the pre-#144 JS reduce: BigInt cents,
+ * every entry counts (no status/normalSide filter — the old reduce summed
+ * all rows), sides other than debit/credit are ignored, missing group = 0.
+ */
+export async function accountSideSums(
+  client: Prisma.TransactionClient,
+  accountId: string,
+): Promise<{ debit: Cents; credit: Cents }> {
+  const groups = await client.ledgerEntry.groupBy({
+    by: ['side'],
+    _sum: { amount: true },
+    where: { accountId },
+  })
+  let debit = 0n
+  let credit = 0n
+  for (const g of groups) {
+    if (g.side === 'debit') debit = g._sum.amount ?? 0n
+    else if (g.side === 'credit') credit = g._sum.amount ?? 0n
+  }
+  return { debit, credit }
+}
+
+/**
  * Derived balance for an account — the ONLY way balance is known (spec §39).
  * Returns KSh CENTS (issue #122): entries sum exactly in bigint; callers
- * convert to KSh only at the API/UI boundary (centsToKes).
+ * convert to KSh only at the API/UI boundary (centsToKes). The Σdebit/Σcredit
+ * legs come from SQL SUM aggregation (issue #144); the sign convention is the
+ * same one the old in-JS reduce used, keyed on the account's kind.
  */
 export async function derivedBalance(accountCode: string): Promise<Cents> {
+  // Account row only — NO `include: { entries: true }` (issue #144: balance
+  // paths never load unbounded entry history into JS).
   const account = await db.ledgerAccount.findUnique({
     where: { code: accountCode },
-    include: { entries: true },
+    select: { id: true, kind: true },
   })
   if (!account) return 0n
-  const debit = sumCents(account.entries.filter((e) => e.side === 'debit').map((e) => e.amount))
-  const credit = sumCents(account.entries.filter((e) => e.side === 'credit').map((e) => e.amount))
+  const { debit, credit } = await accountSideSums(db, account.id)
   return account.kind === 'asset' || account.kind === 'expense' ? debit - credit : credit - debit
 }
 

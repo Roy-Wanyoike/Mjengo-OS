@@ -171,6 +171,35 @@ vi.mock('@/backend/lib/db', () => {
           return found ? structuredClone(found) : null
         },
       },
+      // The SQL-SUM balance path (issue #144): derivedBalance aggregates
+      // Σdebit/Σcredit via ledgerEntry.groupBy over the account's entries —
+      // same fixture rows the old in-JS reduce consumed.
+      ledgerEntry: {
+        async groupBy({
+          by,
+          _sum,
+          where,
+        }: {
+          by: string[]
+          _sum?: { amount?: boolean }
+          where?: { accountId?: string }
+        }) {
+          const account = ESCROW_ACCOUNTS.find((a) => a.id === where?.accountId)
+          const rows = (account?.entries ?? []) as Array<Record<string, unknown>>
+          const groups = new Map<string, Record<string, unknown>>()
+          for (const e of rows) {
+            const key = by.map((f) => e[f]).join('\u0000')
+            let g = groups.get(key)
+            if (!g) {
+              g = Object.fromEntries(by.map((f) => [f, e[f]]))
+              if (_sum?.amount) g._sum = { amount: 0n }
+              groups.set(key, g)
+            }
+            if (_sum?.amount) g._sum.amount = (g._sum.amount as bigint) + (e.amount as bigint)
+          }
+          return [...groups.values()]
+        },
+      },
     },
   }
 })

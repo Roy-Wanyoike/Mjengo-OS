@@ -23,6 +23,7 @@ import {
   ensureAccount,
   ensureAccountTx,
   derivedBalance,
+  accountSideSums,
   cashAccountForMethod,
   type TxClient,
 } from '@/backend/modules/ledger/service'
@@ -624,10 +625,11 @@ export async function depositWallet(projectId: string, p: any) {
     })
     // Derived on the SAME tx client — uncommitted entries are visible here,
     // so the returned balance reflects this deposit (liability: credits − debits).
+    // SQL SUM aggregation (issue #144): one grouped Σdebit/Σcredit over the
+    // LedgerEntry(accountId) index instead of loading the full entry history
+    // into JS — constant memory, still inside the transaction.
     const account = await ensureAccountTx(tx, `WALLET:${wallet.code}`)
-    const entries = await tx.ledgerEntry.findMany({ where: { accountId: account.id } })
-    const debit = sumCents(entries.filter((e) => e.side === 'debit').map((e) => e.amount))
-    const credit = sumCents(entries.filter((e) => e.side === 'credit').map((e) => e.amount))
+    const { debit, credit } = await accountSideSums(tx, account.id)
     return { ledgerRef: ledgerTxn.ref, balance: credit - debit }
   })
   return { walletCode: wallet.code, ledgerRef, balance: centsToKes(balance) }
@@ -681,11 +683,11 @@ export async function withdrawWallet(projectId: string, p: any) {
   // distinct finance users never collide into one replay.
   const idempotencyKey = p.idempotencyKey ?? withdrawNaturalKey(wallet, amount, p, actor.name)
   const { ledgerRef, balance } = await db.$transaction(async (tx) => {
-    // Balance re-checked INSIDE the transaction — no overdraft race.
+    // Balance re-checked INSIDE the transaction — no overdraft race. The
+    // re-check is a SQL SUM aggregate on the SAME tx client (issue #144):
+    // uncommitted rows stay visible (identical read set, constant memory).
     const account = await ensureAccountTx(tx, `WALLET:${wallet.code}`)
-    const entries = await tx.ledgerEntry.findMany({ where: { accountId: account.id } })
-    const debit = sumCents(entries.filter((e) => e.side === 'debit').map((e) => e.amount))
-    const credit = sumCents(entries.filter((e) => e.side === 'credit').map((e) => e.amount))
+    const { debit, credit } = await accountSideSums(tx, account.id)
     const current = credit - debit // liability account
     // Replay check BEFORE the balance check: a retried withdrawal that
     // (nearly) emptied the wallet must return the ORIGINAL result, not
@@ -744,10 +746,10 @@ export async function transferWallet(projectId: string, p: any) {
   const ledgerProjectId = from.ownerType === 'project' ? projectId : null
   const idempotencyKey = p.idempotencyKey ?? transferNaturalKey(from, to, amount, p, actor.name)
   const { ledgerRef } = await db.$transaction(async (tx) => {
+    // Same in-tx SQL SUM re-check as withdraw (issue #144) — race safety
+    // unchanged: the aggregate runs on the tx client, inside the transaction.
     const account = await ensureAccountTx(tx, `WALLET:${from.code}`)
-    const entries = await tx.ledgerEntry.findMany({ where: { accountId: account.id } })
-    const debit = sumCents(entries.filter((e) => e.side === 'debit').map((e) => e.amount))
-    const credit = sumCents(entries.filter((e) => e.side === 'credit').map((e) => e.amount))
+    const { debit, credit } = await accountSideSums(tx, account.id)
     const current = credit - debit
     // Replay check BEFORE the balance check (same rule as withdraw).
     const prior = idempotencyKey
@@ -1010,11 +1012,34 @@ export async function listWallets(projectId?: string) {
     where: projectId ? { OR: [{ ownerId: projectId, ownerType: 'project' }, { ownerType: { not: 'project' } }] } : undefined,
     orderBy: { code: 'asc' },
   })
-  const accounts = await db.ledgerAccount.findMany({ where: { ownerType: 'wallet' }, include: { entries: true } })
+  // SQL SUM aggregation (issue #144): account rows (bounded — one per wallet,
+  // never per entry) + ONE grouped Σdebit/Σcredit per (account, side) — the
+  // pre-#144 shape loaded every wallet-owned account with its ENTIRE entry
+  // history (`include: { entries: true }`), so the list view materialized
+  // the global entry count in memory on every render.
+  const accounts = await db.ledgerAccount.findMany({
+    where: { ownerType: 'wallet' },
+    select: { id: true, code: true, ownerId: true },
+  })
+  const sums = accounts.length
+    ? await db.ledgerEntry.groupBy({
+        by: ['accountId', 'side'],
+        _sum: { amount: true },
+        where: { accountId: { in: accounts.map((a) => a.id) } },
+      })
+    : []
+  const sumsByAccount = new Map<string, { debit: Cents; credit: Cents }>()
+  for (const g of sums) {
+    const s = sumsByAccount.get(g.accountId) ?? { debit: 0n, credit: 0n }
+    if (g.side === 'debit') s.debit = g._sum.amount ?? 0n
+    else if (g.side === 'credit') s.credit = g._sum.amount ?? 0n
+    sumsByAccount.set(g.accountId, s)
+  }
   return wallets.map((w) => {
     const account = accounts.find((a) => a.ownerId === w.id)
-    const debit = account ? sumCents(account.entries.filter((e) => e.side === 'debit').map((e) => e.amount)) : 0n
-    const credit = account ? sumCents(account.entries.filter((e) => e.side === 'credit').map((e) => e.amount)) : 0n
+    const s = account ? sumsByAccount.get(account.id) : undefined
+    const debit = s?.debit ?? 0n
+    const credit = s?.credit ?? 0n
     return {
       id: w.id,
       code: w.code,

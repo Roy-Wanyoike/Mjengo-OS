@@ -358,6 +358,10 @@ model AuditEvent {
   userAgent String? // request user-agent
   requestId String? // correlation id
   createdAt DateTime @default(now())
+
+  // DB-6 hot path (issue #144, migration 15): the project timeline / mjengo
+  // payload / audit keyset all filter projectId and order createdAt DESC.
+  @@index([projectId, createdAt])
 }
 
 // MjengoPay — milestone-based escrow (simulated money, real workflow).
@@ -491,6 +495,13 @@ model Notification {
   read           Boolean   @default(false)
   readAt         DateTime? // when the target read it (analytics / digest)
   createdAt      DateTime  @default(now())
+
+  // DB-6 hot paths (issue #144, migration 15): the list/timeline reads filter
+  // projectId and order createdAt DESC (createdAt also carries the API's
+  // `before` keyset cursor); the unread badge + markRead updateMany filter
+  // (projectId, read).
+  @@index([projectId, createdAt])
+  @@index([projectId, read])
 }
 
 // Authentication (NextAuth.js v4 credentials + JWT sessions)
@@ -1314,6 +1325,11 @@ model JobRecord {
   // exponential backoff, then an honest terminal 'failed' — no silent loss.
   maxAttempts   Int       @default(3)
   lastAttemptAt DateTime?
+
+  // DB-6 hot path (issue #144, migration 15): runDueJobs drains
+  // status IN (queued, retrying) AND runAt <= now, ordered by runAt —
+  // every drain call (the 5-min drainer + on-demand POSTs) hits this.
+  @@index([status, runAt])
 }
 
 // Feature flags (spec §81): ai_progress, ai_voice, wallet, marketplace,
