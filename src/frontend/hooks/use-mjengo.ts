@@ -191,6 +191,18 @@ function normalizeOutboxItem(item: OutboxItem): OutboxItem {
   }
 }
 
+// Exported for tests (issue #183 — the issue's sanctioned seam): the outbox
+// conflict chain's PURE halves (stampBaseVersion / reduceLocal /
+// bumpLocalAttendanceVersion / normalizeOutboxItem) are unit-pinned directly.
+// No other module imports them; the export exists so the client-side
+// version-stamping chain is tested without going through fetch stubs.
+export {
+  stampBaseVersion,
+  reduceLocal,
+  bumpLocalAttendanceVersion,
+  normalizeOutboxItem,
+}
+
 /** Retention cap for the synced/resolved history — the live queue is never pruned. */
 const SYNC_HISTORY_CAP = 50
 
@@ -352,10 +364,18 @@ function bumpLocalAttendanceVersion(w: WorkerWithAttendance): void {
 /**
  * Stamp the client's known entity version (issue "Outbox conflict metadata +
  * entity versions") onto a queued offline action's payload: task.* by row id,
- * attendance.* by the worker's day-row, the bulk muster roll per record. The
- * server REJECTS a flush as 'stale-version' when the row moved on while the
- * device was offline — never a silent last-write-wins overwrite. An absent
- * stamp (row unknown / pre-version local data) applies exactly as today.
+ * attendance.* by the worker's day-row — EXCEPT attendance.override, which is
+ * keyed by the attendance ROW ID (mirroring the server's detectStaleVersion
+ * row-id path) — and the bulk muster roll per record. The server REJECTS a
+ * flush as 'stale-version' when the row moved on while the device was offline
+ * — never a silent last-write-wins overwrite. An absent stamp (row unknown /
+ * pre-version local data) applies exactly as today.
+ *
+ * #183 audit: every type in the server's versioned set
+ * (VERSIONED_TASK_TYPES × 6 + VERSIONED_ATTENDANCE_TYPES × 5) is stamped
+ * here. attendance.override was the one gap — an offline override queued
+ * without baseVersion sailed past detectStaleVersion (null) and applied
+ * silently, i.e. last-write-wins for exactly that action type.
  */
 function stampBaseVersion(data: ProjectPayload, type: string, payload: any): any {
   if (!payload || typeof payload !== 'object') return payload
@@ -364,18 +384,37 @@ function stampBaseVersion(data: ProjectPayload, type: string, payload: any): any
     if (task && typeof task.version === 'number') return { ...payload, baseVersion: task.version }
     return payload
   }
-  if (type === 'attendance.record' && typeof payload.records === 'string') {
-    try {
-      const records = JSON.parse(payload.records)
-      if (Array.isArray(records)) {
-        const stamped = records.map((r: any) => {
-          const v = localAttendanceVersion(data, r?.workerId)
-          return typeof v === 'number' ? { ...r, baseVersion: v } : r
-        })
-        return { ...payload, records: JSON.stringify(stamped) }
+  if (type === 'attendance.override' && payload.id) {
+    // Row-id path (#183): the server versions attendance.override against the
+    // row it targets — stamp the client's known version for THAT row so an
+    // offline override is rejected when the row moved on.
+    const row = data.workers
+      .flatMap((w) => w.attendances)
+      .find((a) => a.id === payload.id) as { version?: number } | undefined
+    if (row && typeof row.version === 'number') return { ...payload, baseVersion: row.version }
+    return payload
+  }
+  if (type === 'attendance.record') {
+    // Bulk muster roll: per-record baseVersion for the worker's today-row.
+    // The server accepts records as a JSON string OR an array (trust.ts /
+    // detectStaleVersion both parse either shape) — stamp whichever arrives
+    // and preserve the payload's original shape on the wire.
+    let records = payload.records
+    if (typeof records === 'string') {
+      try {
+        records = JSON.parse(records)
+      } catch {
+        // malformed records — the server answers the honest parse error; send as-is
       }
-    } catch {
-      // malformed records — the server answers the honest parse error; send as-is
+    }
+    if (Array.isArray(records)) {
+      const stamped = records.map((r: any) => {
+        const v = localAttendanceVersion(data, r?.workerId)
+        return typeof v === 'number' ? { ...r, baseVersion: v } : r
+      })
+      return typeof payload.records === 'string'
+        ? { ...payload, records: JSON.stringify(stamped) }
+        : { ...payload, records: stamped }
     }
     return payload
   }
@@ -500,6 +539,113 @@ function reduceLocal(data: ProjectPayload, type: string,
         if (!w.todayStatus.status) d.summary.fundisToday += payload.status === 'absent' ? 0 : 1
         w.todayStatus = { ...w.todayStatus, status: payload.status, wage, paid: false }
         d.summary.wagesToday += wage - prevWage
+      }
+      break
+    }
+    case 'attendance.record': {
+      // Bulk muster roll (#183 adjacent gap): mirror the trust applier — a
+      // record whose status already matches the local today-row is a NO-OP
+      // (evidence protection: the server leaves the row untouched, no bump),
+      // a different status corrects the row (status, wage, manager-reported)
+      // and bumps the version.
+      let records = payload.records
+      if (typeof records === 'string') {
+        try { records = JSON.parse(records) } catch { records = null }
+      }
+      if (Array.isArray(records)) {
+        for (const r of records) {
+          const w = d.workers.find((x) => x.id === r?.workerId)
+          if (!w) continue
+          const status = typeof r?.status === 'string' ? r.status : 'present'
+          if (w.todayStatus.status === status) continue
+          bumpLocalAttendanceVersion(w)
+          const prevWage = w.todayStatus.wage
+          const wage = status === 'present' ? w.dailyRate : status === 'half_day' ? w.dailyRate / 2 : 0
+          if (!w.todayStatus.status) {
+            d.summary.fundisToday += status === 'absent' ? 0 : 1
+            w.todayStatus = {
+              ...w.todayStatus,
+              checkIn: status === 'absent' || status === 'excused' ? null : new Date().toISOString(),
+            }
+          }
+          w.todayStatus = { ...w.todayStatus, status, wage, paid: false, method: 'manager', verification: 'reported' }
+          // Keep the local day-row itself in step (the Fundis week strip
+          // renders from w.attendances, not just todayStatus).
+          const row = w.attendances.find((a) => a.date === todayEAT()) as
+            | { status?: string; wage?: number; verification?: string }
+            | undefined
+          if (row) {
+            row.status = status
+            row.wage = wage
+            row.verification = 'reported'
+          }
+          d.summary.wagesToday += wage - prevWage
+        }
+      }
+      break
+    }
+    case 'attendance.exception': {
+      // Exception (#183 adjacent gap): the trust applier marks the day-row
+      // verification 'exception' (+ reason) — creating it as present at full
+      // wage when the worker has no row yet.
+      const w = d.workers.find((x) => x.id === payload.workerId)
+      if (w) {
+        bumpLocalAttendanceVersion(w)
+        if (!w.todayStatus.status) {
+          d.summary.fundisToday += 1
+          const prevWage = w.todayStatus.wage
+          w.todayStatus = { ...w.todayStatus, status: 'present', checkIn: new Date().toISOString(), wage: w.dailyRate, method: 'manager' }
+          d.summary.wagesToday += w.dailyRate - prevWage
+        }
+        const reason = typeof payload.reason === 'string' ? payload.reason : null
+        w.todayStatus = {
+          ...w.todayStatus,
+          verification: 'exception',
+          exceptionReason: reason,
+        }
+        // The local day-row carries the exception badge too (week strip).
+        const row = w.attendances.find((a) => a.date === todayEAT()) as
+          | { verification?: string; exceptionReason?: string | null }
+          | undefined
+        if (row) {
+          row.verification = 'exception'
+          row.exceptionReason = reason
+        }
+      }
+      break
+    }
+    case 'attendance.override': {
+      // Override (#183): row-id keyed — mirror the trust applier's status
+      // change onto the local row, and onto todayStatus when the row is the
+      // worker's today-row, so an offline override shows optimistically in
+      // the Fundis tab instead of only as a queued toast.
+      const w = d.workers.find((x) => x.attendances.some((a) => a.id === payload.id))
+      if (w) {
+        const row = w.attendances.find((a) => a.id === payload.id) as
+          | { version?: number; date?: string; status?: string; wage?: number }
+          | undefined
+        if (row) {
+          const known = row.version
+          row.version = (typeof known === 'number' ? known : 1) + 1
+          const wage = payload.to === 'present' ? w.dailyRate : payload.to === 'half_day' ? w.dailyRate / 2 : 0
+          row.status = payload.to
+          row.wage = wage
+          if (row.date === todayEAT()) {
+            const prevWage = w.todayStatus.wage
+            w.todayStatus = {
+              ...w.todayStatus,
+              status: payload.to,
+              wage,
+              paid: false,
+              // A manager override of an exception row is reported evidence —
+              // except excused, which sanctions the absence (applier rule).
+              ...(w.todayStatus.verification === 'exception' && payload.to !== 'excused'
+                ? { verification: 'reported' }
+                : {}),
+            }
+            d.summary.wagesToday += wage - prevWage
+          }
+        }
       }
       break
     }
