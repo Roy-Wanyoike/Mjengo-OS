@@ -170,6 +170,28 @@ closed with a locked card for any other session role. The route is now in
 the OpenAPI document (the one non-v1 mutation surface there — documented
 because its review gate *is* the "AI assists, humans decide" control).
 
+**Global search (`/api/search`, issue #163 / audit API-12).** The ⌘K
+palette's fan-out search pushes its LIKE **into the SQL layer**: every source
+query (projects, parcels, workers, suppliers, catalog items, material
+requests, purchase orders, transactions, invoices, notifications — ten
+tables) carries the sanitized query as Prisma `contains` (SQLite `LIKE`,
+ASCII case-insensitive by default) with the same `take: 300` bound,
+recent-first where a timestamp exists. The pre-#163 mechanism loaded each
+table's 300 most-recent **raw** rows and filtered in memory — a matching row
+outside that recency window was silently missed (issue #166 additionally
+found the projects window inverted, keeping the oldest 300; fixed there).
+With the pushdown the bound caps **matches** per table (the ≤300
+most-recent matches): an exact-name hit is found at any age, a miss needs
+>300 matches for one query, and when the cap truncates, the response says so
+via its `note` field (never silent). Deliberate bounds, stated here:
+`sanitize()` strips `%`/`_` before the LIKE because Prisma does not escape
+wildcards on SQLite; LIKE folds case for ASCII only (non-ASCII
+case-variant queries need the exact byte form — English/Swahili data is
+ASCII); no full-text index — the scale-out path is SQLite FTS5 when any
+searchable table passes 10k rows. Decision record in the route header
+(`src/app/api/search/route.ts`); parity with the old algorithm pinned on
+the real engine (`tests/unit/search-pushdown-realdb.test.ts`).
+
 **Rules that are non-negotiable in this codebase:**
 
 1. **Ledger is the source of truth.** Balances are derived from balanced double-entry
@@ -202,7 +224,7 @@ this order — each step is independently valuable:
 | Cache/coordination | Redis | Multi-instance deploys, distributed rate limiting |
 | Object storage | S3-compatible / Cloudflare R2 (no egress fees) | Media volume outgrows local disk (`/public/photos`) |
 | Identity | Keycloak (OIDC, orgs, MFA) | Enterprise SSO / multi-org requirements |
-| Search | OpenSearch | Full-text + faceted search over projects/suppliers/documents |
+| Search | OpenSearch | Full-text + faceted search over projects/suppliers/documents. Interim (issue #163): SQL LIKE pushdown in `/api/search` — the 300-row window caps matches, not raw rows; SQLite FTS5 is the next step when any searchable table exceeds 10k rows | Any searchable table >10k rows (FTS5); service extraction / cross-service faceting (OpenSearch) |
 | Observability | OpenTelemetry → Prometheus + Loki + Tempo + Grafana | Production SLAs require tracing across the request path |
 | Deployment | Docker → Kubernetes + Helm + Terraform + Argo CD | HA / zero-downtime requirements |
 | Analytics | ClickHouse + Parquet on object storage | High-volume event analytics |

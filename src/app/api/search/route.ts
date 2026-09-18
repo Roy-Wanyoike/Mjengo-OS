@@ -10,6 +10,35 @@ import { log } from '@/backend/lib/log'
 // and notifications. Results come back grouped, max 5 per group, each item
 // carrying a target so the header dropdown can route the click.
 //
+// API-12 / issue #163 — STRUCTURAL DECISION: SQL pushdown. The LIKE now runs
+// INSIDE each query (Prisma `contains` → SQLite `LIKE '%q%'`), not in memory
+// over a pre-fetched window:
+//   · BEFORE: each table loaded its 300 most-recent RAW rows and filtered in
+//     memory — a matching row outside that recency window was silently missed
+//     (the API-12 ceiling; #166 additionally found the projects window
+//     inverted, keeping the OLDEST 300 — fixed there, desc since).
+//   · NOW: the sanitized q is pushed down with the SAME `take: MAX_SCAN`
+//     bounds, so the window caps MATCHES per table (the ≤300 most-recent
+//     matches), not raw rows. An exact-name hit is found no matter how old
+//     it is; a miss now needs >300 matches for one query — and when the cap
+//     bites, the response says so via `note` (no silent truncation).
+//   · `contains` on SQLite is ASCII case-insensitive by default (Prisma sets
+//     no case_sensitive_like pragma — pinned on the real engine in
+//     tests/unit/search-pushdown-realdb.test.ts). Prisma does NOT escape
+//     % / _ in the needle on SQLite, which is why sanitize() below is
+//     load-bearing: a user's wildcards are stripped BEFORE they reach LIKE.
+//   · Known narrowing (documented, accepted): LIKE folds case for ASCII
+//     only; the old in-memory toLowerCase() folded Unicode case too. App
+//     data is English/Swahili (ASCII), and this header has claimed "ASCII
+//     case-insensitive" since the route was born — the pushdown makes it
+//     literally true. Non-ASCII case-variant queries ("CAFÉ" vs "Café")
+//     now require the exact byte form.
+//   · Deliberately NOT FTS5: at demo scale a full-text index + its sync
+//     story are premature (leading-wildcard LIKE can't use one anyway).
+//     Revisit trigger recorded in ARCHITECTURE.md: any searchable table
+//     >10k rows → SQLite FTS5 over the searchable fields (schema change —
+//     coordinate with the DB waves).
+//
 // Scoping: client-role sessions are pinned to THEIR project (session.user.
 // projectId); contractor/admin/finance search across all projects. LIKE
 // wildcards in the query are stripped so users can't inject % / _ patterns.
@@ -47,49 +76,66 @@ interface SearchGroup {
 
 const MAX_PER_GROUP = 5
 
-// S6 hardening — bounds the scan regardless of table size. Each source table
-// loads at most MAX_SCAN rows (recent-first where an order exists) before the
-// in-memory LIKE filter; a matching row beyond the window is honestly missed
-// rather than the route loading unbounded tables into memory.
-// Issue #166: "recent-first" is now true for projects too — the unpinned
+// S6 hardening — bounds every query regardless of table size. Since #163
+// (SQL pushdown) the bound caps MATCHES: each source table returns at most
+// MAX_SCAN rows that ALREADY match the pushed-down LIKE (recent-first where
+// an order exists), instead of loading MAX_SCAN raw rows and filtering in
+// memory. A matching row beyond the cap is honestly missed — but the cap is
+// now per-query matches, not table recency, so an exact-name search finds
+// rows of any age (see the API-12 decision block in the header).
+// Issue #166: "recent-first" is true for projects too — the unpinned
 // query orders createdAt DESC like every timestamped sibling, so the window
-// keeps the NEWEST 300 projects (asc kept the oldest 300, making every
-// project created after the first 300 unfindable by name).
+// keeps the NEWEST 300 matches (asc kept the oldest 300 raw rows, making
+// every project created after the first 300 unfindable by name).
 const MAX_SCAN = 300
 
 /** Cap the query itself — a giant string would still be scanned against every row. */
 const MAX_QUERY = 100
 
-/** Strip LIKE wildcards so % and _ are treated literally. */
+/** Strip LIKE wildcards so % and _ are treated literally.
+ *  Load-bearing with the #163 pushdown: Prisma does NOT escape LIKE
+ *  wildcards inside `contains` on SQLite, so an unstripped % or _ from the
+ *  user would act as a pattern (probe-pinned on the real engine). */
 function sanitize(q: string): string {
   return q.replace(/[%_]/g, ' ').trim()
 }
 
-async function searchAll(q: string, projectId: string | null): Promise<SearchGroup[]> {
+async function searchAll(
+  q: string,
+  projectId: string | null,
+): Promise<{ groups: SearchGroup[]; capped: boolean }> {
   const scope = projectId ? { projectId } : {}
+  // #163: the per-table LIKE terms, pushed down as `contains` — the SAME
+  // fields the old in-memory filter scanned, one OR per searchable column.
   const [projects, parcels, workers, suppliers, catalogItems, requests, orders, transactions, invoices, notifications] =
     await Promise.all([
       projectId
-        ? db.project.findMany({ where: { id: projectId } })
-        : db.project.findMany({ orderBy: { createdAt: 'desc' }, take: MAX_SCAN }),
-      db.landParcel.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
-      // Worker has no timestamp column — a bare take still bounds the scan.
-      db.worker.findMany({ where: { ...scope }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
-      db.supplier.findMany({ orderBy: { createdAt: 'desc' }, take: MAX_SCAN }),
-      db.catalogItem.findMany({ orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { supplier: { select: { businessName: true, county: true } } } }),
-      db.materialRequest.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } }, lines: true } }),
-      db.purchaseOrder.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } }, supplier: { select: { businessName: true } } } }),
-      db.transaction.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
-      db.invoice.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
-      db.notification.findMany({ where: { ...scope }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
+        ? db.project.findMany({ where: { id: projectId, OR: [{ name: { contains: q } }, { client: { contains: q } }, { location: { contains: q } }] } })
+        : db.project.findMany({ where: { OR: [{ name: { contains: q } }, { client: { contains: q } }, { location: { contains: q } }] }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN }),
+      db.landParcel.findMany({ where: { ...scope, OR: [{ plotNumber: { contains: q } }, { county: { contains: q } }, { town: { contains: q } }] }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
+      // Worker has no timestamp column — the take bound still caps the scan.
+      db.worker.findMany({ where: { ...scope, OR: [{ name: { contains: q } }, { role: { contains: q } }] }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
+      db.supplier.findMany({ where: { OR: [{ businessName: { contains: q } }, { county: { contains: q } }, { town: { contains: q } }] }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN }),
+      db.catalogItem.findMany({ where: { OR: [{ name: { contains: q } }, { brand: { contains: q } }, { specification: { contains: q } }] }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { supplier: { select: { businessName: true, county: true } } } }),
+      db.materialRequest.findMany({ where: { ...scope, requestCode: { contains: q } }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } }, lines: true } }),
+      db.purchaseOrder.findMany({ where: { ...scope, orderCode: { contains: q } }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } }, supplier: { select: { businessName: true } } } }),
+      db.transaction.findMany({ where: { ...scope, OR: [{ reference: { contains: q } }, { note: { contains: q } }] }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
+      db.invoice.findMany({ where: { ...scope, invoiceCode: { contains: q } }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
+      db.notification.findMany({ where: { ...scope, OR: [{ title: { contains: q } }, { body: { contains: q } }] }, orderBy: { createdAt: 'desc' }, take: MAX_SCAN, include: { project: { select: { name: true } } } }),
     ])
 
-  const has = (s: string | null | undefined) => Boolean(s && s.toLowerCase().includes(q))
+  // #163 honesty seam: a table returning exactly MAX_SCAN rows means the
+  // take bound truncated its match set (≥300 matches for this q) — the
+  // response says so instead of silently showing only the newest 5.
+  const capped = [projects, parcels, workers, suppliers, catalogItems, requests, orders, transactions, invoices, notifications].some(
+    (rows) => rows.length === MAX_SCAN,
+  )
 
   const groups: SearchGroup[] = []
 
+  // #163: no in-memory filter anymore — the rows arrive pre-matched from the
+  // pushed-down LIKE; slicing to MAX_PER_GROUP is all that remains.
   const projectItems: SearchItem[] = projects
-    .filter((p) => has(p.name) || has(p.client) || has(p.location))
     .slice(0, MAX_PER_GROUP)
     .map((p) => ({
       id: p.id,
@@ -101,7 +147,6 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   if (projectItems.length) groups.push({ group: 'Projects', items: projectItems })
 
   const parcelItems: SearchItem[] = parcels
-    .filter((p) => has(p.plotNumber) || has(p.county) || has(p.town))
     .slice(0, MAX_PER_GROUP)
     .map((p) => ({
       id: p.id,
@@ -113,7 +158,6 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   if (parcelItems.length) groups.push({ group: 'Land parcels', items: parcelItems })
 
   const workerItems: SearchItem[] = workers
-    .filter((w) => has(w.name) || has(w.role))
     .slice(0, MAX_PER_GROUP)
     .map((w) => ({
       id: w.id,
@@ -125,7 +169,6 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   if (workerItems.length) groups.push({ group: 'Workers', items: workerItems })
 
   const supplierItems: SearchItem[] = suppliers
-    .filter((s) => has(s.businessName) || has(s.county) || has(s.town))
     .slice(0, MAX_PER_GROUP)
     .map((s) => ({
       id: s.id,
@@ -137,7 +180,6 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   if (supplierItems.length) groups.push({ group: 'Suppliers', items: supplierItems })
 
   const catalogItemsOut: SearchItem[] = catalogItems
-    .filter((c) => has(c.name) || has(c.brand) || has(c.specification))
     .slice(0, MAX_PER_GROUP)
     .map((c) => ({
       id: c.id,
@@ -149,7 +191,6 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   if (catalogItemsOut.length) groups.push({ group: 'Catalog items', items: catalogItemsOut })
 
   const requestItems: SearchItem[] = requests
-    .filter((r) => has(r.requestCode))
     .slice(0, MAX_PER_GROUP)
     .map((r) => ({
       id: r.id,
@@ -161,7 +202,6 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   if (requestItems.length) groups.push({ group: 'Requests', items: requestItems })
 
   const orderItems: SearchItem[] = orders
-    .filter((o) => has(o.orderCode))
     .slice(0, MAX_PER_GROUP)
     .map((o) => ({
       id: o.id,
@@ -173,7 +213,6 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   if (orderItems.length) groups.push({ group: 'Purchase orders', items: orderItems })
 
   const transactionItems: SearchItem[] = transactions
-    .filter((t) => has(t.reference) || has(t.note))
     .slice(0, MAX_PER_GROUP)
     .map((t) => ({
       id: t.id,
@@ -185,7 +224,6 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   if (transactionItems.length) groups.push({ group: 'Transactions', items: transactionItems })
 
   const invoiceItems: SearchItem[] = invoices
-    .filter((i) => has(i.invoiceCode))
     .slice(0, MAX_PER_GROUP)
     .map((i) => ({
       id: i.id,
@@ -197,7 +235,6 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
   if (invoiceItems.length) groups.push({ group: 'Invoices', items: invoiceItems })
 
   const notificationItems: SearchItem[] = notifications
-    .filter((n) => has(n.title) || has(n.body))
     .slice(0, MAX_PER_GROUP)
     .map((n) => ({
       id: n.id,
@@ -208,7 +245,7 @@ async function searchAll(q: string, projectId: string | null): Promise<SearchGro
     }))
   if (notificationItems.length) groups.push({ group: 'Notifications', items: notificationItems })
 
-  return groups
+  return { groups, capped }
 }
 
 export const GET = route(
@@ -238,9 +275,19 @@ export const GET = route(
       // above is the W5-3 read boundary; see the BE-3 note in the header.)
       const role = session.user.role
       const pinned = role === 'client' ? (session.user.projectId ?? 'none') : null
-      const groups = await searchAll(q, pinned)
+      const { groups, capped } = await searchAll(q, pinned)
 
-      return NextResponse.json({ ok: true, q: raw, scopedTo: pinned, groups })
+      // #163: the note seam (same field the query-cap / min-char branches
+      // use) — present ONLY when a source table's 300-match window truncated,
+      // so a capped result set is never silent. Additive: the ⌘K palette
+      // reads ok/groups only.
+      return NextResponse.json({
+        ok: true,
+        q: raw,
+        scopedTo: pinned,
+        groups,
+        ...(capped ? { note: `Match cap reached — at least one table has ${MAX_SCAN}+ matches for this query; refine it to see older matches` } : {}),
+      })
     } catch (e) {
       log.error('api/search', 'Request failed', { error: e })
       return NextResponse.json({ error: 'Search failed' }, { status: 500 })
