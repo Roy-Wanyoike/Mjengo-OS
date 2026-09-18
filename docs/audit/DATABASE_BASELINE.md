@@ -56,6 +56,22 @@ Total = 68 (matches prior QA claim).
 > baseline, kept for history. (The Float-era bullets were already closed by
 > #122's integer cents.)
 
+> **MONEY-CONVENTIONS UPDATE (2026-09-21, issue #282):** `StockMovement.unitCost`
+> is integer **cents end-to-end** — the one #122 column whose writers kept
+> storing KSh after the BigInt migration (the frontend "Unit cost (KSh)"
+> contract flowed raw into the column; supply's `postDeliveryToInventory`
+> round-tripped the PO line's cents through `centsToKes` before writing),
+> while `loadInventorySlice` read it back as cents — every displayed unit
+> cost and the stockValue rollup were ÷100 understated. Normalized: the
+> inventory service's `parseUnitCost` is THE KSh→cents boundary (payload KSh
+> in → `Cents` stored, ≤2 dp, ≤ MAX_MONEY_KES — `parseNonNegativeMoneyCents`),
+> `postDeliveryToInventory` now stores the PO line's cents untouched, and
+> `loadInventorySlice` remains the cents→KSh read boundary. Migration 12 had
+> already converted all pre-#122 historical rows (`CAST(ROUND(unitCost*100))`);
+> the seed-extras already wrote BigInt cents; no production DB exists —
+> reseed-not-migrate, documented in the #282 PR. The twin drift on
+> `BoqLine.estUnitPrice` (#285) is still open.
+
 - **Model:** `LedgerTransaction` (ref `@unique`, `idempotencyKey @unique`, `reversalOfId`, `status posted|reversed`) + `LedgerEntry` (`txnId`, `accountId`, `side debit|credit`, `amount Float`) — schema.prisma L980–1008.
 - **Balanced check is service code only:** `modules/ledger/service.ts` `validateLines` L114–125 throws when Σdebits ≠ Σcredits — with a **`Math.abs(debit-credit) > 0.005` float tolerance** (L122), an explicit acknowledgement of binary-float money. Nothing at the DB level (SQLite has no cross-row CHECK; no trigger). Any writer that bypasses `postLedgerTransaction*` can post unbalanced legs — and `prisma/seed-extras/money.ts` L41–53 does exactly that (`db.ledgerTransaction.create` + `db.ledgerEntry.create` directly).
 - **Immutability is convention + one legal mutation:** `reverseLedgerTransaction` (L191–213) creates mirrored entries and **updates** the original row (`status: 'reversed'`, `reversalRef`) — so "immutable" really means "no edits except reversal marking". Not DB-enforced on SQLite.

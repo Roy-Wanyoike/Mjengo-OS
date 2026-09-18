@@ -1209,7 +1209,7 @@ model StockMovement {
   inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
   type            String // opening, received, consumed, transferred_in, transferred_out, returned, damaged, adjusted
   quantity        Float // positive KES qty; sign semantics by type
-  unitCost        BigInt? // cents (issue #122) — KES when known
+  unitCost        BigInt? // integer KSh CENTS end-to-end (issues #122, #282) — KSh only at the boundaries: inventory service parseUnitCost converts the KSh action payload (frontend contract "Unit cost (KSh)"); supply postDeliveryToInventory stores the PO line's cents untouched; loadInventorySlice reads back via centsToKes
   reference       String? // PO code / delivery id / consumption id
   note            String?
   recordedBy      String // name/role

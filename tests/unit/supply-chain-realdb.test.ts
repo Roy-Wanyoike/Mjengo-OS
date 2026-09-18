@@ -182,6 +182,12 @@ describe('TEST-6: the full procurement walk on a real database', () => {
     expect(movements.map((m) => m.type).sort()).toEqual(['damaged', 'received'])
     expect(movements.find((m) => m.type === 'received')?.quantity).toBe(43)
     expect(movements.find((m) => m.type === 'damaged')?.quantity).toBe(2)
+    // #282 — the movement carries the PO line's integer CENTS (75,000n =
+    // KSh 750): the money stays in cents from catalog → PO → movement; the
+    // old writer stored centsToKes(75_000n) = 750 into the BigInt cents
+    // column, understating stockValue ÷100 on every read.
+    expect(movements.find((m) => m.type === 'received')?.unitCost).toBe(75_000n)
+    expect(movements.find((m) => m.type === 'damaged')?.unitCost).toBeNull()
     // The supplier's catalog stock was clamped by the ORDERED quantity.
     expect((await prisma.catalogItem.findUniqueOrThrow({ where: { id: catalog.id } })).stockQty).toBe(50)
 
@@ -292,6 +298,11 @@ describe('TEST-6: the full procurement walk on a real database', () => {
     expect(slice.items[0].closingQty).toBe(41)
     expect(slice.items[0].receivedQty).toBe(43)
     expect(slice.items[0].damagedQty).toBe(2)
+    // #282 end-to-end through the whole chain: catalog KSh 750 → PO cents
+    // 75,000 → movement cents 75,000 → stockValue 41 × KSh 750 = KSh 30,750,
+    // with movement rows reading back as KSh at the DTO boundary.
+    expect(slice.items[0].stockValue).toBe(30_750)
+    expect(slice.movements.find((m) => m.type === 'received')?.unitCost).toBe(750)
   })
 
   it('PO business codes are unique per project at the DB level (DB-8)', async () => {

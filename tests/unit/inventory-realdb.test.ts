@@ -23,7 +23,13 @@
  *    (P2002 through Prisma, UNIQUE through the raw handle);
  *  · loadInventorySlice (the project payload's read side) agrees with the
  *    service-reported closing quantities and per-type sums, and derives
- *    stock value from the last known unit cost.
+ *    stock value from the last known unit cost;
+ *  · unitCost is integer CENTS end-to-end (issue #282, normalized 2026-09-21):
+ *    the action payload carries KSh (the frontend "Unit cost (KSh)" contract
+ *    and the offline outbox replay), the service converts at parseUnitCost,
+ *    the column stores cents, and loadInventorySlice converts back — write
+ *    KSh at the boundary → stored cents → read back KSh, asserted against a
+ *    raw-SQL oracle on the column itself.
  */
 import { afterAll, describe, expect, it, vi } from 'vitest'
 
@@ -71,6 +77,15 @@ describe('movement posting + derived closing stock (real tables)', () => {
     expect(received.closingQty).toBe(150)
     expect(received.inventoryItemId).toBe(opened.inventoryItemId) // same item — same (project, material, location)
 
+    // #282 — the units oracle on the REAL column: the payload said KSh (the
+    // "Unit cost (KSh)" contract), the column holds integer CENTS. The
+    // pre-normalization drift stored the raw KSh number here (750/760) and
+    // every read side then divided by 100 again.
+    const storedCost = (type: string) =>
+      (sqlite.prepare(`SELECT unitCost FROM StockMovement WHERE inventoryItemId = ? AND type = ?`).get(opened.inventoryItemId, type) as { unitCost: bigint }).unitCost
+    expect(storedCost('opening')).toBe(75_000n)
+    expect(storedCost('received')).toBe(76_000n)
+
     const consumed = await consumeStock(project.id, { inventoryItemId: opened.inventoryItemId, qty: 30, reference: 'foundation pour' })
     expect(consumed.closingQty).toBe(120)
 
@@ -111,18 +126,49 @@ describe('movement posting + derived closing stock (real tables)', () => {
     expect(store.adjustedQty).toBe(-8)
     expect(store.closingQty).toBe(90)
     expect(laying.closingQty).toBe(20)
-    // KNOWN UNIT DRIFT (found by this harness, pinned as-is — follow-up work,
-    // not silently "fixed" in a test-infra PR): every writer stores unitCost
-    // as a KSh number (the frontend's "Unit cost (KSh)" contract; supply's
-    // postDeliveryToInventory passes centsToKes(...)), while the schema
-    // column comment and loadInventorySlice treat it as CENTS. The slice's
-    // stockValue therefore understates by ×100: 90 bags × "760 cents" →
-    // centsToKes(90 × 760) = KSh 684, not KSh 68,400. If the units get
-    // normalized, this assertion fails on purpose — update it with the fix.
-    expect(store.stockValue).toBe(684)
+    // #282 normalized: unitCost is integer CENTS in the column, so stockValue
+    // = closing × LATEST cost, computed in cents then converted once —
+    // 90 bags × 76,000 cents = 6,840,000 cents → KSh 68,400 (the drifted
+    // writer era showed 684 — ÷100 — pinned then, fixed now).
+    expect(store.stockValue).toBe(68_400)
     // The append-only log is intact: opening + received + consumed +
     // transferred_out + transferred_in + returned + damaged + adjusted = 8.
     expect(slice.movements).toHaveLength(8)
+    // The DTO is the KSh read boundary: movement rows carry KSh numbers.
+    const receiveRow = slice.movements.find((m) => m.type === 'received')!
+    expect(receiveRow.unitCost).toBe(760)
+  })
+
+  it('normalizes unitCost to integer cents end-to-end: KSh in at the action boundary → cents stored → KSh out (issue #282)', async () => {
+    const project = await seedProject(prisma, { name: 'Cents Walk' })
+
+    // KSh 798 typed into the "Unit cost (KSh)" field → 79,800 cents in the
+    // column; a sub-KSh cost (KSh 12.50) exercises the 2-dp money contract.
+    const opened = await openStock(project.id, { materialName: 'Deformed bar', unit: 'length', qty: 3, unitCost: 798, location: 'Site Store' })
+    await receiveStock(project.id, { materialName: 'Deformed bar', unit: 'length', qty: 2, unitCost: 12.5 })
+
+    // STORED — raw SQL on the column: integer cents, never a KSh number.
+    const storedCost = (type: string) =>
+      (sqlite.prepare(`SELECT unitCost FROM StockMovement WHERE inventoryItemId = ? AND type = ?`).get(opened.inventoryItemId, type) as { unitCost: bigint }).unitCost
+    expect(storedCost('opening')).toBe(79_800n)
+    expect(storedCost('received')).toBe(1_250n)
+
+    // READ BACK — the payload DTO is the KSh boundary: movements carry KSh
+    // numbers, and stockValue is computed in cents (closing × LATEST cost)
+    // and converted once: 5 × 1,250 cents = 6,250 cents → KSh 62.50.
+    const slice = await loadInventorySlice(project.id)
+    expect(slice.movements.find((m) => m.type === 'opening')?.unitCost).toBe(798)
+    expect(slice.movements.find((m) => m.type === 'received')?.unitCost).toBe(12.5)
+    expect(slice.items[0].closingQty).toBe(5)
+    expect(slice.items[0].stockValue).toBe(62.5)
+
+    // The boundary also validates like money (#122): a >2-dp KSh cost is
+    // refused BEFORE any row is written.
+    const before = count('StockMovement')
+    await expect(
+      receiveStock(project.id, { materialName: 'Deformed bar', unit: 'length', qty: 1, unitCost: 760.555 }),
+    ).rejects.toThrow(/no more than 2 decimal places/)
+    expect(count('StockMovement')).toBe(before)
   })
 
   it('refuses over-consumption and over-transfers WITHOUT writing a movement row (DB-2 rollback)', async () => {

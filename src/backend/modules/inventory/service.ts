@@ -17,10 +17,11 @@
 // parses its qty through parseMovementQty at the top of its transaction —
 // same fail-closed posture as receiveDelivery's moneyNumber checks: finite
 // number, > 0 for the six unsigned types, finite non-zero for adjust (signed
-// by design), inside sane bounds. unitCost (where accepted) is finite ≥ 0.
+// by design), inside sane bounds. unitCost (where accepted) is KSh at the
+// payload boundary, parsed to integer cents via parseUnitCost (#282).
 
 import { db } from '@/backend/lib/db'
-import { nonNegativeKesToCents } from '@/backend/lib/money'
+import { MAX_MONEY_KES, nonNegativeKesToCents, parseNonNegativeMoneyCents, type Cents } from '@/backend/lib/money'
 import type { TxClient } from '@/backend/modules/ledger/service'
 import { derivedClosingQty } from './repository'
 
@@ -62,16 +63,25 @@ function parseMovementQty(action: string, raw: unknown, opts: { signed?: boolean
 }
 
 /**
- * Optional unit cost (#210): absent → null; present → finite and ≥ 0
- * (a cost is money, never negative — same rule as the supply service).
+ * Optional unit cost (#210, #282) — THE KSh→cents boundary for
+ * StockMovement.unitCost. The action payload carries KSh (the frontend
+ * contract is "Unit cost (KSh)"; the offline outbox replays the same JSON),
+ * and the BigInt column stores integer cents — the ledger-never-lies
+ * convention (money.ts): KSh exists ONLY at this boundary and at the
+ * loadInventorySlice read boundary (centsToKes). Absent/null/'' → null
+ * (no cost recorded); present → non-negative, ≤ MAX_MONEY_KES, at most 2
+ * decimal places (parseNonNegativeMoneyCents — a cost is money, never
+ * negative, and sub-KSh precision is exactly 2 dp).
  */
-function parseUnitCost(action: string, raw: unknown): number | null {
+function parseUnitCost(action: string, raw: unknown): Cents | null {
   if (raw === undefined || raw === null || raw === '') return null
-  const n = Number(raw)
-  if (!Number.isFinite(n) || n < 0) {
-    throw new Error(`${action}: unitCost must be zero or more (got ${typeof raw === 'string' ? `"${raw}"` : String(raw)})`)
+  const cents = parseNonNegativeMoneyCents(raw)
+  if (cents === null) {
+    throw new Error(
+      `${action}: unitCost must be a non-negative KSh amount of at most ${MAX_MONEY_KES.toLocaleString('en-US')} with no more than 2 decimal places (got ${typeof raw === 'string' ? `"${raw}"` : String(raw)})`,
+    )
   }
-  return n
+  return cents
 }
 
 async function upsertItem(
@@ -96,7 +106,7 @@ async function appendMovement(
   inventoryItemId: string,
   type: string,
   quantity: number,
-  unitCost: number | null,
+  unitCost: Cents | null, // integer cents (#282) — converted at parseUnitCost, never a KSh number
   reference: string | null,
   note: string | null,
   recordedBy: string,

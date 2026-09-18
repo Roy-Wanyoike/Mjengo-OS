@@ -1173,7 +1173,7 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
     orderLineId: string
     orderLineName: string
     unit: string
-    unitPrice: number
+    unitPrice: Cents // PO-line cents — #282: passes through to StockMovement.unitCost UNTOUCHED (integer cents end-to-end; KSh never enters this path)
     qtyOrdered: number
     qtyReceived: number
     qtyRejected: number
@@ -1205,7 +1205,11 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
       orderLineId: orderLine.id,
       orderLineName: orderLine.name,
       unit: orderLine.unit,
-      unitPrice: centsToKes(orderLine.unitPrice),
+      // #282: keep the PO line's integer CENTS — no centsToKes round-trip.
+      // The old code converted to KSh here and postDeliveryToInventory then
+      // stored that KSh number into the BigInt cents column (stockValue
+      // ÷100 understated on every read). Cents in, cents stored.
+      unitPrice: orderLine.unitPrice,
       qtyOrdered: orderLine.qty,
       qtyReceived,
       qtyRejected,
@@ -1370,6 +1374,9 @@ export async function receiveDelivery(projectId: string, payload: Record<string,
  *     present, else 'returned'
  *   · CatalogItem.stockQty clamped to max(0, stock − qtyOrdered) for the
  *     supplier's matching item (name exact, then fuzzy; silent skip on no match)
+ * unitCost is the PO line's integer CENTS, stored as-is (#282 — the money
+ * stays in cents from catalog → PO → movement; KSh appears only at the
+ * payload read boundaries).
  * Returns a plain summary for the audit trail + toasts.
  */
 async function postDeliveryToInventory(
@@ -1379,7 +1386,7 @@ async function postDeliveryToInventory(
   lines: Array<{
     orderLineName: string
     unit: string
-    unitPrice: number
+    unitPrice: Cents
     qtyOrdered: number
     qtyReceived: number
     qtyRejected: number
@@ -1399,7 +1406,8 @@ async function postDeliveryToInventory(
       create: { projectId, materialName: line.orderLineName, unit: line.unit, location: 'Site Store', supplierId: order.supplierId },
     })
 
-    // 2) net received → 'received' movement (unitCost from the PO line)
+    // 2) net received → 'received' movement (unitCost from the PO line —
+    //    integer cents in, integer cents stored, #282)
     const net = Math.round((line.qtyReceived - line.qtyRejected) * 100) / 100
     if (net > 0) {
       await tx.stockMovement.create({
