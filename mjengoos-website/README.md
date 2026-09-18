@@ -133,10 +133,13 @@ SEO: documented in [`SEO.md`](./SEO.md).
 
 In this sandbox, a Caddy gateway proxies a single public port. Requests
 carrying `?XTransformPort=3001` are routed to this website; the bare `/`
-goes to the main app on port 3000. All internal links use `SiteLink`, which
-transparently preserves the `XTransformPort` query parameter across
-navigation (via `useSyncExternalStore`, hydration-safe). Standalone
-deployments are unaffected.
+goes to the main app on port 3000. All internal links — nav/footer
+(`SiteLink`/`NavLink`) and every CTA (`Button`, including the 404 page) —
+transparently preserve the `XTransformPort` query parameter across
+navigation through the shared `useGatewayPort` hook
+(`lib/use-gateway-port.ts`): param-less on the server and the first client
+render (hydration-safe), appended after mount. Standalone deployments are
+unaffected.
 
 ### Integration with the main application
 

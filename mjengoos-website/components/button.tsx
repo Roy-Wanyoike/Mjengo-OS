@@ -1,6 +1,9 @@
+"use client";
+
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { cn, withGatewayPort } from "@/lib/utils";
+import { useGatewayPort } from "@/lib/use-gateway-port";
 
 type Variant = "primary" | "secondary" | "ghost" | "dark" | "outline-dark";
 type Size = "sm" | "md" | "lg";
@@ -33,10 +36,21 @@ interface ButtonProps extends Omit<ComponentProps<typeof Link>, "className" | "c
   className?: string;
 }
 
-/** Link styled as a button — every CTA on the site is a real link (§46). */
-export function Button({ variant = "primary", size = "md", className, children, ...props }: ButtonProps) {
+/**
+ * Link styled as a button — every CTA on the site is a real link (§46).
+ * Client component so internal hrefs preserve the gateway preview param
+ * exactly like `SiteLink` (param-less on the server and first client
+ * render, `?XTransformPort` appended after mount — no hydration mismatch;
+ * no-op in standalone/integrated deployments where the param is absent).
+ */
+export function Button({ variant = "primary", size = "md", className, children, href, ...props }: ButtonProps) {
+  const port = useGatewayPort();
   return (
-    <Link className={cn(base, variants[variant], sizes[size], className)} {...props}>
+    <Link
+      href={typeof href === "string" ? withGatewayPort(href, port) : href}
+      className={cn(base, variants[variant], sizes[size], className)}
+      {...props}
+    >
       {children}
     </Link>
   );
