@@ -375,3 +375,73 @@ describe('migration 14 — ledger balance + append-only invariants (DB-3, issue 
     })
   })
 })
+
+// ------------------------------------------------- migration 18 (#159 / API-8)
+
+describe('Attachment.objectKey uniqueness (migration 18 — #159 / audit API-8)', () => {
+  const insert = (id: string, objectKey: string | null) =>
+    db
+      .prepare(
+        `INSERT INTO Attachment (id, entityType, entityId, fileName, storageKey, objectKey, kind, uploadedBy, reviewStatus)
+         VALUES (?, 'photo', 'unattached', 'upp-1712345678-abcd12.png', '/photos/upp-1712345678-abcd12.png', ?, 'other_photo', 'a@demo.test', 'pending')`,
+      )
+      .run(id, objectKey)
+
+  it('migration 18_upload_confirm_object_key is part of the chain', () => {
+    expect(migrationDirs()).toContain('18_upload_confirm_object_key')
+  })
+
+  it('rejects a second row with the same objectKey — the /api/upload/confirm dedupe', () => {
+    insert('att-a', 'upp-1712345678-abcd12.png')
+    expect(() => insert('att-b', 'upp-1712345678-abcd12.png')).toThrow(
+      /UNIQUE constraint failed: Attachment.objectKey/,
+    )
+  })
+
+  it('NULL objectKey rows never collide — the pre-#159 corpus (document mode, legacy rows) is untouched', () => {
+    // Two rows with IDENTICAL fileName and storageKey — the duplicated-
+    // evidence shape #159 is about — both land: SQLite unique indexes skip
+    // NULLs, so the constraint is additive over the legacy corpus and no
+    // dedupe pass exists (documented in the migration header).
+    insert('att-legacy-1', null)
+    expect(() => insert('att-legacy-2', null)).not.toThrow()
+  })
+
+  it('distinct objectKeys coexist — distinct keys keep working exactly as today', () => {
+    insert('att-c', 'upp-1712345678-aaaaaa.png')
+    expect(() => insert('att-d', 'upp-1712345678-bbbbbb.png')).not.toThrow()
+  })
+
+  it('the migration applies over a database seeded with pre-#159 duplicates (no cleanup pass needed)', () => {
+    // The issue's "migration test on a DB seeded with a duplicate": replay
+    // 00→17 (the pre-#159 world — no objectKey column yet), seed the
+    // duplicate rows the old behavior could mint, then apply migration 18's
+    // SQL on top: it must succeed, because the new keyspace starts empty
+    // (every pre-migration row is NULL) — the documented reason there is no
+    // dedupe/delete pass in the migration.
+    const old = new Database(':memory:')
+    for (const dir of migrationDirs()) {
+      if (parseInt(dir, 10) > 17) break
+      old.exec(readFileSync(join(MIGRATIONS_DIR, dir, 'migration.sql'), 'utf8'))
+    }
+    const dup = `INSERT INTO Attachment (id, entityType, entityId, fileName, storageKey, kind, uploadedBy, reviewStatus)
+                 VALUES (?, 'photo', 'unattached', 'upp-1712345678-abcd12.png', '/photos/upp-1712345678-abcd12.png', 'other_photo', 'retry@demo.test', 'pending')`
+    old.prepare(dup).run('att-dup-1')
+    old.prepare(dup).run('att-dup-2') // the duplicated evidence row #159 exists to stop
+    expect(() =>
+      old.exec(readFileSync(join(MIGRATIONS_DIR, '18_upload_confirm_object_key', 'migration.sql'), 'utf8')),
+    ).not.toThrow()
+    // And the constraint is live on the migrated duplicate-seeded database:
+    // the legacy duplicates survive (NULL objectKey), a fresh keyed pair
+    // does not.
+    const n = old.prepare(`SELECT COUNT(*) AS n FROM Attachment WHERE fileName = 'upp-1712345678-abcd12.png'`).get() as { n: number }
+    expect(Number(n.n)).toBe(2)
+    const keyed = `INSERT INTO Attachment (id, entityType, entityId, fileName, storageKey, objectKey, kind, uploadedBy, reviewStatus)
+                   VALUES (?, 'photo', 'unattached', 'upp-1712345678-cccccc.png', '/photos/x', ?, 'other_photo', 'a@demo.test', 'pending')`
+    old.prepare(keyed).run('att-new-1', 'upp-1712345678-cccccc.png')
+    expect(() => old.prepare(keyed).run('att-new-2', 'upp-1712345678-cccccc.png')).toThrow(
+      /UNIQUE constraint failed: Attachment.objectKey/,
+    )
+    old.close()
+  })
+})

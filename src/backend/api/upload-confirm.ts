@@ -14,18 +14,40 @@
 // so a mismatch here is a client that ignored the contract, and the row is
 // refused with an explanation rather than created with a lie.
 //
+// IDEMPOTENT ON THE NATURAL KEY (issue #159 / audit API-8): this is the
+// S3/R2 deployment surface, and retries are EXPECTED there (that is why
+// the presign family exists) — a retried confirm used to mint a second
+// Attachment row pointing at one object. The dedupe key is the RAW object
+// key (upp-<ts>-<hex>.<ext>), recorded on the row as Attachment.objectKey
+// (unique index, migration 18) — NOT storageKey, which is publicUrl(key)
+// and on s3-compat without S3_PUBLIC_BASE is a per-call presigned GET
+// (fresh SigV4 date, 7-day expiry), so two confirms of one object would
+// mint two different strings. The design is the natural-key route rather
+// than the #177 IdempotencyRecord seam because the seam is check-then-act
+// on a caller-chosen header key (confirm has none — the server minted the
+// key) and cannot make the create safe under concurrency; only the DB
+// constraint gives "concurrent double-confirm → one row". See migration
+// 18's header for the full decision record.
+//
+// Replay semantics: a retried confirm of an already-confirmed key returns
+// the ORIGINAL row (200, replayed: true — the wallet family's idiom),
+// without re-HEADing the object: the row was minted after a successful
+// verification, and the retry asks "did my confirm land?", which the row
+// answers. The first confirm wins the provenance snapshot (uploadedBy,
+// sizeBytes, mimeType, storageKey) — evidence rows are append-only, so a
+// replay never rewrites them. A conflicting retry — same key, different
+// category, the one caller-chosen payload field — is refused 409 without
+// replaying or updating (the money family's payload-mismatch posture,
+// issue #75/BE-9). Keys are minted per presign response and handed to
+// exactly one session, so the single-column unique is honest: one object,
+// one row, first confirm wins.
+//
 // The row matches the document-mode Attachment shape (reviewStatus 'pending'
 // default, category provenance, sizeBytes/mimeType from the HEAD). Fields
 // this flow does NOT take (projectId/entityType/entityId/expiresAt/title)
 // are a deliberate scope cut — the document mode's richer provenance is its
 // own route; photo provenance rides the delivery-verification links that
 // consume attachment ids (agent 8-a).
-//
-// NON-IDEMPOTENT BY DESIGN: Attachment rows are append-only evidence in this
-// app (same posture as the orphaned-upload follow-up documented in 8-a) —
-// confirming the same key twice records two rows pointing at one object.
-// A replay/dedupe seam would need a schema index (out of scope, noted in
-// the worklog).
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -52,6 +74,28 @@ const confirmBody = z.strictObject({
   }),
 })
 
+/**
+ * Prisma P2002 raised by the Attachment.objectKey unique index (migration
+ * 18) — the DB-level dedupe this route leans on. The engine reports the
+ * violated target as the field list or the index name depending on
+ * adapter/version, so both shapes are recognized; a P2002 naming anything
+ * else (nothing else on this table is caller-reachable) is rethrown —
+ * fail closed, never silently swallowed.
+ */
+function isObjectKeyUniqueViolation(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const { code, meta } = err as { code?: unknown; meta?: { target?: unknown } | null }
+  if (code !== 'P2002') return false
+  const target = meta?.target
+  if (Array.isArray(target)) {
+    return target.some((t) => String(t).includes('objectKey'))
+  }
+  if (typeof target === 'string') {
+    return target.includes('objectKey') || target.includes('Attachment_objectKey_key')
+  }
+  return false
+}
+
 export const POST = route(
   {
     scope: 'api/upload/confirm',
@@ -62,6 +106,14 @@ export const POST = route(
   },
   async (_req, session, body) => {
     const { key, category } = body
+
+    // The replay lookup runs BEFORE the storage verification: an existing
+    // row for this objectKey is the durable answer to "did my confirm
+    // land?" (it was minted after a successful HEAD), so a retry gets it
+    // even if the object's HEAD would transiently fail now — and the
+    // retry path skips the object round-trip entirely.
+    const existing = await db.attachment.findUnique({ where: { objectKey: key } })
+    if (existing) return replayOrConflict(existing, key, category)
 
     const driver = getStorageDriver()
     if (typeof driver.statObject !== 'function') {
@@ -113,25 +165,42 @@ export const POST = route(
     // field semantics as every existing Attachment row). With S3_PUBLIC_BASE
     // it is stable forever; without it, it is a presigned GET with the SigV4
     // 7-day maximum — the documented tradeoff (DEPLOYMENT.md object storage
-    // section; replay-time re-signing is the parked follow-up).
-    const attachment = await db.attachment.create({
-      data: {
-        entityType: 'photo',
-        entityId: 'unattached',
-        fileName: key,
-        storageKey: driver.publicUrl(key),
-        kind: `${category}_photo`,
-        uploadedBy: session.user.email,
-        projectId: null,
-        category,
-        mimeType: stat.contentType,
-        sizeBytes: stat.sizeBytes,
-        reviewStatus: 'pending', // the existing upload default — humans review
-      },
-    })
+    // section; replay-time re-signing is the parked follow-up). objectKey is
+    // the RAW key — the stable natural key the unique index (migration 18)
+    // dedupes on, so the unstable publicUrl above never gates idempotency.
+    let attachment
+    try {
+      attachment = await db.attachment.create({
+        data: {
+          entityType: 'photo',
+          entityId: 'unattached',
+          fileName: key,
+          storageKey: driver.publicUrl(key),
+          objectKey: key,
+          kind: `${category}_photo`,
+          uploadedBy: session.user.email,
+          projectId: null,
+          category,
+          mimeType: stat.contentType,
+          sizeBytes: stat.sizeBytes,
+          reviewStatus: 'pending', // the existing upload default — humans review
+        },
+      })
+    } catch (err) {
+      // Concurrent double-confirm: both requests missed the replay lookup
+      // above, both passed verification, and the unique index made exactly
+      // one create win. The loser resolves the winner's row and replays it
+      // — both callers get 200, one row exists. Any other error is not
+      // ours to interpret: rethrow (the route's 500 contract).
+      if (!isObjectKeyUniqueViolation(err)) throw err
+      const winner = await db.attachment.findUnique({ where: { objectKey: key } })
+      if (!winner) throw err // vanished between violation and re-read — honest 500
+      return replayOrConflict(winner, key, category)
+    }
 
     return NextResponse.json({
       ok: true,
+      replayed: false,
       attachment: {
         id: attachment.id,
         storageKey: attachment.storageKey,
@@ -142,3 +211,48 @@ export const POST = route(
     })
   },
 )
+
+/**
+ * The shared answer for a key that is already confirmed — both the
+ * pre-verification replay lookup and the post-race unique-violation path.
+ * Same category → 200 with the ORIGINAL row and the family's replayed flag
+ * (the row is never rewritten — append-only evidence). Different category
+ * (the one caller-chosen payload field) → 409, nothing replayed, nothing
+ * updated: reusing a confirmed key to reclassify the upload is a client
+ * bug, and silently honouring it would fork the caller's intent from the
+ * recorded evidence.
+ */
+function replayOrConflict(
+  existing: {
+    id: string
+    storageKey: string
+    fileName: string
+    category: string | null
+    reviewStatus: string
+  },
+  key: string,
+  category: (typeof DOCUMENT_CATEGORIES)[number],
+): NextResponse {
+  if (existing.category !== category) {
+    return NextResponse.json(
+      {
+        error:
+          `Upload key "${key}" was already confirmed as category "${existing.category ?? 'none'}" — ` +
+          `the stored Attachment was NOT replayed and NOT reclassified. Confirm again with the ` +
+          `original category, or presign a fresh upload (POST /api/upload/presign) for "${category}".`,
+      },
+      { status: 409 },
+    )
+  }
+  return NextResponse.json({
+    ok: true,
+    replayed: true,
+    attachment: {
+      id: existing.id,
+      storageKey: existing.storageKey,
+      fileName: existing.fileName,
+      category: existing.category,
+      reviewStatus: existing.reviewStatus,
+    },
+  })
+}

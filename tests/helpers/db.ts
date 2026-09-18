@@ -10,7 +10,7 @@
  *
  *   · a FRESH SQLite database file per test file (vitest isolates module
  *     registries per file, so the lazily-created singleton below is per-file);
- *   · the FULL migration history 00→17 applied by the REAL
+ *   · the FULL migration history 00→18 applied by the REAL
  *     `prisma migrate deploy` CLI (not by replaying SQL text) — the
  *     `_prisma_migrations` bookkeeping table is real, so the harness would
  *     catch a migration that applies via `db push` but not via `deploy`

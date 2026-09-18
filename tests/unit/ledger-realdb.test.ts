@@ -8,7 +8,7 @@
  * unique constraints — on a database whose full migration history was applied
  * by the real `prisma migrate deploy` (see tests/helpers/db.ts). Pinned:
  *
- *  · the harness itself: `_prisma_migrations` is real (18 rows, 00→17) —
+ *  · the harness itself: `_prisma_migrations` is real (19 rows, 00→18) —
  *    a migration that breaks `deploy` cannot reach these tests green;
  *  · double-entry posting through postLedgerTransaction: born pending →
  *    legs → posted (the migration-14 state machine), lazy chart-of-accounts
@@ -54,9 +54,9 @@ afterAll(disposeRealDb)
 const count = (table: string): number => Number((sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: bigint }).n)
 
 describe('the harness (issue #184)', () => {
-  it('runs on a database migrated by the real prisma migrate deploy (00→17 recorded)', () => {
+  it('runs on a database migrated by the real prisma migrate deploy (00→18 recorded)', () => {
     const rows = sqlite.prepare(`SELECT COUNT(*) AS n FROM _prisma_migrations WHERE finished_at IS NOT NULL`).get() as { n: bigint }
-    expect(Number(rows.n)).toBe(18)
+    expect(Number(rows.n)).toBe(19)
     // The ledger invariant triggers are live in this database.
     const triggers = sqlite.prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'LedgerTransaction%'`).all() as Array<{ name: string }>
     expect(triggers.map((t) => t.name)).toContain('LedgerTransaction_posting_gate')
