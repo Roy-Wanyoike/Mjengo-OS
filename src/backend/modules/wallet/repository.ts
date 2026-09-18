@@ -17,7 +17,7 @@ export async function loadFinanceSlice(projectId: string): Promise<FinanceSlice>
       orderBy: { occurredAt: 'desc' },
       take: 60,
     }),
-    db.ledgerAccount.findMany({ where: { projectId }, include: { entries: true } }),
+    db.ledgerAccount.findMany({ where: { projectId }, select: { id: true, code: true, name: true, kind: true, normalSide: true } }),
     db.phase.findMany({ where: { projectId }, select: { budget: true } }),
     db.transaction.findMany({ where: { projectId } }),
   ])
@@ -70,11 +70,29 @@ export async function loadFinanceSlice(projectId: string): Promise<FinanceSlice>
 
   // Exact cents balances per account; KSh only for the row display. The
   // escrow consistency check below reuses the CENTS form (exact compare).
+  // SQL SUM aggregation (issue #144): ONE grouped Σdebit/Σcredit per
+  // (account, side) — the pre-#144 shape loaded every account with its
+  // ENTIRE entry history (`include: { entries: true }`) and reduced in JS,
+  // so the finance slice degraded with the project's ledger age. Sign
+  // convention identical to the old reduce (kind-keyed).
+  const sums = accounts.length
+    ? await db.ledgerEntry.groupBy({
+        by: ['accountId', 'side'],
+        _sum: { amount: true },
+        where: { accountId: { in: accounts.map((a) => a.id) } },
+      })
+    : []
+  const sumsByAccount = new Map<string, { debit: Cents; credit: Cents }>()
+  for (const g of sums) {
+    const s = sumsByAccount.get(g.accountId) ?? { debit: 0n, credit: 0n }
+    if (g.side === 'debit') s.debit = g._sum.amount ?? 0n
+    else if (g.side === 'credit') s.credit = g._sum.amount ?? 0n
+    sumsByAccount.set(g.accountId, s)
+  }
   const accountBalances = new Map<string, Cents>()
   const accountRows: LedgerAccountRow[] = accounts.map((a) => {
-    const debit = sumCents(a.entries.filter((e) => e.side === 'debit').map((e) => e.amount))
-    const credit = sumCents(a.entries.filter((e) => e.side === 'credit').map((e) => e.amount))
-    const balance = a.kind === 'asset' || a.kind === 'expense' ? debit - credit : credit - debit
+    const s = sumsByAccount.get(a.id) ?? { debit: 0n, credit: 0n }
+    const balance = a.kind === 'asset' || a.kind === 'expense' ? s.debit - s.credit : s.credit - s.debit
     accountBalances.set(a.code, balance)
     return { code: a.code, name: a.name, kind: a.kind, normalSide: a.normalSide, balance: centsToKes(balance) }
   })

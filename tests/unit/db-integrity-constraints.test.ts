@@ -147,11 +147,50 @@ describe('hot-path indexes exist (DB-6)', () => {
     'Invoice_projectId_invoiceCode_key',
     'LedgerEntry_accountId_idx',
     'StockMovement_inventoryItemId_idx',
+    // Migration 15 (issue #144) — the audit's remaining hot paths.
+    'JobRecord_status_runAt_idx',
+    'Notification_projectId_read_idx',
+    'Notification_projectId_createdAt_idx',
+    'AuditEvent_projectId_createdAt_idx',
   ]
 
   it.each(EXPECTED_INDEXES)('%s exists in sqlite_master', (name) => {
     const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`).get(name)
     expect(row).toEqual({ name })
+  })
+})
+
+describe('migration 15 — the hot-path indexes serve the REAL query shapes (issue #144)', () => {
+  /** The planner's chosen access path for a query, as one detail string. */
+  const plan = (sql: string): string => {
+    const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>
+    return rows.map((r) => r.detail).join(' | ')
+  }
+
+  it('the job drain (status IN (queued,retrying) + runAt <= now, ORDER BY runAt) is index-backed', () => {
+    // runDueJobs' exact WHERE/ORDER — the pg_cron 5-min drainer's read.
+    const p = plan(
+      `SELECT * FROM JobRecord WHERE status IN ('queued', 'retrying') AND runAt <= '2026-09-18T00:00:00Z' ORDER BY runAt ASC LIMIT 10`,
+    )
+    expect(p).toContain('JobRecord_status_runAt_idx')
+  })
+
+  it('the notifications list (projectId + ORDER BY createdAt DESC, the `before` keyset) is index-backed', () => {
+    // /api/notifications default + project timeline + mjengo payload reads.
+    const p = plan(`SELECT * FROM Notification WHERE "projectId" = 'p-1' AND "createdAt" < '2026-09-18T00:00:00Z' ORDER BY "createdAt" DESC LIMIT 50`)
+    expect(p).toContain('Notification_projectId_createdAt_idx')
+  })
+
+  it('the unread reads / markRead (projectId + read = false) are index-backed', () => {
+    // The unread filter of the same list + markRead's updateMany WHERE.
+    const p = plan(`SELECT * FROM Notification WHERE "projectId" = 'p-1' AND "read" = 0`)
+    expect(p).toContain('Notification_projectId_read_idx')
+  })
+
+  it('the audit timeline (projectId + ORDER BY createdAt DESC, keyset after the boundary row) is index-backed', () => {
+    // project.ts timeline take-60 / mjengo.ts take-120 / audit.ts keyset.
+    const p = plan(`SELECT * FROM AuditEvent WHERE "projectId" = 'p-1' ORDER BY "createdAt" DESC, "id" DESC LIMIT 60`)
+    expect(p).toContain('AuditEvent_projectId_createdAt_idx')
   })
 })
 

@@ -344,6 +344,31 @@ vi.mock('@/backend/lib/db', () => {
       async findMany({ where }: { where: { accountId: string } }) {
         return entriesForAccount(where.accountId).map((e) => ({ ...e }))
       },
+      // The in-tx balance re-checks aggregate in SQL now (issue #144) —
+      // faithful Prisma groupBy twin over the in-memory entries.
+      async groupBy({
+        by,
+        _sum,
+        where,
+      }: {
+        by: string[]
+        _sum?: { amount?: boolean }
+        where?: { accountId?: string }
+      }) {
+        const rows = entriesForAccount(where?.accountId ?? '').map((e) => ({ ...e }))
+        const groups = new Map<string, Record<string, unknown>>()
+        for (const e of rows) {
+          const key = by.map((f) => (e as Record<string, unknown>)[f]).join('\u0000')
+          let g = groups.get(key)
+          if (!g) {
+            g = Object.fromEntries(by.map((f) => [f, (e as Record<string, unknown>)[f]]))
+            if (_sum?.amount) g._sum = { amount: 0n }
+            groups.set(key, g)
+          }
+          if (_sum?.amount) g._sum.amount = (g._sum.amount as bigint) + (e.amount as bigint)
+        }
+        return [...groups.values()]
+      },
     },
     escrowWallet: {
       async findUnique({ where }: { where: { projectId: string } }) {
