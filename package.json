@@ -17,6 +17,7 @@
     "site:lint": "cd mjengoos-website && bun run lint",
     "site:typecheck": "cd mjengoos-website && bun run typecheck",
     "test": "vitest run",
+    "test:finance": "vitest run -c vitest.financial.config.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed"
