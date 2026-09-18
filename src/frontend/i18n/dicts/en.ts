@@ -1119,7 +1119,10 @@ export const enDict = {
   'money.kpi.pending': 'Pending client decision',
   'money.kpi.pendingNote': 'Release request(s) awaiting {name}',
   'money.wallet.title': 'MjengoPay escrow wallet',
-  'money.wallet.note': 'Milestone-based escrow — money moves only on client-approved, photo-proven work',
+  // #138: approval-gated language — "escrow" survives in the app only as the
+  // internal ledger-account/wallet NAME (title above) and in the simulated-
+  // rails disclosure (money.posture.note), never as a behavior claim.
+  'money.wallet.note': 'Approval-gated milestones — money moves only on client-approved, photo-proven work',
   'money.wallet.topupAria': 'Top up the escrow wallet',
   'money.wallet.topup': 'Top up',
   'money.milestones.title': 'Milestones — money tied to proof of work',
@@ -1205,7 +1208,7 @@ export const enDict = {
   'money.ledger.noneYet': 'none yet',
   'money.cancel': 'Cancel',
   'money.topup.title': 'Top up escrow wallet',
-  'money.topup.desc': 'Funds are held in escrow and released only against client-approved milestones.',
+  'money.topup.desc': 'Funds stay committed to the milestone and are released only when the client approves.',
   'money.topup.amount': 'Amount (KSh)',
   'money.topup.ph': 'e.g. 500,000',
   'money.topup.preview': 'Adding {amount} — new balance {balance}',

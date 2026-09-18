@@ -1122,7 +1122,10 @@ export const swDict = {
   'money.kpi.pending': 'Inasubiri uamuzi wa mteja',
   'money.kpi.pendingNote': 'Maombi ya kutoa yanangojea {name}',
   'money.wallet.title': 'Pochi ya escrow ya MjengoPay',
-  'money.wallet.note': 'Escrooti ya hatua — pesa husogea tu kwa kazi aliyoiidhinisha mteja, iliyo na uthibitisho wa picha',
+  // #138: lugha ya "lango la uidhinishaji" — "escrow" hubaki kama JINA la
+  // akaunti ya daftari (kichwa hapo juu) na kwenye taarifa ya njia za pesa
+  // za mfano (money.posture.note), si kama dai la kitendo.
+  'money.wallet.note': 'Hatua zenye lango la uidhinishaji — pesa husogea tu kwa kazi aliyoiidhinisha mteja, iliyo na uthibitisho wa picha',
   'money.wallet.topupAria': 'Ongeza pesa kwenye pochi ya escrow',
   'money.wallet.topup': 'Ongeza pesa',
   'money.milestones.title': 'Hatua — pesaziunganishwa na uthibitisho wa kazi',
@@ -1208,7 +1211,7 @@ export const swDict = {
   'money.ledger.noneYet': 'hakuna bado',
   'money.cancel': 'Ghairi',
   'money.topup.title': 'Ongeza pesa kwenye pochi ya escrow',
-  'money.topup.desc': 'Pesa zinashikiliwa escrow na hutolewa tu dhidi ya hatua aliyoizidhinisha mteja.',
+  'money.topup.desc': 'Pesa zinabakia zimepangwa kwa ajili ya hatua na hutolewa tu baada ya mteja kuidhinisha.',
   'money.topup.amount': 'Kiasi (KSh)',
   'money.topup.ph': 'mf. 500,000',
   'money.topup.preview': 'Kuongeza {amount} — salio jipya {balance}',

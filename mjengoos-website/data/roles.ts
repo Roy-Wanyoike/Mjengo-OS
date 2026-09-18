@@ -29,7 +29,7 @@ export const ROLES: RoleDefinition[] = [
     ],
     gains: [
       "Every progress claim is anchored to dated, geolocated site photos.",
-      "Escrow-style milestone releases — you approve before money moves.",
+      "Approval-gated milestone releases — you approve before money moves.",
       "Alerts surface anomalies early, when they are still cheap to fix.",
     ],
   },

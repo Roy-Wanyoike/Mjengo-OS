@@ -17,7 +17,7 @@ const BULLETS = [
   },
   {
     icon: ShieldCheck,
-    title: "Escrow-style release",
+    title: "Approval-gated release",
     text: "Funds stay committed to the milestone until the client approves. Nobody spends ahead of the proof.",
   },
   {
