@@ -8,6 +8,7 @@ import type {
   LoginTrackerStore,
   RateLimitStore,
 } from '@/backend/lib/rate-limit'
+import { log } from './log'
 
 /**
  * SQLite-backed implementations of the rate-limit / login-lockout store seams
@@ -213,10 +214,12 @@ export function createSqliteStores(env: NodeJS.ProcessEnv): SqliteStores | null 
   const path = resolveRateLimitSqlitePath(env)
   const opened = openSqliteDatabase(path)
   if ('error' in opened) {
-    console.warn(
-      `[rate-limit] the shared SQLite rate-limit store is not active: ${opened.error}. ` +
+    log.warn(
+      'rate-limit',
+      `the shared SQLite rate-limit store is not active: ${opened.error}. ` +
         `Falling back to the in-memory store — per-process counters (issue #158 default posture; ` +
         `set RATE_LIMIT_STORE=memory to opt out explicitly and silence this warning).`,
+      { error: opened.error },
     )
     return null
   }
@@ -226,9 +229,11 @@ export function createSqliteStores(env: NodeJS.ProcessEnv): SqliteStores | null 
       loginTrackerStore: new SqliteLoginTrackerStore(opened.db),
     }
   } catch (err) {
-    console.warn(
-      `[rate-limit] the shared SQLite rate-limit store is not active: store construction failed ` +
+    log.warn(
+      'rate-limit',
+      `the shared SQLite rate-limit store is not active: store construction failed ` +
         `(${describeError(err)}). Falling back to the in-memory store — per-process counters.`,
+      { error: describeError(err) },
     )
     return null
   }
@@ -358,9 +363,11 @@ export class SqliteRateLimitStore implements RateLimitStore {
   private degrade(op: string, err: unknown): void {
     if (this.warned) return
     this.warned = true
-    console.warn(
-      `[rate-limit] sqlite store degraded — ${op}() failed (${describeError(err)}); ` +
+    log.warn(
+      'rate-limit',
+      `sqlite store degraded — ${op}() failed (${describeError(err)}); ` +
         `failing OPEN (requests pass) until the store recovers. Counter state may be lost.`,
+      { op, error: describeError(err) },
     )
   }
 }
@@ -477,9 +484,11 @@ export class SqliteLoginTrackerStore implements LoginTrackerStore {
   private degrade(op: string, err: unknown): void {
     if (this.warned) return
     this.warned = true
-    console.warn(
-      `[rate-limit] sqlite login-tracker store degraded — ${op} failed (${describeError(err)}); ` +
+    log.warn(
+      'rate-limit',
+      `sqlite login-tracker store degraded — ${op} failed (${describeError(err)}); ` +
         `failing OPEN (no lockout enforcement) until the store recovers.`,
+      { op, error: describeError(err) },
     )
   }
 }

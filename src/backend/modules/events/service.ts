@@ -21,6 +21,7 @@ import type {
   DomainEventPayload,
   NotifyPolicyEntry,
 } from './types'
+import { log } from '@/backend/lib/log'
 
 // ---------------- notification policy (the default subscriber) ----------------
 //
@@ -215,7 +216,7 @@ export async function emit(
         })
       } catch (e) {
         processed = false
-        console.error(`[events] notify policy failed for ${type} (audience ${audienceRole})`, e)
+        log.error('events', `notify policy failed for ${type} (audience ${audienceRole})`, { type, audienceRole, error: e })
       }
     }
   }
@@ -226,7 +227,7 @@ export async function emit(
       await handler(envelope)
     } catch (e) {
       processed = false
-      console.error(`[events] subscriber failed for ${type}`, e)
+      log.error('events', `subscriber failed for ${type}`, { type, error: e })
     }
   }
 
@@ -237,7 +238,7 @@ export async function emit(
         data: { processedAt: new Date() },
       })
     } catch (e) {
-      console.error(`[events] could not stamp processedAt for ${type}`, e)
+      log.error('events', `could not stamp processedAt for ${type}`, { type, error: e })
     }
   }
 

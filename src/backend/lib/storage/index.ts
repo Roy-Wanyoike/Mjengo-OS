@@ -41,6 +41,7 @@ export {
   type SigV4PresignOptions,
   type PresignMethod,
 } from './sigv4'
+import { log } from '../log'
 
 /** The env contract the factory reads (subset of process.env). */
 export interface StorageEnv {
@@ -104,10 +105,12 @@ export function resolveStorageDriver(env: StorageEnv): StorageAdapter {
   const anySet = [...REQUIRED_KEYS, 'S3_PUBLIC_BASE'].some((k) => String(env[k] ?? '').trim())
   if (anySet && !warnedPartial) {
     warnedPartial = true
-    console.warn(
-      `[storage] S3 configuration incomplete (missing ${missing.join(', ')}) — ` +
+    log.warn(
+      'storage',
+      `S3 configuration incomplete (missing ${missing.join(', ')}) — ` +
         `falling back to the local-disk driver (public/photos on this server). ` +
         `Set all of ${REQUIRED_KEYS.join(', ')} to enable object storage.`,
+      { missing },
     )
   }
   return localDiskDriver

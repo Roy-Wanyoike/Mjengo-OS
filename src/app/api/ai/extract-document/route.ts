@@ -8,6 +8,7 @@ import {
   reviewDocument,
 } from '@/backend/modules/documents/service'
 import { isReviewDecision, isReviewStatus, type DocumentExtraction } from '@/backend/modules/documents/types'
+import { log, withRequestLogging } from '@/backend/lib/log'
 
 // Document intelligence API (MjengoOS backend wave B3, Doc A §60).
 //
@@ -55,7 +56,8 @@ function parseExtractionDraft(raw: unknown): DocumentExtraction | null {
   }
 }
 
-export const GET = async (req: NextRequest): Promise<NextResponse> => {
+export const GET = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/extract-document', async () => {
   // Same shared gate as POST/PUT: session → role allowlist → rate limit.
   // The mutation-safety step passes GETs untouched by design, and a GET has
   // no body, so the gate's body-shape check sees {} (fields: [] → any body
@@ -97,15 +99,16 @@ export const GET = async (req: NextRequest): Promise<NextResponse> => {
       }),
     })
   } catch (e) {
-    console.error('[api/ai/extract-document GET]', e)
+    log.error('api/ai/extract-document GET', 'Request failed', { error: e })
     return NextResponse.json(
       { ok: false, error: safeErrorMessage(e, 'Could not load the document review queue') },
       { status: 500 },
     )
   }
-}
+})
 
-export const POST = async (req: NextRequest): Promise<NextResponse> => {
+export const POST = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/extract-document', async () => {
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:extract-document',
     fields: [
@@ -142,16 +145,17 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
       reviewStatus: 'pending', // re-extraction always re-opens review
     })
   } catch (e) {
-    console.error('[api/ai/extract-document]', e)
+    log.error('api/ai/extract-document', 'Request failed', { error: e })
     // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
     return NextResponse.json(
       { ok: false, error: safeErrorMessage(e, 'Document extraction failed') },
       { status: 500 },
     )
   }
-}
+})
 
-export const PUT = async (req: NextRequest): Promise<NextResponse> => {
+export const PUT = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/extract-document', async () => {
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:document-review',
     fields: [
@@ -190,11 +194,11 @@ export const PUT = async (req: NextRequest): Promise<NextResponse> => {
     const { ok, ...rest } = result
     return NextResponse.json({ ok, ...rest, reviewedBy: name })
   } catch (e) {
-    console.error('[api/ai/extract-document PUT]', e)
+    log.error('api/ai/extract-document PUT', 'Request failed', { error: e })
     // Same redaction as voice-log (W-AUDIT #5 family — no raw SDK errors).
     return NextResponse.json(
       { ok: false, error: safeErrorMessage(e, 'Document review failed') },
       { status: 500 },
     )
   }
-}
+})

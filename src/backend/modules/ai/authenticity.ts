@@ -62,6 +62,7 @@ import { dHash, hammingDistance, DUPLICATE_HAMMING_THRESHOLD } from '@/backend/l
 import { resolveAiProvider } from './provider'
 import type { AiTextResult, AiProvider } from './types'
 import { getFlags, type FlagMap } from '@/backend/modules/intel/flags'
+import { log } from '@/backend/lib/log'
 
 /**
  * Hard cap on photos sent to the VISION pass per screen run. Documented
@@ -820,7 +821,7 @@ export async function runAuthenticityScreen(input: AuthenticityScreenInput): Pro
   } catch (e) {
     // NEVER THROWN into a caller — a screen failure is advisory-only noise,
     // logged loudly and reported leak-free (error class only).
-    console.error('[ai-authenticity] screen failed (advisory only)', e)
+    log.error('ai-authenticity', 'screen failed (advisory only)', { error: e })
     return { ok: false, errorClass: e instanceof Error ? e.constructor.name : 'unknown' }
   }
 }
@@ -841,7 +842,7 @@ export async function runPostFreezeAuthenticityScreen(
   try {
     const outcome = await runAuthenticityScreen({ projectId, pack })
     if (!outcome.ok) {
-      console.error('[ai-authenticity] post-freeze screen failed (advisory only — the pack and release stand)', outcome.errorClass)
+      log.error('ai-authenticity', 'post-freeze screen failed (advisory only — the pack and release stand)', { errorClass: outcome.errorClass })
       await logAudit(
         projectId,
         'ai_screen',
@@ -852,7 +853,7 @@ export async function runPostFreezeAuthenticityScreen(
     }
   } catch (e) {
     // Belt and braces: even a programming error here cannot fail the pack.
-    console.error('[ai-authenticity] post-freeze hook threw (advisory only — the pack and release stand)', e)
+    log.error('ai-authenticity', 'post-freeze hook threw (advisory only — the pack and release stand)', { error: e })
     await logAudit(
       projectId,
       'ai_screen',

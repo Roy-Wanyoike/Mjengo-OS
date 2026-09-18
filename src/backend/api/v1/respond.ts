@@ -26,6 +26,7 @@
 //   500 unexpected failure — generic honest message, details in server logs
 
 import { NextResponse } from 'next/server'
+import { log } from '@/backend/lib/log'
 
 /** v1 error body: { error, field? } — one shape for every failure. */
 export function v1Err(status: number, error: string, field?: string): NextResponse {
@@ -76,7 +77,7 @@ export function mapServiceError(scope: string, e: unknown, fallback: string): Ne
     if (NOT_FOUND_MESSAGES.has(e.message)) return v1Err(404, e.message)
     return v1Err(400, e.message)
   }
-  console.error(`[api/v1 ${scope}]`, e)
+  log.error(`api/v1 ${scope}`, 'unexpected non-Error failure', { error: e })
   return v1Err(500, fallback)
 }
 

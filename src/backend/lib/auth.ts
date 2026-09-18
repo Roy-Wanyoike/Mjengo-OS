@@ -12,6 +12,7 @@ import {
   clientIpFromHeaders,
   recordLoginFailure,
 } from '@/backend/lib/rate-limit'
+import { log } from '@/backend/lib/log'
 
 /** Shape carried on the session (JWT → session callback). */
 export interface MjengoSessionUser {
@@ -118,11 +119,13 @@ export function warnNextAuthUrlMismatch(headers: Headers): void {
   const reqHost = headers.get('x-forwarded-host') ?? headers.get('host')
   if (envHost && reqHost && envHost !== reqHost) {
     warnedUrlMismatch = true
-    console.warn(
-      `[auth] NEXTAUTH_URL (${envHost}) does not match the request host (${reqHost}). ` +
+    log.warn(
+      'auth',
+      `NEXTAUTH_URL (${envHost}) does not match the request host (${reqHost}). ` +
         'Sign-in redirects and cookie origins will target the wrong host. ' +
         'Behind a reverse proxy leave NEXTAUTH_URL unset (next-auth derives the origin ' +
         'from x-forwarded-host/-proto), or set it to the public origin.',
+      { envHost, reqHost },
     )
   }
 }

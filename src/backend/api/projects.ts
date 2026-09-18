@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { logAudit, summarizeAction } from '@/backend/lib/audit'
+import { currentRequestId } from '@/backend/lib/log'
 import { getProjectPayload, getProjectsList, PROJECTS_LIST_TAKE } from '@/backend/lib/mjengo'
 import { ownerReadScope } from '@/backend/lib/membership-scope'
 import { route, safeError, genericError } from '@/backend/lib/route-kit'
@@ -236,7 +237,7 @@ export const POST = route(
       {
         ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown',
         userAgent: req.headers.get('user-agent')?.slice(0, 300) || undefined,
-        requestId: req.headers.get('x-request-id')?.trim() || crypto.randomUUID(),
+        requestId: currentRequestId() ?? crypto.randomUUID(),
         entity: 'Project',
         entityId: project.id,
         after: {

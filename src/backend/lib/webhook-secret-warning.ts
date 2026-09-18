@@ -35,6 +35,7 @@
 // and so tests can pin the once-only contract directly.
 
 /** Route labels already warned in THIS process (once-only per route). */
+import { log } from './log'
 const warned = new Set<string>()
 
 /**
@@ -95,23 +96,27 @@ export function warnIfWebhookSecretUnsetInProduction(routeLabel: string, secretE
   if (warned.has(routeLabel)) return
   if (process.env.NODE_ENV === 'production') {
     warned.add(routeLabel)
-    console.warn(
-      `[${routeLabel}] PRODUCTION POSTURE: ${secretEnvName} is unset — this route ` +
+    log.warn(
+      routeLabel,
+      `PRODUCTION POSTURE: ${secretEnvName} is unset — this route ` +
         `FAILS CLOSED: POST is refused with 503 until the secret is set. ` +
         `Set ${secretEnvName} (X-Signature: lowercase-hex HMAC-SHA256 of the raw request body) ` +
         `before pointing real aggregator/relay traffic at it. ` +
         `See the route's GET contract for the exact signing scheme.`,
+      { secretEnvName },
     )
     return
   }
   if (webhookOpenPostureOptedIn()) {
     warned.add(routeLabel)
-    console.warn(
-      `[${routeLabel}] OPEN POSTURE (WEBHOOK_OPEN_POSTURE=1): ${secretEnvName} is unset and ` +
+    log.warn(
+      routeLabel,
+      `OPEN POSTURE (WEBHOOK_OPEN_POSTURE=1): ${secretEnvName} is unset and ` +
         `unauthenticated writes ARE being accepted in this ${process.env.NODE_ENV || 'development'} runtime — ` +
         `the explicit demo/gateway-trust posture (attendance rows via applyAction, phone-keyed identity). ` +
         `Set ${secretEnvName} (X-Signature: lowercase-hex HMAC-SHA256 of the raw request body) before ` +
         `pointing real aggregator/relay traffic at it, or unset WEBHOOK_OPEN_POSTURE to fail closed (503).`,
+      { secretEnvName },
     )
   }
 }

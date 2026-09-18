@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { runDailyRecap } from '@/backend/modules/jobs/handlers'
 import { enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
+import { log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -21,7 +22,8 @@ export const maxDuration = 120
  * The no-JSON legacy body contract is preserved (allowEmptyBody → default
  * project).
  */
-export const POST = async (req: NextRequest): Promise<NextResponse> => {
+export const POST = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/recap', async () => {
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:recap',
     fields: [{ name: 'projectId', type: 'string' }],
@@ -36,7 +38,7 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
       recap: { id: recap.recapId, projectId: recap.projectId, day: recap.day, content: recap.content },
     })
   } catch (e) {
-    console.error('[api/ai/recap]', e)
+    log.error('api/ai/recap', 'Request failed', { error: e })
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Recap generation failed' }, { status: 500 })
   }
-}
+})

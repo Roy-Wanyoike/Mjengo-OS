@@ -42,6 +42,7 @@ import {
 import { runDarajaReconcile } from '@/backend/modules/wallet/daraja-reconcile'
 import { buildTrustDigest } from '@/backend/modules/ai/trust-digest'
 import { derivedBalance } from '@/backend/modules/ledger/service'
+import { log } from '@/backend/lib/log'
 
 /** Nairobi/EAT date string (UTC+3) — the platform's "today". */
 function todayEAT(): string {
@@ -478,8 +479,9 @@ export function escrowDriftThresholdCentsFromEnv(env: NodeJS.ProcessEnv = proces
   if (!raw) return DEFAULT_ESCROW_DRIFT_ALERT_CENTS
   const n = Number(raw)
   if (!Number.isSafeInteger(n) || n < 1) {
-    console.warn(
-      `[reconciliation] ESCROW_DRIFT_ALERT_CENTS="${raw}" is not an integer ≥ 1 — using the default (${DEFAULT_ESCROW_DRIFT_ALERT_CENTS} cent)`,
+    log.warn(
+      'reconciliation',
+      `ESCROW_DRIFT_ALERT_CENTS="${raw}" is not an integer ≥ 1 — using the default (${DEFAULT_ESCROW_DRIFT_ALERT_CENTS} cent)`,
     )
     return DEFAULT_ESCROW_DRIFT_ALERT_CENTS
   }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import pkg from '../../../../package.json'
+import { withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,7 +19,11 @@ export const dynamic = 'force-dynamic'
  * checks exist to report — those fields stay absent until a real dependency
  * does. Job counts are point-in-time row counts, not queue depth gauges.
  */
-export async function GET() {
+export function GET(req: Request): Promise<NextResponse> {
+  // Issue #204: the probe gets the same request-id/access-line treatment as
+  // every other API request (req is the Next-injected Request — probes carry
+  // no session, the wrapper adds no auth of its own).
+  return withRequestLogging(req, 'api/health', async () => {
   const startedAt = Date.now()
   const base = {
     ok: false as boolean,
@@ -61,4 +66,5 @@ export async function GET() {
       { status: 503 },
     )
   }
+  })
 }

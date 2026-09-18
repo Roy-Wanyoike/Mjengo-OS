@@ -50,6 +50,7 @@
 import { createHash } from 'node:crypto'
 import type { NextRequest } from 'next/server'
 import { buildAuthOptions } from '@/backend/lib/auth'
+import { log } from './log'
 
 /** Dev/test only — the fallback applies ONLY to an explicit development/test runtime (SEC-2). */
 export function isDevRuntime(): boolean {
@@ -71,8 +72,9 @@ function warnFallbackRejectedOnce(): void {
   const runtime = process.env.NODE_ENV ?? '<unset>'
   if (warnedNonDevRuntime === runtime) return
   warnedNonDevRuntime = runtime
-  console.error(
-    `[auth] NEXTAUTH_SECRET is not set and NODE_ENV is "${runtime}" — the ` +
+  log.error(
+    'auth',
+    `NEXTAUTH_SECRET is not set and NODE_ENV is "${runtime}" — the ` +
       `next-auth dev fallback secret is PUBLICLY DERIVABLE from the repo source, ` +
       `so session verification refuses it outside development/test. Every guarded ` +
       `API will answer 401 until a real secret is set. Generate one ` +

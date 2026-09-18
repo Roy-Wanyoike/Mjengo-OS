@@ -8,6 +8,7 @@ import {
   unauthenticatedWebhookWritesRefused,
   warnIfWebhookSecretUnsetInProduction,
 } from '@/backend/lib/webhook-secret-warning'
+import { currentRequestId, log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -209,7 +210,7 @@ async function dispatchWhatsappAction(
   const ctx = {
     ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown',
     userAgent: `whatsapp-gateway (${req.headers.get('user-agent')?.slice(0, 200) ?? 'unknown'})`,
-    requestId: req.headers.get('x-request-id')?.trim() || crypto.randomUUID(),
+    requestId: currentRequestId() ?? crypto.randomUUID(),
     entity: type,
     entityId: worker.id,
   }
@@ -255,7 +256,10 @@ function bodyTooLarge(): NextResponse {
   )
 }
 
-export async function POST(req: NextRequest) {
+export function POST(req: NextRequest): Promise<NextResponse> {
+  // Issue #204: not route-kit (WhatsApp relay contract), same request-id
+  // treatment as every API request (see the USSD route's note).
+  return withRequestLogging(req, 'api/whatsapp POST', async () => {
   // SEC-4 (audit wave 2) + issue #156: unset secret and no explicit open
   // posture → 503, no processing — FAIL CLOSED (production always; any other
   // runtime unless WEBHOOK_OPEN_POSTURE=1 opts into the demo posture).
@@ -372,11 +376,12 @@ export async function POST(req: NextRequest) {
     }, worker)
     return wa(`Note added to the site photo thread.\n${worker.name} — asante!${WHATSAPP_FOOTER}`)
   } catch (e) {
-    console.error('[api/whatsapp POST]', e)
+    log.error('api/whatsapp POST', 'Request failed', { error: e })
     // A gateway must get text back even when the domain action failed —
     // honest failure copy, never a JSON stack.
     return wa(`Could not record — try again or use the app.${WHATSAPP_FOOTER}`)
   }
+  })
 }
 
 /**

@@ -73,6 +73,7 @@
 import { db } from '@/backend/lib/db'
 import { enqueue } from '@/backend/modules/jobs/service'
 import { DARAJA_CALLBACK_KEY_PREFIX, DARAJA_INTENT_KEY_PREFIX, processDarajaStkCallback } from './daraja-callback'
+import { log } from '@/backend/lib/log'
 
 /** The JobType this module registers (jobs/handlers.ts dispatches on it). */
 export const DARAJA_RECONCILE_JOB_TYPE = 'wallet.reconcile'
@@ -102,7 +103,7 @@ function minutesFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number):
   if (!raw) return fallback
   const n = Number(raw)
   if (!Number.isFinite(n) || n <= 0) {
-    console.warn(`[daraja-reconcile] ${name}="${raw}" is not a positive number — using the default (${fallback} min)`)
+    log.warn('daraja-reconcile', `${name}="${raw}" is not a positive number — using the default (${fallback} min)`, { name, fallback })
     return fallback
   }
   return n
@@ -178,7 +179,7 @@ export async function seedDarajaReconcileSweep(env: NodeJS.ProcessEnv = process.
   try {
     return await scheduleDarajaReconcile(new Date(Date.now() + afterMin * 60_000))
   } catch (e) {
-    console.error('[daraja-reconcile] failed to seed the reconciliation sweep job', e)
+    log.error('daraja-reconcile', 'failed to seed the reconciliation sweep job', { error: e })
     return null
   }
 }

@@ -42,6 +42,7 @@ import { db } from '@/backend/lib/db'
 import { centsToKes, type Cents } from '@/backend/lib/money'
 import { logAudit } from '@/backend/lib/audit'
 import { runPostFreezeAuthenticityScreen } from '@/backend/modules/ai/authenticity'
+import { log } from '@/backend/lib/log'
 
 /** Bump when the pack content shape changes — old rows keep their version. */
 export const DRAW_PACK_SCHEMA_VERSION = 1
@@ -365,13 +366,13 @@ export async function createDrawPackForRelease(
         createdAt: row.createdAt,
       })
     } catch (e) {
-      console.error('[draw-pack] authenticity screen hook failed after freeze (advisory only — the pack stands)', e)
+      log.error('draw-pack', 'authenticity screen hook failed after freeze (advisory only — the pack stands)', { error: e })
     }
 
     return detailFromRow(row)
   } catch (e) {
     // Money already moved — the release stands. Record the failure loudly.
-    console.error('[draw-pack] failed to freeze the evidence pack for milestone', input.milestoneId, e)
+    log.error('draw-pack', 'failed to freeze the evidence pack for milestone', { milestoneId: input.milestoneId, error: e })
     await logAudit(
       projectId,
       'draw_pack',

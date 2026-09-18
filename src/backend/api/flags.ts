@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/backend/lib/db'
 import { logAudit } from '@/backend/lib/audit'
+import { currentRequestId, log } from '@/backend/lib/log'
 import { route, genericError } from '@/backend/lib/route-kit'
 import { FLAG_KEYS, FLAG_DEFAULTS, getFlags, setFlag, type FlagKey } from '@/backend/modules/intel/flags'
 
@@ -85,7 +86,7 @@ export const POST = route(
         {
           ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown',
           userAgent: req.headers.get('user-agent')?.slice(0, 300) || undefined,
-          requestId: req.headers.get('x-request-id')?.trim() || crypto.randomUUID(),
+          requestId: currentRequestId() ?? crypto.randomUUID(),
           entity: 'FeatureFlag',
           entityId: key,
           before: { enabled: before },
@@ -93,9 +94,11 @@ export const POST = route(
         },
       )
     } else {
-      console.warn(
-        `[api/flags POST] flag "${key}" → ${enabled} NOT audited: no Project exists to scope the ` +
+      log.warn(
+        'api/flags POST',
+        `flag "${key}" → ${enabled} NOT audited: no Project exists to scope the ` +
           `AuditEvent to (projectId is a required Project FK) — create a project first.`,
+        { key, enabled },
       )
     }
     return NextResponse.json({ ok: true, key, enabled, flags })

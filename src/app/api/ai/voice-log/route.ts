@@ -4,6 +4,7 @@ import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 import { AI_VOICE_LOG_MAX_BODY_BYTES, enforceAiRoutePolicy } from '@/backend/lib/rate-limit'
 import { safeErrorMessage } from '@/backend/lib/guard'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
+import { log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -37,7 +38,8 @@ export const maxDuration = 120
  * buttons are disabled by the same flag — see flags.ts for the map;
  * /api/ai/parse-text, the typed-note path, is deliberately NOT gated).
  */
-export const POST = async (req: NextRequest): Promise<NextResponse> => {
+export const POST = (req: NextRequest): Promise<NextResponse> =>
+  withRequestLogging(req, 'api/ai/voice-log', async () => {
   const gate = await enforceAiRoutePolicy(req, {
     bucket: 'ai:voice-log',
     // BE-5 (issue #105): 13 MB transport cap — headroom over the 12 MB
@@ -81,10 +83,10 @@ export const POST = async (req: NextRequest): Promise<NextResponse> => {
 
     return NextResponse.json({ ok: true, ...parsed })
   } catch (e) {
-    console.error('[api/ai/voice-log]', e)
+    log.error('api/ai/voice-log', 'Request failed', { error: e })
     // W-AUDIT #5: route SDK/ASR failures through safeErrorMessage — raw
     // e.message leaked SDK internals (multi-line/stack-like errors are
     // redacted; single-line domain messages still pass honestly).
     return NextResponse.json({ error: safeErrorMessage(e, 'Voice processing failed') }, { status: 500 })
   }
-}
+})
