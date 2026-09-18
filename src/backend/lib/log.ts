@@ -131,8 +131,13 @@ export type LogFields = Record<string, unknown>
  * BigInts → strings (this repo's cents are BigInts), circular references →
  * '[Circular]', undefined-root → 'null'. A log line must not take the
  * process down.
+ *
+ * Exported for the error sink (lib/errors/sink.ts, issue #202), which
+ * serializes its POST body under the same never-throw discipline — one
+ * implementation, two consumers, no cycle (this module imports nothing
+ * from the repo).
  */
-function safeStringify(value: unknown): string {
+export function safeStringify(value: unknown): string {
   const seen = new WeakSet<object>()
   return (
     JSON.stringify(value, (_key, v: unknown) => {

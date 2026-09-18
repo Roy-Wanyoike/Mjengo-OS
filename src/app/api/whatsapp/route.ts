@@ -8,6 +8,7 @@ import {
   unauthenticatedWebhookWritesRefused,
   warnIfWebhookSecretUnsetInProduction,
 } from '@/backend/lib/webhook-secret-warning'
+import { captureError } from '@/backend/lib/errors/sink'
 import { currentRequestId, log, withRequestLogging } from '@/backend/lib/log'
 
 export const dynamic = 'force-dynamic'
@@ -377,6 +378,9 @@ export function POST(req: NextRequest): Promise<NextResponse> {
     return wa(`Note added to the site photo thread.\n${worker.name} — asante!${WHATSAPP_FOOTER}`)
   } catch (e) {
     log.error('api/whatsapp POST', 'Request failed', { error: e })
+    // Issue #202 — same failure to the opt-in error sink (fire-and-forget;
+    // the requestId context above rides along in the payload).
+    captureError(e, { scope: 'api/whatsapp POST' })
     // A gateway must get text back even when the domain action failed —
     // honest failure copy, never a JSON stack.
     return wa(`Could not record — try again or use the app.${WHATSAPP_FOOTER}`)

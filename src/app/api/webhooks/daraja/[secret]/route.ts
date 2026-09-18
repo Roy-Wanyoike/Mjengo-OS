@@ -48,6 +48,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { processDarajaStkCallback } from '@/backend/modules/wallet/daraja-callback'
 import { darajaWebhookSegment } from '@/backend/modules/wallet/daraja'
 import { ipAllowed, parseIpAllowlist } from '@/backend/modules/wallet/ip-allowlist'
+import { captureError } from '@/backend/lib/errors/sink'
 import { clientIpFromHeaders } from '@/backend/lib/rate-limit'
 import { log, withRequestLogging } from '@/backend/lib/log'
 
@@ -149,6 +150,9 @@ export function POST(req: NextRequest, ctx: Ctx): Promise<NextResponse> {
     // Money may or may not have committed — a 500 makes Safaricom retry, and
     // the durable dedupe + ledger idempotency key make the retry money-safe.
     log.error('api/webhooks/daraja POST', 'Request failed', { error: e })
+    // Issue #202 — same failure to the opt-in error sink (fire-and-forget;
+    // the requestId context above rides along in the payload).
+    captureError(e, { scope: 'api/webhooks/daraja POST' })
     return NextResponse.json({ error: 'Callback processing failed' }, { status: 500 })
   }
   })
