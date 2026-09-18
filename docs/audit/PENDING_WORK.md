@@ -33,7 +33,7 @@
 | ID | Proposed issue title | Domain | Notes |
 |---|---|---|---|
 | SEC-3r | `feat(security): share-link expiry + re-issue + decision-power review` | security | entropy fixed this wave; expiry + milestone.decide-from-link remains |
-| SEC-5 | `chore(auth): next-auth v4→v5 migration plan (supported pairing with Next 16)` | security | |
+| SEC-5 | `chore(auth): next-auth v4→v5 migration plan (supported pairing with Next 16)` | security | 2026-09-18: ADR 0007 + exact pin 4.24.15 + Dependabot advisory watch landed (#173); v5 cutover scheduled per ADR phases |
 | DB-3 | `feat(db): DB-level ledger enforcement on SQLite (triggers/checks) parity with Supabase design` | finance | |
 | DB-5 | `fix(seed): production guard on destructive seed scripts` | data | NODE_ENV gate + confirm prompt |
 | API-3 | `perf(api): v1 list routes must not materialize full project payload` | backend | |

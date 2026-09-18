@@ -1,0 +1,37 @@
+# Dependency advisory & update watch — issue #173 / SEC-5 interim protection
+# (ADR 0007: docs/adr/0007-nextauth-v5-migration.md).
+#
+# Scope: the ROOT package tree (the app in src/) + GitHub Actions workflows.
+# The mjengoos-website/ package tree is tracked separately by issue #216.
+#
+# Cadence: weekly, with minor+patch updates grouped into one PR per week.
+# Security advisories are NOT subject to groups or schedules — Dependabot
+# opens those PRs immediately, which is the next-auth advisory watch this
+# file exists for (next-auth is pinned to an exact 4.24.15 per ADR 0007 and
+# is deliberately excluded from the group so every proposed bump — patch or
+# major — arrives as its own immediately-reviewable PR).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+        exclude-patterns:
+          # Security-critical exact pin (ADR 0007) — never silently grouped.
+          - next-auth
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-updates:
+        update-types:
+          - major
+          - minor
+          - patch
