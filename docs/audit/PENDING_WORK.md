@@ -37,7 +37,7 @@
 | DB-3 | `feat(db): DB-level ledger enforcement on SQLite (triggers/checks) parity with Supabase design` | finance | 2026-09-19: CLOSED on SQLite — migration `14_ledger_invariants` (#124) lands the posting-gate balance trigger, append-only guards, reversal-only update whitelist, side/amount CHECKs + the `LedgerMaintenance` exemption; DB-10 (immutability alignment) and the ledger part of DB-11 close with it |
 | DB-5 | `fix(seed): production guard on destructive seed scripts` | data | NODE_ENV gate + confirm prompt |
 | API-3 | `perf(api): v1 list routes must not materialize full project payload` | backend | |
-| API-4 | `perf(api): bound core reads (take/cursor) — milestones, variations, comments, attendance, supply` | backend | |
+| API-4 | `perf(api): bound core reads (take/cursor) — milestones, variations, comments, attendance, supply` | backend | 2026-09-18: landed via #155 — roster take 500 + `/api/projects` GET DB-level keyset (additive `nextCursor`/`hasMore`); payload takes milestones 200 / variations 60 / zones 120 / photoComments 120; v1 attendance keyset pushdown (contract unchanged); `loadSupplyOrdersBounded` (take 200) on the v1 list routes, full slice stays on detail surfaces |
 | API-5 | `feat(security): confirm-before-decide on share-link money actions` | security | overlaps SEC-3r |
 | FE-3 | `feat(i18n): complete EN-only sub-surfaces (audit tab, finder dialogs, land professionals, overview cards, PDF/CSV)` | frontend | |
 | FE-4 | `feat(offline): supplier-portal outbox parity` | frontend | |

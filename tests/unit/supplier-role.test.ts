@@ -31,8 +31,8 @@
  * fake (session control, mirrors guard.ts 1:1 incl. sessionSupplierId);
  * '@/backend/lib/mjengo' keeps applyAction REAL (importOriginal) and stubs
  * only the getProjectPayload / getProjectsList read seams;
- * '@/backend/modules/supply/repository' (loadSupplySlice) is controlled for
- * the v1 supply reads. route-kit, rate-limit, flags, the audit AsyncLocalStorage
+ * '@/backend/modules/supply/repository' (loadSupplySlice + the #155 bounded
+ * list read loadSupplyOrdersBounded) is controlled for the v1 supply reads. route-kit, rate-limit, flags, the audit AsyncLocalStorage
  * and every route under test stay REAL. Unique session emails keep the
  * in-process rate limiter out of the way.
  */
@@ -504,7 +504,7 @@ vi.mock('@/backend/lib/mjengo', async (importOriginal) => {
 })
 
 // The supply module's public read — controlled per test (v1-supply idiom).
-const repo = vi.hoisted(() => ({ loadSupplySlice: vi.fn() }))
+const repo = vi.hoisted(() => ({ loadSupplySlice: vi.fn(), loadSupplyOrdersBounded: vi.fn() }))
 vi.mock('@/backend/modules/supply/repository', () => repo)
 
 import { db } from '@/backend/lib/db'
@@ -627,6 +627,7 @@ beforeEach(() => {
       ? { project: { id, name: id === 'p-1' ? 'Riverside Villas' : 'Westlands Duplex' } }
       : null) as never)
   repo.loadSupplySlice.mockReset()
+  repo.loadSupplyOrdersBounded.mockReset()
 })
 
 afterEach(() => {
@@ -1022,7 +1023,10 @@ describe('the buyer payload surfaces are closed to supplier sessions', () => {
     sessionFor('supplier', { supplierId: 'sup-1' })
     const res = await projectsGet(getReq('http://localhost/api/projects'))
     expect(res.status).toBe(200)
-    expect(await bodyOf(res)).toEqual({ ok: true, projects: [] })
+    // #155: the portfolio response now carries nextCursor/hasMore (DB-level
+    // keyset pagination) — additive fields; the roster itself stays the
+    // honest empty list for a supplier session.
+    expect(await bodyOf(res)).toEqual({ ok: true, projects: [], nextCursor: null, hasMore: false })
     expect(getProjectsList).toHaveBeenCalledTimes(1)
   })
 
@@ -1338,11 +1342,16 @@ describe('v1 supplier-owned families — row-pinned, indistinguishable from a mi
   }
 
   beforeEach(() => {
-    // The real repo scopes by project — the stub mirrors that honestly.
+    // The real repo scopes by project — the stub mirrors that honestly
+    // (the full slice for the payload seam, the bounded orders array for
+    // the #155 v1 list routes — same rows either way).
     repo.loadSupplySlice.mockImplementation(async (projectId: string) => ({
       ...SLICE,
       orders: SLICE.orders.filter((o) => o.projectId === projectId),
     }))
+    repo.loadSupplyOrdersBounded.mockImplementation(
+      async (projectId: string) => SLICE.orders.filter((o) => o.projectId === projectId),
+    )
   })
 
   it('GET /api/v1/supply/orders?projectId=p-1 → exactly THEIR orders in the project', async () => {

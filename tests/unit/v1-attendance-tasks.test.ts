@@ -17,6 +17,10 @@
  *     / ?status= / ?date= all filter BEFORE pagination; a cursor outside the
  *     (filtered) list → 400 { field }. A foreign/unknown workerId matches no
  *     rows → honest empty page (the never-written-status precedent).
+ *     Issue #155 (API-4): the filters, the keyset boundary and take =
+ *     limit + 1 are pushed INTO the findMany — pinned here at the db-stub
+ *     seam (page 2's query carries the cursor row's (createdAt, id)
+ *     boundary and never re-reads page 1 rows).
  *   · WORKFORCE TRUST HONESTY — evidence and the append-only override log
  *     surface as COUNTS ONLY (evidenceCount/overrideCount — malformed stored
  *     JSON → 0, never a 500); the worker join (name/role) rides every row.
@@ -28,8 +32,10 @@
  *
  * Mocks (flags-gating idioms): '@/backend/lib/guard' full fake (session
  * control), '@/backend/lib/db' (project.findUnique + attendance.findMany
- * with honest where-filtering + task.findFirst with the phase/worker/blocker
- * include). route-kit, rate-limit, respond/schemas and the routes stay REAL.
+ * as an honest Prisma twin — where incl. the keyset boundary OR, orderBy,
+ * take — + attendance.findUnique for cursor resolution, + task.findFirst
+ * with the phase/worker/blocker include). route-kit, rate-limit,
+ * respond/schemas and the routes stay REAL.
  */
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -152,6 +158,9 @@ vi.mock('@/backend/lib/db', () => {
       { id: 'p-1', name: 'Nyumba Yangu' },
       { id: 'p-2', name: 'Kiambu Road Duplex' },
     ],
+    /** The attendance findMany args, in call order — the #155 DB-level
+     * keyset pins (boundary pushdown + take = limit + 1). */
+    attendanceCalls: [] as Array<Record<string, unknown>>,
   }
   return {
     db: {
@@ -170,20 +179,48 @@ vi.mock('@/backend/lib/db', () => {
         },
       },
       attendance: {
-        // Honest where-filtering (projectId + workerId + status + date) — the
-        // route applies the same filters, and the mock honors them so the
-        // filter tests exercise the real query seam.
-        async findMany({ where }: { where?: Record<string, unknown> }) {
-          return ATTENDANCES.filter((a) => {
+        // Honest Prisma twin (issue #155: the route pushes limit + cursor +
+        // filters INTO the findMany) — where-filtering (projectId +
+        // workerId + status + date + the keyset boundary OR), the
+        // (createdAt DESC, id DESC) total order and take are all honored,
+        // so the pagination tests exercise the real query seam.
+        async findMany({ where, orderBy, take }: { where?: Record<string, unknown>; orderBy?: Array<Record<string, string>>; take?: number }) {
+          state.attendanceCalls.push({ where, orderBy, take })
+          const boundary = where?.OR as Array<Record<string, unknown>> | undefined
+          const inBoundary = (a: (typeof ATTENDANCES)[number]) => {
+            if (!boundary) return true
+            return boundary.some((cond) => {
+              const c = cond.createdAt as unknown
+              if (c instanceof Date) {
+                // tiebreak branch: createdAt = c AND id < cursor id
+                const id = cond.id as { lt: string }
+                return a.createdAt.getTime() === c.getTime() && a.id < id.lt
+              }
+              // main branch: createdAt < c.lt
+              const lt = (c as { lt: Date }).lt
+              return a.createdAt.getTime() < lt.getTime()
+            })
+          }
+          const rows = ATTENDANCES.filter((a) => {
             if (where?.projectId && a.projectId !== where.projectId) return false
             if (where?.workerId && a.workerId !== where.workerId) return false
             if (where?.status && a.status !== where.status) return false
             if (where?.date && a.date !== where.date) return false
+            if (!inBoundary(a)) return false
             return true
-          }).map((a) => ({
-            ...a,
-            worker: WORKER_NAMES[a.workerId] ?? null,
-          }))
+          })
+            .map((a) => ({ ...a, worker: WORKER_NAMES[a.workerId] ?? null }))
+          // (createdAt DESC, id DESC) — the route's documented total order.
+          rows.sort(
+            (a, b) =>
+              b.createdAt.getTime() - a.createdAt.getTime() ||
+              (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+          )
+          return take !== undefined ? rows.slice(0, take) : rows
+        },
+        async findUnique({ where }: { where: { id: string } }) {
+          const found = ATTENDANCES.find((a) => a.id === where.id)
+          return found ? { ...found } : null
         },
       },
       task: {
@@ -233,6 +270,12 @@ import { GET as openapiGet } from '@/app/api/openapi.json/route'
 import { GET as projectAttendanceGet } from '@/app/api/v1/projects/[id]/attendance/route'
 import { GET as taskDetailGet } from '@/app/api/v1/tasks/[id]/route'
 import { invalidateFlagCache } from '@/backend/modules/intel/flags'
+import { db } from '@/backend/lib/db'
+
+/** The db stub's recorded state (the #155 query-shape pins). */
+function state() {
+  return (db as unknown as { __state: { attendanceCalls: Array<Record<string, unknown>> } }).__state
+}
 
 function sessionFor(role: string, projectId: string | null = null) {
   h.session = { user: { id: `u-${role}`, email: `${role}@test.dev`, name: role, role, projectId } }
@@ -337,6 +380,9 @@ describe('GET /api/v1/projects/:id/attendance — the day-rows', () => {
 
   it('cursor pagination: limit=2 pages walk all 6 rows with no overlap; a filtered-out cursor → 400', async () => {
     sessionFor('admin')
+    // #155: reset the recorded findMany args so the walk below is exactly
+    // this test's three page queries.
+    state().attendanceCalls.length = 0
     const seen: string[] = []
     let cursor: string | undefined
     let pages = 0
@@ -350,6 +396,34 @@ describe('GET /api/v1/projects/:id/attendance — the day-rows', () => {
     } while (cursor && pages < 10)
     expect(pages).toBe(3)
     expect(seen).toEqual(['att-00000002', 'att-00000001', 'att-00000003', 'att-00000004', 'att-00000005', 'att-00000006'])
+
+    // #155 (API-4) DB-level keyset pins — the pagination is pushed INTO the
+    // findMany: every page query carries take = limit + 1 (the hasMore probe
+    // row) and the documented (createdAt DESC, id DESC) order, and every
+    // page AFTER the first carries the cursor row's (createdAt, id) boundary
+    // — page 1 rows are never re-read at the DB level.
+    const calls = state().attendanceCalls
+    expect(calls).toHaveLength(3)
+    for (const c of calls) {
+      expect(c.take).toBe(3) // limit 2 + the hasMore probe row
+      expect(c.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }])
+      expect(c.where).toMatchObject({ projectId: 'p-1' })
+    }
+    expect(calls[0].where).not.toHaveProperty('OR') // first page: no boundary
+    // Page 2's boundary = (createdAt, id) of att-00000001, page 1's last item.
+    expect(calls[1].where).toMatchObject({
+      OR: [
+        { createdAt: { lt: d('2026-02-14T07:30:00Z') } },
+        { createdAt: d('2026-02-14T07:30:00Z'), id: { lt: 'att-00000001' } },
+      ],
+    })
+    // Page 3's boundary = (createdAt, id) of att-00000004, page 2's last item.
+    expect(calls[2].where).toMatchObject({
+      OR: [
+        { createdAt: { lt: d('2026-02-12T18:00:00Z') } },
+        { createdAt: d('2026-02-12T18:00:00Z'), id: { lt: 'att-00000004' } },
+      ],
+    })
 
     const stale = await projectAttendanceGet(req('p-1', '?status=absent&cursor=att-00000002'), ctx('p-1'))
     expect(stale.status).toBe(400)

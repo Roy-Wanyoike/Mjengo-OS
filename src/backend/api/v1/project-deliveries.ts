@@ -1,7 +1,7 @@
 import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
-import { loadSupplySlice } from '@/backend/modules/supply/repository'
+import { loadSupplyOrdersBounded } from '@/backend/modules/supply/repository'
 import { projectIdRef, projectDeliveriesQuery, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, membershipProjectDenied, supplierSessionId } from './scope'
@@ -38,11 +38,15 @@ type Ctx = { params: Promise<{ id: string }> }
  * filters before pagination) + ?limit/?cursor (delivery id of the last item
  * of the previous page; a cursor that falls out of the filtered list → 400).
  *
- * DATA: loadSupplySlice(projectId) — the supply module's public read (the
- * deliveries ride the orders' include). Flattened and ordered (createdAt
- * DESC, id DESC) for a deterministic keyset; the per-project delivery set is
- * bounded in practice, so pagination slices in the route layer (the
- * wallet-list pattern). Rate limit: 120/min per principal.
+ * DATA (issue #155 / audit API-4): loadSupplyOrdersBounded(projectId) — the
+ * supply module's BOUNDED list read (the orders network alone with the
+ * deliveries riding the orders' include, take-capped at the DB; the full
+ * loadSupplySlice network stays on the detail surfaces). Flattened and
+ * ordered (createdAt DESC, id DESC) for a deterministic keyset; the supplier
+ * pin / status filter / pagination slice in the route layer over that
+ * bounded window — a page beyond the window reports hasMore: false (the
+ * documented bound, the search-route MAX_SCAN honesty convention). Rate
+ * limit: 120/min per principal.
  */
 export const GET = route(
   {
@@ -80,10 +84,10 @@ export const GET = route(
       return v1Err(403, 'Supplier account has no supplier linked')
     }
 
-    const slice = await loadSupplySlice(id)
+    const orders = await loadSupplyOrdersBounded(id)
     // pageOfKind needs { id } rows; carry the owning order alongside for
     // orderCode + line-name lookups.
-    let rows = slice.orders.flatMap((o) => o.deliveries.map((d) => ({ id: d.id, d, o })))
+    let rows = orders.flatMap((o) => o.deliveries.map((d) => ({ id: d.id, d, o })))
     if (supplierId) {
       rows = rows.filter((r) => r.o.supplierId === supplierId)
     }

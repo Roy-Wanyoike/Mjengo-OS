@@ -181,20 +181,90 @@ export async function resolveProjectId(projectId?: string | null, payload?: any)
   return first.id
 }
 
+/**
+ * DB-level bound for the portfolio roster read (issue #155 / audit API-4).
+ *
+ * The roster itself is now take-capped like its per-table siblings (BE-8
+ * capped phases/transactions/workers/alerts/photos but left the project scan
+ * open — #155 closes that gap): 500 projects per read, ~2 orders of magnitude
+ * above the demo portfolio (3 projects) and equal to the largest per-table
+ * cap in the same Promise.all. /api/projects GET paginates past the cap with
+ * the keyset cursor; the no-arg callers (actions/sync response refreshes)
+ * take the single honest first page.
+ */
+export const PROJECTS_LIST_TAKE = 500
+
+/** Keyset query for {@link getProjectsList} — every field optional. */
+export interface ProjectsListQuery {
+  /**
+   * Keyset cursor: the id of the last project of the previous page (the
+   * audit-route / v1 cursor convention). The boundary is the cursor row's
+   * (createdAt, id) pair — the roster's total order — so page 2 never
+   * re-reads page 1 rows at the DB level. Unknown id, or an id outside the
+   * requested projectIds scope → single-line Error (the route maps it to a
+   * 400, the pageOfKind message convention).
+   */
+  cursor?: string
+  /** DB-level page size. Defaults to {@link PROJECTS_LIST_TAKE}. */
+  take?: number
+  /**
+   * Exact project-id scope, pushed INTO the query (issue #155): the client
+   * pin and the SEC-6 membership scope become `id IN (…)` so a scoped roster
+   * never depends on window position — a client's pinned project is found by
+   * the index, not by happening to sit inside the first 500. An empty list
+   * matches nothing (the honest empty roster for suppliers / unpinned
+   * clients); undefined = the portfolio window (contractor/admin).
+   */
+  projectIds?: string[]
+}
+
 /** Lightweight roster of every project (for switchers / dashboards).
  *
  * BE-8 (issue #105): the per-table loads are take-capped so a swollen table
  * can never turn this roster into an unbounded full scan — phases 500 /
  * transactions 500 / workers 500 / alerts 200 / photos 500, each ~2 orders
  * of magnitude above the demo portfolio (3 projects × dozens of rows), so no
- * honest dashboard view is truncated. The project list itself stays
- * uncapped: it IS the roster this function exists to return. The caps live
- * here (not in the route) so every caller — /api/projects, /api/actions,
- * /api/sync response refreshes — inherits the same bounded load.
+ * honest dashboard view is truncated. #155 (audit API-4): the project scan
+ * itself is now bounded too — take {@link PROJECTS_LIST_TAKE} (500) by
+ * default, with an optional keyset cursor + id scope so /api/projects GET
+ * paginates at the DB instead of loading every project. The caps live here
+ * (not in the route) so every caller — /api/projects, /api/actions,
+ * /api/sync response refreshes — inherits the same bounded load. Callers
+ * that need honest hasMore semantics ask for `take: limit + 1` and slice
+ * (the audit-route pattern); the no-arg call is the plain first page.
  */
-export async function getProjectsList(): Promise<ProjectListItem[]> {
+export async function getProjectsList(query: ProjectsListQuery = {}): Promise<ProjectListItem[]> {
+  const take = query.take ?? PROJECTS_LIST_TAKE
+  // Keyset boundary: the cursor row's (createdAt, id) — resolved by id (the
+  // audit.ts convention). A cursor outside the requested scope is refused
+  // with the same single-line error (pageOfKind's "in this list" rule).
+  let boundary: { createdAt: Date; id: string } | null = null
+  if (query.cursor) {
+    const cursorRow = await db.project.findUnique({ where: { id: query.cursor } })
+    if (!cursorRow || (query.projectIds !== undefined && !query.projectIds.includes(cursorRow.id))) {
+      throw new Error('Unknown cursor — it must be the id of a project in this list')
+    }
+    boundary = { createdAt: cursorRow.createdAt, id: cursorRow.id }
+  }
   const [projects, phases, transactions, workers, alerts, photos] = await Promise.all([
-    db.project.findMany({ orderBy: { createdAt: 'asc' } }),
+    db.project.findMany({
+      where: {
+        ...(query.projectIds !== undefined ? { id: { in: query.projectIds } } : {}),
+        ...(boundary
+          ? {
+              OR: [
+                { createdAt: { gt: boundary.createdAt } },
+                { createdAt: boundary.createdAt, id: { gt: boundary.id } },
+              ],
+            }
+          : {}),
+      },
+      // The roster's total order: createdAt ASC (oldest project first — the
+      // switcher order) with the id tiebreak, so the keyset boundary is exact
+      // even when two projects share a timestamp.
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take,
+    }),
     db.phase.findMany({ include: { tasks: true }, take: 500 }),
     db.transaction.findMany({ take: 500 }),
     db.worker.findMany({ take: 500 }),
@@ -254,6 +324,36 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
     : await db.project.findFirst({ orderBy: { createdAt: 'asc' } })
   if (!project) return null
 
+  // DB-level bounds on the four list-shaped reads (issue #155 / audit API-4):
+  // milestones / variation orders / site zones / photo comments are the
+  // append-mostly display lists this payload serves, and each now carries an
+  // explicit take sized to the real consumers:
+  //   · milestones 200 — /api/v1/projects/:id/milestones rides THIS read and
+  //     documents limit up to 200, so the bound equals that max page and no
+  //     documented v1 page is ever truncated (~2 orders above the ~5-row
+  //     seed fixtures);
+  //   · variations 60 — the money tab's scrollable decision list, no v1
+  //     route rides it (the notifications-sibling bound; variations are
+  //     rarer than milestones by construction — one per client-approved
+  //     plan change);
+  //   · zones 120 — the site-plan card renders every zone of the site (a
+  //     handful by domain shape; the auditEvents-sibling bound leaves an
+  //     order of magnitude of headroom);
+  //   · photoComments 120 — the overview photo drawer filters per photo from
+  //     this one list (the auditEvents-sibling bound).
+  //
+  // The reads deliberately left uncapped in the same block feed EXACT
+  // aggregates, not just lists — phases → budgetTotal/progressPct, workers +
+  // their attendance include → wagesUnpaid/fundisToday/week earnings,
+  // deliveries + consumptions → the materials rollup (on-site qty, stock
+  // value), transactions → budgetSpent + the weekly spendTrend, photos →
+  // per-photo phase joins, alerts → unackedAlerts. A take on any of them
+  // would silently corrupt that math (a capped scan is a wrong sum, not a
+  // shorter list), so their honest DB-level bound is a SQL aggregate (the
+  // issue #144 accountSideSums pattern), which is aggregate-wave work —
+  // recorded as the follow-up, not smuggled in here. Until then they remain
+  // full scans BY DESIGN, bounded in practice only by the project's own
+  // lifetime data (SQLite demo scale: dozens of rows per table).
   const [phases, workers, materials, deliveries, consumptions, photos, alerts, transactions, recaps, escrow, milestones, variations, zones, notifications, auditEvents, photoComments, inventory, boq, finance, drawPacks] =
     await Promise.all([
       db.phase.findMany({ where: { projectId: project.id }, orderBy: { order: 'asc' }, include: { tasks: { orderBy: { createdAt: 'asc' } } } }),
@@ -266,12 +366,12 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
       db.transaction.findMany({ where: { projectId: project.id }, orderBy: { date: 'desc' } }),
       db.recap.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 5 }),
       db.escrowWallet.findUnique({ where: { projectId: project.id } }),
-      db.milestone.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'asc' } }),
-      db.variationOrder.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' } }),
-      db.siteZone.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'asc' } }),
+      db.milestone.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'asc' }, take: 200 }),
+      db.variationOrder.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 60 }),
+      db.siteZone.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'asc' }, take: 120 }),
       db.notification.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 60 }),
       db.auditEvent.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 120 }),
-      db.photoComment.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' } }),
+      db.photoComment.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 120 }),
       loadInventorySlice(project.id),
       loadBoqSlice(project.id),
       loadFinanceSlice(project.id),

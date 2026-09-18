@@ -27,8 +27,9 @@
  * Mocks (flags-gating idioms): '@/backend/lib/guard' full fake (session
  * control), '@/backend/lib/db' (featureFlag + the two route-layer reads:
  * project.findUnique, purchaseOrder.findFirst), and
- * '@/backend/modules/supply/repository' (loadSupplySlice — the module's
- * public read). route-kit, rate-limit, flags, respond/schemas and the
+ * '@/backend/modules/supply/repository' (loadSupplyOrdersBounded — the
+ * module's BOUNDED list read since #155; the full slice stays on the detail
+ * surfaces). route-kit, rate-limit, flags, respond/schemas and the
  * routes themselves stay REAL. NEXT_FLAGS_OFF + invalidateFlagCache().
  */
 import { NextRequest } from 'next/server'
@@ -128,8 +129,11 @@ vi.mock('@/backend/lib/guard', async () => {
   }
 })
 
-// The supply module's public read — controlled per test.
-const repo = vi.hoisted(() => ({ loadSupplySlice: vi.fn() }))
+// The supply module's reads — controlled per test. Issue #155: the two LIST
+// routes read loadSupplyOrdersBounded (the bounded orders network); the full
+// loadSupplySlice stays on the detail surfaces (not exercised by these
+// route tests — bounded-reads.test.ts pins the repository itself).
+const repo = vi.hoisted(() => ({ loadSupplyOrdersBounded: vi.fn() }))
 vi.mock('@/backend/modules/supply/repository', () => repo)
 
 import { GET as openapiGet } from '@/app/api/openapi.json/route'
@@ -246,7 +250,7 @@ beforeEach(() => {
   h.session = null
   delete process.env.NEXT_FLAGS_OFF
   invalidateFlagCache()
-  repo.loadSupplySlice.mockResolvedValue(SLICE)
+  repo.loadSupplyOrdersBounded.mockResolvedValue(SLICE.orders)
 })
 
 afterEach(() => {
@@ -262,7 +266,7 @@ describe('GET /api/v1/supply/orders — list', () => {
     const res = await supplyOrdersGet(getReq('http://localhost/api/v1/supply/orders?projectId=p-1'))
     expect(res.status).toBe(200)
     const body = await bodyOf(res)
-    expect(repo.loadSupplySlice).toHaveBeenCalledWith('p-1')
+    expect(repo.loadSupplyOrdersBounded).toHaveBeenCalledWith('p-1')
     expect(body.ok).toBe(true)
     expect(body.data).toEqual([
       {
@@ -328,23 +332,23 @@ describe('GET /api/v1/supply/orders — list', () => {
     const body = await bodyOf(res)
     expect(body.error).toMatch(/projectId/)
     expect(body.field).toBe('projectId')
-    expect(repo.loadSupplySlice).not.toHaveBeenCalled()
+    expect(repo.loadSupplyOrdersBounded).not.toHaveBeenCalled()
   })
 
-  it('unknown project → 404 { error: "Project not found" }, no slice load', async () => {
+  it('unknown project → 404 { error: "Project not found" }, no bounded read', async () => {
     sessionFor('contractor')
     const res = await supplyOrdersGet(getReq('http://localhost/api/v1/supply/orders?projectId=p-x'))
     expect(res.status).toBe(404)
     expect(await bodyOf(res)).toEqual({ error: 'Project not found' })
-    expect(repo.loadSupplySlice).not.toHaveBeenCalled()
+    expect(repo.loadSupplyOrdersBounded).not.toHaveBeenCalled()
   })
 
-  it('client pinned to a foreign project → 403, no slice load', async () => {
+  it('client pinned to a foreign project → 403, no bounded read', async () => {
     sessionFor('client', 'p-2')
     const res = await supplyOrdersGet(getReq('http://localhost/api/v1/supply/orders?projectId=p-1'))
     expect(res.status).toBe(403)
     expect(await bodyOf(res)).toEqual({ error: 'Not permitted for this project' })
-    expect(repo.loadSupplySlice).not.toHaveBeenCalled()
+    expect(repo.loadSupplyOrdersBounded).not.toHaveBeenCalled()
   })
 
   it('client reading their OWN project → 200', async () => {
@@ -473,7 +477,7 @@ describe('GET /api/v1/projects/:id/deliveries — delivery verification records'
     const res = await projectDeliveriesGet(req('p-1'), ctx('p-1'))
     expect(res.status).toBe(200)
     const body = await bodyOf(res)
-    expect(repo.loadSupplySlice).toHaveBeenCalledWith('p-1')
+    expect(repo.loadSupplyOrdersBounded).toHaveBeenCalledWith('p-1')
     const items = body.data as Array<Record<string, unknown>>
     expect(items.map((x) => x.id)).toEqual(['dlv-2', 'dlv-3', 'dlv-1'])
     expect(items[0]).toEqual({
@@ -565,7 +569,7 @@ describe('marketplace flag gates the whole v1 supply family (non-admins)', () =>
     const body = await bodyOf(res)
     expect(body.error).toMatch(/Feature disabled by feature flag \(marketplace\)/)
     expect(body.error).toMatch(/admin can re-enable/)
-    expect(repo.loadSupplySlice).not.toHaveBeenCalled()
+    expect(repo.loadSupplyOrdersBounded).not.toHaveBeenCalled()
   })
 
   it('flag OFF + admin → 200 (bypass so the flag can be exercised)', async () => {
@@ -585,14 +589,14 @@ describe('marketplace flag gates the whole v1 supply family (non-admins)', () =>
     expect((await bodyOf(res)).error).toMatch(/Feature disabled by feature flag \(marketplace\)/)
   })
 
-  it('flag OFF + supervisor on the deliveries list → 403, no slice load', async () => {
+  it('flag OFF + supervisor on the deliveries list → 403, no bounded read', async () => {
     process.env.NEXT_FLAGS_OFF = 'marketplace'
     sessionFor('supervisor')
     const res = await projectDeliveriesGet(getReq('http://localhost/api/v1/projects/p-1/deliveries'), {
       params: Promise.resolve({ id: 'p-1' }),
     })
     expect(res.status).toBe(403)
-    expect(repo.loadSupplySlice).not.toHaveBeenCalled()
+    expect(repo.loadSupplyOrdersBounded).not.toHaveBeenCalled()
   })
 
   it('flag ON → the routes behave normally (the gate is additive, not a rewrite)', async () => {

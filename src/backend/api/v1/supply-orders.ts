@@ -1,7 +1,7 @@
 import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
-import { loadSupplySlice } from '@/backend/modules/supply/repository'
+import { loadSupplyOrdersBounded } from '@/backend/modules/supply/repository'
 import { supplyOrdersQuery, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
 import { clientProjectDenied, membershipProjectDenied, supplierSessionId } from './scope'
@@ -36,12 +36,15 @@ import { supplyOrderSummary } from './supply-rows'
  * ?cursor (order id of the last item of the previous page; a cursor that
  * falls out of the filtered list → 400).
  *
- * DATA: loadSupplySlice(projectId) is the supply module's public read — the
- * exact procurement network the webapp Finder tab renders (orders arrive
- * createdAt DESC with their deliveries; the id tiebreak below pins a
- * deterministic total order for the keyset). The per-project order set is
- * bounded in practice, so pagination slices in the route layer — the
- * wallet-list pattern. Rate limit: 120/min per principal.
+ * DATA (issue #155 / audit API-4): loadSupplyOrdersBounded(projectId) — the
+ * supply module's BOUNDED list read (the orders network alone, take-capped
+ * at the DB; the full loadSupplySlice network stays on the detail surfaces).
+ * Orders arrive createdAt DESC with their deliveries; the id tiebreak below
+ * pins a deterministic total order for the keyset. The supplier pin / status
+ * filter / pagination slice in the route layer over that bounded window —
+ * a page beyond the window reports hasMore: false (the documented bound,
+ * the search-route MAX_SCAN honesty convention). Rate limit: 120/min per
+ * principal.
  */
 export const GET = route(
   {
@@ -76,22 +79,22 @@ export const GET = route(
       return v1Err(403, 'Supplier account has no supplier linked')
     }
 
-    const slice = await loadSupplySlice(projectId)
-    let orders = slice.orders
+    const orders = await loadSupplyOrdersBounded(projectId)
+    let list = orders
     if (supplierId) {
-      orders = orders.filter((o) => o.supplierId === supplierId)
+      list = list.filter((o) => o.supplierId === supplierId)
     }
     if (q.data.status) {
-      orders = orders.filter((o) => o.status === q.data.status)
+      list = list.filter((o) => o.status === q.data.status)
     }
     // Deterministic keyset order: (createdAt DESC, id DESC).
-    orders = [...orders].sort(
+    list = [...list].sort(
       (a, b) =>
         b.createdAt.getTime() - a.createdAt.getTime() ||
         (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
     )
 
-    const p = pageOfKind(orders, q.data.limit, q.data.cursor, 'an order')
+    const p = pageOfKind(list, q.data.limit, q.data.cursor, 'an order')
     if (!p.ok) return p.response
     return v1Ok(p.page.items.map(supplyOrderSummary), {
       nextCursor: p.page.nextCursor,
