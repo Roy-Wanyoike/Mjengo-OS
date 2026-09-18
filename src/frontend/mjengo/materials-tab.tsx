@@ -182,7 +182,11 @@ export function MaterialsTab() {
             </TableHeader>
             <TableBody>
               {data.materials.map((m) => {
-                const lowStock = m.onSiteQty <= m.deliveredQty * 0.1 && m.deliveredQty > 0
+                // #207: server-owned flag (MaterialRow.lowStock, computed by
+                // the ONE rule in modules/inventory/low-stock.ts against this
+                // ledger's own quantities) — the old client-side recompute
+                // is gone; the badge renders what the server says.
+                const lowStock = m.lowStock
                 return (
                   <TableRow key={m.id} className={lowStock ? 'bg-amber-50/50' : undefined}>
                     <TableCell className="font-medium text-stone-800">
@@ -424,12 +428,12 @@ function MovementBadge({ type }: { type: StockMovementType | string }) {
   )
 }
 
-/** Low stock = closing ≤ 10% of everything that ever came in (opening + received + returns). */
-function isLowStock(item: InventoryItemRow): boolean {
-  const inflow = item.openingQty + item.receivedQty + item.returnedQty
-  return inflow > 0 && item.closingQty <= inflow * 0.1
-}
-
+/**
+ * #207: the low-stock badge/tile consume the SERVER flag (the slice's
+ * InventoryItemRow.lowStock) — this client-side heuristic was the second of
+ * the two divergent recomputes the issue deleted. The rule itself lives in
+ * modules/inventory/low-stock.ts and is applied at the payload boundary.
+ */
 function SiteStoreCard() {
   const { data, dispatch, online, outbox, viewMode, actionBusy } = useMjengo()
   const t = useT()
@@ -462,7 +466,7 @@ function SiteStoreCard() {
   const consumedTotal = items.reduce((s, i) => s + i.consumedQty, 0)
   const damagedTotal = items.reduce((s, i) => s + i.damagedQty, 0)
   const transfersTotal = movements.filter((m) => m.type === 'transferred_out').length
-  const lowCount = items.filter(isLowStock).length
+  const lowCount = items.filter((i) => i.lowStock).length
   const offlineNote = t('field.savedQueued', { count: outbox.length })
 
   const lastMovementByItem = new Map<string, { reference: string | null; createdAt: string; type: string }>()
@@ -686,7 +690,7 @@ function SiteStoreCard() {
               </TableHeader>
               <TableBody>
                 {items.map((item) => {
-                  const low = isLowStock(item)
+                  const low = item.lowStock // #207: the server's flag, not a client recompute
                   const last = lastMovementByItem.get(item.id)
                   return (
                     <TableRow key={item.id} className={low ? 'bg-amber-50/50' : undefined}>

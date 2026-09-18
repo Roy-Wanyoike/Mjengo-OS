@@ -13,6 +13,7 @@ import { SUPPLY_ACTIONS, applySupplyAction } from '@/backend/actions/supply'
 import { INVOICE_ACTIONS, applyInvoiceAction } from '@/backend/actions/invoices'
 import { INVENTORY_ACTIONS, applyInventoryAction } from '@/backend/actions/inventory'
 import { loadInventorySlice, loadBoqSlice } from '@/backend/modules/inventory/repository'
+import { isLowStock } from '@/backend/modules/inventory/low-stock'
 import { loadFinanceSlice } from '@/backend/modules/wallet/repository'
 import { WALLET_ACTIONS, applyWalletAction } from '@/backend/actions/wallet'
 import {
@@ -94,6 +95,11 @@ export interface MaterialRow extends MaterialKes {
   onSiteQty: number
   stockValue: number
   deliveries: DeliveryKes[]
+  /** #207: server-owned low-stock flag — the ONE rule (modules/inventory/
+   * low-stock.ts) applied to THIS ledger's own quantities (closing =
+   * onSiteQty, inflow = delivered total). The legacy table used to
+   * re-derive this client-side; it renders the flag now. */
+  lowStock: boolean
 }
 
 export interface ProjectSummary {
@@ -398,6 +404,11 @@ export async function getProjectPayload(projectId?: string | null): Promise<Proj
       // mulQtyCents refuses qty ≤ 0 by design (line totals must move) — a
       // material with nothing on site has an honest zero stock value.
       stockValue: onSiteQty > 0 ? centsToKes(mulQtyCents(onSiteQty, m.unitPrice)) : 0,
+      // #207: same ONE rule as the inventory slice, fed by the v1 delivery
+      // ledger's own derived quantities — closing = onSiteQty (delivered −
+      // consumed), inflow = deliveredQty. The v1 Material catalog has no
+      // reorder level, so this surface always runs the derived default.
+      lowStock: isLowStock({ closingQty: onSiteQty, inflowQty: deliveredQty }),
       deliveries: md.map(toDeliveryKes),
     }
   })

@@ -484,7 +484,7 @@ model Notification {
   id             String    @id @default(cuid())
   projectId      String?
   project        Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  kind           String // recap, milestone, variation, anomaly, comment, attendance, share, system, approval.requested, delivery.discrepancy, invoice.submitted, price.alert...
+  kind           String // recap, milestone, variation, anomaly, comment, attendance, share, system, approval.requested, delivery.discrepancy, invoice.submitted, price.alert, stock.low...
   title          String
   body           String
   channel        String    @default("in_app") // in_app, whatsapp, sms, push, email
@@ -1203,6 +1203,10 @@ model InventoryItem {
   materialId   String? // optional link to the global Material catalog
   location     String          @default("Site Store") // site store / zone name
   supplierId   String?
+  // #207: explicit low-stock threshold — derived closing ≤ level ⇒ low. Null
+  // falls back to the documented default (closing ≤ 10% of everything that
+  // ever flowed in — modules/inventory/low-stock.ts, ONE definition).
+  reorderLevel Int?
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
   movements    StockMovement[]

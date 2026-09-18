@@ -581,9 +581,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   const foreman = 'Mwangi Kariuki (Foreman)'
   const storekeeper = 'Joseph Mwenda (Storekeeper)'
 
-  async function item(materialName: string, unit: string, supplierId: string | null, location = 'Site Store') {
+  async function item(materialName: string, unit: string, supplierId: string | null, location = 'Site Store', reorderLevel: number | null = null) {
     return db.inventoryItem.create({
-      data: { projectId: project.id, materialName, unit, location, supplierId },
+      data: { projectId: project.id, materialName, unit, location, supplierId, reorderLevel },
     })
   }
   async function move(
@@ -602,8 +602,10 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   }
 
   // Cement — opening + received (48 of 50, PO-2026-000009) + damaged (4 bags
-  // set by rain) + consumed + transfer to the Slab store
-  const cement = await item('Cement 50kg (32.5N)', 'bag', nairobi?.id ?? null)
+  // set by rain) + consumed + transfer to the Slab store. reorderLevel 40
+  // (#207): closing 39 ≤ 40 → LOW — the explicit threshold demo (the derived
+  // default would NOT flag 39 of 68 in).
+  const cement = await item('Cement 50kg (32.5N)', 'bag', nairobi?.id ?? null, 'Site Store', 40)
   await move(cement.id, 'opening', 20, daysAgo(12, 8), foreman, 76000n, null, 'Opening count at handover')
   await move(cement.id, 'received', 48, daysAgo(8, 14), foreman, 79500n, po9Ref?.orderCode ?? 'PO-2026-000009', '48 of 50 — 2 missing, flagged for review')
   await move(cement.id, 'damaged', 4, daysAgo(6, 9), storekeeper, null, po9Ref?.orderCode ?? 'PO-2026-000009', '4 bags set by rain')
@@ -618,8 +620,10 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
   await move(ballast.id, 'received', 10, daysAgo(8, 14), foreman, 195000n, po9Ref?.orderCode ?? 'PO-2026-000009', 'Delivered in full')
   await move(ballast.id, 'consumed', 8, daysAgo(3, 16), foreman, null, null, 'Slab hardcore backfill')
 
-  // River sand — opening + consumed (now LOW: 1 of 3 left)
-  const sand = await item('River sand', 'tonne', kiambu?.id ?? null)
+  // River sand — opening + consumed (now LOW: 1 of 3 left, under the
+  // reorderLevel 2 set below — #207's threshold-governed flag; the derived
+  // 10%-of-inflow default alone would leave 1 of 3 unflagged)
+  const sand = await item('River sand', 'tonne', kiambu?.id ?? null, 'Site Store', 2)
   await move(sand.id, 'opening', 3, daysAgo(12, 8), foreman, 220000n, null, null)
   await move(sand.id, 'consumed', 2, daysAgo(5, 11), foreman, null, null, 'Screed batch A')
 

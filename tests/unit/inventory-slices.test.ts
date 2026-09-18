@@ -25,6 +25,10 @@
  *    empty project yields the empty-slice shape (counts included);
  *  · item rows do NOT double-carry the movement log (the loader strips it
  *    from the items array — movements live in the flat list only).
+ *  · #207: lowStock is COMPUTED from the one documented rule (explicit
+ *    reorderLevel when set, else closing ≤ 10% of opening+received+
+ *    returned, zero-inflow never low) — above/below threshold, the exact
+ *    boundary, and the zero-inflow guard are pinned in their own describe.
  *
  * Deliberately NOT duplicated here (already pinned elsewhere — see the PR
  * coverage map): the service write paths + qty validation
@@ -126,7 +130,7 @@ interface SeedMovement {
 /** Seed one inventory item with its full movement log (append-only order). */
 function seedItem(
   projectId: string,
-  spec: { materialName: string; unit?: string; location?: string; supplierId?: string | null },
+  spec: { materialName: string; unit?: string; location?: string; supplierId?: string | null; reorderLevel?: number | null },
   movements: SeedMovement[],
 ): string {
   const id = `item_${++state.seq}`
@@ -137,6 +141,7 @@ function seedItem(
     unit: spec.unit ?? 'bag',
     location: spec.location ?? 'Site Store',
     supplierId: spec.supplierId ?? null,
+    reorderLevel: spec.reorderLevel ?? null, // #207 column, null = derived default
     updatedAt: T(0),
   })
   movements.forEach((m, i) => {
@@ -199,9 +204,11 @@ describe('loadInventorySlice — per-type sums and the closing formula (stubbed 
     expect(row.closingQty).toBe(100 + 50 + 3 - 8 + (15 - 20) - 30 - 5)
     expect(row.closingQty).toBe(105)
 
-    // lowStock is a constant false today — pinned so making it real is a
-    // deliberate change, not a silent one.
+    // #207: lowStock is COMPUTED now — closing 105 vs inflow 153 (100
+    // opening + 50 received + 3 returned) × 10% = 15.3 → 105 is comfortably
+    // above → false for a REAL reason, not the old hardcoded literal.
     expect(row.lowStock).toBe(false)
+    expect(row.reorderLevel).toBeNull()
   })
 
   it('transferredQty is the NET out − in on BOTH sides of a transfer pair', async () => {
@@ -348,5 +355,127 @@ describe('loadInventorySlice — project scoping + slice shape', () => {
     expect(slice.items).toHaveLength(1)
     expect('movements' in slice.items[0]).toBe(false)
     expect(slice.movements).toHaveLength(1) // …but the log is served once, flat
+  })
+})
+
+describe('loadInventorySlice — #207 honest lowStock (ONE rule: reorderLevel, else 10% of inflow)', () => {
+  it('derived default: closing at or below 10% of inflow is LOW, above is not', async () => {
+    // Healthy: 100 in, 80 consumed → closing 20 > 10 (10% of 100) → not low.
+    seedItem(P, { materialName: 'Healthy cement' }, [
+      { type: 'opening', quantity: 100, at: T(1) },
+      { type: 'consumed', quantity: 80, at: T(2) },
+    ])
+    // Low: 100 in, 95 consumed → closing 5 ≤ 10 → LOW.
+    seedItem(P, { materialName: 'Drained cement' }, [
+      { type: 'opening', quantity: 100, at: T(1) },
+      { type: 'consumed', quantity: 95, at: T(2) },
+    ])
+    // The exact boundary: closing == 10% of inflow → LOW (the rule is ≤).
+    seedItem(P, { materialName: 'Boundary cement' }, [
+      { type: 'opening', quantity: 100, at: T(1) },
+      { type: 'consumed', quantity: 90, at: T(2) },
+    ])
+
+    const slice = await loadInventorySlice(P)
+    const byName = (n: string) => slice.items.find((i) => i.materialName === n)!
+    expect(byName('Healthy cement').closingQty).toBe(20)
+    expect(byName('Healthy cement').lowStock).toBe(false)
+    expect(byName('Drained cement').closingQty).toBe(5)
+    expect(byName('Drained cement').lowStock).toBe(true)
+    expect(byName('Boundary cement').closingQty).toBe(10)
+    expect(byName('Boundary cement').lowStock).toBe(true)
+  })
+
+  it('the derived denominator counts opening + received + returned — NOT transfers or adjustments', async () => {
+    // Transfers move stock between the project's own locations: they are not
+    // inflow on either side. 40 in, 30 transferred out → closing 10, inflow
+    // 40 → 10 > 4 → NOT low (counting transfers as inflow would still say
+    // not-low here; the pin is the denominator's shape).
+    seedItem(P, { materialName: 'Transfer-only source' }, [
+      { type: 'opening', quantity: 40, at: T(1) },
+      { type: 'transferred_out', quantity: 30, at: T(2) },
+    ])
+    // A destination that only ever received stock BY TRANSFER: closing 10,
+    // inflow 0 → never low (zero-inflow guard — the v1 client heuristic's
+    // own no-inflow protection, now server-owned).
+    seedItem(P, { materialName: 'Transfer-only destination', location: 'Workshop' }, [
+      { type: 'transferred_in', quantity: 10, at: T(2) },
+    ])
+    // Returns count as inflow: 5 opening + 5 returned, 9 consumed →
+    // closing 1, inflow 10 → 1 ≤ 1 → LOW.
+    seedItem(P, { materialName: 'Returned stock' }, [
+      { type: 'opening', quantity: 5, at: T(1) },
+      { type: 'returned', quantity: 5, at: T(2) },
+      { type: 'consumed', quantity: 9, at: T(3) },
+    ])
+
+    const slice = await loadInventorySlice(P)
+    const byName = (n: string) => slice.items.find((i) => i.materialName === n)!
+    expect(byName('Transfer-only source').lowStock).toBe(false)
+    expect(byName('Transfer-only destination').lowStock).toBe(false)
+    expect(byName('Returned stock').lowStock).toBe(true)
+  })
+
+  it('a zero-inflow item is NEVER low under the derived default (no basis for a percentage)', async () => {
+    // The classic false-positive the guard kills: a fresh line with a single
+    // consumed movement... cannot exist (guards refuse over-consumption), but
+    // an adjusted-to-zero line with no inflow can: closing 0, inflow 0 →
+    // 0 ≤ 0 × 0.1 would be TRUE without the guard. Never low.
+    seedItem(P, { materialName: 'Adjusted to nothing' }, [
+      { type: 'adjusted', quantity: -4, at: T(1) },
+    ])
+    const slice = await loadInventorySlice(P)
+    expect(slice.items[0].closingQty).toBe(-4)
+    expect(slice.items[0].lowStock).toBe(false)
+  })
+
+  it('an explicit reorderLevel governs outright — including where the derived default would disagree', async () => {
+    // Derived would say NOT low (50 > 100×10%); the operator's reorder point
+    // of 60 says the pile is already too small → LOW. The threshold wins.
+    seedItem(P, { materialName: 'Threshold makes it low', reorderLevel: 60 }, [
+      { type: 'opening', quantity: 100, at: T(1) },
+      { type: 'consumed', quantity: 50, at: T(2) },
+    ])
+    // Derived would say LOW (8 ≤ 100×10%); reorderLevel 5 says reordering
+    // only matters below 5 → NOT low. The threshold wins in BOTH directions.
+    seedItem(P, { materialName: 'Threshold spares it', reorderLevel: 5 }, [
+      { type: 'opening', quantity: 100, at: T(1) },
+      { type: 'consumed', quantity: 92, at: T(2) },
+    ])
+    // The boundary: closing == reorderLevel → LOW (≤, mirroring the derived
+    // rule's own boundary semantics).
+    seedItem(P, { materialName: 'Boundary on the level', reorderLevel: 25 }, [
+      { type: 'opening', quantity: 100, at: T(1) },
+      { type: 'consumed', quantity: 75, at: T(2) },
+    ])
+    // reorderLevel 0 = "alert only at stockout": closing 3 is fine, 0 is low.
+    seedItem(P, { materialName: 'Stockout-only alert', reorderLevel: 0 }, [
+      { type: 'opening', quantity: 100, at: T(1) },
+      { type: 'consumed', quantity: 97, at: T(2) },
+    ])
+    seedItem(P, { materialName: 'Stockout reached', reorderLevel: 0 }, [
+      { type: 'opening', quantity: 100, at: T(1) },
+      { type: 'consumed', quantity: 100, at: T(2) },
+    ])
+
+    const slice = await loadInventorySlice(P)
+    const byName = (n: string) => slice.items.find((i) => i.materialName === n)!
+    expect(byName('Threshold makes it low').lowStock).toBe(true)
+    expect(byName('Threshold spares it').lowStock).toBe(false)
+    expect(byName('Boundary on the level').closingQty).toBe(25)
+    expect(byName('Boundary on the level').lowStock).toBe(true)
+    expect(byName('Stockout-only alert').closingQty).toBe(3)
+    expect(byName('Stockout-only alert').lowStock).toBe(false)
+    expect(byName('Stockout reached').closingQty).toBe(0)
+    expect(byName('Stockout reached').lowStock).toBe(true)
+  })
+
+  it('surfaces the reorderLevel itself on the row (null when unset, the number when set)', async () => {
+    seedItem(P, { materialName: 'No level' }, [{ type: 'opening', quantity: 10, at: T(1) }])
+    seedItem(P, { materialName: 'With level', reorderLevel: 7 }, [{ type: 'opening', quantity: 10, at: T(1) }])
+    const slice = await loadInventorySlice(P)
+    const byName = (n: string) => slice.items.find((i) => i.materialName === n)!
+    expect(byName('No level').reorderLevel).toBeNull()
+    expect(byName('With level').reorderLevel).toBe(7)
   })
 })

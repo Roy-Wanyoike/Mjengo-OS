@@ -26,8 +26,8 @@ import {
 } from '@/backend/modules/inventory/service'
 
 export const INVENTORY_ACTIONS = [
-  'inventory.open', // { materialName, unit, qty, unitCost?, location?, supplierId? } — opening stock
-  'inventory.receive', // { inventoryItemId | materialName+unit+location, qty, unitCost?, reference?, note? }
+  'inventory.open', // { materialName, unit, qty, unitCost?, location?, supplierId?, reorderLevel? } — opening stock; reorderLevel (#207) sets the item's explicit low-stock threshold (absent = leave any stored level alone)
+  'inventory.receive', // { inventoryItemId | materialName+unit+location, qty, unitCost?, reference?, note?, reorderLevel? } — reorderLevel (#207) as above
   'inventory.consume', // { inventoryItemId, qty, reference?, note? }
   'inventory.transfer', // { inventoryItemId, qty, toLocation, note? }
   'inventory.return', // { inventoryItemId, qty, note? }

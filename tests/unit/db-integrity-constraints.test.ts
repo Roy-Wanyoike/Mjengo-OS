@@ -87,6 +87,16 @@ describe('migration replay', () => {
   it('migration 14_ledger_invariants is part of the chain', () => {
     expect(migrationDirs()).toContain('14_ledger_invariants')
   })
+
+  it('migration 18_reorder_level is part of the chain (#207 low-stock threshold)', () => {
+    expect(migrationDirs()).toContain('18_reorder_level')
+    // And it is a pure additive ALTER: the column exists, nullable, no default.
+    const cols = db.prepare(`PRAGMA table_info(InventoryItem)`).all() as Array<{ name: string; notnull: number; dflt_value: string | null }>
+    const col = cols.find((c) => c.name === 'reorderLevel')
+    expect(col).toBeDefined()
+    expect(col!.notnull).toBe(0)
+    expect(col!.dflt_value).toBeNull()
+  })
 })
 
 describe('Attendance day-row uniqueness (DB-7)', () => {
