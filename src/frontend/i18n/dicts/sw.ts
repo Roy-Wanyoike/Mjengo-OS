@@ -2397,7 +2397,7 @@ export const swDict = {
   'audit.events': 'Matukio',
   'audit.shownMore': '{count} yameonyeshwa · zaidi zipo',
   'audit.shownEnd': '{count} yameonyeshwa · mwisho wa mlolongo',
-  'audit.eventsDesc': 'Bofya safu kuona tukio kamili — maelezo ya ziada, IP, kitambulisho cha ombi. Nyakati kwa EAT.',
+  'audit.eventsDesc': 'Bofya safu kuona tukio kamili — maelezo ya ziada, mabadiliko ya hali, IP, kitambulisho cha ombi. Nyakati kwa EAT.',
   'audit.col.time': 'Waktu',
   'audit.col.actor': 'Mtendaji',
   'audit.col.kind': 'Aina',
@@ -2418,6 +2418,9 @@ export const swDict = {
   'audit.detail.request': 'Ombi',
   'audit.detail.meta': 'Maelezo ya ziada (meta)',
   'audit.detail.noMeta': 'Hakuna maelezo ya ziada yaliyorekodiwa kwa tukio hili.',
+  'audit.detail.state': 'Mabadiliko ya hali (yaliyohifadhiwa wakati wa uamuzi)',
+  'audit.detail.before': 'Kabla',
+  'audit.detail.after': 'Baada',
   // Alama za aina za ukaguzi — ufunguo mmoja kwa kila thamani ya kindForAction (mfano wa land/labels.ts).
   'audit.kind.task': 'Kazi',
   'audit.kind.phase': 'Awamu',

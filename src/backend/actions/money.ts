@@ -2,6 +2,12 @@
 // variation orders. Dispatched from lib/mjengo.ts applyAction(), which auto-writes the
 // AuditEvent for every success — never log manually here.
 //
+// #218: the DECISION actions (milestone.decide, variation.decide) return their
+// pre-read state + decision facts on the reserved `__audit` result key so
+// applyAction's audit row captures WHAT was decided and the before/after
+// transition (auditEnrichmentFor in lib/audit.ts shapes it; the key is
+// stripped before the result leaves — response contracts unchanged).
+//
 // Rules of the house:
 //  - Money never moves without photo proof (requestRelease requires ≥1 evidence photo).
 //  - Only the client decides releases and variations — the decision-maker is
@@ -192,6 +198,26 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
         payloadBy: payload?.by,
       })
 
+      // #218 — the decision's audit facts: the pre-read milestone state
+      // frozen at decision time (the evidence basis as it stood when the
+      // client decided — later evidence changes can never rewrite this row)
+      // plus the fields the dispatcher cannot derive from payload/result
+      // alone. auditEnrichmentFor (lib/audit.ts) shapes them; applyAction
+      // strips the reserved key before the result leaves.
+      const evidencePhotoIds = parseEvidenceIds(milestone.evidencePhotoIds)
+      const auditFacts = {
+        entity: 'Milestone',
+        entityId: id,
+        before: { status: milestone.status, evidencePhotoIds },
+        after: { status: decision === 'approve' ? 'released' : 'rejected', evidencePhotoIds },
+        meta: {
+          milestoneName: milestone.name,
+          amountCents: milestone.amount, // BigInt — enrichment normalizes to string
+          ...(milestone.phaseId ? { phaseId: milestone.phaseId } : {}),
+          evidencePhotoIds,
+        },
+      }
+
       if (decision === 'approve') {
         // Atomic: milestone update + escrow debit + EXPENSE credit + Transaction
         // row (costCode 'milestone' + ledgerTxnId + phaseId cost-code — the
@@ -230,7 +256,13 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
           ledgerTxnId: released.ledgerTxnId,
           decider,
         })
-        return { id, balance: centsToKes(released.balance), ledgerRef: released.ledgerRef, drawPackId: drawPack?.id ?? null }
+        return {
+          id,
+          balance: centsToKes(released.balance),
+          ledgerRef: released.ledgerRef,
+          drawPackId: drawPack?.id ?? null,
+          __audit: { ...auditFacts, meta: { ...auditFacts.meta, ledgerTxnId: released.ledgerTxnId } },
+        }
       }
 
       // reject — no money moves, decision history preserved
@@ -239,7 +271,7 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
         data: { status: 'rejected', decidedAt: new Date(), decidedBy: decider.name, decisionNote: note },
       })
       const wallet = await db.escrowWallet.findUnique({ where: { projectId } })
-      return { id, balance: centsToKes(wallet?.balance ?? 0n) }
+      return { id, balance: centsToKes(wallet?.balance ?? 0n), __audit: auditFacts }
     }
 
     case 'variation.submit': {
@@ -289,6 +321,22 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
         payloadBy: payload?.by,
       })
 
+      // #218 — same decision-audit facts as milestone.decide: the pre-read
+      // status (submitted) frozen into before/after + the fields only this
+      // handler knows. No evidence refs exist on variations; the budget
+      // impact IS the decision's subject, so it rides the meta.
+      const auditFacts = {
+        entity: 'VariationOrder',
+        entityId: id,
+        before: { status: variation.status },
+        after: { status: decision === 'approve' ? 'approved' : 'rejected' },
+        meta: {
+          title: variation.title,
+          budgetImpactCents: variation.budgetImpact, // BigInt — normalized to string
+          ...(variation.phaseId ? { phaseId: variation.phaseId } : {}),
+        },
+      }
+
       if (decision === 'approve') {
         // Budget moves ONLY after client approval — phase + project budgets
         // adjust and the variation flips in one db.$transaction (F2)
@@ -321,7 +369,7 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
             recipient: project?.client ?? null,
           },
         })
-        return { id }
+        return { id, __audit: auditFacts }
       }
 
       // reject — budget untouched
@@ -329,7 +377,7 @@ export async function applyMoneyAction(type: string, payload: any, projectId: st
         where: { id },
         data: { status: 'rejected', decidedBy: decider.name, decidedAt: new Date(), decisionNote: note },
       })
-      return { id }
+      return { id, __audit: auditFacts }
     }
 
     default:

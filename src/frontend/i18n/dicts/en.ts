@@ -2394,7 +2394,7 @@ export const enDict = {
   'audit.events': 'Events',
   'audit.shownMore': '{count} shown · more available',
   'audit.shownEnd': '{count} shown · end of trail',
-  'audit.eventsDesc': 'Tap a row for the full event — meta, IP, request id. Times in EAT.',
+  'audit.eventsDesc': 'Tap a row for the full event — meta, state change, IP, request id. Times in EAT.',
   'audit.col.time': 'Time',
   'audit.col.actor': 'Actor',
   'audit.col.kind': 'Kind',
@@ -2415,6 +2415,9 @@ export const enDict = {
   'audit.detail.request': 'Request',
   'audit.detail.meta': 'Detail (meta)',
   'audit.detail.noMeta': 'No extra meta recorded for this event.',
+  'audit.detail.state': 'State change (frozen at decision time)',
+  'audit.detail.before': 'Before',
+  'audit.detail.after': 'After',
   // Audit-kind badges — one key per kindForAction value (land/labels.ts pattern).
   'audit.kind.task': 'Task',
   'audit.kind.phase': 'Phase',

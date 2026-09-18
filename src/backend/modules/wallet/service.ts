@@ -344,7 +344,27 @@ export async function decidePaymentRequest(projectId: string, p: any) {
     `${fmtKes(request.amount)} to ${request.payee} — decided by ${decider.name} (${decider.role})${p.note ? ` — ${p.note}` : ''}`,
     { kind: decision === 'approved' ? 'payment.approved' : 'payment.rejected' },
   )
-  return { id: updated.id, status: updated.status, decidedBy: decider.name }
+  return {
+    id: updated.id,
+    status: updated.status,
+    decidedBy: decider.name,
+    // #218 — decision-audit facts (the milestone.decide/variation.decide
+    // convention): the pre-read status frozen into before/after + the
+    // fields only this handler knows. auditEnrichmentFor (lib/audit.ts)
+    // shapes them; applyAction strips the reserved key before the result
+    // leaves. This service's ONLY caller is the applyAction dispatcher.
+    __audit: {
+      entity: 'PaymentRequest',
+      entityId: request.id,
+      before: { status: request.status },
+      after: { status: decision },
+      meta: {
+        requestCode: request.requestCode,
+        amountCents: request.amount, // BigInt — enrichment normalizes to string
+        payee: request.payee,
+      },
+    },
+  }
 }
 
 /** Session gate for payment-request decisions — client/finance are the real queue. */
