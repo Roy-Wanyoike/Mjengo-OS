@@ -11,6 +11,21 @@ generator client {
 //     uses numeric(18,3) — ADR-0002)
 //   · the Supabase/Postgres path stores NUMERIC(18,2) KES and converts to
 //     cents at the repository boundary; this module is the canonical form
+//
+// STATUS LADDERS (issue #129 — DB-10): the ladder columns below (status /
+// role / type / kind / method / … vocabularies) are enforced at the DB
+// level by CHECK constraints — migration 19_status_ladder_checks, built
+// from the Supabase design's vocabulary CHECKs (divergences documented in
+// that migration's header). THE PER-COLUMN COMMENTS ARE THE SINGLE SOURCE
+// OF TRUTH: each lists the legal values, and the CHECKs mirror them.
+// Adding a ladder value is a three-step contract — update the comment here,
+// add the value in the migration that ships it, and extend the TS union /
+// Zod enum at the API boundary. A typo'd value now dies at INSERT/UPDATE
+// time instead of silently corrupting a state machine. Deliberately open
+// (unconstrained, matching the Supabase design): AuditEvent.kind,
+// Notification.kind, JobRecord.type, Attachment.entityType (caller-supplied
+// provenance pointer), Material.unit, CatalogItem.category/unit,
+// BoqLine.category.
 datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
@@ -308,7 +323,7 @@ model Transaction {
   id          String   @id @default(cuid())
   projectId   String
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  type        String // wage, material, transport, other, invoice, milestone, payment_request
+  type        String // wage, material, transport, other, invoice, milestone, payment_request, reversal (compensating rows, #213)
   amount      BigInt // cents — integer money (issue #122; was Float KSh)
   method      String   @default("mpesa") // mpesa, cash, bank, card, wallet
   reference   String?

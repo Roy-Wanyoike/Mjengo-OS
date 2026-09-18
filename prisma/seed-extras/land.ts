@@ -127,7 +127,10 @@ export async function seedLand(db: PrismaClient): Promise<void> {
       lat: -1.1714,
       lng: 36.8356,
       approxArea: '0.1 ha (approx)',
-      tenureType: 'leasehold 99 years from 1988',
+      // #129: tenureType is a CHECK-constrained ladder (freehold|leasehold,
+      // migration 19) — the 99-years-from-1988 term detail stays in the
+      // parcel's deed/search text where it belongs.
+      tenureType: 'leasehold',
       status: 'searching',
       createdAt: daysAgo(12, 9),
     },

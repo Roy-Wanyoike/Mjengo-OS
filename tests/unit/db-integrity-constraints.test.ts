@@ -455,3 +455,359 @@ describe('Attachment.objectKey uniqueness (migration 18 — #159 / audit API-8)'
     old.close()
   })
 })
+
+// ------------------------------------------------- migration 19 (#129 / DB-10)
+
+/**
+ * Status-ladder CHECK constraints (migration 19 — issue #129).
+ *
+ * The schema carried zero enums and zero CHECKs on every status/role/ladder
+ * column: a typo like "recieved" or "on-hold" persisted silently. Migration
+ * 19 rebuilds the affected tables (the sanctioned data-preserving pattern)
+ * carrying the Supabase design's vocabulary CHECKs. Pinned here, per the
+ * issue's acceptance criteria:
+ *
+ *  · a wrong-value INSERT on a constrained ladder is REJECTED by the DB —
+ *    the full census of the 75 new CHECKs, every one probed with a legal
+ *    value (accepted) and a realistic typo (rejected);
+ *  · a wrong-value UPDATE is rejected too, and the row is untouched;
+ *  · nullable ladders accept NULL but still refuse typos;
+ *  · the migration is data-preserving: legal rows written into the
+ *    PRE-migration (00→18) database survive the 19 rebuild verbatim;
+ *  · the migration-14 ledger trigger set survives the LedgerTransaction
+ *    rebuild (DROP TABLE drops triggers — 19 recreates them verbatim).
+ */
+
+/** Every (table, column, legal, typo) probe for migration 19's CHECKs. */
+const LADDER_PROBES: ReadonlyArray<[table: string, column: string, legal: string, typo: string]> = [
+  // -- core project domain
+  ['Project', 'clientType', 'diaspora', 'Diaspora'],
+  ['Project', 'status', 'on_hold', 'on-hold'],
+  ['Phase', 'status', 'in_progress', 'in-progress'],
+  ['Task', 'status', 'blocked', 'block'],
+  ['Task', 'priority', 'urgent', 'urgent!!'],
+  ['Worker', 'employmentType', 'casual', 'intern'],
+  ['Attendance', 'status', 'half_day', 'halfday'],
+  ['Attendance', 'method', 'kiosk_pin', 'pin'],
+  ['Attendance', 'verification', 'exception', 'except'],
+  ['Attendance', 'exceptionReason', 'battery_dead', 'battery'],
+  ['Delivery', 'source', 'voice', 'whatsapp'],
+  ['Alert', 'type', 'safety', ' hazard'],
+  ['Alert', 'severity', 'critical', 'crit'],
+  // -- trust & money platform
+  ['Transaction', 'type', 'payment_request', 'payment'],
+  ['Transaction', 'method', 'mpesa', 'M-Pesa'],
+  ['AuditEvent', 'role', 'foreman', 'forman'],
+  ['Milestone', 'status', 'release_requested', 'release-requested'],
+  ['VariationOrder', 'status', 'approved', 'approve'],
+  ['PhotoComment', 'role', 'foreman', 'Foreman'],
+  // -- platform surface
+  ['Notification', 'channel', 'whatsapp', 'WhatsApp'],
+  ['Notification', 'deliveryStatus', 'failed', 'failure'],
+  ['User', 'role', 'procurement', 'procurment'],
+  ['ProjectTeam', 'role', 'client_rep', 'client-rep'],
+  // -- land & professionals
+  ['LandParcel', 'tenureType', 'leasehold', 'leasehold 99 years'],
+  ['LandParcel', 'status', 'searching', 'search'],
+  ['ParcelDocument', 'kind', 'search_cert', 'search certificate'],
+  ['TitleSearch', 'transcriptionMatch', 'mismatch', 'missmatch'],
+  ['TitleSearch', 'status', 'reviewed', 'complete'],
+  ['Professional', 'category', 'qty_surveyor', 'qs'],
+  ['Professional', 'licenceBody', 'BORAQS', 'boraqs'],
+  ['CredentialCheck', 'method', 'registry_lookup', 'registry'],
+  ['ParcelAssignment', 'role', 'advocate', 'lawyer'],
+  ['ParcelAssignment', 'status', 'invited', 'invite'],
+  // -- supply chain
+  ['MaterialRequest', 'requestedByRole', 'procurement', 'procure'],
+  ['MaterialRequest', 'status', 'cancelled', 'withdrawn'], // withdrawn is the APPROVAL word (#206)
+  ['ApprovalRule', 'approverRole', 'finance', 'finace'],
+  ['Approval', 'entityType', 'request', 'requests'],
+  ['Approval', 'approverRole', 'supervisor', 'superviser'],
+  ['Approval', 'decision', 'withdrawn', 'settled'],
+  ['Quote', 'status', 'declined', 'decline'],
+  ['PurchaseOrder', 'status', 'pending_approval', 'pending-approval'],
+  ['PurchaseOrder', 'paymentSource', 'project_wallet', 'wallet'],
+  ['OrderDelivery', 'status', 'in_transit', 'transit'],
+  ['OrderDeliveryLine', 'condition', 'damaged', 'damage'],
+  // -- invoices & money core
+  ['Invoice', 'status', 'disputed', 'dispute'],
+  ['Invoice', 'paidByRole', 'finance', 'fin'],
+  ['Invoice', 'paymentMethod', 'wallet', 'paypal'],
+  ['MjengoScore', 'confidence', 'high', 'hi'],
+  ['PricePoint', 'source', 'order', 'orders'],
+  ['LedgerAccount', 'kind', 'liability', 'liabilities'],
+  ['LedgerAccount', 'normalSide', 'credit', 'cred'],
+  ['LedgerAccount', 'ownerType', 'escrow', 'team'],
+  ['LedgerTransaction', 'postedRole', 'admin', 'manager'],
+  ['WalletAccount', 'ownerType', 'organization', 'org'],
+  ['WalletAccount', 'status', 'frozen', 'freeze'],
+  ['PaymentRequest', 'requestedByRole', 'finance', 'fin'],
+  ['PaymentRequest', 'method', 'bank', 'paypal'],
+  ['PaymentRequest', 'status', 'paid', 'payed'],
+  ['PaymentRequest', 'relatedEntityType', 'wages', 'salary'],
+  // -- inventory
+  ['StockMovement', 'type', 'transferred_in', 'transfer_in'],
+  ['StockCount', 'status', 'posted', 'post'],
+  ['Boq', 'status', 'superseded', 'superceded'],
+  // -- universal & platform
+  ['Attachment', 'category', 'receipt', 'reciept'],
+  ['Attachment', 'reviewStatus', 'rejected', 'reject'],
+  ['JobRecord', 'status', 'retrying', 'retry'],
+  ['AiReviewNote', 'verdict', 'escalate', 'critical'],
+  ['AiReviewNote', 'confidence', 'medium', 'med'],
+  ['AiInsight', 'targetType', 'draw_pack', 'pack'],
+  ['AiInsight', 'kind', 'phase_mismatch', 'mismatch'],
+  ['AiInsight', 'source', 'dhash', 'hash'],
+  ['AiInsight', 'severity', 'warning', 'warn'],
+  ['AiInsight', 'confidence', 'high', 'ultra'],
+  ['TrustDigest', 'lang', 'sw', 'fr'],
+  ['TrustDigest', 'audioStatus', 'ready', 'available'],
+]
+
+describe('status-ladder CHECK constraints (migration 19 — #129 / DB-10)', () => {
+  // Parent rows for the FK graph beyond the shared beforeEach — one row per
+  // table whose children need it, minimal legal shapes.
+  beforeEach(() => {
+    db.exec(`
+      INSERT INTO Phase (id, projectId, name, "order", budget, status) VALUES ('ph-1', 'p-1', 'Foundation', 1, 1000, 'pending');
+      INSERT INTO Material (id, name, unit, unitPrice) VALUES ('mat-1', 'Cement', 'bag', 65000);
+      INSERT INTO InventoryItem (id, projectId, materialName, unit, updatedAt) VALUES ('inv-1', 'p-1', 'Cement', 'bag', CURRENT_TIMESTAMP);
+      INSERT INTO SitePhoto (id, projectId, url) VALUES ('sp-1', 'p-1', '/photos/sp-1.jpg');
+      INSERT INTO LandParcel (id, projectId, plotNumber, county, updatedAt) VALUES ('lp-1', 'p-1', 'LR 1/1', 'Nairobi', CURRENT_TIMESTAMP);
+      INSERT INTO Professional (id, name, category, updatedAt) VALUES ('prof-1', 'Wanjala', 'surveyor', CURRENT_TIMESTAMP);
+      INSERT INTO MaterialRequest (id, projectId, requestCode, requestedByRole, requestedByName, updatedAt) VALUES ('mr-1', 'p-1', 'MR-2026-000001', 'contractor', 'C', CURRENT_TIMESTAMP);
+      INSERT INTO PurchaseOrder (id, orderCode, projectId, supplierId, subtotal, total, createdByRole, updatedAt) VALUES ('po-1', 'PO-2026-000001', 'p-1', 'sup-1', 1, 1, 'contractor', CURRENT_TIMESTAMP);
+      INSERT INTO PurchaseOrderLine (id, orderId, name, unit, qty, unitPrice, lineTotal) VALUES ('pol-1', 'po-1', 'Cement', 'bag', 1, 1, 1);
+      INSERT INTO OrderDelivery (id, orderId, status) VALUES ('od-1', 'po-1', 'dispatched');
+      INSERT INTO Milestone (id, projectId, name, amount) VALUES ('ms-1', 'p-1', 'Slab', 1000);
+      INSERT INTO DrawPack (id, milestoneId, projectId, milestoneName, amount, ledgerRef, ledgerTxnId, attendanceSummary, contentHash) VALUES ('dp-1', 'ms-1', 'p-1', 'Slab', 1000, 'MJL-2026-001', 'lt-seed', '{}', 'h');
+    `)
+  })
+
+  /**
+   * Legal values for EVERY constrained column, so the generic builder can
+   * fill non-probed ladder columns without tripping their own CHECKs (the
+   * placeholder 'x' is only for unconstrained free text). First value of
+   * each ladder — mirrors the migration-19 vocabularies.
+   */
+  const LEGAL: Record<string, Record<string, string>> = {
+    Project: { clientType: 'diaspora', status: 'active' },
+    Phase: { status: 'pending' },
+    Task: { status: 'pending', priority: 'normal' },
+    Worker: { employmentType: 'casual' },
+    Attendance: { status: 'present', method: 'geofence', verification: 'reported', exceptionReason: 'network' },
+    Delivery: { source: 'manual' },
+    Alert: { type: 'budget', severity: 'info' },
+    Transaction: { type: 'material', method: 'mpesa' },
+    AuditEvent: { role: 'contractor' },
+    Milestone: { status: 'locked' },
+    VariationOrder: { status: 'submitted' },
+    PhotoComment: { role: 'client' },
+    Notification: { channel: 'in_app', deliveryStatus: 'logged' },
+    User: { role: 'contractor' },
+    ProjectTeam: { role: 'contractor' },
+    LandParcel: { tenureType: 'freehold', status: 'searching' },
+    ParcelDocument: { kind: 'title_deed' },
+    TitleSearch: { transcriptionMatch: 'pending', status: 'requested' },
+    Professional: { category: 'surveyor', licenceBody: 'LSK' },
+    CredentialCheck: { method: 'document_review' },
+    ParcelAssignment: { role: 'surveyor', status: 'active' },
+    MaterialRequest: { requestedByRole: 'contractor', status: 'draft' },
+    ApprovalRule: { approverRole: 'supervisor' },
+    Approval: { entityType: 'request', approverRole: 'supervisor', decision: 'pending' },
+    Quote: { status: 'requested' },
+    PurchaseOrder: { status: 'draft', paymentSource: 'client' },
+    OrderDelivery: { status: 'dispatched' },
+    OrderDeliveryLine: { condition: 'ok' },
+    Invoice: { status: 'draft', paidByRole: 'client', paymentMethod: 'mpesa' },
+    MjengoScore: { confidence: 'low' },
+    PricePoint: { source: 'seed' },
+    LedgerAccount: { kind: 'asset', normalSide: 'debit', ownerType: 'project' },
+    LedgerTransaction: { postedRole: 'client', status: 'pending' },
+    WalletAccount: { ownerType: 'project', status: 'active' },
+    PaymentRequest: { requestedByRole: 'contractor', method: 'mpesa', status: 'pending', relatedEntityType: 'milestone' },
+    StockMovement: { type: 'received' },
+    StockCount: { status: 'open' },
+    Boq: { status: 'draft' },
+    Attachment: { category: 'other', reviewStatus: 'pending' },
+    JobRecord: { status: 'queued' },
+    AiReviewNote: { verdict: 'consistent', confidence: 'low' },
+    AiInsight: { targetType: 'site_photo', kind: 'duplicate', source: 'dhash', severity: 'info', confidence: 'low' },
+    TrustDigest: { lang: 'en', audioStatus: 'ready' },
+  }
+
+  /**
+   * Columns whose DB DEFAULT is illegal for a direct INSERT (only one: the
+   * migration-14 birth gate demands 'pending' while the column default says
+   * 'posted' — the posting transition is the balance gate).
+   */
+  const FORCED: Record<string, Record<string, string>> = {
+    LedgerTransaction: { status: 'pending' },
+  }
+
+  /**
+   * Generic INSERT builder: fills every required column with a type-correct
+   * placeholder, resolves FK columns onto the seeded parents, fills sibling
+   * ladder columns with LEGAL values, and lets the caller override exactly
+   * the ladder column under test.
+   */
+  function insertInto(table: string, overrides: Record<string, unknown>): void {
+    const info = db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{
+      name: string; type: string; notnull: number; dflt_value: string | null
+    }>
+    const parents: Record<string, string> = {
+      projectId: 'p-1', workerId: 'w-1', supplierId: 'sup-1', phaseId: 'ph-1',
+      parcelId: 'lp-1', professionalId: 'prof-1', requestId: 'mr-1', orderId: 'po-1',
+      orderLineId: 'pol-1', deliveryId: 'od-1', drawPackId: 'dp-1', photoId: 'sp-1',
+      materialId: 'mat-1', inventoryItemId: 'inv-1', milestoneId: 'ms-1', txnId: 'lt-guard',
+    }
+    const legal = LEGAL[table] ?? {}
+    const forced = FORCED[table] ?? {}
+    const cols: string[] = []
+    const vals: unknown[] = []
+    for (const c of info) {
+      if (c.name in overrides) { cols.push(`"${c.name}"`); vals.push(overrides[c.name]); continue }
+      if (c.name in forced) { cols.push(`"${c.name}"`); vals.push(forced[c.name]); continue }
+      if (c.name === 'id') { cols.push('"id"'); vals.push(`${table}-${Math.random().toString(36).slice(2, 10)}`); continue }
+      if (c.name in legal) { cols.push(`"${c.name}"`); vals.push(legal[c.name]); continue }
+      if (c.dflt_value !== null) continue // column default covers it
+      if (c.name in parents) { cols.push(`"${c.name}"`); vals.push(parents[c.name]); continue }
+      if (c.notnull === 0) continue // nullable and unset -> NULL
+      cols.push(`"${c.name}"`)
+      // Unique per call: several free-text columns are UNIQUE (ref, email,
+      // code, …) and a shared 'x' would collide across probes.
+      vals.push(c.type === 'DATETIME' ? '2026-01-01 08:00:00' : c.type === 'REAL' ? 1.0 : c.type === 'BOOLEAN' ? 1 : `${c.name}-${Math.random().toString(36).slice(2, 10)}`)
+    }
+    db.prepare(
+      `INSERT INTO "${table}" (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
+    ).run(...vals)
+  }
+
+  it('migration 19_status_ladder_checks is part of the chain', () => {
+    expect(migrationDirs()).toContain('19_status_ladder_checks')
+  })
+
+  it('the CHECK census: 77 named _check constraints across 44 tables (75 from migration 19 + 2 from migration 14)', () => {
+    const rows = db.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string; sql: string }>
+    const perTable = rows.map((r) => ({ t: r.name, n: (r.sql.match(/_check" CHECK/g) ?? []).length })).filter((r) => r.n > 0)
+    expect(perTable.reduce((s, r) => s + r.n, 0)).toBe(77)
+    expect(perTable.length).toBe(44)
+    // migration 14's LedgerEntry pair rides along untouched
+    expect(perTable.find((r) => r.t === 'LedgerEntry')?.n).toBe(2)
+  })
+
+  it.each(LADDER_PROBES)('%s.%s: "%s" accepted, "%s" rejected at the DB level', (table, column, legal, typo) => {
+    // Legal value persists (INSERT path)
+    expect(() => insertInto(table, { [column]: legal })).not.toThrow()
+    // Typo'd value is rejected by the CHECK (INSERT path)
+    expect(() => insertInto(table, { [column]: typo })).toThrow(
+      new RegExp(`CHECK constraint failed: ${table}_${column}_check`),
+    )
+  })
+
+  it('a wrong-value UPDATE is rejected and the row keeps its legal value', () => {
+    insertInto('Project', { id: 'upd-1', status: 'active' })
+    expect(() => db.prepare(`UPDATE Project SET status = 'completed!' WHERE id = 'upd-1'`).run()).toThrow(
+      /CHECK constraint failed: Project_status_check/,
+    )
+    expect((db.prepare(`SELECT status FROM Project WHERE id = 'upd-1'`).get() as { status: string }).status).toBe('active')
+    // A legal UPDATE still works
+    expect(() => db.prepare(`UPDATE Project SET status = 'completed' WHERE id = 'upd-1'`).run()).not.toThrow()
+    expect((db.prepare(`SELECT status FROM Project WHERE id = 'upd-1'`).get() as { status: string }).status).toBe('completed')
+  })
+
+  it('nullable ladders accept NULL but still refuse typos', () => {
+    for (const [table, column, typo] of [
+      ['Worker', 'employmentType', 'intern'],
+      ['Attendance', 'exceptionReason', 'sick'],
+      ['Invoice', 'paymentMethod', 'paypal'],
+      ['Attachment', 'category', 'photograph'],
+      ['LandParcel', 'tenureType', 'leasehold 99 years'],
+      ['AiInsight', 'confidence', 'certain'],
+      ['LedgerAccount', 'ownerType', 'team'],
+      ['Professional', 'licenceBody', 'KRA'],
+      ['PaymentRequest', 'relatedEntityType', 'task'],
+    ] as const) {
+      expect(() => insertInto(table, { [column]: null }), `${table}.${column} NULL`).not.toThrow()
+      expect(() => insertInto(table, { [column]: typo }), `${table}.${column} "${typo}"`).toThrow(
+        new RegExp(`CHECK constraint failed: ${table}_${column}_check`),
+      )
+    }
+  })
+
+  it('the ledger birth-state gate and the status CHECK coexist (migration 14 + 19)', () => {
+    // 'posted' is a legal CHECK value but an illegal BIRTH state — the
+    // migration-14 insert gate rejects it (the posting transition is the
+    // balance gate), proving the trigger survived the 19 rebuild.
+    expect(() => insertInto('LedgerTransaction', { status: 'posted' })).toThrow(/born pending/)
+    // 'pending' is the one legal birth state.
+    expect(() => insertInto('LedgerTransaction', { status: 'pending' })).not.toThrow()
+    // postedRole has its own ladder — a wrong actor role is refused by the
+    // CHECK even on a legal pending birth (triggers pass it through).
+    expect(() => insertInto('LedgerTransaction', { status: 'pending', postedRole: 'manager' })).toThrow(
+      /CHECK constraint failed: LedgerTransaction_postedRole_check/,
+    )
+    // Under maintenance (the archival exemption) the birth gate is
+    // disabled — a born-'posted' backfill row is allowed — but the status
+    // CHECK is ABSOLUTE (like the posting-gate balance assertion): a
+    // nonsense status still cannot land, maintenance or not.
+    db.prepare(`INSERT INTO LedgerMaintenance (id, allow) VALUES (1, 1)`).run()
+    expect(() => insertInto('LedgerTransaction', { status: 'posted' })).not.toThrow()
+    expect(() => insertInto('LedgerTransaction', { status: 'settled' })).toThrow(
+      /CHECK constraint failed: LedgerTransaction_status_check/,
+    )
+  })
+
+  it('the migration-14 trigger set survived the rebuild (all seven, verbatim semantics)', () => {
+    const triggers = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger'`).all() as Array<{ name: string }>
+    expect(triggers.map((t) => t.name).sort()).toEqual([
+      'LedgerEntry_delete_guard',
+      'LedgerEntry_insert_gate',
+      'LedgerEntry_update_guard',
+      'LedgerTransaction_delete_guard',
+      'LedgerTransaction_insert_gate',
+      'LedgerTransaction_posting_gate',
+      'LedgerTransaction_update_guard',
+    ])
+    // And they still bite: LedgerEntry is append-only (a live row first —
+    // a no-op UPDATE on an empty table fires nothing).
+    insertInto('LedgerAccount', { id: 'la-guard', code: 'GUARD', name: 'Guard', kind: 'asset', normalSide: 'debit' })
+    insertInto('LedgerTransaction', { id: 'lt-guard', status: 'pending', postedRole: 'client' })
+    db.prepare(
+      `INSERT INTO LedgerEntry (id, txnId, accountId, side, amount) VALUES ('le-guard', 'lt-guard', 'la-guard', 'debit', 1)`,
+    ).run()
+    expect(() => db.prepare(`UPDATE LedgerEntry SET amount = amount + 1 WHERE id = 'le-guard'`).run()).toThrow(/append-only/)
+  })
+
+  it('data-preserving: legal rows written into the 00→18 database survive the 19 rebuild verbatim', () => {
+    // The #159 pattern: replay the PRE-migration world, write rows, apply
+    // migration 19 on top — the rebuild copies every column losslessly.
+    const old = new Database(':memory:')
+    for (const dir of migrationDirs()) {
+      if (parseInt(dir, 10) > 18) break
+      old.exec(readFileSync(join(MIGRATIONS_DIR, dir, 'migration.sql'), 'utf8'))
+    }
+    old.exec(`
+      INSERT INTO Project (id, shareToken, name, client, location, budget, startDate, targetDate, status, createdAt, updatedAt)
+        VALUES ('keep-p', 'tok-keep', 'Kept', 'C', 'N', 100, '2026-01-01', '2026-12-01', 'on_hold', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      INSERT INTO Phase (id, projectId, name, "order", budget, status) VALUES ('keep-ph', 'keep-p', 'Walls', 1, 1, 'done');
+      INSERT INTO Task (id, phaseId, title, status, priority, updatedAt) VALUES ('keep-t', 'keep-ph', 'T', 'blocked', 'urgent', CURRENT_TIMESTAMP);
+      INSERT INTO Worker (id, projectId, name, role, phone, dailyRate, active) VALUES ('keep-w', 'keep-p', 'W', 'fundi', '0700000000', 1, 1);
+      INSERT INTO Attendance (id, workerId, projectId, date, status, method, wage, verification) VALUES ('keep-a', 'keep-w', 'keep-p', '2026-09-01', 'half_day', 'kiosk_pin', 1, 'exception');
+      INSERT INTO Milestone (id, projectId, name, amount, status) VALUES ('keep-m', 'keep-p', 'M', 1, 'release_requested');
+    `)
+    expect(() =>
+      old.exec(readFileSync(join(MIGRATIONS_DIR, '19_status_ladder_checks', 'migration.sql'), 'utf8')),
+    ).not.toThrow()
+    // Every row survived with its ladder value intact.
+    expect((old.prepare(`SELECT status FROM Project WHERE id = 'keep-p'`).get() as { status: string }).status).toBe('on_hold')
+    expect((old.prepare(`SELECT status, priority FROM Task WHERE id = 'keep-t'`).get() as { status: string; priority: string })).toEqual({ status: 'blocked', priority: 'urgent' })
+    expect((old.prepare(`SELECT status, method, verification FROM Attendance WHERE id = 'keep-a'`).get() as Record<string, string>)).toEqual({ status: 'half_day', method: 'kiosk_pin', verification: 'exception' })
+    expect((old.prepare(`SELECT status FROM Milestone WHERE id = 'keep-m'`).get() as { status: string }).status).toBe('release_requested')
+    // And the CHECKs are live on the migrated database.
+    expect(() => old.prepare(`UPDATE Task SET status = 'finished' WHERE id = 'keep-t'`).run()).toThrow(
+      /CHECK constraint failed: Task_status_check/,
+    )
+    old.close()
+  })
+})
