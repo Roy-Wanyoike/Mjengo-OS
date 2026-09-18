@@ -76,6 +76,13 @@ mapped 1:1 to a future extracted service (see ARCHITECTURE.md):
 `auth/[...nextauth]`, `projects`, `project`, `actions` (idempotent dispatch +
 audit context), `sync` (outbox drain), `share`, `upload`, `search`, `flags`,
 `notifications`, `audit` (admin-only, GET-only), `reports/budget-variance`,
-`jobs/run`, `health`, `ussd`, `ai/{parse-text, analyze-photo, voice-log,
-extract-document, recap, anomaly-scan}`, `v1/{wallets, payments, respond,
-schemas, openapi.json}`. Contract details live in `/api/openapi.json`.
+`jobs/run`, `health`, `ussd`, `whatsapp`, `webhooks/daraja`,
+`ai/{parse-text, analyze-photo, voice-log, extract-document, recap,
+anomaly-scan, authenticity-screen}`, `v1/**` (the 27 OpenAPI-documented
+read + money paths: wallets, payments, projects, supply, milestones,
+invoices, workers, land, intel).
+Contract details: the v1 family + three app reads are OpenAPI-documented at
+`/api/openapi.json`; the rest are documented at their seams (route zod
+schemas/headers, the gateway GET contracts, the audit's §2 inventory) — the
+scope decision and the full pointer table are
+[ADR 0008](../../docs/adr/0008-openapi-scope.md).
