@@ -46,13 +46,35 @@ function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v ? v : undefined
 }
 
+/**
+ * Guarded JSON for the snapshot columns (before/after/meta): BigInt (money
+ * cents, #122) serializes as a lossless string, and ANY failure to serialize
+ * degrades to "column absent" instead of throwing — DB-4's rule that the
+ * audit write must never become the failure surface applies to enriched
+ * payloads too (#218: decision actions now put structured facts in
+ * meta/before/after, so the stringify is the one place a bad value could
+ * previously cost the WHOLE row — e.g. a raw BigInt meta used to throw and
+ * silently lose the event).
+ */
 function asJson(v: unknown): string | undefined {
   if (v === undefined || v === null) return undefined
   try {
-    return JSON.stringify(v)
+    return JSON.stringify(v, (_k, val) => (typeof val === 'bigint' ? val.toString() : val))
   } catch {
     return undefined
   }
+}
+
+/** Deep-copy a value with every BigInt replaced by its string form. */
+function jsonSafe(v: unknown): unknown {
+  if (typeof v === 'bigint') return v.toString()
+  if (Array.isArray(v)) return v.map(jsonSafe)
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, val] of Object.entries(v)) out[k] = jsonSafe(val)
+    return out
+  }
+  return v
 }
 
 /** Append-only Bias-Free Ledger entry. Never throws — auditing must not break actions.
@@ -84,7 +106,7 @@ export async function logAudit(
         actor: actor.name,
         role: actor.role,
         summary,
-        meta: meta ? JSON.stringify(meta) : undefined,
+        meta: meta ? asJson(meta) : undefined,
         entity: asString(merged.entity),
         entityId: asString(merged.entityId),
         before: asJson(merged.before),
@@ -205,4 +227,120 @@ export function kindForAction(type: string): string {
     ai: 'ai_review', // W6-1: AI draw review appends (advisory notes — the kind the audit filter list exposes)
   }
   return map[prefix] ?? 'action'
+}
+
+// ---------------- decision-action audit enrichment (issue #218) ----------------
+
+/**
+ * House bound for a free-text note riding an audit row — the v1 `noteText`
+ * contract (api/v1/schemas.ts, ≤ 500). The decision actions accept an
+ * unbounded `note` payload field, so the enrichment truncates defensively:
+ * ids and refs only is the size policy, and a note is the one human text
+ * that can be arbitrarily long.
+ */
+const AUDIT_NOTE_MAX = 500
+
+/**
+ * The reserved `__audit` result key a decision-action handler may return:
+ * the raw facts ONLY (pre-read state, entity ids, handler-known fields) —
+ * applyAction's logAudit call is the single writer and auditEnrichmentFor
+ * (below) is the single shaper. The `__` prefix mirrors the __actor/__role
+ * payload convention: applyAction STRIPS the key before the result leaves,
+ * so no route response, outbox row or idempotency record ever sees it.
+ *
+ * entity is the Prisma MODEL name, PascalCase — the DrawPack/v1-payments
+ * convention (entity: 'DrawPack' / 'PaymentRequest' / 'WalletAccount'), not
+ * the lowercase audit kind.
+ */
+export interface ActionAuditFacts {
+  entity: string
+  entityId: string
+  /** State as it stood when the decision was made (frozen into the row). */
+  before?: Record<string, unknown>
+  /** The post-decision projection (status transition). */
+  after?: Record<string, unknown>
+  /** Handler-known fields the dispatcher cannot derive from payload/result. */
+  meta?: Record<string, unknown>
+}
+
+/** What auditEnrichmentFor hands applyAction: the merged meta + the ctx. */
+export interface ActionAuditEnrichment {
+  meta: Record<string, unknown>
+  ctx: AuditContext
+}
+
+/**
+ * Build the decision-scoped audit enrichment for an action result (issue
+ * #218). Reads the handler's `__audit` facts off the result, merges the
+ * payload's decision/note and (for milestone approve) the money refs that
+ * already ride the result, and returns the meta + ctx logAudit needs.
+ * Returns null for every action that did not carry facts — the historic
+ * `{ type }`-only meta and the ambient request ctx stay exactly as they
+ * were for all of them.
+ *
+ * Money values are normalized to STRINGS of integer cents (BigInt →
+ * "80000000"): lossless, unambiguous, and safe for JSON persistence. The
+ * note is truncated to AUDIT_NOTE_MAX. Evidence refs are ids ONLY — never
+ * binaries or URLs (PII/size policy).
+ */
+export function auditEnrichmentFor(
+  type: string,
+  payload: any,
+  result: any,
+): ActionAuditEnrichment | null {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null
+  const raw = (result as { __audit?: unknown }).__audit
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const facts = raw as Partial<ActionAuditFacts>
+  if (typeof facts.entity !== 'string' || !facts.entity || typeof facts.entityId !== 'string' || !facts.entityId) {
+    return null
+  }
+  const p = payload ?? {}
+  // The decision appliers have already validated decision ∈ approve/reject
+  // by the time the audit line runs (they throw otherwise); the typeof
+  // guards here keep the helper total for any future caller.
+  const decision = typeof p.decision === 'string' ? p.decision : undefined
+  const trimmedNote = typeof p.note === 'string' ? p.note.trim() : ''
+  const note = trimmedNote
+    ? trimmedNote.length > AUDIT_NOTE_MAX
+      ? `${trimmedNote.slice(0, AUDIT_NOTE_MAX)}…`
+      : trimmedNote
+    : undefined
+  const base: Record<string, unknown> = { type }
+  if (decision) base.decision = decision
+  if (note) base.note = note
+  const extra = facts.meta && typeof facts.meta === 'object' ? facts.meta : {}
+
+  let meta: Record<string, unknown>
+  switch (type) {
+    case 'milestone.decide': {
+      meta = { ...base, milestoneId: facts.entityId, ...extra }
+      if (decision === 'approve') {
+        // The money refs ride the approve result already; reject moves none
+        // (drawPackId null = the pack write failed, audited separately as
+        // draw_pack.create_failed — honest, never fabricated).
+        const r = result as { ledgerRef?: unknown; drawPackId?: unknown }
+        meta.ledgerRef = r.ledgerRef
+        meta.drawPackId = r.drawPackId ?? null
+      }
+      break
+    }
+    case 'variation.decide':
+      meta = { ...base, variationId: facts.entityId, ...extra }
+      break
+    case 'payment.decide':
+      meta = { ...base, paymentRequestId: facts.entityId, ...extra }
+      break
+    default:
+      return null
+  }
+  return {
+    meta: jsonSafe(meta) as Record<string, unknown>,
+    ctx: {
+      entity: facts.entity,
+      entityId: facts.entityId,
+      ...(facts.before ? { before: jsonSafe(facts.before) } : {}),
+      ...(facts.after ? { after: jsonSafe(facts.after) } : {}),
+    },
+  }
 }

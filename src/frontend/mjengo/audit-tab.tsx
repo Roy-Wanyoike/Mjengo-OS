@@ -50,6 +50,11 @@ interface AuditEventRow {
   meta?: string | Record<string, unknown> | null
   entity?: string | null
   entityId?: string | null
+  // #218 — decision actions (milestone/variation/payment .decide) now write
+  // frozen before/after state snapshots; every older row leaves them null
+  // (null-tolerant rendering below).
+  before?: string | Record<string, unknown> | null
+  after?: string | Record<string, unknown> | null
   ip?: string | null
   userAgent?: string | null
   requestId?: string | null
@@ -93,20 +98,20 @@ function roleBadgeClass(role: string): string {
   return 'bg-amber-100 text-amber-900 hover:bg-amber-100 border-0'
 }
 
-/** meta arrives as JSON or a plain string — pretty-print either way. */
-function prettyMeta(meta: AuditEventRow['meta']): string | null {
-  if (meta === null || meta === undefined || meta === '') return null
-  if (typeof meta === 'string') {
+/** meta/before/after arrive as JSON or a plain string — pretty-print either way. */
+function prettyMeta(value: string | Record<string, unknown> | null | undefined): string | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'string') {
     try {
-      return JSON.stringify(JSON.parse(meta), null, 2)
+      return JSON.stringify(JSON.parse(value), null, 2)
     } catch {
-      return meta
+      return value
     }
   }
   try {
-    return JSON.stringify(meta, null, 2)
+    return JSON.stringify(value, null, 2)
   } catch {
-    return String(meta)
+    return String(value)
   }
 }
 
@@ -255,6 +260,8 @@ export function AuditTab() {
   }
 
   const detailMeta = prettyMeta(detail?.meta)
+  const detailBefore = prettyMeta(detail?.before)
+  const detailAfter = prettyMeta(detail?.after)
 
   return (
     <div className="space-y-6">
@@ -575,6 +582,32 @@ export function AuditTab() {
                 </div>
               ) : (
                 <p className="text-xs text-stone-400">{t('audit.detail.noMeta')}</p>
+              )}
+
+              {/* #218 — the frozen before/after state decision actions write;
+                  rows without them (every pre-#218 row) render nothing here */}
+              {(detailBefore || detailAfter) && (
+                <div>
+                  <p className="text-xs font-semibold text-stone-500 mb-1.5">{t('audit.detail.state')}</p>
+                  <div className="space-y-2">
+                    {detailBefore && (
+                      <div>
+                        <p className="text-[11px] font-medium text-stone-500 mb-0.5">{t('audit.detail.before')}</p>
+                        <pre className="text-[11px] leading-relaxed text-stone-700 bg-stone-50 border border-stone-200 rounded-lg p-3 max-h-40 overflow-auto whitespace-pre-wrap break-all [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full">
+                          {detailBefore}
+                        </pre>
+                      </div>
+                    )}
+                    {detailAfter && (
+                      <div>
+                        <p className="text-[11px] font-medium text-stone-500 mb-0.5">{t('audit.detail.after')}</p>
+                        <pre className="text-[11px] leading-relaxed text-stone-700 bg-stone-50 border border-stone-200 rounded-lg p-3 max-h-40 overflow-auto whitespace-pre-wrap break-all [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full">
+                          {detailAfter}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </>
           )}

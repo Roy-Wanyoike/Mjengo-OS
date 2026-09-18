@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto'
 import { db } from '@/backend/lib/db'
 import { assertMoneyAmount } from '@/backend/lib/money-bounds'
 import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
-import { logAudit, summarizeAction, kindForAction } from '@/backend/lib/audit'
+import { logAudit, summarizeAction, kindForAction, auditEnrichmentFor } from '@/backend/lib/audit'
 import { TRUST_ACTIONS, applyTrustAction } from '@/backend/actions/trust'
 import { MONEY_ACTIONS, applyMoneyAction } from '@/backend/actions/money'
 import { EVIDENCE_ACTIONS, applyEvidenceAction } from '@/backend/actions/evidence'
@@ -832,13 +832,29 @@ export async function applyAction(type: ActionType, payload: any, projectIdArg?:
     result = await applyCoreAction(type, cleanPayload, projectId)
   }
 
+  // #218 — decision-action audit enrichment: the money/wallet decision
+  // handlers (milestone.decide, variation.decide, payment.decide) may return
+  // their pre-read state + decision facts on the reserved `__audit` result
+  // key (the __actor/__role payload convention, mirrored on the result).
+  // auditEnrichmentFor (lib/audit.ts) shapes them; logAudit merges the ctx
+  // ADDITIVELY over the ambient request context (ip/userAgent/requestId
+  // survive — the withAuditContext store), and the key is STRIPPED here so
+  // no caller ever sees it: the response contract stays byte-identical.
+  const auditEnrichment = auditEnrichmentFor(type, cleanPayload, result)
+  if (result && typeof result === 'object' && !Array.isArray(result) && '__audit' in result) {
+    const publicResult: Record<string, unknown> = { ...(result as Record<string, unknown>) }
+    delete publicResult.__audit
+    result = publicResult
+  }
+
   // Bias-Free Ledger: every successful action is logged, append-only
   await logAudit(
     projectId,
     kindForAction(type),
     { name: __actor ?? 'Site Manager', role: __role ?? 'contractor' },
     summarizeAction(type, cleanPayload, result),
-    { type },
+    auditEnrichment?.meta ?? { type },
+    auditEnrichment?.ctx,
   )
   return result
 }
