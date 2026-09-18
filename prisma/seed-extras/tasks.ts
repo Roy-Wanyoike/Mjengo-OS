@@ -22,6 +22,7 @@
 // banner can show WHO blocked the work and WHEN (the UI reads the ledger).
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 
 const db = new PrismaClient()
 
@@ -40,6 +41,7 @@ function daysFromNow(n: number, hour = 17, minute = 0): Date {
 }
 
 async function main() {
+  await ensureForeignKeys(db) // issue #135 / audit DB-12 — refuse to write with FK enforcement off
   const project = await db.project.findFirst({ where: { name: { contains: 'Nyumba Yangu' } } })
   if (!project) throw new Error('Base project missing — run `bun prisma/seed.ts` first')
 

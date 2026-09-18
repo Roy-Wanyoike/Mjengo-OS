@@ -567,6 +567,31 @@ server {
   3. `HEALTH_PUBLIC_DETAIL=1` — the explicit demo/trusted-intranet opt-in
      that re-opens the detail for everyone (what a sandbox preview wants;
      never an internet-fronted deployment).
+- **SQLite integrity posture (issue #135 / audit DB-12):** foreign-key
+  enforcement in SQLite is a PER-CONNECTION `PRAGMA foreign_keys` (OFF by
+  default in raw SQLite — it is not stored in the file). The app asserts it
+  at boot: `src/instrumentation.ts` (the Next.js server-boot hook) runs
+  `PRAGMA foreign_keys = ON` + a read-back verification via
+  `src/backend/lib/db.ts` `ensureForeignKeys()` before serving anything, and
+  a failure is FATAL — the server refuses to start rather than silently
+  running with every Cascade/Restrict/SetNull in the schema neutered. The
+  verified posture: Prisma's SQLite connector opens its connections with the
+  pragma ON (pinned on the real engine by
+  `tests/unit/db-fk-pragma-realdb.test.ts`, together with an orphan-insert
+  P2003 rejection proving enforcement end-to-end). Two caveats for operators:
+  1. **Non-Prisma writers** (`sqlite3` CLI, scripts, any direct driver) must
+     run `PRAGMA foreign_keys = ON` on EVERY connection themselves — the
+     pragma does not persist, and raw SQLite starts OFF. The seeds and every
+     DB-touching script entrypoint run the same assert before their first
+     query.
+  2. **Multi-instance / multi-process deploys:** the ledger's in-process
+     reference counter (BE-10, documented at `src/backend/modules/ledger/service.ts`)
+     assumes ONE app process — running two instances against the same SQLite
+     file risks lost-update races the counter cannot see (on top of SQLite's
+     own single-writer model). Keep the deployment single-process per DB
+     file; horizontal scaling waits on the Postgres/Supabase path (where this
+     whole pragma concern disappears — Postgres enforces FKs natively, and
+     the boot assert skips itself for non-SQLite `DATABASE_URL`s).
 - **Backups — scheduled (issue #199):** `deploy/backup/` ships the whole
   thing — a script + a systemd timer covering all three stateful volumes:
   an **online** `sqlite3` `.backup` snapshot of the DB (WAL-safe, no app

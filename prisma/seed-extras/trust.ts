@@ -8,6 +8,7 @@
  * Only Attendance rows for these projects are touched (+ Worker.pin updates).
  */
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 import { fmtKes } from '@/backend/lib/money'
 
 const db = new PrismaClient()
@@ -97,6 +98,7 @@ async function insertAttendance(
 }
 
 async function main() {
+  await ensureForeignKeys(db) // issue #135 / audit DB-12 — refuse to write with FK enforcement off
   const projects = await db.project.findMany({ orderBy: { createdAt: 'asc' } })
   if (projects.length < 3) throw new Error('Expected the 3 seeded projects — run `bun prisma/seed.ts` first')
 

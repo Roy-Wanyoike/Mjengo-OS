@@ -24,6 +24,7 @@
 // error (the users.ts rule), never a silent partial grant.
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 
 import { assertSeedAllowed } from '../seed-guard'
 
@@ -35,6 +36,7 @@ const db = new PrismaClient()
 const MEMBERSHIP_ROLES = ['supervisor', 'procurement', 'qs', 'finance'] as const
 
 async function main() {
+  await ensureForeignKeys(db) // issue #135 / audit DB-12 — refuse to write with FK enforcement off
   await db.projectMembership.deleteMany()
 
   const users = await db.user.findMany({ select: { id: true, email: true, role: true } })

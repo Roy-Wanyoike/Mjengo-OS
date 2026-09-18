@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 import { mulQtyCents } from '@/backend/lib/money'
 import { seedProfessionals } from './seed-extras/professionals'
 import { seedLand } from './seed-extras/land'
@@ -40,6 +41,7 @@ function lastWeekdays(n: number): Array<[number, string]> {
 }
 
 async function main() {
+  await ensureForeignKeys(db) // issue #135 / audit DB-12 — refuse to write with FK enforcement off
   console.log(
     '\n⚠  DESTRUCTIVE: this seed DELETES ALL ROWS in the tables it owns (and the\n' +
       '   inline professionals/land/supply/invoices/intel seeds re-wipe theirs)\n' +

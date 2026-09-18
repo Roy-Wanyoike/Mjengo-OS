@@ -7,6 +7,7 @@
  * Run: bun prisma/seed-extras/evidence.ts
  */
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 import { fmtKes } from '@/backend/lib/money'
 
 const db = new PrismaClient()
@@ -19,6 +20,7 @@ function daysAgo(n: number, hour = 9, minute = 0) {
 }
 
 async function main() {
+  await ensureForeignKeys(db) // issue #135 / audit DB-12 — refuse to write with FK enforcement off
   console.log('— evidence seed-extras: zones · comments · notifications · audit trail —')
 
   // Wipe (evidence-owned models only)

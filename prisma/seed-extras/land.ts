@@ -12,6 +12,7 @@
 //     human review (honest language: anomaly, not accusation).
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 
 const db = new PrismaClient()
 
@@ -175,7 +176,9 @@ export async function seedLand(db: PrismaClient): Promise<void> {
 
 // Standalone runner (Bun): `bun prisma/seed-extras/land.ts`
 if ((import.meta as { main?: boolean }).main === true) {
-  seedLand(db)
+  // issue #135 / audit DB-12 — refuse to write with FK enforcement off
+  ensureForeignKeys(db)
+    .then(() => seedLand(db))
     .catch((e) => { console.error(e); process.exit(1) })
     .finally(() => db.$disconnect())
 }

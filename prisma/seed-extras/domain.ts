@@ -11,6 +11,7 @@
 // PO-2026-000009 comes from prisma/seed-extras/supply.ts.
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 
 const db = new PrismaClient()
 
@@ -32,6 +33,7 @@ async function seedWorkerProfile(name: string, profile: Record<string, string | 
 }
 
 async function main() {
+  await ensureForeignKeys(db) // issue #135 / audit DB-12 — refuse to write with FK enforcement off
   const project = await db.project.findFirst({ where: { name: { contains: 'Nyumba Yangu' } } })
   if (!project) throw new Error('Base projects missing — run `bun prisma/seed.ts` first')
 

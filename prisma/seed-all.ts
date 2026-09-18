@@ -42,11 +42,22 @@
  * prisma/seed-guard.ts holds the rules; the admin demo account additionally
  * needs SEED_DEMO_ADMIN=1, see prisma/seed-extras/users.ts).
  */
+import { PrismaClient } from '@prisma/client'
 import { spawnSync } from 'node:child_process'
 
+import { ensureForeignKeys } from '@/backend/lib/db'
 import { assertSeedAllowed } from './seed-guard'
 
 assertSeedAllowed()
+
+// Issue #135 (audit DB-12): assert SQLite FK enforcement BEFORE the chain
+// runs. Each child script re-asserts on its own connection; this guards the
+// runner's own connection and fails the whole chain up front when
+// `PRAGMA foreign_keys` cannot be enabled — the seeds' deleteMany/create
+// ordering leans on the schema's Cascade/Restrict semantics.
+const bootDb = new PrismaClient()
+await ensureForeignKeys(bootDb)
+await bootDb.$disconnect()
 
 const steps: Array<{ script: string; note: string; wipes: string }> = [
   {

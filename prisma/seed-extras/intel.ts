@@ -9,6 +9,7 @@
 // to re-run AFTER seed-extras/money.ts, which wipes all notifications.
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 import { fmtKes } from '@/backend/lib/money'
 
 const db = new PrismaClient()
@@ -168,7 +169,9 @@ export async function seedIntel(db: PrismaClient): Promise<void> {
 
 // Standalone runner (Bun): `bun prisma/seed-extras/intel.ts`
 if ((import.meta as { main?: boolean }).main === true) {
-  seedIntel(db)
+  // issue #135 / audit DB-12 — refuse to write with FK enforcement off
+  ensureForeignKeys(db)
+    .then(() => seedIntel(db))
     .catch((e) => { console.error(e); process.exit(1) })
     .finally(() => db.$disconnect())
 }
