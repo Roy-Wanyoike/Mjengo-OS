@@ -134,7 +134,7 @@ export const enDict = {
   'header.aria.online': 'Online',
   'header.aria.offline': 'Offline',
   'header.aria.toggleConnectivity': 'Toggle simulated connectivity',
-  'header.simNote': 'Simulation toggle — the app also follows the browser\'s real connectivity',
+  'header.simNote': 'Dev/QA tool — simulates going offline to exercise the sync queue; the app still follows the browser\'s real connectivity. Never shown in production builds',
   'header.sync': 'Sync',
   'header.syncing': 'Syncing…',
   'header.aria.sync': 'Sync queued actions',

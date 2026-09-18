@@ -59,8 +59,8 @@ jobs/run POST handler · API-10 typed /api/actions payload at route · API-11
 audit POST /api/projects · API-12 real search index (replace in-memory
 300-row window) · API-14 extend OpenAPI to the app surface (the
 document-intelligence route joined the doc via #153; the rest remains open) · FE-6 outbox
-auto-retry with backoff · FE-7 hide offline-simulation toggle in prod ·
-FE-8 runtime DOM a11y suite · FE-9 USSD body i18n · FE-11 SW staleness cue ·
+auto-retry with backoff · FE-7 ~~hide offline-simulation toggle in prod~~ —
+landed 2026-09-24 via #136 (module-scope NODE_ENV gate, DCE-verified) · FE-8 runtime DOM a11y suite · FE-9 USSD body i18n · FE-11 SW staleness cue ·
 FE-12 offline worklist for online-only flows · WD-3 "escrow-style" wording ·
 WD-4/5/6/11 website minor set (gateway param, manifest, sitemap date, leads
 in backup set) · DB-9 soft-FK sweep · DB-10 enums/CHECKs parity · DB-11

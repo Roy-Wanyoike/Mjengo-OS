@@ -12,6 +12,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/frontend/ui/popover'
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from '@/frontend/ui/sheet'
 import { ProjectSwitcher } from '@/frontend/mjengo/project-switcher'
 import { SyncOutboxPanel } from '@/frontend/mjengo/sync-outbox-panel'
+import { SHOW_CONNECTIVITY_SIM } from '@/frontend/lib/dev-affordances'
 import {
   Wifi, CloudOff, HardHat, RefreshCw, CheckCheck, Share2, Bell, LogOut,
   Landmark, FileDiff, MessageSquare, TriangleAlert, BellRing,
@@ -951,29 +952,40 @@ export function Header({
 
             {!isShareClient && (
               <>
-                {/* Connectivity toggle — SIMULATES field connectivity; real
-                    browser online/offline events are followed separately.
+                {/* Connectivity SIMULATION pill — a dev/QA affordance,
+                    gated out of production builds (issue #136 / audit FE-7):
+                    a production user flipping it would queue real outbox
+                    items for no reason and blur "really offline" (the amber
+                    banner + outbox panel keep surfacing real state) vs
+                    "simulated offline". SHOW_CONNECTIVITY_SIM is a
+                    module-scope build-time constant (Next inlines NODE_ENV),
+                    so a production build folds it to false and
+                    dead-code-eliminates the pill — the SHOW_DEMO_QUICKFILL
+                    pattern from the login screen. The store's setOnline is
+                    NOT gated: it stays the browser online/offline event path
+                    (app.tsx) and the unit suites' offline-flow harness.
                     Hidden below sm: at 375px the 7-pill row measured 398px
                     and this demo affordance is the widest non-essential pill
-                    (the offline banner + outbox panel still surface state;
-                    re-enable from a wider viewport). */}
-                <div
-                  className="hidden sm:flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-stone-900 border border-stone-800"
-                  title={t('header.simNote')}
-                >
-                  {online ? (
-                    <Wifi className="w-4 h-4 text-emerald-400" aria-label={t('header.aria.online')} />
-                  ) : (
-                    <CloudOff className="w-4 h-4 text-amber-500" aria-label={t('header.aria.offline')} />
-                  )}
-                  <Switch
-                    checked={online}
-                    onCheckedChange={setOnline}
-                    aria-label={t('header.aria.toggleConnectivity')}
-                    className="scale-90 data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-amber-600"
-                  />
-                  <span className="text-xs font-medium w-12 hidden sm:inline">{online ? t('header.online') : t('header.offlineSim')}</span>
-                </div>
+                    (re-enable from a wider viewport). */}
+                {SHOW_CONNECTIVITY_SIM && (
+                  <div
+                    className="hidden sm:flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-stone-900 border border-stone-800"
+                    title={t('header.simNote')}
+                  >
+                    {online ? (
+                      <Wifi className="w-4 h-4 text-emerald-400" aria-label={t('header.aria.online')} />
+                    ) : (
+                      <CloudOff className="w-4 h-4 text-amber-500" aria-label={t('header.aria.offline')} />
+                    )}
+                    <Switch
+                      checked={online}
+                      onCheckedChange={setOnline}
+                      aria-label={t('header.aria.toggleConnectivity')}
+                      className="scale-90 data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-amber-600"
+                    />
+                    <span className="text-xs font-medium w-12 hidden sm:inline">{online ? t('header.online') : t('header.offlineSim')}</span>
+                  </div>
+                )}
 
                 {/* Sync control + per-item outbox sheet (issue "Outbox
                     conflict metadata + entity versions"): the historical flush
