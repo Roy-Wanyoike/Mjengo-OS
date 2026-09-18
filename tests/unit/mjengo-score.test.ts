@@ -743,6 +743,7 @@ describe('non-influence: score rows change no action outcomes anywhere', () => {
       'src/backend/modules/intel/repository.ts',
       'src/backend/modules/intel/policy.ts',
       'src/backend/actions/intel.ts',
+      'src/backend/api/action-schemas.ts', // #161 registry: the request-contract catalog lists every action type — validation wiring, no domain reads
       'src/backend/lib/audit.ts', // kind map + ledger one-liner only — no reads
       'src/frontend/mjengo/intel/sections/score-section.tsx',
       'src/frontend/mjengo/intel-tab.tsx', // mounts the section — display wiring only

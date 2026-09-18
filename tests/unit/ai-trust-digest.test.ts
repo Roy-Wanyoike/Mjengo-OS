@@ -926,6 +926,7 @@ describe('non-influence: digest rows change no action outcomes anywhere', () => 
     const allowlist = new Set([
       'src/backend/modules/ai/trust-digest.ts', // the engine (reads rows, appends digests)
       'src/backend/actions/ai.ts', // the ai.trustDigest action registration + dispatcher
+      'src/backend/api/action-schemas.ts', // #161 registry: the request-contract catalog lists every action type — validation wiring, no domain reads
       'src/backend/lib/audit.ts', // kind map + ledger one-liner only — no reads
       'src/backend/api/share.ts', // the read-only share GET branch
       'src/backend/modules/jobs/handlers.ts', // the digest.trust job twin

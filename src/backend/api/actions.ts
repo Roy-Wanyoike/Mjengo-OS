@@ -14,6 +14,8 @@ import { kindForAction, withAuditContext } from '@/backend/lib/audit'
 import { currentRequestId } from '@/backend/lib/log'
 import { actionFlagGate } from '@/backend/lib/action-flag-gate'
 import { actionsPrincipal } from '@/backend/lib/idempotency'
+import { ActionPayloadError } from '@/backend/api/action-schemas'
+import { zodIssueResponse } from '@/backend/lib/route-kit'
 
 // Owner action endpoint — src/app/api/actions/route.ts is the shim.
 // · client-ROLE sessions may only dispatch CLIENT_ACTIONS (403 otherwise) and
@@ -223,7 +225,17 @@ export const POST = publicRoute(
     // audit row per action; the entity hint comes from the payload id when
     // the action targets a known row.
     const auditCtx = auditContextFor(req, type, payload)
-    const result = await withAuditContext(auditCtx, () => applyAction(type, actorPayload, targetProjectId))
+    let result
+    try {
+      result = await withAuditContext(auditCtx, () => applyAction(type, actorPayload, targetProjectId))
+    } catch (e) {
+      // #161 (API-10): a registry schema violation renders as the house
+      // validation 400 — the SAME { error, field? } contract the v1 family
+      // and POST /api/share already answer with (zodIssueResponse), not the
+      // generic safeError 'Action failed' every deep applier error takes.
+      if (e instanceof ActionPayloadError) return zodIssueResponse(e.issues)
+      throw e
+    }
 
     // Persist the idempotency record AFTER a successful apply (spec §57), in
     // the caller's OWN namespace (#177 — actionsPrincipal over the RESOLVED
