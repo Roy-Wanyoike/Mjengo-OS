@@ -18,6 +18,7 @@ import type { PaymentRequestRow } from '@/backend/modules/wallet/types'
 import { EMPTY_FINANCE_SLICE } from '@/backend/modules/wallet/types'
 import type { DrawPackLink } from '@/backend/modules/drawpack/service'
 import { DrawPackViewer } from '@/frontend/mjengo/draw-pack-viewer'
+import { WalletPostureBanner } from '@/frontend/mjengo/wallet-posture-banner'
 import { useT } from '@/frontend/i18n/provider'
 import {
   Banknote, BookOpen, Camera, Check, CheckCheck, FileCheck2, Hourglass, ImageOff, Link2, Loader2, Lock, Minus, Plus, Send, ShieldCheck, Sparkles, TrendingUp, Wallet, X,
@@ -543,6 +544,11 @@ export function MoneyTab() {
     <div className="space-y-6">
       {/* W4-1 print isolation — only #draw-pack-print-root is visible on paper */}
       <style>{`@media print { body * { visibility: hidden !important; } #draw-pack-print-root, #draw-pack-print-root * { visibility: visible !important; } #draw-pack-print-root { position: fixed !important; inset: 0 !important; overflow: visible !important; background: white !important; } }`}</style>
+
+      {/* #123 (FE-2): simulated-rails posture at the SURFACE — persistent,
+          dismissible per project, re-arms when the posture changes. The
+          honest inline notes inside the dialogs stay exactly as they are. */}
+      <WalletPostureBanner projectId={data.project.id} />
 
       {/* KPI row */}
       <section className="grid grid-cols-2 gap-4 lg:grid-cols-4" aria-label={t('money.kpiAria')}>

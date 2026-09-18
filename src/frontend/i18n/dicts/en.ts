@@ -1056,6 +1056,13 @@ export const enDict = {
   'money.escrow.consistentNote': 'Derived {derived} = stored projection {projected} — every top-up and release posts ledger rows',
   'money.escrow.drift': 'Drift {amount} — investigate',
   'money.escrow.driftNote': 'Ledger-derived {derived} ≠ projection {projected} — the ledger is the source of truth',
+  // #123 (FE-2): the simulated-rails posture banner at the top of the Money
+  // tab + the fundis payroll gate line — one shared key family, no divergent
+  // duplicate. Retires with #43 (see mjengo/wallet-posture.ts).
+  'money.posture.title': 'Simulated money rails',
+  'money.posture.note': 'Wallet, escrow and payroll post to the real double-entry ledger, but the payment provider is simulated — no real money moves until M-Pesa production wiring lands (#43).',
+  'money.posture.dismiss': 'Dismiss',
+  'money.posture.dismissAria': 'Dismiss the simulated-rails notice',
   'money.kpiAria': 'MjengoPay KPIs',
   'money.kpi.escrow': 'In escrow',
   'money.kpi.escrowHeld': 'Held for {name}',

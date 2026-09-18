@@ -471,3 +471,38 @@ describe('#107 wave 5: materials enum label keys exist for every renderable valu
     expect(translate(enDict, 'mat.store.title')).toBe('Site Store')
   })
 })
+
+// ---------------------------------------------------------------------------
+// #123 (audit FE-2): simulated-rails posture banner. The Money tab surface
+// banner and the fundis payroll gate line share ONE key family
+// (money.posture.*) — pinned here so the disclosure cannot ship in one
+// language only, and so the copy stays honest (ledger-real,
+// provider-simulated, #43) via the real translate().
+// ---------------------------------------------------------------------------
+
+describe('#123: posture banner key family exists in both dictionaries', () => {
+  const POSTURE_KEYS = [
+    'money.posture.title',
+    'money.posture.note',
+    'money.posture.dismiss',
+    'money.posture.dismissAria',
+  ] as const
+
+  it('the shared money.posture.* family resolves in BOTH dictionaries', () => {
+    for (const key of POSTURE_KEYS) {
+      expect(enKeys.has(key), `en.ts is missing "${key}"`).toBe(true)
+      expect(swKeys.has(key), `sw.ts is missing "${key}"`).toBe(true)
+    }
+  })
+
+  it('the posture copy states the honest ledger-real / provider-simulated posture in both languages', () => {
+    expect(translate(enDict, 'money.posture.title')).toBe('Simulated money rails')
+    expect(translate(enDict, 'money.posture.note')).toContain('double-entry ledger')
+    expect(translate(enDict, 'money.posture.note')).toContain('simulated')
+    expect(translate(enDict, 'money.posture.note')).toContain('#43')
+    expect(translate(swDict, 'money.posture.title')).toBe('Njia za pesa za mfano')
+    expect(translate(swDict, 'money.posture.note')).toContain('daftari halisi la mara mbili')
+    expect(translate(swDict, 'money.posture.note')).toContain('mfano')
+    expect(translate(swDict, 'money.posture.note')).toContain('#43')
+  })
+})
