@@ -51,6 +51,22 @@ export default async function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
+        {/* Pre-hydration <html lang> sync (issue #130 / audit FE-5): mirrors
+            public/offline.html exactly — same `mjengo-os-settings` store, same
+            values — so a saved Kiswahili preference gets correct AT
+            pronunciation from FIRST PAINT, before React hydrates. The static
+            lang="en" above stays the SSR/hydration markup; the post-hydration
+            I18nProvider useEffect (src/frontend/i18n/provider.tsx) then keeps
+            documentElement.lang in lockstep on every locale switch, and
+            suppressHydrationWarning absorbs the en→sw attribute flip the same
+            way it absorbs next-themes' class mutation. */}
+        <script
+          nonce={nonce}
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{var s=JSON.parse(localStorage.getItem('mjengo-os-settings')||'{}');if(s&&s.state&&s.state.language==='sw'){document.documentElement.lang='sw'}}catch(e){}",
+          }}
+        />
         {/* i18n (W4-I18N · spec §62) — wraps the session provider so the login
             gate and every surface below it can use t(); locale persists via the
             SAME `mjengo-os-settings` store the Settings tab writes. */}
@@ -60,7 +76,8 @@ export default async function RootLayout({
         <Toaster richColors position="top-center" />
         {/* Service-worker registration (PWA). /api/* is never cached — see
             public/sw.js. Registered on window load so it never competes with
-            first paint, and guarded so non-SW browsers skip it. */}
+            first paint, and guarded so non-SW browsers skip it. Like the
+            lang-sync script above, it carries the CSP nonce. */}
         <script
           nonce={nonce}
           dangerouslySetInnerHTML={{

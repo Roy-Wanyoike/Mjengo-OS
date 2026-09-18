@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useSyncExternalStore,
   type ReactNode,
@@ -76,6 +77,23 @@ export function translate(dict: Dict, key: string, vars?: Record<string, string 
   return value
 }
 
+/**
+ * Keeps <html lang> in lockstep with the active locale (issue #130 / audit
+ * FE-5, WCAG 3.1.1 language-of-page): screen readers stop pronouncing
+ * Kiswahili copy with English phonetics, and translation tools stop guessing.
+ *
+ * The root layout is a SERVER component that statically renders lang="en"
+ * (the SSR/hydration locale), so the only honest sync is a post-hydration
+ * client mutation of the document element — never a render-time store read —
+ * which is exactly what this writer does when the provider's useEffect calls
+ * it. Exported for the behavioral pin in tests/unit/html-lang.test.ts.
+ */
+export function syncHtmlLang(locale: Locale): void {
+  // SSR + the node-only vitest environment have no document — nothing to sync.
+  if (typeof document === 'undefined') return
+  document.documentElement.lang = locale
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
   const language = useLocalePrefs((s) => s.language)
   const setLanguage = useLocalePrefs((s) => s.setLanguage)
@@ -84,6 +102,16 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   // Server render + hydration pass: default locale (markup parity); the
   // post-hydration commit picks up the persisted preference.
   const locale: Locale = hydrated && SUPPORTED_LOCALES.includes(language) ? language : DEFAULT_LOCALE
+
+  // <html lang> tracks the active locale (#130): runs AFTER the hydration
+  // commit (initially 'en', matching the layout's static markup — no
+  // hydration mismatch), then again on every locale flip, so a Settings
+  // switch is reflected on the document element immediately, no reload.
+  // (First paint for a saved 'sw' is handled even earlier, pre-hydration, by
+  // the nonce'd inline script in layout.tsx that mirrors offline.html.)
+  useEffect(() => {
+    syncHtmlLang(locale)
+  }, [locale])
 
   const t = useCallback<TranslateFn>(
     (key, vars) => translate(DICTS[locale], key, vars),
