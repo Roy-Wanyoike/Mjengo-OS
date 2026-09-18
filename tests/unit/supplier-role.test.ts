@@ -76,10 +76,12 @@ vi.mock('@/backend/lib/db', () => {
     lastNotifWhere: undefined as Row | undefined,
     /** Call counters — the "zero reads/writes" pins. searchScans counts the
      *  /api/search fan-out (all ten source tables); notificationFindMany /
-     *  jobRecordFindMany count the BE-3 GET routes' reads. */
+     *  jobRecordFindMany count the BE-3 GET routes' reads; projectFindFirst
+     *  counts the #157 first-project default lookup (zero post-fix). */
     calls: {
       purchaseOrderFindFirst: 0, quoteFindFirst: 0, catalogFindUnique: 0,
       searchScans: 0, notificationFindMany: 0, jobRecordFindMany: 0,
+      projectFindFirst: 0,
     },
     reset() {
       state.audits = []
@@ -99,6 +101,7 @@ vi.mock('@/backend/lib/db', () => {
       state.calls = {
         purchaseOrderFindFirst: 0, quoteFindFirst: 0, catalogFindUnique: 0,
         searchScans: 0, notificationFindMany: 0, jobRecordFindMany: 0,
+        projectFindFirst: 0,
       }
       seed()
     },
@@ -269,7 +272,7 @@ vi.mock('@/backend/lib/db', () => {
         if (where.shareToken !== undefined) return rows.find((p) => p.shareToken === where.shareToken) ?? null
         return null
       },
-      async findFirst() { return { ...P1 } },
+      async findFirst() { state.calls.projectFindFirst++; return { ...P1 } },
       async findMany({ where, select }: { where?: Row; select?: Row }) {
         state.calls.searchScans++ // /api/search source table #1
         const rows = [P1, P2].filter((p) => matches(p as Row, where ?? {}))
@@ -527,6 +530,7 @@ const repo = vi.hoisted(() => ({ loadSupplySlice: vi.fn(), loadSupplyOrdersBound
 vi.mock('@/backend/modules/supply/repository', () => repo)
 
 import { db } from '@/backend/lib/db'
+import { OWNER_ROLES } from '@/backend/lib/guard' // the mocked guard's export — mirrors guard.ts 1:1
 import { getProjectPayload, getProjectsList } from '@/backend/lib/mjengo'
 import { buildAuthOptions } from '@/backend/lib/auth'
 import { assertSupplierScope, SUPPLIER_ACTION_REFUSED, SUPPLIER_UNLINKED } from '@/backend/modules/supply/supplier-scope'
@@ -579,6 +583,7 @@ function stateType() {
       searchScans: number
       notificationFindMany: number
       jobRecordFindMany: number
+      projectFindFirst: number
     }
     reset: () => void
   }
@@ -1182,13 +1187,62 @@ describe('GET /api/notifications — the BE-12 supplier scope, on the GET half (
     expect(state.calls.notificationFindMany).toBe(0)
   })
 
-  it('MIRROR: a contractor with no project named still gets the default first project (unchanged)', async () => {
+  it('MIRROR: a contractor with no project named → the honest #157 400, not the first project\'s rows', async () => {
     sessionFor('contractor')
     const res = await notificationsGet(getReq('http://localhost/api/notifications'), undefined)
+    expect(res.status).toBe(400)
+    expect(await bodyOf(res)).toEqual({ error: 'projectId required — owner roles have no default project' })
+    // The arbitrary adoption is gone BEFORE any read: no first-project
+    // lookup, no notification row, no where-clause at all.
+    expect(state.calls.projectFindFirst).toBe(0)
+    expect(state.calls.notificationFindMany).toBe(0)
+    expect(state.lastNotifWhere).toBeUndefined()
+  })
+})
+
+describe('GET /api/notifications — the #157 owner contract (no first-project default)', () => {
+  // Pre-#157 this GET silently adopted the FIRST project in the DB (oldest
+  // createdAt) for any unpinned non-client, non-supplier session — an
+  // arbitrary, data-dependent default (audit API-6). The honest contract:
+  // owner roles are portfolio-wide readers, so a missing ?projectId is a
+  // missing parameter, not a default.
+  it.each(OWNER_ROLES)('owner role %s with NO projectId → 400, zero rows read, zero first-project lookups', async (role) => {
+    sessionFor(role)
+    const res = await notificationsGet(getReq('http://localhost/api/notifications'), undefined)
+    expect(res.status).toBe(400)
+    expect(await bodyOf(res)).toEqual({ error: 'projectId required — owner roles have no default project' })
+    expect(state.calls.projectFindFirst).toBe(0)
+    expect(state.calls.notificationFindMany).toBe(0)
+    expect(state.lastNotifWhere).toBeUndefined()
+  })
+
+  it('an owner role naming a project gets exactly that project\'s rows (the pinned reading path)', async () => {
+    sessionFor('contractor')
+    const res = await notificationsGet(getReq('http://localhost/api/notifications?projectId=p-2'), undefined)
     expect(res.status).toBe(200)
     const body = await bodyOf(res)
-    expect((body.notifications as Array<{ id: string }>).map((n) => n.id)).toEqual(['n-1'])
-    expect(state.lastNotifWhere).toMatchObject({ projectId: 'p-1' })
+    expect((body.notifications as Array<{ id: string }>).map((n) => n.id)).toEqual(['n-2'])
+    expect(state.lastNotifWhere).toMatchObject({ projectId: 'p-2' })
+  })
+
+  it('an owner role naming an UNKNOWN project → the same 404 everyone gets (the 400 fires only on absence)', async () => {
+    sessionFor('supervisor')
+    const res = await notificationsGet(getReq('http://localhost/api/notifications?projectId=p-missing'), undefined)
+    expect(res.status).toBe(404)
+    expect(await bodyOf(res)).toEqual({ error: 'Project not found' })
+    expect(state.calls.notificationFindMany).toBe(0)
+  })
+
+  it('an UNKNOWN role with NO projectId → the same 400 (the else branch fails closed, never adopts)', async () => {
+    // The route scopes by "not client, not supplier" — a role it has never
+    // heard of falls into the owner branch, and post-#157 that means the
+    // honest 400, never a silent first-project read.
+    sessionFor('auditor')
+    const res = await notificationsGet(getReq('http://localhost/api/notifications'), undefined)
+    expect(res.status).toBe(400)
+    expect(await bodyOf(res)).toEqual({ error: 'projectId required — owner roles have no default project' })
+    expect(state.calls.projectFindFirst).toBe(0)
+    expect(state.calls.notificationFindMany).toBe(0)
   })
 })
 

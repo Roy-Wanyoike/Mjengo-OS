@@ -95,8 +95,13 @@ function NotificationPrefsCard() {
   const [savingKind, setSavingKind] = useState<string | null>(null)
   const [reload, setReload] = useState(0)
 
-  // Load the session user's saved prefs (GET also pins clients to their own
-  // project; unknown/omitted projectId → server picks the first project).
+  // Load the session user's saved prefs. #157 made an omitted projectId a
+  // 400 for owner roles — safe here because the owner app only renders
+  // Settings once the project payload has loaded (data.project.id is set),
+  // so this card always sends the active project's id; the supplier portal
+  // (which reuses this tab with the owner store still empty) is a supplier
+  // session, which reads its served-projects' union when no id is sent;
+  // clients are pinned to their own project either way.
   // 401 = not signed in (anonymous share-link client on the client surface
   // can reach the Settings tab) → honest signed-out note, not a fake error.
   useEffect(() => {

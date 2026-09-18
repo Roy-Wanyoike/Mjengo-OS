@@ -121,7 +121,7 @@ Sampled 5 representative files (ledger, v1-wallets, ussd-route, supplier-role, r
 | File | Purpose |
 |---|---|
 | v1-supply.test.ts (34) | Supply order list/detail, delivery verification records, marketplace flag gate, OpenAPI |
-| supplier-role.test.ts (82) | Supplier portal scoping: allowlist, session pin, row pin, closed buyer surfaces, seeded demo journey, migration additive |
+| supplier-role.test.ts (93) | Supplier portal scoping: allowlist, session pin, row pin, closed buyer surfaces, seeded demo journey, migration additive; GET /api/notifications scoping pins (BE-3 supplier union + the #157 owner no-default 400) |
 | v1-invoices.test.ts (23) | Invoice lifecycle list/detail + 3-way verdict, rate limit, OpenAPI Phase C |
 | delivery-photos.test.ts (11) | Delivery evidence: link-on-verify, discrepancy counts, replay, idempotent re-link, fail-closed validation |
 | v1-suppliers-parcels.test.ts (16) | Supplier catalog summary + parcel verification ladder summary reads |

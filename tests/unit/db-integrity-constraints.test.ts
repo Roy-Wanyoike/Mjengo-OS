@@ -176,7 +176,8 @@ describe('migration 15 — the hot-path indexes serve the REAL query shapes (iss
   })
 
   it('the notifications list (projectId + ORDER BY createdAt DESC, the `before` keyset) is index-backed', () => {
-    // /api/notifications default + project timeline + mjengo payload reads.
+    // /api/notifications project-scoped reads (post-#157 owner roles must
+    // NAME the project) + project timeline + mjengo payload reads.
     const p = plan(`SELECT * FROM Notification WHERE "projectId" = 'p-1' AND "createdAt" < '2026-09-18T00:00:00Z' ORDER BY "createdAt" DESC LIMIT 50`)
     expect(p).toContain('Notification_projectId_createdAt_idx')
   })
