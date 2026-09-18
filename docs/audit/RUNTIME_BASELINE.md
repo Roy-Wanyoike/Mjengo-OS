@@ -47,5 +47,13 @@ against the new unique constraints (`bun run seed` on a throwaway DB).
 - Tests are not DB-backed (in-memory Prisma stubs) except the new
   `db-integrity-constraints.test.ts` (real better-sqlite3) and
   `rate-limit-store.test.ts` — TEST-2 register item.
+  2026-09-19 update (issue #184): the real-SQLite harness landed —
+  `tests/helpers/db.ts` (fresh temp-file SQLite per test file, migrations
+  00→15 applied by the REAL `prisma migrate deploy`, real PrismaClient +
+  better-sqlite3 handle) with five critical-path suites on it:
+  ledger-realdb / wallet-realdb / supply-chain-realdb (the TEST-6 walk) /
+  inventory-realdb / attendance-realdb. The stub suites still run unchanged
+  for fast pure-logic coverage — the register item is now about CI wiring
+  (#98), not about the harness existing.
 - No automated E2E (Playwright) — TEST-1 register item; prior
   "browser-verified" evidence was manual.

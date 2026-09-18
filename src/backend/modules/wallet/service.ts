@@ -978,14 +978,30 @@ export async function postEscrowTopup(
 ): Promise<{ ledgerRef: string; balance: Cents }> {
   const method = opts.method ?? 'mpesa'
   const cashCode = cashAccountForMethod(method)
+  // Same natural key the ledger post below derives (issue #75/BE-3): a
+  // retried top-up with the SAME reference must REPLAY, never double-count.
+  // Found by the #184 real-SQLite harness: the projection used to increment
+  // unconditionally, so a replay incremented EscrowWallet.balance while the
+  // ledger (correctly) posted nothing — the stored balance drifted above the
+  // derived truth by exactly the retry amount (the #212 drift-alarm class).
+  // The replay check runs BEFORE the upsert, mirroring withdrawWallet's
+  // replay-before-balance-check discipline.
+  const idempotencyKey = opts.reference ? `escrow.topup:${projectId}:${opts.reference}` : undefined
   return db.$transaction(async (tx) => {
+    if (idempotencyKey) {
+      const prior = await tx.ledgerTransaction.findUnique({ where: { idempotencyKey } })
+      if (prior) {
+        const wallet = await tx.escrowWallet.findUnique({ where: { projectId } })
+        return { ledgerRef: prior.ref, balance: wallet?.balance ?? 0n }
+      }
+    }
     const escrowAccount = await ensureAccountTx(tx, `ESCROW:${projectId}`)
     const ledgerTxn = await postLedgerTransactionInTx(tx, {
       projectId,
       description: `Escrow top-up${opts.reference ? ` (${opts.reference})` : ''} — ${method}`,
       postedBy: by,
       postedRole: opts.role ?? 'client',
-      idempotencyKey: opts.reference ? `escrow.topup:${projectId}:${opts.reference}` : undefined,
+      idempotencyKey,
       lines: [
         { accountCode: cashCode, side: 'debit', amount },
         { accountCode: `ESCROW:${projectId}`, side: 'credit', amount },

@@ -47,6 +47,7 @@
 | OBS-1/2 | `feat(observability): structured logs w/ correlation IDs, error tracking, metrics` | sre | 2026-09-19: #204/PR #277 landed the structured logger (OBS-2 — `lib/log.ts`, JSON-in-prod, requestId propagation); #202 landed the opt-in fail-open error sink (OBS-1 — `lib/errors/sink.ts` webhook v1 on that substrate, `ERROR_SINK_URL` gate, unconfigured = journal-only default); metrics (OBS-3) still open |
 | INF-1 | `fix(deploy): systemd unit drops to non-root service user` | ops | |
 | API-1r | `fix(security): require webhook secrets when secrets are SET but routes also rate-limit per-identity` | backend | residual after SEC-4 |
+| TEST-10 | `fix(inventory): unitCost unit drift — writers store KSh, readers assume cents (stockValue ×100 understated)` | data | Found 2026-09-19 by the #184 real-SQLite harness: every writer (frontend "Unit cost (KSh)" contract; supply's postDeliveryToInventory passes `centsToKes(...)`) stores a KSh number into the BigInt `StockMovement.unitCost` column whose schema comment says cents, while `loadInventorySlice` treats it as cents (`mulQtyCents` + `centsToKes` on the movement rows too) — displayed costs and stockValue are ÷100. tests/unit/inventory-realdb.test.ts pins the CURRENT behavior with a fail-on-purpose note; normalizing the units is a money-semantics decision (which side, plus stored historical data), deliberately not done in the test-infra PR |
 
 ### P3 (non-blocking improvements)
 
@@ -103,4 +104,4 @@ Wave-3 findings fixed along the way (all evidence in worklog.md):
 Offline transfer: `mjengo-wave3.bundle` (verified complete history; `git clone mjengo-wave3.bundle`).
 Dev DB: rebuilt on the renamed migration set + reseeded (`bun run seed`).
 
-Next wave candidates from the register (P2): #124 DB-enforced ledger invariants · #144 SQL SUM aggregation · #154/#155 bounded reads · #156 webhook residual · #194 stock reconciliation · #199 backups · #202/#204 observability · #183 offline conflict matrix · #184 real-SQLite harness · #212 escrow drift alarm.
+Next wave candidates from the register (P2): #124 DB-enforced ledger invariants · #144 SQL SUM aggregation · #154/#155 bounded reads · #156 webhook residual · #194 stock reconciliation · #199 backups · #202/#204 observability · #183 offline conflict matrix · #184 real-SQLite harness (landed 2026-09-19 — harness + 5 critical-path real-DB suites; its first catches: postEscrowTopup replay projection drift, fixed in-flight; StockMovement.unitCost unit drift, filed as TEST-10) · #212 escrow drift alarm.
