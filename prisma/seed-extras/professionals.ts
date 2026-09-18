@@ -8,6 +8,7 @@
 // "licence expired — renewal pending" finding, exactly as found.
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 
 const db = new PrismaClient()
 
@@ -184,7 +185,9 @@ export async function seedProfessionals(db: PrismaClient): Promise<void> {
 
 // Standalone runner (Bun): `bun prisma/seed-extras/professionals.ts`
 if ((import.meta as { main?: boolean }).main === true) {
-  seedProfessionals(db)
+  // issue #135 / audit DB-12 — refuse to write with FK enforcement off
+  ensureForeignKeys(db)
+    .then(() => seedProfessionals(db))
     .catch((e) => { console.error(e); process.exit(1) })
     .finally(() => db.$disconnect())
 }

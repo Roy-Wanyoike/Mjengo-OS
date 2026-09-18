@@ -24,6 +24,7 @@
 // Rows are looked up by NAME (never ids).
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 import { seedInvoices } from './invoices'
 
 const db = new PrismaClient()
@@ -660,7 +661,9 @@ export async function seedSupply(db: PrismaClient, opts: { reseedInvoices?: bool
 // reseedInvoices: invoices hang off the fresh POs — rebuild them so any extras
 // order (invoices before or after supply) ends consistent.
 if ((import.meta as { main?: boolean }).main === true) {
-  seedSupply(db, { reseedInvoices: true })
+  // issue #135 / audit DB-12 — refuse to write with FK enforcement off
+  ensureForeignKeys(db)
+    .then(() => seedSupply(db, { reseedInvoices: true }))
     .catch((e) => { console.error(e); process.exit(1) })
     .finally(() => db.$disconnect())
 }

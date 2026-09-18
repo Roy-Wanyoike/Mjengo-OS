@@ -22,6 +22,7 @@
 // its documented public password and must be changed immediately.
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 import { randomBytes, scryptSync } from 'node:crypto'
 
 import { SEED_DEMO_ADMIN_ENV, assertSeedAllowed, shouldSeedDemoAdmin } from '../seed-guard'
@@ -37,6 +38,7 @@ function hashPassword(password: string): string {
 }
 
 async function main() {
+  await ensureForeignKeys(db) // issue #135 / audit DB-12 — refuse to write with FK enforcement off
   await db.user.deleteMany()
 
   const p1 = await db.project.findFirst({ where: { name: { contains: 'Nyumba Yangu' } } })

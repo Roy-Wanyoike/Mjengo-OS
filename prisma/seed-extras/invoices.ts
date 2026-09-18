@@ -13,6 +13,7 @@
 //     PO-2026-000012; 3-way match pending — delivery not yet recorded).
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 
 const db = new PrismaClient()
 
@@ -169,7 +170,9 @@ export async function seedInvoices(db: PrismaClient): Promise<void> {
 
 // Standalone runner (Bun): `bun prisma/seed-extras/invoices.ts`
 if ((import.meta as { main?: boolean }).main === true) {
-  seedInvoices(db)
+  // issue #135 / audit DB-12 — refuse to write with FK enforcement off
+  ensureForeignKeys(db)
+    .then(() => seedInvoices(db))
     .catch((e) => { console.error(e); process.exit(1) })
     .finally(() => db.$disconnect())
 }

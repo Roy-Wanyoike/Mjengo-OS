@@ -18,6 +18,7 @@
 // type:'milestone' Transaction rows (handled by src/lib/actions/money.ts).
 
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 import { fmtKes } from '@/backend/lib/money'
 import { withLedgerMaintenance } from './ledger-maintenance'
 
@@ -71,6 +72,7 @@ async function postSeedLedger(input: {
 }
 
 async function main() {
+  await ensureForeignKeys(db) // issue #135 / audit DB-12 — refuse to write with FK enforcement off
   // FK-safe wipe of ONLY the models this seed owns
   await db.notification.deleteMany()
   await db.paymentRequest.deleteMany()

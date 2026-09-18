@@ -3,6 +3,7 @@
 // Run AFTER prisma/seed-extras/money.ts (which also seeds a couple of live
 // workflow notifications and wipes Notification on its own re-run).
 import { PrismaClient } from '@prisma/client'
+import { ensureForeignKeys } from '@/backend/lib/db'
 import { fmtKes } from '@/backend/lib/money'
 
 const db = new PrismaClient()
@@ -29,6 +30,7 @@ async function withBusyRetry(fn: () => Promise<void>, attempts = 5) {
 }
 
 async function main() {
+  await ensureForeignKeys(db) // issue #135 / audit DB-12 — refuse to write with FK enforcement off
   await db.notification.deleteMany()
 
   const [p1, p2, p3] = await Promise.all([
