@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto'
 
 import { db } from '@/backend/lib/db'
 import { assertMoneyAmount } from '@/backend/lib/money-bounds'
+import { parseActionPayload } from '@/backend/api/action-schemas'
 import { scrubTranscriptPhones } from '@/backend/lib/pii-scrub'
 import { logAudit, summarizeAction, kindForAction, auditEnrichmentFor } from '@/backend/lib/audit'
 import { TRUST_ACTIONS, applyTrustAction } from '@/backend/actions/trust'
@@ -740,11 +741,22 @@ export type ActionType =
   | (typeof AI_ACTIONS)[number]
 
 export async function applyAction(type: ActionType, payload: any, projectIdArg?: string): Promise<any> {
+  // #161 (API-10) — the action schema registry choke point. The server-side
+  // actor stamp is stripped FIRST, then the clean payload is validated
+  // against ACTION_PAYLOAD_SCHEMAS (src/backend/api/action-schemas.ts)
+  // BEFORE any DB read, role gate or handler runs: /api/actions, /api/sync
+  // outbox items, /api/share links, the USSD/WhatsApp gateways and the AI
+  // write-back all dispatch through here, so every path inherits the same
+  // contract. Strict money/wallet types reject unknown + mistyped fields
+  // (ActionPayloadError — the /api/actions route renders it as the house
+  // { error, field? } 400); documented types accept the applier's own
+  // validation exactly as before. Validation is check-only: the parsed
+  // value is discarded and the appliers keep their coercion semantics.
+  const { __actor, __role, __supplierId, ...cleanPayload } = payload ?? {}
+  parseActionPayload(type, cleanPayload)
+
   // Project resolution: explicit projectId arg > payload.projectId > first project
   const projectId = await resolveProjectId(projectIdArg, payload)
-
-  // Optional actor override (used by the public share route / client role); never reaches handlers
-  const { __actor, __role, __supplierId, ...cleanPayload } = payload ?? {}
 
   // ---- B1 domain role gates (Doc A §24/§26/§33) ------------------------------
   // The role stamp arrives via __role, written SERVER-side by every entry

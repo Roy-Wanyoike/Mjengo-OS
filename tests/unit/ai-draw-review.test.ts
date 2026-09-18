@@ -823,6 +823,7 @@ describe('non-influence: note rows change no action outcomes anywhere', () => {
       'src/backend/actions/ai.ts', // action registration + dispatch
       'src/backend/lib/audit.ts', // audit kind map + ledger one-liner only — no reads
       'src/backend/lib/mjengo.ts', // ActionType registration + role gate — dispatch wiring only
+      'src/backend/api/action-schemas.ts', // #161 registry: the request-contract catalog lists every action type — validation wiring, no domain reads
       'src/backend/lib/action-flag-gate.ts', // the ai flag family registration (enforcement, not influence)
       'src/backend/modules/intel/flags.ts', // enforcement-map comment only
       'src/backend/api/share.ts', // the read: serves the latest note through the token gate
