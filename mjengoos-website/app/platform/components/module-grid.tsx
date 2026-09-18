@@ -61,8 +61,8 @@ const MODULES: { icon: LucideIcon; name: string; description: string; caps: stri
     icon: Wallet,
     name: "Wallet & payments",
     description:
-      "One financial record per project: available, committed, spent. Escrow-style milestone releases approved against evidence, with an append-only audit ledger behind every movement.",
-    caps: ["Escrow-style releases", "M-Pesa records", "Audit ledger"],
+      "One financial record per project: available, committed, spent. Approval-gated milestone releases, approved against evidence, with an append-only audit ledger behind every movement.",
+    caps: ["Approval-gated releases", "M-Pesa records", "Audit ledger"],
   },
   {
     icon: Camera,

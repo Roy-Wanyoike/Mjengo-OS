@@ -81,6 +81,11 @@ export function Wallet() {
                 <p className="px-5 pt-4 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-mute">
                   Recent ledger entries
                 </p>
+                {/* #138: "Escrow top-up" below is DELIBERATE demo data — this
+                    mockup is DemoChip-labelled and the row names the ESCROW
+                    ledger account that genuinely exists in the app. Marketing
+                    copy says "approval-gated"; this ledger row stays
+                    escrow-named because that is what the real ledger calls it. */}
                 <ul className="divide-y divide-ink/10 px-5 pb-2 pt-1 text-[13px]">
                   {[
                     { text: "Milestone released — Walling to ring beam", amount: "-650,000", tag: "evidence attached" },
