@@ -329,12 +329,17 @@ describe('#132: retryAll overrides the schedule (and is the exhausted fallback)'
 
 describe('#132: wiring — the schedule persists and the panel communicates it', () => {
   it('the schedule fields are persisted outbox state (normalize + rehydrate restore)', () => {
+    // #128: the item shape + normalizeOutboxItem moved to the shared
+    // src/frontend/lib/outbox.ts core (the supplier outbox store consumes the
+    // same migration); the rehydrate re-arm stays in use-mjengo.ts. Same
+    // assertions, now pointed at the line's current home.
+    const core = readSrc('src/frontend/lib/outbox.ts')
     const src = readSrc('src/frontend/hooks/use-mjengo.ts')
     // OutboxItem carries the fields…
-    expect(src).toContain('autoAttempts?: number')
-    expect(src).toContain('nextAttemptAt?: number')
+    expect(core).toContain('autoAttempts?: number')
+    expect(core).toContain('nextAttemptAt?: number')
     // …normalizeOutboxItem migrates old persisted items to a clean slate…
-    expect(src).toContain('autoAttempts: typeof item.autoAttempts === \'number\' ? item.autoAttempts : 0')
+    expect(core).toContain('autoAttempts: typeof item.autoAttempts === \'number\' ? item.autoAttempts : 0')
     // …and the rehydrate hook re-arms the timer so a reload keeps the schedule.
     expect(src).toContain('setTimeout(() => armAutoRetryTimer(), 0)')
   })

@@ -11,6 +11,11 @@
 //   · MUTATE  POST /api/actions  with SUPPLIER_ACTIONS only (quote.receive,
 //             quote.decline, order.confirm, order.dispatch, catalog.upsert);
 //             the server re-pins every id to their own rows
+//   · OFFLINE #128 — the supplier outbox: dispatch queues in the persisted
+//             use-supplier-outbox store when the radio is down (or drops
+//             mid-send) and drains via the supplier-scoped /api/sync on
+//             reconnect; the header's SupplierSyncControl is the
+//             pending/syncing indicator + per-item sheet (owner parity).
 //
 // Sections reuse the Finder's proven bits (badges, money/qty formatters,
 // delivery-photo rendering, the invoice status badge) — the buyer cards
@@ -20,9 +25,8 @@
 // Internal navigation mirrors the permission matrix row (permissions.ts
 // ROLE_TABS.supplier): 'supplier' (this portal) + 'settings' (per-user prefs).
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSession, signOut } from 'next-auth/react'
-import { toast } from 'sonner'
 import { HardHat, LogOut, MessageSquareQuote, RefreshCw, Truck, ReceiptText, Boxes, Settings } from 'lucide-react'
 import { Badge } from '@/frontend/ui/badge'
 import { Button } from '@/frontend/ui/button'
@@ -31,11 +35,13 @@ import { Skeleton } from '@/frontend/ui/skeleton'
 import { useT } from '@/frontend/i18n/provider'
 import type { ActionType } from '@/backend/lib/mjengo'
 import type { SupplierPortalPayload } from '@/backend/api/supplier'
+import { useSupplierOutbox } from '@/frontend/hooks/use-supplier-outbox'
 import { SettingsTab } from '@/frontend/mjengo/settings-tab'
 import { SupplierQuoteCard } from './supplier-quote-card'
 import { SupplierOrderCard } from './supplier-order-card'
 import { SupplierInvoices } from './supplier-invoices'
 import { SupplierCatalog } from './supplier-catalog'
+import { SupplierSyncControl } from './supplier-sync-control'
 
 /** The portal's dispatch signature (scoped: names the buyer project the row
  *  lives in — catalog rows are network-global, so their project context is
@@ -48,13 +54,18 @@ export type SupplierDispatch = (
 ) => Promise<boolean>
 
 export function SupplierPortal() {
-  const { data: session } = useSession()
+  const { data: session, status } = useSession()
   const t = useT()
   const [payload, setPayload] = useState<SupplierPortalPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [view, setView] = useState<'portal' | 'settings'>('portal')
+  // #128 — the supplier outbox store: online flag (drives queue-vs-send),
+  // dataVersion (drives the post-drain portal refresh). The STORE owns the
+  // queue + drain; this component only wires connectivity + refreshes.
+  const online = useSupplierOutbox((s) => s.online)
+  const dataVersion = useSupplierOutbox((s) => s.dataVersion)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -87,36 +98,70 @@ export function SupplierPortal() {
     void load()
   }, [load])
 
-  /** Scoped mutation: POST /api/actions with the buyer project named by the
-   *  row being acted on. The server pins the ids to OUR supplier link; on
-   *  success we re-read the whole portal payload (source of truth). */
+  // ---------------- #128 — supplier outbox wiring (owner app parity) ----------------
+
+  // Real connectivity: mirror app.tsx's owner wiring against the SUPPLIER
+  // store — going offline is silent (the queued badge appears on the next
+  // action), coming back online drains the outbox via setOnline → toast
+  // "Back online — syncing queued actions" + auto-syncNow.
+  useEffect(() => {
+    useSupplierOutbox.setState({ online: navigator.onLine })
+    const onOffline = () => useSupplierOutbox.getState().setOnline(false)
+    const onOnline = () => useSupplierOutbox.getState().setOnline(true)
+    window.addEventListener('offline', onOffline)
+    window.addEventListener('online', onOnline)
+    return () => {
+      window.removeEventListener('offline', onOffline)
+      window.removeEventListener('online', onOnline)
+    }
+  }, [])
+
+  // Post-auth drain (#191 parity): a drain that hit an EXPIRED session left
+  // the supplier queue auth-blocked; once a session authenticates again
+  // (keyed on next-auth's `expires` so expiry + re-login re-arms it) the
+  // auth-blocked items re-queue and the pending queue flushes once when
+  // online. Repeated fires are harmless (syncNow no-ops without pending work).
+  const authDrainedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (status !== 'authenticated' || !session?.user?.email || !online) return
+    const sessionKey = String(session.expires ?? session.user.email)
+    if (authDrainedFor.current === sessionKey) return
+    authDrainedFor.current = sessionKey
+    void useSupplierOutbox.getState().drainAfterAuth()
+  }, [status, session, online])
+
+  // Post-drain refresh: this store owns NO payload of its own — when a drain
+  // synced ≥ 1 server-side row (dataVersion bumped), re-read /api/supplier so
+  // the cards reflect what actually landed. dataVersion starts at 0 and is
+  // not persisted, so a fresh mount never fires a spurious load.
+  useEffect(() => {
+    if (dataVersion > 0) void load()
+  }, [dataVersion, load])
+
+  /** Scoped mutation, offline-first (#128): the SUPPLIER outbox store owns
+   *  the send-or-queue decision — online it POSTs /api/actions exactly as
+   *  before; offline (or when the network drops mid-send) the action queues
+   *  in the persisted outbox and drains on reconnect. 'applied' → re-read the
+   *  whole portal payload (source of truth); 'queued' → true (the sync sheet
+   *  owns the pending state); 'refused' → false (the honest server message
+   *  was already toasted by the store). */
   const dispatch: SupplierDispatch = useCallback(
     async (type, actionPayload, projectId, label) => {
       setBusy(true)
       try {
-        const res = await fetch('/api/actions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type, payload: actionPayload, projectId }),
-        })
-        const json = (await res.json()) as { ok?: boolean; error?: string }
-        if (json.ok) {
+        const result = await useSupplierOutbox
+          .getState()
+          .dispatch(type, actionPayload, projectId, label)
+        if (result === 'applied') {
           await load()
           return true
         }
-        // Honest failure: the server's own single-line message (wrong status /
-        // foreign id → the same words as a miss; never a stack).
-        toast.error(json.error ?? t('supplier.action.rejected'), { duration: 8000 })
-        void label
-        return false
-      } catch {
-        toast.error(t('supplier.action.network'))
-        return false
+        return result === 'queued'
       } finally {
         setBusy(false)
       }
     },
-    [load, t],
+    [load],
   )
 
   const quotes = payload?.quotes ?? []
@@ -149,6 +194,9 @@ export function SupplierPortal() {
             </Badge>
           </div>
           <div className="flex items-center gap-1.5">
+            {/* #128 — pending/syncing indicator + per-item outbox sheet (only
+                renders while there is outbox work). */}
+            <SupplierSyncControl />
             <Button
               size="sm"
               variant="ghost"

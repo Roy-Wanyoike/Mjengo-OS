@@ -973,20 +973,63 @@ describe('POST /api/actions — the supplier pin (REAL applyAction)', () => {
 
 // --------------------------------------------------------- POST /api/sync
 
-describe('POST /api/sync — suppliers own no outbox (fail closed)', () => {
-  it('403 for a supplier session — before any item is drained, ZERO rows', async () => {
+describe('POST /api/sync — the supplier-scoped drain (#128: own outbox, own rows only)', () => {
+  // W5-3 pinned a blanket 403 ("suppliers own no outbox") because the portal
+  // dispatched online-only. #128 ships the real outbox: a supplier session
+  // DRAINS here, but the fail-closed spirit is unchanged — only
+  // SUPPLIER_ACTIONS get through (a buyer type fails per-item before any
+  // handler runs), every id is row-pinned to the session's supplier link,
+  // and the response never carries buyer payloads.
+
+  it('a buyer type in a supplier flush fails per-item with the role refusal — ZERO rows, ZERO applier reads', async () => {
     sessionFor('supplier', { supplierId: 'sup-1' })
+    const res = await syncPost(jsonReq('http://localhost/api/sync', 'POST', {
+      projectId: 'p-1',
+      actions: [{ id: 'a1', type: 'task.complete', payload: { id: 't-1' }, projectId: 'p-2' }],
+    }))
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    expect(body.results).toEqual([{ id: 'a1', ok: false, error: 'Not permitted for role "supplier"' }])
+    expect(body.data).toBeNull()
+    expect(body.projects).toEqual([])
+    expect(state.audits).toHaveLength(0)
+    expect(state.calls.purchaseOrderFindFirst).toBe(0)
+  })
+
+  it('a SUPPLIER_ACTIONS item drains through the row pin: their own order applies, the buyer payload keys never ride the response', async () => {
+    sessionFor('supplier', { supplierId: 'sup-1' })
+    const res = await syncPost(jsonReq('http://localhost/api/sync', 'POST', {
+      projectId: 'p-2',
+      actions: [{ id: 'a2', type: 'order.confirm', payload: { id: 'po-3' }, projectId: 'p-2' }],
+    }))
+    expect(res.status).toBe(200)
+    const body = await bodyOf(res)
+    expect(body.ok).toBe(true)
+    expect(body.results).toEqual([{ id: 'a2', ok: true }])
+    // #128: a supplier response NEVER carries buyer payloads (data null,
+    // projects [] — the /api/actions posture; the portal re-reads /api/supplier).
+    expect(body.data).toBeNull()
+    expect(body.projects).toEqual([])
+    expect(getProjectPayload).not.toHaveBeenCalled()
+    expect(getProjectsList).not.toHaveBeenCalled()
+    // The audit row stamps the SUPPLIER session identity.
+    expect(state.audits).toHaveLength(1)
+    expect(state.audits[0]).toMatchObject({ role: 'supplier' })
+  })
+
+  it('a supplier session with NO linked supplier drains nothing (403 — the /api/actions posture)', async () => {
+    sessionFor('supplier', { supplierId: null })
     const res = await syncPost(jsonReq('http://localhost/api/sync', 'POST', {
       projectId: 'p-1',
       actions: [{ id: 'a1', type: 'order.confirm', payload: { id: 'po-3' }, projectId: 'p-2' }],
     }))
     expect(res.status).toBe(403)
-    expect(await bodyOf(res)).toEqual({ ok: false, error: 'Not permitted for role "supplier"' })
+    expect(await bodyOf(res)).toEqual({ ok: false, error: 'Supplier account has no supplier linked' })
     expect(state.audits).toHaveLength(0)
     expect(state.calls.purchaseOrderFindFirst).toBe(0)
   })
 
-  it('MIRROR: the same flush by a contractor applies (the 403 is supplier-specific)', async () => {
+  it('MIRROR: the same flush by a contractor applies (the supplier branch is supplier-specific)', async () => {
     sessionFor('contractor')
     const res = await syncPost(jsonReq('http://localhost/api/sync', 'POST', {
       projectId: 'p-2',
