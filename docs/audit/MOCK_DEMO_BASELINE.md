@@ -97,6 +97,7 @@ Specifically checked and cleared:
 Sampled 5 representative files (ledger, v1-wallets, ussd-route, supplier-role, rate-limit-store):
 - **Idiom = in-memory Map-based Prisma stubs (`vi.mock('@/backend/lib/db')`) with the REAL domain/service/route code on top.** e.g. ledger.test.ts:19–89 stubs ledgerAccount/ledgerTransaction/$transaction and exercises the real posting/reversal/idempotency core; ussd-route.test.ts keeps applyAction, rate-limit and audit REAL (only db swapped); v1-wallets keeps route-kit, respond, wallet/http idempotency REAL.
 - **NOT DB-backed**: only 1 of 71 files touches a real database engine — rate-limit-store.test.ts (better-sqlite3, real file). No test constructs PrismaClient against a temp SQLite DB; Prisma query semantics, FK constraints and transaction isolation are therefore never exercised (see TEST-2/TEST-3).
+  → **Superseded 2026-09-19 (issue #184)**: `tests/helpers/db.ts` now constructs a real PrismaClient per test file on a temp-file SQLite database migrated by the real `prisma migrate deploy` (00→15), and the five `*-realdb.test.ts` critical-path suites run the real services against it. This historical finding stands for the 71 files audited at the time; the stub idiom itself is unchanged and intentional for pure-logic coverage.
 - External network is always mocked (fetch/SDK/web-push), with timeout races pinned via fake timers. Good discipline overall.
 
 ### 5.3 Inventory by domain (71 files, 1-line purpose)
@@ -231,11 +232,11 @@ Sampled 5 representative files (ledger, v1-wallets, ussd-route, supplier-role, r
 | ID | Severity | Finding | Action |
 |---|---|---|---|
 | TEST-1 | **High** | Zero E2E/browser tests (no Playwright/Cypress anywhere) | Add Playwright + a login→project→money→share golden path in EN+SW |
-| TEST-2 | **High** | Migration correctness never executed against a real DB (SQL read as text only) | CI job: `prisma migrate deploy` on temp SQLite + `prisma migrate diff` vs schema; same for supabase SQL on temp Postgres if feasible |
-| TEST-3 | **Medium** | 70/71 test files stub Prisma with in-memory Maps; Prisma query semantics/FKs/transactions untested | Add a small DB-backed integration layer (temp SQLite via PrismaClient) for ledger/wallet/inventory invariants |
+| TEST-2 | **High** | Migration correctness never executed against a real DB (SQL read as text only) | CI job: `prisma migrate deploy` on temp SQLite + `prisma migrate diff` vs schema; same for supabase SQL on temp Postgres if feasible. 2026-09-19: the in-suite half landed via #184 — the harness applies the real `prisma migrate deploy` to a fresh temp SQLite per test file and pins the trigger/index state; the CI job itself still waits on #98 |
+| TEST-3 | **Medium** | 70/71 test files stub Prisma with in-memory Maps; Prisma query semantics/FKs/transactions untested | Add a small DB-backed integration layer (temp SQLite via PrismaClient) for ledger/wallet/inventory invariants. 2026-09-19: LANDED via #184 — tests/helpers/db.ts + ledger/wallet/supply-chain/inventory/attendance real-DB suites (31 tests); stub suites retained by design |
 | TEST-4 | **Medium** | No coverage tooling (no provider, no thresholds) | Install @vitest/coverage-v8; set floor thresholds; publish in CI |
 | TEST-5 | **Medium** | inventory module (consumption/stock reconciliation) has no tests | New tests/unit/inventory.test.ts |
-| TEST-6 | **Medium** | No procurement chain end-to-end test (incl. discrepancy → 3-way → ledger) | New integration test walking RFQ→quote→PO→delivery(discrepancy)→invoice→pay |
+| TEST-6 | **Medium** | No procurement chain end-to-end test (incl. discrepancy → 3-way → ledger) | New integration test walking RFQ→quote→PO→delivery(discrepancy)→invoice→pay. 2026-09-19: LANDED via #184 — tests/unit/supply-chain-realdb.test.ts walks the full chain on the real engine incl. the short-delivery discrepancy, the 3-way verdict, the acknowledgeMismatch gate and the escrow-funded ledger posting |
 | TEST-7 | Low | Share-token expiry/revocation lifecycle untested | Extend share-token-binding.test.ts |
 | TEST-8 | Low | vitest.config has no setupFiles; frontend tests are grep-contracts, no rendering | Optional jsdom + RTL for the 3 riskiest dialogs |
 | TEST-9 | Info | fileParallelism:false is slow-but-safe; fine for 4GB CI box | Keep |
