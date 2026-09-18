@@ -502,10 +502,23 @@ export async function upsertBoqLine(projectId: string, p: any) {
     category: p.category ?? null,
     note: p.note ?? null,
   }
-  const line = p.id
-    ? await db.boqLine.update({ where: { id: String(p.id) }, data })
-    : await db.boqLine.create({ data: { boqId: boq.id, ...data } })
-  return { id: line.id }
+  if (!p.id) {
+    const created = await db.boqLine.create({ data: { boqId: boq.id, ...data } })
+    return { id: created.id }
+  }
+  // #286: the update path resolves the LINE through the caller's project
+  // scope (deleteBoqLine's findFirst pattern — the pre-fix bare-id update
+  // let a foreign project's line id rewrite that project's line) AND
+  // requires the line to belong to the scoped BOQ, so a same-project line
+  // from another BOQ version can't be rewritten through this BOQ either.
+  // Foreign/unknown/mismatched line ids are refused with the honest error
+  // and no row is touched.
+  const line = await db.boqLine.findFirst({
+    where: { id: String(p.id), boq: { projectId } },
+  })
+  if (!line || line.boqId !== boq.id) throw new Error('BOQ line not found')
+  const updated = await db.boqLine.update({ where: { id: line.id }, data })
+  return { id: updated.id }
 }
 
 export async function deleteBoqLine(projectId: string, p: any) {

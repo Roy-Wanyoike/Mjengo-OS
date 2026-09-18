@@ -36,7 +36,7 @@ export const INVENTORY_ACTIONS = [
   'inventory.count', // { countedBy, countedAt?, note?, counts: [{ inventoryItemId, countedQty }] } — record a physical stock count session (issue #194)
   'inventory.count.post', // { countId, postedBy? } — post the count-linked adjustments (`adjusted` movements referencing the count)
   'boq.create', // { name, lines?: [{ materialName, unit?, qty?, estUnitPrice?, category?, note? }] } — estUnitPrice is KSh, converted to cents at the write boundary (#285)
-  'boq.line.upsert', // { boqId, id?, materialName, unit, qty, estUnitPrice? (KSh → cents at the boundary, #285), category?, note? }
+  'boq.line.upsert', // { boqId, id?, materialName, unit, qty, estUnitPrice? (KSh → cents at the boundary, #285), category?, note? } — when id is given it must name a line of boqId's BOQ in the caller's project; foreign/unknown ids are refused (#286)
   'boq.line.delete', // { id }
   'boq.approve', // { id }
   'boq.to_request', // { id, lineIds? } — generate MaterialRequest from BOQ lines
