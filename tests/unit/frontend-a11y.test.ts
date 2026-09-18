@@ -210,9 +210,11 @@ describe('audit 2-b regression holds (untouched by this wave on purpose)', () =>
 // ---------------------------------------------------------------------------
 
 describe('FE-2 (issue #108): site-plan zone aria-labels pluralize the photo count', () => {
-  it('the zone button aria-label uses the 1 photo / N photos ternary', () => {
+  it('the zone button aria-label uses the 1 photo / N photos ternary (#125: via the sitemap.zoneAria* dict pair)', () => {
     const src = readSrc('src/frontend/mjengo/site-map-card.tsx')
-    expect(src).toContain("zonePhotoCount === 1 ? 'photo' : 'photos'")
+    expect(src).toContain("zonePhotoCount === 1")
+    expect(src).toContain("t('sitemap.zoneAriaOne'")
+    expect(src).toContain("t('sitemap.zoneAriaMany'")
     expect(src).not.toContain('} photos`') // the old always-plural label
   })
 })

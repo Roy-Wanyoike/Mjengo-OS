@@ -192,24 +192,24 @@ function ReportsMenu({ disabled }: { disabled?: boolean }) {
     setBusy(key)
     try {
       if (key === 'daily') {
-        const f = downloadDailyReportCSV(data)
-        toast.success(`${f} downloaded — generated from live project data`)
+        const f = downloadDailyReportCSV(t, data)
+        toast.success(t('overview.report.downloaded', { file: f }))
       } else if (key === 'weekly') {
-        const f = downloadWeeklyReportCSV(data)
-        toast.success(`${f} downloaded — generated from live project data`)
+        const f = downloadWeeklyReportCSV(t, data)
+        toast.success(t('overview.report.downloaded', { file: f }))
       } else if (key === 'financial') {
-        const f = downloadFinancialReportCSV(data)
-        toast.success(`${f} downloaded — generated from live project data`)
+        const f = downloadFinancialReportCSV(t, data)
+        toast.success(t('overview.report.downloaded', { file: f }))
       } else if (key === 'procurement') {
-        const f = downloadProcurementReportCSV(data)
-        toast.success(`${f} downloaded — generated from live project data`)
+        const f = downloadProcurementReportCSV(t, data)
+        toast.success(t('overview.report.downloaded', { file: f }))
       } else if (key === 'weekly-pdf') {
-        const f = await downloadWeeklyReportPDF(data)
-        toast.success(`${f} downloaded — generated from live project data`)
+        const f = await downloadWeeklyReportPDF(t, data)
+        toast.success(t('overview.report.downloaded', { file: f }))
       }
     } catch (e) {
       console.error('report download failed', e)
-      toast.error('Report build failed — nothing was downloaded')
+      toast.error(t('overview.report.buildFailed'))
     } finally {
       setBusy(null)
     }
@@ -262,13 +262,13 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
       })
       const json = await res.json()
       if (json.ok) {
-        toast.success('6 PM recap generated — ready to send to the client on WhatsApp')
+        toast.success(t('overview.recap.toastOk'))
         await useMjengo.getState().load()
       } else {
-        toast.error(json.error ?? 'Failed to generate recap')
+        toast.error(json.error ?? t('overview.recap.toastFailed'))
       }
     } catch {
-      toast.error('Network error — AI recap needs connectivity')
+      toast.error(t('overview.recap.toastNetwork'))
     } finally {
       setRecapBusy(false)
     }
@@ -278,14 +278,14 @@ export function OverviewTab({ onOpenCopilot }: { onOpenCopilot: () => void }) {
     if (!data) return
     const prefix = projectFilePrefix(data)
     const files: Record<typeof kind, { csv: string; filename: string }> = {
-      summary: { csv: projectSummaryCSV(data), filename: `${prefix}-summary.csv` },
-      materials: { csv: materialsLedgerCSV(data), filename: `${prefix}-materials-ledger.csv` },
-      attendance: { csv: attendanceCSV(data), filename: `${prefix}-attendance.csv` },
-      transactions: { csv: transactionsCSV(data), filename: `${prefix}-transactions.csv` },
+      summary: { csv: projectSummaryCSV(t, data), filename: `${prefix}-summary.csv` },
+      materials: { csv: materialsLedgerCSV(t, data), filename: `${prefix}-materials-ledger.csv` },
+      attendance: { csv: attendanceCSV(t, data), filename: `${prefix}-attendance.csv` },
+      transactions: { csv: transactionsCSV(t, data), filename: `${prefix}-transactions.csv` },
     }
     const { csv, filename } = files[kind]
     downloadCSV(filename, csv)
-    toast.success(`${filename} downloaded`)
+    toast.success(t('field.exported', { file: filename }))
   }
 
   async function recordExpense(payload: ExpenseDialogPayload): Promise<boolean> {

@@ -14,6 +14,7 @@ import { Label } from '@/frontend/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/frontend/ui/select'
 import { Textarea } from '@/frontend/ui/textarea'
 import { Plus, ReceiptText, Trash2 } from 'lucide-react'
+import { useT } from '@/frontend/i18n/provider'
 import type { ProjectPayload } from '@/backend/lib/mjengo'
 import { formatKes } from './invoice-bits'
 
@@ -46,6 +47,7 @@ interface Props {
 const BILLABLE_ORDER_STATUSES = ['approved', 'sent', 'confirmed', 'delivering', 'delivered', 'closed']
 
 export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChange, onCreate }: Props) {
+  const t = useT()
   const billable = useMemo(() => orders.filter((o) => BILLABLE_ORDER_STATUSES.includes(o.status)), [orders])
   const [orderId, setOrderId] = useState<string>('none')
   const [supplierId, setSupplierId] = useState<string>('none')
@@ -67,7 +69,7 @@ export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChang
       unitPrice: String(l.unitPrice),
     }))
     if (po.deliveryFee > 0) {
-      pre.push({ name: `Delivery — ${po.supplierName} to site`, qty: '1', unitPrice: String(po.deliveryFee) })
+      pre.push({ name: t('finder.inv.create.deliveryLine', { supplier: po.supplierName }), qty: '1', unitPrice: String(po.deliveryFee) })
     }
     return pre.length ? pre : [{ name: '', qty: '', unitPrice: '' }]
   }
@@ -101,14 +103,14 @@ export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChang
       const qty = Number(l.qty)
       const price = Number(l.unitPrice)
       if (!name && !l.qty && !l.unitPrice) continue // skip fully-blank rows
-      if (!name) { setError('Every line needs a name'); return }
-      if (!Number.isFinite(qty) || qty <= 0) { setError(`Line "${name}": quantity must be greater than zero`); return }
-      if (!Number.isFinite(price) || price < 0) { setError(`Line "${name}": unit price must be zero or more`); return }
+      if (!name) { setError(t('finder.inv.create.error.name')); return }
+      if (!Number.isFinite(qty) || qty <= 0) { setError(t('finder.inv.create.error.qty', { name })); return }
+      if (!Number.isFinite(price) || price < 0) { setError(t('finder.inv.create.error.price', { name })); return }
       payloadLines.push({ name, qty, unitPrice: price })
     }
-    if (!payloadLines.length) { setError('Add at least one invoice line'); return }
+    if (!payloadLines.length) { setError(t('finder.inv.create.error.lines')); return }
     const taxNum = Number(tax) || 0
-    if (taxNum < 0) { setError('Tax must be zero or more'); return }
+    if (taxNum < 0) { setError(t('finder.inv.create.error.tax')); return }
 
     onCreate({
       orderId: selectedOrder?.id,
@@ -127,21 +129,20 @@ export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChang
     <Dialog open={open} onOpenChange={(o) => { handleOpenChange(o) }}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="text-stone-900">New supplier invoice</DialogTitle>
+          <DialogTitle className="text-stone-900">{t('finder.inv.create.title')}</DialogTitle>
           <DialogDescription>
-            Draft an invoice for the client to decide on. Link it to a purchase order to pre-fill the supplier, lines and delivery fee —
-            the 3-way match then compares PO ↔ invoice ↔ delivery before any payment.
+            {t('finder.inv.create.desc')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-1">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label>From purchase order</Label>
+              <Label>{t('finder.inv.create.fromPo')}</Label>
               <Select value={orderId} onValueChange={handleOrderChange}>
-                <SelectTrigger aria-label="Purchase order"><SelectValue placeholder="Choose a PO" /></SelectTrigger>
+                <SelectTrigger aria-label={t('finder.inv.create.poAria')}><SelectValue placeholder={t('finder.inv.create.poPh')} /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Standalone (no PO)</SelectItem>
+                  <SelectItem value="none">{t('finder.inv.create.standalone')}</SelectItem>
                   {billable.map((o) => (
                     <SelectItem key={o.id} value={o.id}>
                       {o.orderCode} · {o.supplierName} · {formatKes(o.total)}
@@ -151,30 +152,30 @@ export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChang
               </Select>
               <p className="text-[11px] text-stone-400">
                 {selectedOrder
-                  ? `Pre-filled from ${selectedOrder.orderCode} — ${selectedOrder.status.replace('_', ' ')}. Server recomputes all totals.`
-                  : 'No PO link → the invoice runs a 2-way check (invoice vs delivery records).'}
+                  ? t('finder.inv.create.prefilled', { code: selectedOrder.orderCode, status: selectedOrder.status.replace(/_/g, ' ') })
+                  : t('finder.inv.create.noPoNote')}
               </p>
             </div>
 
             {!selectedOrder && (
               <div className="space-y-2">
-                <Label>Supplier</Label>
+                <Label>{t('finder.inv.col.supplier')}</Label>
                 <Select value={supplierId} onValueChange={setSupplierId}>
-                  <SelectTrigger aria-label="Supplier"><SelectValue placeholder="Optional" /></SelectTrigger>
+                  <SelectTrigger aria-label={t('finder.inv.col.supplier')}><SelectValue placeholder={t('finder.inv.create.optional')} /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">Not recorded</SelectItem>
+                    <SelectItem value="none">{t('finder.inv.create.notRecorded')}</SelectItem>
                     {suppliers.map((s) => (
                       <SelectItem key={s.id} value={s.id}>{s.businessName}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-[11px] text-stone-400">Suppliers from the Finder network.</p>
+                <p className="text-[11px] text-stone-400">{t('finder.inv.create.supplierNote')}</p>
               </div>
             )}
 
             {selectedOrder && (
               <div className="space-y-2">
-                <Label>Supplier (from PO)</Label>
+                <Label>{t('finder.inv.create.supplierFromPo')}</Label>
                 <p className="min-h-11 rounded-md border border-stone-200 bg-stone-50 px-3 py-2.5 text-sm text-stone-700">
                   {selectedOrder.supplierName}
                 </p>
@@ -202,22 +203,22 @@ export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChang
                     <Input
                       value={l.name}
                       onChange={(e) => updateLine(i, { name: e.target.value })}
-                      placeholder="e.g. Cement 50kg (32.5N)"
-                      aria-label={`Line ${i + 1} name`}
+                      placeholder={t('finder.inv.create.namePh')}
+                      aria-label={t('finder.inv.create.lineNameAria', { n: i + 1 })}
                       className="text-sm"
                     />
                     <Input
                       type="number" min="0" value={l.qty}
                       onChange={(e) => updateLine(i, { qty: e.target.value })}
-                      placeholder="Qty" inputMode="decimal"
-                      aria-label={`Line ${i + 1} quantity`}
+                      placeholder={t('finder.inv.det.col.qty')} inputMode="decimal"
+                      aria-label={t('finder.inv.create.lineQtyAria', { n: i + 1 })}
                       className="text-sm"
                     />
                     <Input
                       type="number" min="0" value={l.unitPrice}
                       onChange={(e) => updateLine(i, { unitPrice: e.target.value })}
-                      placeholder="Unit KSh" inputMode="numeric"
-                      aria-label={`Line ${i + 1} unit price`}
+                      placeholder={t('finder.inv.create.unitKsh')} inputMode="numeric"
+                      aria-label={t('finder.inv.create.linePriceAria', { n: i + 1 })}
                       className="text-sm"
                     />
                     <div className="flex items-center justify-between gap-1">
@@ -225,7 +226,7 @@ export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChang
                       <Button
                         size="sm" variant="ghost" className="h-8 w-8 min-h-8 min-w-8 p-0 text-stone-400 hover:text-rose-600"
                         onClick={() => setLines((prev) => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev))}
-                        aria-label={`Remove line ${i + 1}`}
+                        aria-label={t('finder.inv.create.removeLineAria', { n: i + 1 })}
                         disabled={lines.length <= 1}
                       >
                         <Trash2 className="h-3.5 w-3.5" aria-hidden />
@@ -239,15 +240,15 @@ export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChang
 
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-2">
-              <Label htmlFor="inv-tax">Tax / VAT (KSh)</Label>
+              <Label htmlFor="inv-tax">{t('finder.inv.create.taxVat')}</Label>
               <Input id="inv-tax" type="number" min="0" value={tax} onChange={(e) => setTax(e.target.value)} inputMode="numeric" />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="inv-due">Due date</Label>
+              <Label htmlFor="inv-due">{t('finder.inv.create.dueDate')}</Label>
               <Input id="inv-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Totals (advisory)</Label>
+              <Label>{t('finder.inv.create.totals')}</Label>
               <p className="min-h-11 rounded-md bg-stone-50 px-3 py-2.5 text-sm tabular-nums text-stone-700">
                 {formatKes(subtotal)} + {formatKes(Number(tax) || 0)} = <span className="font-semibold text-stone-900">{formatKes(total)}</span>
               </p>
@@ -255,21 +256,21 @@ export function CreateInvoiceDialog({ open, orders, suppliers, busy, onOpenChang
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="inv-note">Note (optional)</Label>
-            <Textarea id="inv-note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. For PO-2026-000012 — DN-8812 attached" />
+            <Label htmlFor="inv-note">{t('finder.inv.create.noteLabel')}</Label>
+            <Textarea id="inv-note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('finder.inv.create.notePh')} />
           </div>
 
           {error && <p className="rounded-md bg-rose-50 p-2.5 text-xs text-rose-700">{error}</p>}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={busy}>Cancel</Button>
+          <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={busy}>{t('dialog.expense.cancel')}</Button>
           <Button
             onClick={() => submit()}
             disabled={busy}
             className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700"
           >
-            <ReceiptText className="h-4 w-4" aria-hidden /> Create draft
+            <ReceiptText className="h-4 w-4" aria-hidden /> {t('finder.inv.create.submit')}
           </Button>
         </DialogFooter>
       </DialogContent>

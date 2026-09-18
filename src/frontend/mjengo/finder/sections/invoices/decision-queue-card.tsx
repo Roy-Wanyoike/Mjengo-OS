@@ -9,6 +9,7 @@
 import { Button } from '@/frontend/ui/button'
 import { AlertTriangle, Check, Eye, MoreHorizontal, ShieldCheck, X } from 'lucide-react'
 import { dateShort } from '@/frontend/lib/format'
+import { useT } from '@/frontend/i18n/provider'
 import type { InvoiceWithLines, ThreeWayReport } from '@/backend/modules/invoices/types'
 import { InvoiceStatusBadge, ThreeWayChip, formatKes, fmtQty } from './invoice-bits'
 
@@ -27,6 +28,7 @@ interface Props {
 export function DecisionQueueCard({
   invoice, report, clientName, isDecider, busy, onApprove, onReject, onDispute, onOpen,
 }: Props) {
+  const t = useT()
   const disputed = invoice.status === 'disputed'
   const preview = invoice.lines.slice(0, 3)
   const hidden = invoice.lines.length - preview.length
@@ -41,18 +43,18 @@ export function DecisionQueueCard({
             <ThreeWayChip report={report} />
           </div>
           <p className="pt-1 text-sm text-stone-700">
-            {invoice.supplierName ?? 'Supplier not recorded'}
+            {invoice.supplierName ?? t('finder.inv.noSupplier')}
             {invoice.orderCode && <span className="text-stone-400"> · {invoice.orderCode}</span>}
           </p>
           <p className="pt-0.5 text-xs text-stone-400">
-            {invoice.submittedAt ? `submitted ${dateShort(invoice.submittedAt)}` : ''}
-            {invoice.dueDate ? ` · due ${dateShort(invoice.dueDate)}` : ''}
+            {invoice.submittedAt ? t('finder.inv.submittedAt', { date: dateShort(invoice.submittedAt) }) : ''}
+            {invoice.dueDate ? ` ${t('finder.inv.dueAt', { date: dateShort(invoice.dueDate) })}` : ''}
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <span className="text-base font-bold tabular-nums text-stone-900">{formatKes(invoice.total)}</span>
-          <Button size="sm" variant="ghost" className="h-8 min-h-8 gap-1 px-2 text-xs text-stone-500" onClick={() => onOpen(invoice)} aria-label={`Open invoice ${invoice.invoiceCode} details`}>
-            <Eye className="h-3.5 w-3.5" aria-hidden /> Details
+          <Button size="sm" variant="ghost" className="h-8 min-h-8 gap-1 px-2 text-xs text-stone-500" onClick={() => onOpen(invoice)} aria-label={t('finder.inv.dq.openDetailsAria', { code: invoice.invoiceCode })}>
+            <Eye className="h-3.5 w-3.5" aria-hidden /> {t('finder.inv.details')}
           </Button>
         </div>
       </div>
@@ -67,7 +69,7 @@ export function DecisionQueueCard({
         ))}
         {hidden > 0 && (
           <p className="flex items-center gap-1 pt-0.5 text-[11px] text-stone-400">
-            <MoreHorizontal className="h-3 w-3" aria-hidden /> {hidden} more line{hidden === 1 ? '' : 's'} — open details
+            <MoreHorizontal className="h-3 w-3" aria-hidden /> {t(hidden === 1 ? 'finder.inv.dq.hiddenOne' : 'finder.inv.dq.hiddenMany', { count: hidden })}
           </p>
         )}
       </div>
@@ -76,13 +78,13 @@ export function DecisionQueueCard({
       {report.mismatches.length > 0 && (
         <div className="mt-3 space-y-1.5 rounded-md border border-amber-200 bg-amber-50 p-2.5">
           <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
-            <AlertTriangle className="h-3.5 w-3.5" aria-hidden /> 3-way match — {report.mismatches.length} open item{report.mismatches.length === 1 ? '' : 's'}, review before paying
+            <AlertTriangle className="h-3.5 w-3.5" aria-hidden /> {t(report.mismatches.length === 1 ? 'finder.inv.dq.matchOne' : 'finder.inv.dq.matchMany', { count: report.mismatches.length })}
           </p>
           {report.mismatches.slice(0, 2).map((m, i) => (
             <p key={i} className="text-[11px] leading-relaxed text-amber-800">• {m.name}: {m.issue}</p>
           ))}
           {report.mismatches.length > 2 && (
-            <p className="text-[11px] text-amber-700">+{report.mismatches.length - 2} more in details</p>
+            <p className="text-[11px] text-amber-700">{t('finder.inv.dq.moreInDetails', { count: report.mismatches.length - 2 })}</p>
           )}
         </div>
       )}
@@ -93,11 +95,11 @@ export function DecisionQueueCard({
           <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
           {isDecider
             ? disputed
-              ? 'Disputed — re-approve after reconciling with the supplier, or reject'
-              : `Client decision — ${clientName} approves, rejects or disputes`
+              ? t('finder.inv.dq.reapproveHint')
+              : t('finder.inv.dq.decideHint', { client: clientName })
             : disputed
-              ? 'Disputed — awaiting reconciliation with the supplier, then a client re-approval'
-              : `Awaiting client decision — ${clientName} decides from the client view`}
+              ? t('finder.inv.dq.disputedWaiting')
+              : t('finder.inv.dq.waiting', { client: clientName })}
         </p>
         {isDecider && (
           <div className="flex flex-wrap gap-2">
@@ -105,49 +107,49 @@ export function DecisionQueueCard({
               size="sm" className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
               disabled={busy}
               onClick={() => onApprove(invoice)}
-              aria-label={`Approve invoice ${invoice.invoiceCode}`}
+              aria-label={t('finder.inv.dq.approveAria', { code: invoice.invoiceCode })}
             >
-              <Check className="h-4 w-4" aria-hidden /> {disputed ? 'Re-approve' : 'Approve'}
+              <Check className="h-4 w-4" aria-hidden /> {disputed ? t('finder.inv.dq.reapprove') : t('finder.inv.dq.approve')}
             </Button>
             <Button
               size="sm" variant="outline" className="min-h-11 gap-1.5 border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
               disabled={busy}
               onClick={() => onReject(invoice)}
-              aria-label={`Reject invoice ${invoice.invoiceCode} with a note`}
+              aria-label={t('finder.inv.dq.rejectAria', { code: invoice.invoiceCode })}
             >
-              <X className="h-4 w-4" aria-hidden /> Reject with note
+              <X className="h-4 w-4" aria-hidden /> {t('finder.inv.dq.rejectNote')}
             </Button>
             {!disputed && (
               <Button
                 size="sm" variant="outline" className="min-h-11 gap-1.5 border-orange-300 text-orange-700 hover:bg-orange-50 hover:text-orange-800"
                 disabled={busy}
                 onClick={() => onDispute(invoice)}
-                aria-label={`Dispute invoice ${invoice.invoiceCode} with a note`}
+                aria-label={t('finder.inv.dq.disputeAria', { code: invoice.invoiceCode })}
               >
-                <AlertTriangle className="h-4 w-4" aria-hidden /> Dispute
+                <AlertTriangle className="h-4 w-4" aria-hidden /> {t('finder.inv.dq.dispute')}
               </Button>
             )}
           </div>
         )}
         {!isDecider && (
-          <p className="text-[11px] text-stone-500">
-            Server-enforced: only the client role can record this decision — site-team attempts fail honestly.
-          </p>
+          <p className="text-[11px] text-stone-500">{t('finder.inv.dq.serverEnforced')}</p>
         )}
       </div>
 
       {/* dispute note */}
       {disputed && invoice.note && (
         <p className="mt-2 rounded-md bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
-          Dispute note: “{invoice.note}”{invoice.decidedBy ? ` — filed by ${invoice.decidedBy}` : ''}
+          {invoice.decidedBy
+            ? t('finder.inv.dq.noteLine', { note: invoice.note, by: invoice.decidedBy })
+            : t('finder.inv.dq.noteLineNoBy', { note: invoice.note })}
         </p>
       )}
       {disputed && !invoice.note && invoice.decidedBy && (
-        <p className="mt-2 text-[11px] text-stone-400">Disputed by {invoice.decidedBy}</p>
+        <p className="mt-2 text-[11px] text-stone-400">{t('finder.inv.dq.disputedBy', { by: invoice.decidedBy })}</p>
       )}
       {invoice.decidedBy && !disputed && (
         <p className="mt-2 rounded-md bg-stone-50 px-2.5 py-1.5 text-xs text-stone-500">
-          Decided by <span className="font-medium">{invoice.decidedBy}</span>
+          {t('finder.inv.dq.decidedBy', { by: invoice.decidedBy })}
           {invoice.decidedAt ? ` · ${dateShort(invoice.decidedAt)}` : ''}
         </p>
       )}

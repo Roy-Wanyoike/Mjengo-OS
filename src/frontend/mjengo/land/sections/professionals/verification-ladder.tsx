@@ -6,8 +6,12 @@
 // highlighted, the rest muted. Hovering/focusing a rung shows what it means.
 // The caption always pairs the level with the COUNT of recorded checks — the
 // number of checks is the fact; the label is only our shorthand for it.
+//
+// Labels/hints resolve through the land.ladder.* dict family (issue #125) —
+// the backend VERIFICATION_LADDER rows stay the source of rung STRUCTURE.
 
-import { VERIFICATION_LADDER, checksRecordedLabel } from '@/backend/modules/professionals/types'
+import { VERIFICATION_LADDER } from '@/backend/modules/professionals/types'
+import { useT } from '@/frontend/i18n/provider'
 import { cn } from '@/frontend/lib/utils'
 import { ShieldCheck } from 'lucide-react'
 import {
@@ -16,6 +20,13 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/frontend/ui/tooltip'
+
+/** "3 checks recorded" phrasing for the card footer (dict twins — the backend
+ *  checksRecordedLabel helper is EN-only, so this renders the localized pair). */
+function useChecksRecordedLabel() {
+  const t = useT()
+  return (n: number) => (n === 1 ? t('land.ladder.checksOne', { n }) : t('land.ladder.checksMany', { n }))
+}
 
 export function VerificationLadder({
   state,
@@ -26,8 +37,10 @@ export function VerificationLadder({
   checkCount: number
   className?: string
 }) {
+  const t = useT()
+  const checksLabel = useChecksRecordedLabel()
   const level = Math.min(6, Math.max(0, Math.round(state)))
-  const rung = VERIFICATION_LADDER[level]
+  const rungLabel = t(`land.ladder.${level}.label`)
 
   return (
     <div className={cn('min-w-0', className)}>
@@ -35,7 +48,7 @@ export function VerificationLadder({
         <div
           className="flex items-center gap-1"
           role="img"
-          aria-label={`Verification ladder: ${rung.label} (level ${level} of 6) — ${checksRecordedLabel(checkCount)}`}
+          aria-label={t('land.ladder.aria', { label: rungLabel, level, checks: checksLabel(checkCount) })}
         >
           {VERIFICATION_LADDER.map((r, i) => {
             const achieved = i <= level
@@ -58,10 +71,10 @@ export function VerificationLadder({
                 </TooltipTrigger>
                 <TooltipContent side="top" className="text-xs max-w-52">
                   <p className="font-semibold">
-                    {r.level} · {r.label}
-                    {i === level && ' — current'}
+                    {t('land.ladder.rungTitle', { n: r.level, label: t(`land.ladder.${r.level}.label`) })}
+                    {i === level && t('land.ladder.current')}
                   </p>
-                  <p className="text-stone-500">{r.hint}</p>
+                  <p className="text-stone-500">{t(`land.ladder.${r.level}.hint`)}</p>
                 </TooltipContent>
               </Tooltip>
             )
@@ -74,9 +87,9 @@ export function VerificationLadder({
           aria-hidden
         />
         <span className="truncate">
-          <span className="font-medium text-stone-700">{rung.label}</span>
+          <span className="font-medium text-stone-700">{rungLabel}</span>
           <span className="text-stone-400"> · </span>
-          {checksRecordedLabel(checkCount)}
+          {checksLabel(checkCount)}
         </span>
       </p>
     </div>

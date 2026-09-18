@@ -13,10 +13,14 @@
 // favourable/under budget). The badge is derived locally from budget vs spent
 // so the Under/Over wording stays honest regardless of the number's sign:
 //   under budget → emerald · overspend ≤10% → amber · overspend >10% → red.
+//
+// Copy flows through useT() (overview.var.* — issue #125).
 
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
 import { usePermissions } from '@/shared/permissions'
+import { useT } from '@/frontend/i18n/provider'
+import type { TranslateFn } from '@/frontend/i18n/types'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/frontend/ui/card'
 import { Badge } from '@/frontend/ui/badge'
 import { Button } from '@/frontend/ui/button'
@@ -80,20 +84,21 @@ interface VarianceResponse {
 const VARIANCE_ROLES: readonly string[] = ['qs', 'contractor', 'admin']
 
 /** Under/Over badge meta derived from budget vs spent (sign-agnostic). */
-function varianceBadge(budget: number, spent: number): { label: string; cls: string } {
+function varianceBadge(t: TranslateFn, budget: number, spent: number): { label: string; cls: string } {
   if (spent > budget) {
     const overspendPct = budget > 0 ? ((spent - budget) / budget) * 100 : Infinity
     return overspendPct > 10
-      ? { label: 'Over budget', cls: 'bg-red-100 text-red-700 hover:bg-red-100 border-0' }
-      : { label: 'Slight overspend', cls: 'bg-amber-100 text-amber-800 hover:bg-amber-100 border-0' }
+      ? { label: t('overview.var.badge.over'), cls: 'bg-red-100 text-red-700 hover:bg-red-100 border-0' }
+      : { label: t('overview.var.badge.slight'), cls: 'bg-amber-100 text-amber-800 hover:bg-amber-100 border-0' }
   }
-  return { label: 'Under budget', cls: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100 border-0' }
+  return { label: t('overview.var.badge.under'), cls: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100 border-0' }
 }
 
 // ---------------- component ----------------
 
 export function BudgetVarianceCard() {
   const { role, authenticated } = usePermissions()
+  const t = useT()
   const projectId = useMjengo((s) => s.data?.project?.id ?? null)
 
   const [data, setData] = useState<VarianceData | null>(null)
@@ -120,24 +125,24 @@ export function BudgetVarianceCard() {
           setError({
             status: res.status,
             message: res.status === 403
-              ? 'Your role cannot view this budget report.'
+              ? t('overview.var.err403')
               : res.status === 404
-                ? 'This report is not available for the project yet.'
-                : json.error ?? `Report request failed (${res.status}).`,
+                ? t('overview.var.err404')
+                : json.error ?? t('overview.var.errFailed', { status: res.status }),
           })
           setData(null)
           return
         }
         setData(json.data)
       } catch {
-        setError({ status: null, message: 'Network error — could not reach the budget report.' })
+        setError({ status: null, message: t('overview.var.errNetwork') })
         setData(null)
       } finally {
         if (initial) setLoading(false)
         else setRefreshing(false)
       }
     },
-    [projectId],
+    [projectId, t],
   )
 
   useEffect(() => {
@@ -155,9 +160,9 @@ export function BudgetVarianceCard() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <Scale className="w-5 h-5 text-amber-600" aria-hidden /> Budget variance
+            <Scale className="w-5 h-5 text-amber-600" aria-hidden /> {t('overview.var.title')}
           </CardTitle>
-          <CardDescription>QS drill-down — phase budgets vs actual spend</CardDescription>
+          <CardDescription>{t('overview.var.desc')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -174,13 +179,13 @@ export function BudgetVarianceCard() {
       <Card className="border-amber-200 bg-amber-50/60 shadow-sm" role="alert">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <Scale className="w-5 h-5 text-amber-600" aria-hidden /> Budget variance
+            <Scale className="w-5 h-5 text-amber-600" aria-hidden /> {t('overview.var.title')}
           </CardTitle>
         </CardHeader>
         <CardContent className="flex items-start gap-3">
           <TriangleAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" aria-hidden />
           <div className="flex-1">
-            <p className="text-sm font-semibold text-amber-900">Variance report unavailable</p>
+            <p className="text-sm font-semibold text-amber-900">{t('overview.var.unavailable')}</p>
             <p className="text-xs text-amber-800 mt-0.5">{error.message}</p>
             <Button
               size="sm"
@@ -189,7 +194,7 @@ export function BudgetVarianceCard() {
               disabled={refreshing}
               onClick={() => void fetchReport(false)}
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden /> Retry
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden /> {t('overview.var.retry')}
             </Button>
           </div>
         </CardContent>
@@ -207,10 +212,10 @@ export function BudgetVarianceCard() {
       <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-2">
         <div>
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <Scale className="w-5 h-5 text-amber-600" aria-hidden /> Budget variance
+            <Scale className="w-5 h-5 text-amber-600" aria-hidden /> {t('overview.var.title')}
           </CardTitle>
           <CardDescription>
-            {p.name} · phase budgets vs actual spend · QS drill-down
+            {t('overview.var.descProject', { name: p.name })}
           </CardDescription>
         </div>
         <Button
@@ -219,12 +224,12 @@ export function BudgetVarianceCard() {
           className="gap-1.5 shrink-0 min-h-9"
           disabled={refreshing}
           onClick={() => void fetchReport(false)}
-          aria-label="Refresh budget variance report"
+          aria-label={t('overview.var.refreshAria')}
         >
           {refreshing
             ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
             : <RefreshCw className="w-4 h-4" aria-hidden />}
-          <span className="hidden sm:inline">Refresh</span>
+          <span className="hidden sm:inline">{t('overview.var.refresh')}</span>
         </Button>
       </CardHeader>
 
@@ -233,36 +238,36 @@ export function BudgetVarianceCard() {
         <div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-              <p className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">Budget</p>
+              <p className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">{t('overview.var.budget')}</p>
               <p className="text-base sm:text-lg font-bold text-stone-900 tabular-nums">{formatKES(p.budgetTotal, true)}</p>
             </div>
             <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-              <p className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">Spent</p>
+              <p className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">{t('overview.var.spent')}</p>
               <p className="text-base sm:text-lg font-bold text-stone-900 tabular-nums">{formatKES(p.spent, true)}</p>
             </div>
             <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-              <p className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">Remaining</p>
+              <p className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">{t('overview.var.remaining')}</p>
               <p className={`text-base sm:text-lg font-bold tabular-nums ${p.remaining < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
                 {formatKES(p.remaining, true)}
               </p>
             </div>
             <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-              <p className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">Build progress</p>
+              <p className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">{t('overview.var.progress')}</p>
               <p className="text-base sm:text-lg font-bold text-stone-900 tabular-nums">{p.progressPct}%</p>
             </div>
           </div>
           <div className="mt-3">
             <div className="flex items-center justify-between text-xs text-stone-500 mb-1">
-              <span>Spend {p.spentPct}% of budget</span>
+              <span>{t('overview.var.spendOf', { pct: p.spentPct })}</span>
               <span>
                 {spendLeads > 0
-                  ? `Spend leads work by ${spendLeads} pts`
-                  : `Spend trails work by ${Math.abs(spendLeads)} pts`}
+                  ? t('overview.var.leads', { pts: spendLeads })
+                  : t('overview.var.trails', { pts: Math.abs(spendLeads) })}
               </span>
             </div>
             <Progress
               value={Math.max(0, Math.min(100, p.spentPct))}
-              aria-label={`Spent ${p.spentPct}% of budget`}
+              aria-label={t('overview.var.progressBarAria', { pct: p.spentPct })}
               className={`h-2.5 bg-stone-200 [&>[data-slot=progress-indicator]]:${spendLeads > 8 ? 'bg-red-500' : spendLeads > 0 ? 'bg-amber-500' : 'bg-emerald-600'}`}
             />
           </div>
@@ -271,11 +276,11 @@ export function BudgetVarianceCard() {
         {/* Phase variance table (expandable rows) */}
         <div>
           <h3 className="text-sm font-semibold text-stone-800 mb-2 flex items-center gap-1.5">
-            <BarChart3 className="w-4 h-4 text-stone-400" aria-hidden /> Phase budget vs actual
+            <BarChart3 className="w-4 h-4 text-stone-400" aria-hidden /> {t('overview.var.phaseTitle')}
           </h3>
           {data.phases.length === 0 ? (
             <p className="text-sm text-stone-400 py-6 text-center border border-dashed border-stone-200 rounded-lg">
-              No phase budgets recorded for this project yet.
+              {t('overview.var.noPhases')}
             </p>
           ) : (
             <div className="border border-stone-200 rounded-lg overflow-hidden">
@@ -283,18 +288,18 @@ export function BudgetVarianceCard() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent bg-stone-50">
-                      <TableHead className="text-xs text-stone-500">Phase</TableHead>
-                      <TableHead className="text-xs text-stone-500 text-right">Budget</TableHead>
-                      <TableHead className="text-xs text-stone-500 text-right">Spent</TableHead>
-                      <TableHead className="text-xs text-stone-500 text-right">Variance</TableHead>
-                      <TableHead className="text-xs text-stone-500 text-right hidden sm:table-cell">Progress</TableHead>
-                      <TableHead className="w-10" aria-label="Expand phase transactions" />
+                      <TableHead className="text-xs text-stone-500">{t('overview.var.col.phase')}</TableHead>
+                      <TableHead className="text-xs text-stone-500 text-right">{t('overview.var.col.budget')}</TableHead>
+                      <TableHead className="text-xs text-stone-500 text-right">{t('overview.var.col.spent')}</TableHead>
+                      <TableHead className="text-xs text-stone-500 text-right">{t('overview.var.col.variance')}</TableHead>
+                      <TableHead className="text-xs text-stone-500 text-right hidden sm:table-cell">{t('overview.var.col.progress')}</TableHead>
+                      <TableHead className="w-10" aria-label={t('overview.var.col.expandAria')} />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {data.phases.map((ph) => {
                       const open = openPhase === ph.name
-                      const badge = varianceBadge(ph.budget, ph.spent)
+                      const badge = varianceBadge(t, ph.budget, ph.spent)
                       const over = ph.spent > ph.budget
                       const varianceAbs = Math.abs(
                         Number.isFinite(ph.variance) ? ph.variance : ph.budget - ph.spent,
@@ -306,7 +311,7 @@ export function BudgetVarianceCard() {
                           >
                             <TableCell className="font-medium text-stone-800">
                               {ph.name}
-                              <span className="block text-[10px] text-stone-400 sm:hidden">{ph.txCount} tx</span>
+                              <span className="block text-[10px] text-stone-400 sm:hidden">{t('overview.var.tx', { count: ph.txCount })}</span>
                             </TableCell>
                             <TableCell className="text-right tabular-nums text-stone-700 text-sm">{formatKES(ph.budget, true)}</TableCell>
                             <TableCell className="text-right tabular-nums text-stone-900 text-sm font-semibold">{formatKES(ph.spent, true)}</TableCell>
@@ -320,14 +325,14 @@ export function BudgetVarianceCard() {
                             </TableCell>
                             <TableCell className="text-right tabular-nums text-stone-600 text-sm hidden sm:table-cell">
                               {ph.progressPct}%
-                              <span className="block text-[10px] text-stone-400">{ph.txCount} tx</span>
+                              <span className="block text-[10px] text-stone-400">{t('overview.var.tx', { count: ph.txCount })}</span>
                             </TableCell>
                             <TableCell>
                               <button
                                 type="button"
                                 onClick={() => setOpenPhase(open ? null : ph.name)}
                                 aria-expanded={open}
-                                aria-label={`${open ? 'Hide' : 'Show'} top transactions for ${ph.name}`}
+                                aria-label={t('overview.var.toggleAria', { action: open ? t('overview.var.hide') : t('overview.var.show'), phase: ph.name })}
                                 className="w-9 h-9 flex items-center justify-center rounded-md hover:bg-stone-100 transition-colors text-stone-500"
                                 disabled={ph.topTransactions.length === 0}
                               >
@@ -341,12 +346,12 @@ export function BudgetVarianceCard() {
                             <TableRow className="bg-stone-50/60 hover:bg-stone-50/60">
                               <TableCell colSpan={6} className="py-3">
                                 <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
-                                  <ReceiptText className="w-3.5 h-3.5" aria-hidden /> Top transactions in {ph.name}
+                                  <ReceiptText className="w-3.5 h-3.5" aria-hidden /> {t('overview.var.topTx', { phase: ph.name })}
                                 </p>
                                 <ul className="max-h-64 overflow-y-auto pr-1 space-y-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full">
                                   {ph.topTransactions.map((tx, i) => (
                                     <li key={i} className="flex items-center justify-between gap-3 text-xs border-b border-stone-100 last:border-b-0 pb-1.5 last:pb-0">
-                                      <span className="text-stone-600 truncate" title={tx.note}>{tx.note || 'Untitled transaction'}</span>
+                                      <span className="text-stone-600 truncate" title={tx.note}>{tx.note || t('overview.var.untitledTx')}</span>
                                       <span className="flex items-center gap-2 shrink-0 tabular-nums">
                                         <span className="text-stone-400">{dateShort(tx.date)}</span>
                                         <span className="font-semibold text-stone-800">{formatKES(tx.amount, true)}</span>
@@ -370,14 +375,14 @@ export function BudgetVarianceCard() {
         {/* Spend by category — horizontal share bars */}
         {data.categories.length > 0 && (
           <div>
-            <h3 className="text-sm font-semibold text-stone-800 mb-2">Spend by category</h3>
+            <h3 className="text-sm font-semibold text-stone-800 mb-2">{t('overview.var.catTitle')}</h3>
             <ul className="space-y-2.5">
               {data.categories.map((cat) => (
                 <li key={cat.key}>
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <span className="text-sm text-stone-700 font-medium truncate">{cat.label}</span>
                     <span className="flex items-center gap-2 shrink-0 text-xs">
-                      <span className="text-stone-400">{cat.txCount} tx</span>
+                      <span className="text-stone-400">{t('overview.var.tx', { count: cat.txCount })}</span>
                       <span className="font-semibold tabular-nums text-stone-800">{formatKES(cat.spent, true)}</span>
                       <span className="tabular-nums text-stone-500">{Math.round(cat.share)}%</span>
                     </span>
@@ -385,7 +390,7 @@ export function BudgetVarianceCard() {
                   <div
                     className="h-2 rounded-full bg-stone-200 overflow-hidden"
                     role="img"
-                    aria-label={`${cat.label}: ${Math.round(cat.share)}% of spend, ${formatKES(cat.spent, true)}`}
+                    aria-label={t('overview.var.catAria', { label: cat.label, share: Math.round(cat.share), amount: formatKES(cat.spent, true) })}
                   >
                     <div
                       className="h-full rounded-full bg-amber-500"

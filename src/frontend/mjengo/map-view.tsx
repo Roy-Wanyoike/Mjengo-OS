@@ -9,10 +9,15 @@
 // Native SVG <title> tooltips carry name + county + verification/status.
 // The caption states exactly what this is: schematic positions from recorded
 // coordinates — not survey-grade.
+//
+// Copy flows through useT() (map.* — issue #125); supplier verification
+// labels reuse the finder.dir.verb.* family, parcel statuses land.parcelStatus.*.
 
 import { useMemo, useState } from 'react'
+import { useT } from '@/frontend/i18n/provider'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/frontend/ui/card'
 import { Map } from 'lucide-react'
+import { PARCEL_STATUSES, type ParcelStatus } from '@/backend/modules/land/types'
 
 export interface MapSupplier {
   id: string
@@ -61,7 +66,6 @@ const COUNTY_ANCHORS: Array<{ name: string; lat: number; lng: number }> = [
 ]
 
 /** Supplier verification ladder colors (levels 0-5, labels match the Finder directory). */
-const VERIFICATION_LABELS = ['Unverified', 'Registered', 'Identity verified', 'Business verified', 'Location verified', 'Transaction verified']
 function verificationColor(level: number): string {
   if (level >= 4) return '#059669' // emerald-600 — location/transaction verified
   if (level === 3) return '#d97706' // amber-600 — business verified
@@ -76,15 +80,16 @@ function parcelColor(status: string): string {
 }
 
 const GRADES_CHIPS = [
-  { label: 'Supplier · verification ≥4', color: '#059669' },
-  { label: 'Supplier · level 3', color: '#d97706' },
-  { label: 'Supplier · level 1-2', color: '#a8a29e' },
-  { label: 'Parcel verified', color: '#059669' },
-  { label: 'Parcel searching', color: '#f59e0b' },
-  { label: 'Parcel flagged', color: '#dc2626' },
-]
+  { key: 'supplierHigh', color: '#059669' },
+  { key: 'supplier3', color: '#d97706' },
+  { key: 'supplier12', color: '#a8a29e' },
+  { key: 'parcelVerified', color: '#059669' },
+  { key: 'parcelSearching', color: '#f59e0b' },
+  { key: 'parcelFlagged', color: '#dc2626' },
+] as const
 
 export function MapView({ suppliers, parcels }: { suppliers: MapSupplier[]; parcels: MapParcel[] }) {
+  const t = useT()
   const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
 
   const plottedSuppliers = useMemo(
@@ -97,6 +102,14 @@ export function MapView({ suppliers, parcels }: { suppliers: MapSupplier[]; parc
   )
   const noCoords =
     plottedSuppliers.length === 0 && plottedParcels.length === 0
+
+  /** Verification label — the Finder directory family, raw-level fallback. */
+  const verificationLabel = (level: number): string =>
+    level >= 0 && level <= 5 ? t(`finder.dir.verb.${level}`) : t('finder.dir.verb.level', { n: level })
+
+  /** Parcel status label — the land family, raw-status fallback. */
+  const parcelStatusLabel = (status: string): string =>
+    (PARCEL_STATUSES as readonly string[]).includes(status) ? t(`land.parcelStatus.${status as ParcelStatus}`) : status
 
   // subtle grid every 2 degrees
   const gridLines = useMemo(() => {
@@ -116,11 +129,10 @@ export function MapView({ suppliers, parcels }: { suppliers: MapSupplier[]; parc
     <Card className="border-stone-200 shadow-sm">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-          <Map className="h-5 w-5 text-amber-600" aria-hidden /> Supplier &amp; parcel map
+          <Map className="h-5 w-5 text-amber-600" aria-hidden /> {t('map.title')}
         </CardTitle>
         <CardDescription>
-          {plottedSuppliers.length} suppliers and {plottedParcels.length} land parcels plotted from recorded
-          coordinates — hover a marker for details.
+          {t('map.desc', { suppliers: plottedSuppliers.length, parcels: plottedParcels.length })}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -129,7 +141,7 @@ export function MapView({ suppliers, parcels }: { suppliers: MapSupplier[]; parc
             viewBox={`0 0 ${VB_W} ${VB_H}`}
             className="w-full h-auto rounded-lg border border-stone-200 bg-stone-50"
             role="img"
-            aria-label={`Schematic Kenya map with ${plottedSuppliers.length} supplier and ${plottedParcels.length} parcel markers`}
+            aria-label={t('map.aria', { suppliers: plottedSuppliers.length, parcels: plottedParcels.length })}
           >
             {/* bounding frame + equator hint */}
             <rect x={3} y={3} width={VB_W - 6} height={VB_H - 6} rx={10} fill="none" stroke="#d6d3d1" strokeWidth={1.5} />
@@ -160,7 +172,11 @@ export function MapView({ suppliers, parcels }: { suppliers: MapSupplier[]; parc
             {plottedParcels.map((p) => {
               const x = projectX(p.lng as number)
               const y = projectY(p.lat as number)
-              const label = `${p.plotNumber} — ${[p.county, p.town].filter(Boolean).join(', ')} · ${p.status}`
+              const label = t('map.parcelTip', {
+                plot: p.plotNumber,
+                place: [p.county, p.town].filter(Boolean).join(', '),
+                status: parcelStatusLabel(p.status),
+              })
               return (
                 <rect
                   key={p.id}
@@ -185,7 +201,11 @@ export function MapView({ suppliers, parcels }: { suppliers: MapSupplier[]; parc
             {plottedSuppliers.map((s) => {
               const x = projectX(s.lng as number)
               const y = projectY(s.lat as number)
-              const label = `${s.businessName} — ${[s.county, s.town].filter(Boolean).join(', ')} · ${VERIFICATION_LABELS[s.verificationState] ?? `Level ${s.verificationState}`}`
+              const label = t('map.supplierTip', {
+                name: s.businessName,
+                place: [s.county, s.town].filter(Boolean).join(', '),
+                level: verificationLabel(s.verificationState),
+              })
               return (
                 <circle
                   key={s.id}
@@ -218,24 +238,24 @@ export function MapView({ suppliers, parcels }: { suppliers: MapSupplier[]; parc
           {noCoords && (
             <div className="absolute inset-0 flex items-center justify-center">
               <p className="rounded-lg bg-white/90 border border-stone-200 px-4 py-3 text-sm text-stone-500 max-w-64 text-center">
-                No recorded coordinates yet — suppliers and parcels appear here once lat/lng is on record.
+                {t('map.noCoords')}
               </p>
             </div>
           )}
         </div>
 
         {/* legend */}
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5" aria-label="Map legend">
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5" aria-label={t('map.legendAria')}>
           {GRADES_CHIPS.map((l) => (
-            <span key={l.label} className="flex items-center gap-1.5 text-[11px] text-stone-500">
+            <span key={l.key} className="flex items-center gap-1.5 text-[11px] text-stone-500">
               <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: l.color }} aria-hidden />
-              {l.label}
+              {t(`map.legend.${l.key}`)}
             </span>
           ))}
         </div>
 
         <p className="mt-2 text-[11px] text-stone-400 italic">
-          Schematic positions from recorded coordinates — not survey-grade.
+          {t('map.footnote')}
         </p>
       </CardContent>
     </Card>

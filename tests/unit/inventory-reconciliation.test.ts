@@ -535,14 +535,20 @@ describe('source pins — offline-first wiring + UI + export', () => {
     // The run-count dialog + the post-adjustment action + the CSV export exist.
     expect(src).toContain("t('mat.count.dialog.title')")
     expect(src).toContain("t('mat.count.post')")
-    expect(src).toContain('reconciliationCSV(data)')
+    expect(src).toContain('reconciliationCSV(t, data)')
   })
 
-  it('export-utils carries reconciliationCSV over the payload count history', () => {
+  it('export-utils carries reconciliationCSV over the payload count history', async () => {
     const src = read('src/frontend/mjengo/export-utils.ts')
     expect(src).toContain('export function reconciliationCSV(')
     expect(src).toContain('p.inventory.counts')
-    expect(src).toContain("'Variance (Expected − Counted)'")
+    // #125: the header row flows through t() (csv.rec.*) so the export
+    // honors the active locale — the EN value keeps the same wording.
+    expect(src).toContain("t('csv.rec.variance')")
+    const { enDict } = await import('@/frontend/i18n/dicts/en')
+    const { swDict } = await import('@/frontend/i18n/dicts/sw')
+    expect(enDict['csv.rec.variance' as keyof typeof enDict]).toBe('Variance (Expected − Counted)')
+    expect(swDict['csv.rec.variance' as keyof typeof swDict]).toBe('Tofauti (Inayotarajiwa − Iliyopimwa)')
   })
 
   it('the i18n key family exists in BOTH dictionaries (spot values via the dicts)', async () => {

@@ -506,3 +506,252 @@ describe('#123: posture banner key family exists in both dictionaries', () => {
     expect(translate(swDict, 'money.posture.note')).toContain('#43')
   })
 })
+
+// ---------------------------------------------------------------------------
+// #125 Kiswahili surface completion (audit FE-3): audit tab, finder invoices/
+// requests/dashboard/search, land dialogs + professionals, overview cards,
+// shell cards, and the report/CSV artifacts. Same conventions as the blocks
+// above (literal-key sampling, enum-family pinning, raw-toast bans) — plus
+// the regression guard the issue itself asks for: every file the 2026-09-16
+// baseline listed as EN-only must now import useT. The USSD tab body is
+// deliberately absent (FE-9 / #140 owns it).
+// ---------------------------------------------------------------------------
+
+describe('#125: every baseline EN-only surface now imports useT (regression guard)', () => {
+  // The definitive FE-3 list (docs/audit/FRONTEND_BASELINE.md §3, rg -L useT)
+  // — artifacts (report-utils.ts / export-utils.ts) are pure functions that
+  // TAKE t() instead of calling the hook, so they are pinned by signature in
+  // the artifacts block below, not by the useT import.
+  const BASELINE_EN_ONLY_FILES = [
+    'src/frontend/mjengo/audit-tab.tsx',
+    // finder — invoices
+    'src/frontend/mjengo/finder/sections/invoices-section.tsx',
+    'src/frontend/mjengo/finder/sections/invoices/create-invoice-dialog.tsx',
+    'src/frontend/mjengo/finder/sections/invoices/decision-queue-card.tsx',
+    'src/frontend/mjengo/finder/sections/invoices/invoice-bits.tsx',
+    'src/frontend/mjengo/finder/sections/invoices/invoice-detail-dialog.tsx',
+    'src/frontend/mjengo/finder/sections/invoices/ledger-consistency-chip.tsx',
+    'src/frontend/mjengo/finder/sections/invoices/pay-invoice-dialog.tsx',
+    'src/frontend/mjengo/finder/sections/invoices/printable-invoice.tsx',
+    // finder — requests
+    'src/frontend/mjengo/finder/sections/requests/quotes-card.tsx',
+    'src/frontend/mjengo/finder/sections/requests/order-card.tsx',
+    'src/frontend/mjengo/finder/sections/requests/create-order-dialog.tsx',
+    'src/frontend/mjengo/finder/sections/requests/create-request-dialog.tsx',
+    'src/frontend/mjengo/finder/sections/requests/delivery-receive-dialog.tsx',
+    'src/frontend/mjengo/finder/sections/requests/delivery-photos.tsx',
+    // finder — dashboard + search
+    'src/frontend/mjengo/finder/sections/dashboard/boq-card.tsx',
+    'src/frontend/mjengo/finder/sections/dashboard/rules-card.tsx',
+    'src/frontend/mjengo/finder/sections/dashboard/price-alert-chip.tsx',
+    'src/frontend/mjengo/finder/sections/search/supplier-directory.tsx',
+    // land
+    'src/frontend/mjengo/land/sections/parcels/dialogs.tsx',
+    'src/frontend/mjengo/land/sections/professionals-section.tsx',
+    'src/frontend/mjengo/land/sections/professionals/dialogs.tsx',
+    'src/frontend/mjengo/land/sections/professionals/professional-card.tsx',
+    'src/frontend/mjengo/land/sections/professionals/assignments-summary.tsx',
+    'src/frontend/mjengo/land/sections/professionals/verification-ladder.tsx',
+    // overview
+    'src/frontend/mjengo/overview/role-cards.tsx',
+    'src/frontend/mjengo/overview/timeline.tsx',
+    'src/frontend/mjengo/overview/variance-card.tsx',
+    // shell / cards
+    'src/frontend/mjengo/map-view.tsx',
+    'src/frontend/mjengo/project-switcher.tsx',
+    'src/frontend/mjengo/photo-comments.tsx',
+    'src/frontend/mjengo/site-map-card.tsx',
+    'src/frontend/mjengo/timelapse-card.tsx',
+  ] as const
+
+  it.each(BASELINE_EN_ONLY_FILES)('%s wires useT()', (file) => {
+    expect(readSrc(file), `${file} lost its useT import — the exact FE-3 gap class`).toContain('useT')
+  })
+
+  it('the guard list itself stays wired (no silently dropped entries)', () => {
+    expect(BASELINE_EN_ONLY_FILES.length).toBeGreaterThanOrEqual(32)
+  })
+})
+
+describe('#125: audit + finder + land + overview + shell — every literal t() key resolves in both dictionaries', () => {
+  const literalKeysIn = (src: string) => [
+    ...src.matchAll(/\bt\(\s*'([a-zA-Z0-9_.]+)'/g),
+    ...src.matchAll(/\bt\(\s*"([a-zA-Z0-9_.]+)"/g),
+  ].map((m) => m[1])
+
+  // Key-carrying object literals + template-literal families resolved by
+  // these surfaces (the pattern the #107 wave block uses).
+  const namespaceStringsIn = (src: string) =>
+    [...src.matchAll(/'(audit|finder|land|overview|map|switcher|comments|sitemap|tl|fundis)\.[a-zA-Z0-9_.]+'/g)]
+      .map((m) => m[0].slice(1, -1))
+
+  const SURFACES_125: Record<string, string[]> = {
+    audit: ['src/frontend/mjengo/audit-tab.tsx'],
+    finderInvoices: [
+      'src/frontend/mjengo/finder/sections/invoices-section.tsx',
+      'src/frontend/mjengo/finder/sections/invoices/create-invoice-dialog.tsx',
+      'src/frontend/mjengo/finder/sections/invoices/decision-queue-card.tsx',
+      'src/frontend/mjengo/finder/sections/invoices/invoice-bits.tsx',
+      'src/frontend/mjengo/finder/sections/invoices/invoice-detail-dialog.tsx',
+      'src/frontend/mjengo/finder/sections/invoices/ledger-consistency-chip.tsx',
+      'src/frontend/mjengo/finder/sections/invoices/pay-invoice-dialog.tsx',
+      'src/frontend/mjengo/finder/sections/invoices/printable-invoice.tsx',
+    ],
+    finderRequests: [
+      'src/frontend/mjengo/finder/sections/requests/quotes-card.tsx',
+      'src/frontend/mjengo/finder/sections/requests/order-card.tsx',
+      'src/frontend/mjengo/finder/sections/requests/create-order-dialog.tsx',
+      'src/frontend/mjengo/finder/sections/requests/create-request-dialog.tsx',
+      'src/frontend/mjengo/finder/sections/requests/delivery-receive-dialog.tsx',
+      'src/frontend/mjengo/finder/sections/requests/delivery-photos.tsx',
+    ],
+    finderDashboard: [
+      'src/frontend/mjengo/finder/sections/dashboard/boq-card.tsx',
+      'src/frontend/mjengo/finder/sections/dashboard/rules-card.tsx',
+      'src/frontend/mjengo/finder/sections/dashboard/price-alert-chip.tsx',
+      'src/frontend/mjengo/finder/sections/search/supplier-directory.tsx',
+    ],
+    land: [
+      'src/frontend/mjengo/land/sections/parcels/dialogs.tsx',
+      'src/frontend/mjengo/land/sections/professionals-section.tsx',
+      'src/frontend/mjengo/land/sections/professionals/dialogs.tsx',
+      'src/frontend/mjengo/land/sections/professionals/professional-card.tsx',
+      'src/frontend/mjengo/land/sections/professionals/assignments-summary.tsx',
+      'src/frontend/mjengo/land/sections/professionals/verification-ladder.tsx',
+    ],
+    overview: [
+      'src/frontend/mjengo/overview/role-cards.tsx',
+      'src/frontend/mjengo/overview/timeline.tsx',
+      'src/frontend/mjengo/overview/variance-card.tsx',
+    ],
+    shell: [
+      'src/frontend/mjengo/map-view.tsx',
+      'src/frontend/mjengo/project-switcher.tsx',
+      'src/frontend/mjengo/photo-comments.tsx',
+      'src/frontend/mjengo/site-map-card.tsx',
+      'src/frontend/mjengo/timelapse-card.tsx',
+    ],
+  }
+
+  it('each #125 surface family samples enough keys (guards against silent wiring regressions)', () => {
+    const minimums: Record<string, number> = {
+      audit: 40, finderInvoices: 120, finderRequests: 90, finderDashboard: 60,
+      land: 150, overview: 80, shell: 60,
+    }
+    for (const [family, files] of Object.entries(SURFACES_125)) {
+      const keys = new Set(files.flatMap((f) => [...literalKeysIn(readSrc(f)), ...namespaceStringsIn(readSrc(f))]))
+      expect(keys.size, `${family} surface sampled too few keys (${keys.size})`).toBeGreaterThan(minimums[family])
+    }
+  })
+
+  it('every sampled key exists in both dictionaries', () => {
+    for (const [family, files] of Object.entries(SURFACES_125)) {
+      for (const key of new Set(files.flatMap((f) => [...literalKeysIn(readSrc(f)), ...namespaceStringsIn(readSrc(f))]))) {
+        expect(enKeys.has(key), `en.ts is missing "${key}" (used by the ${family} surface)`).toBe(true)
+        expect(swKeys.has(key), `sw.ts is missing "${key}" (used by the ${family} surface)`).toBe(true)
+      }
+    }
+  })
+
+  it('no raw English toast literals on the newly wired #125 path', () => {
+    const RAW_TOAST = /toast\.(?:success|error|info|warning)\(\s*(?:['"]|`(?!\$\{t\())/g
+    const files = Object.values(SURFACES_125).flat()
+    for (const file of files) {
+      const offending = [...readSrc(file).matchAll(RAW_TOAST)].map(() => file)
+      expect(offending, `${file} still fires raw-literal toasts`).toEqual([])
+    }
+  })
+})
+
+describe('#125: dynamic enum label keys exist for every renderable value', () => {
+  const PRO_CATEGORIES_FULL = ['surveyor', 'engineer', 'advocate', 'architect', 'qty_surveyor', 'contractor']
+  const FUNDIS_DISPATCH = [
+    'checkIn', 'checkOut', 'override', 'record', 'muster', 'exception', 'addFundi', 'editFundi',
+  ]
+
+  const expectBoth = (key: string) => {
+    expect(enKeys.has(key), `en.ts is missing dynamic key "${key}"`).toBe(true)
+    expect(swKeys.has(key), `sw.ts is missing dynamic key "${key}"`).toBe(true)
+  }
+
+  it('the professionals body-hint family covers every category the add-dialog can select', () => {
+    PRO_CATEGORIES_FULL.forEach((c) => expectBoth(`land.pros.dlg.bodyHint.${c}`))
+  })
+
+  it('the verification-ladder caption family (checks count + aria) resolves in both dictionaries', () => {
+    expectBoth('land.ladder.aria')
+    expectBoth('land.ladder.rungTitle')
+    expectBoth('land.ladder.current')
+    expectBoth('land.ladder.checksOne')
+    expectBoth('land.ladder.checksMany')
+    for (let level = 0; level <= 6; level++) expectBoth(`land.ladder.${level}.label`)
+  })
+
+  it('the fundis dispatch-label family exists in both dictionaries', () => {
+    FUNDIS_DISPATCH.forEach((k) => expectBoth(`fundis.dispatch.${k}`))
+  })
+
+  it('spot Kiswahili values render through the real translate()', () => {
+    expect(translate(swDict, 'land.dlg.np.title')).toBe('Rekodi kiwanja kipya')
+    expect(translate(swDict, 'land.pros.card.noChecks')).toContain('Haijathibitishwa')
+    expect(translate(swDict, 'land.ladder.checksMany', { n: 3 })).toBe('ukaguzi 3 umerekodiwa')
+    expect(translate(swDict, 'overview.var.badge.over')).toBe('Imevuka bajeti')
+    expect(translate(swDict, 'map.title')).toBe('Ramani ya wasambazaji na viwanja')
+    expect(translate(swDict, 'switcher.newProject')).toBe('Mradi mpya')
+    expect(translate(swDict, 'tl.day', { day: 4 })).toBe('Siku 4')
+    expect(translate(swDict, 'fundis.dispatch.record', { name: 'Otieno', status: 'Yupo' })).toBe('Rekodi Otieno Yupo')
+  })
+})
+
+describe('#125: dispatch STATUS_LABELS moved into the dicts (the old EN pin, flipped)', () => {
+  // Wave-5 pinned STATUS_LABELS as EN "because it feeds dispatch labels".
+  // #125 moves those dispatch labels through t(): the map above stays as a
+  // KNOWN-STATUS GUARD only — its EN values never render anywhere.
+  it('STATUS_LABELS is a guard; dispatch labels resolve the dict twins', () => {
+    const src = readSrc('src/frontend/mjengo/fundis-tab.tsx')
+    // guard usage (display path)
+    expect(src).toContain('STATUS_LABELS[status] ? t(`fundis.status.${status}`)')
+    // the dispatch label paths interpolate localized statuses
+    expect(src).toContain("t('fundis.dispatch.override', { name: worker.name, status: t(`fundis.status.${to}`) })")
+    expect(src).toContain("t('fundis.dispatch.record', { name: worker.name, status: t(`fundis.status.${to}`) })")
+    // the old raw-EN interpolation is gone
+    expect(src).not.toContain('STATUS_LABELS[to]')
+  })
+})
+
+describe('#125: report + CSV artifacts honor the active locale', () => {
+  it('every builder takes the caller\'s t() (signature pin — artifacts cannot call useT)', () => {
+    const reports = readSrc('src/frontend/mjengo/report-utils.ts')
+    expect(reports).toContain('buildDailyReportCSV(t: TranslateFn')
+    expect(reports).toContain('buildWeeklyReportCSV(t: TranslateFn')
+    expect(reports).toContain('buildFinancialReportCSV(t: TranslateFn')
+    expect(reports).toContain('buildProcurementReportCSV(t: TranslateFn')
+    expect(reports).toContain('downloadWeeklyReportPDF(t: TranslateFn')
+    const exports = readSrc('src/frontend/mjengo/export-utils.ts')
+    expect(exports).toContain('materialsLedgerCSV(t: TranslateFn')
+    expect(exports).toContain('reconciliationCSV(t: TranslateFn')
+    expect(exports).toContain('attendanceCSV(t: TranslateFn')
+    expect(exports).toContain('transactionsCSV(t: TranslateFn')
+    expect(exports).toContain('projectSummaryCSV(t: TranslateFn')
+  })
+
+  it('the report/csv families resolve in both dictionaries with honest EN/SW values', () => {
+    for (const key of [
+      'report.h.project', 'report.h.client', 'report.h.location', 'report.h.generated',
+      'report.daily.title', 'report.weekly.title', 'report.financial.title', 'report.procurement.title',
+      'report.pdf.footer', 'csv.mat.material', 'csv.rec.variance', 'csv.att.worker',
+      'csv.tx.date', 'csv.sum.project',
+    ]) {
+      expect(enKeys.has(key), `en.ts is missing "${key}"`).toBe(true)
+      expect(swKeys.has(key), `sw.ts is missing "${key}"`).toBe(true)
+    }
+    // EN keeps the audited wording; SW renders the Kiswahili twin.
+    expect(translate(enDict, 'report.h.project', { name: 'Riverside Villas' })).toBe('Project: Riverside Villas')
+    expect(translate(swDict, 'report.h.project', { name: 'Riverside Villas' })).toBe('Mradi: Riverside Villas')
+    expect(translate(enDict, 'csv.rec.variance')).toBe('Variance (Expected − Counted)')
+    expect(translate(swDict, 'csv.rec.variance')).toBe('Tofauti (Inayotarajiwa − Iliyopimwa)')
+    expect(translate(swDict, 'report.daily.movements')).toContain('SITE STORE') // stored proper noun stays
+    expect(translate(swDict, 'report.daily.crewLine', { today: 4, expected: 5, wages: 3000, alerts: 1 }))
+      .toBe('Wafanyakazi 4/5 leo · mishahara 3000 KES · tahadhari 1 hazijakubaliwa')
+  })
+})

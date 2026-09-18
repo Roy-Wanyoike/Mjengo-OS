@@ -18,8 +18,9 @@ import { Input } from '@/frontend/ui/input'
 import { Label } from '@/frontend/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/frontend/ui/radio-group'
 import { AlertTriangle, Banknote, BookOpen, Check, ShieldCheck } from 'lucide-react'
+import { useT } from '@/frontend/i18n/provider'
 import type { InvoiceWithLines, ThreeWayReport } from '@/backend/modules/invoices/types'
-import { PAYMENT_METHOD_LABELS, formatKes } from './invoice-bits'
+import { paymentMethodLabels, formatKes } from './invoice-bits'
 
 /** Same auto-reference shape the server generates (money.ts helper). */
 function previewReference(method: string): string {
@@ -40,6 +41,8 @@ interface Props {
 }
 
 export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfirm, onClose }: Props) {
+  const t = useT()
+  const methodLabels = paymentMethodLabels(t)
   const [method, setMethod] = useState('mpesa')
   const [reference, setReference] = useState('')
   const [useAutoRef, setUseAutoRef] = useState(true)
@@ -75,10 +78,12 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
     >
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle className="text-stone-900">Record payment</DialogTitle>
+          <DialogTitle className="text-stone-900">{t('finder.inv.pay.title')}</DialogTitle>
           <DialogDescription>
             {invoice
-              ? `${invoice.invoiceCode} — ${formatKes(invoice.total)} to ${invoice.supplierName ?? 'the supplier'}${invoice.orderCode ? ` (${invoice.orderCode})` : ''}. Payment writes a permanent ledger entry.`
+              ? invoice.orderCode
+                ? t('finder.inv.pay.descPo', { code: invoice.invoiceCode, amount: formatKes(invoice.total), supplier: invoice.supplierName ?? t('finder.inv.noSupplier'), po: invoice.orderCode })
+                : t('finder.inv.pay.desc', { code: invoice.invoiceCode, amount: formatKes(invoice.total), supplier: invoice.supplierName ?? t('finder.inv.noSupplier') })
               : ''}
           </DialogDescription>
         </DialogHeader>
@@ -87,9 +92,9 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
           <div className="grid gap-4 py-1">
             {/* method */}
             <div className="space-y-2">
-              <Label>Payment method</Label>
-              <RadioGroup value={method} onValueChange={setMethod} className="grid grid-cols-2 gap-2 sm:grid-cols-3" aria-label="Payment method">
-                {Object.entries(PAYMENT_METHOD_LABELS).map(([value, meta]) => (
+              <Label>{t('finder.inv.pay.method')}</Label>
+              <RadioGroup value={method} onValueChange={setMethod} className="grid grid-cols-2 gap-2 sm:grid-cols-3" aria-label={t('finder.inv.pay.methodAria')}>
+                {Object.entries(methodLabels).map(([value, meta]) => (
                   <label
                     key={value}
                     htmlFor={`pay-method-${value}`}
@@ -105,48 +110,48 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
               </RadioGroup>
               {method === 'wallet' && (
                 <p className={`rounded-md p-2.5 text-xs ${walletShort ? 'bg-rose-50 text-rose-700' : 'bg-stone-50 text-stone-500'}`}>
-                  Escrow wallet holds <span className="font-semibold tabular-nums">{formatKes(walletBalance)}</span>
-                  {walletShort ? ' — insufficient. Top up the wallet first or choose another method.' : ` · paying releases ${formatKes(invoice.total)} from escrow.`}
+                  {t('finder.inv.pay.walletHolds', { balance: formatKes(walletBalance) })}
+                  {walletShort ? t('finder.inv.pay.walletShort') : t('finder.inv.pay.walletOk', { amount: formatKes(invoice.total) })}
                 </p>
               )}
             </div>
 
             {/* reference */}
             <div className="space-y-2">
-              <Label htmlFor="pay-reference">Payment reference</Label>
+              <Label htmlFor="pay-reference">{t('finder.inv.pay.reference')}</Label>
               <div className="flex items-center gap-2">
                 <Checkbox
                   id="pay-auto-ref"
                   checked={useAutoRef}
                   onCheckedChange={(v) => setUseAutoRef(Boolean(v))}
-                  aria-label="Use an auto-generated reference"
+                  aria-label={t('finder.inv.pay.autoAria')}
                 />
                 <label htmlFor="pay-auto-ref" className="cursor-pointer text-sm text-stone-700">
-                  Auto <span className="font-mono text-xs text-stone-500">{autoRef}</span>
+                  {t('finder.inv.pay.auto')} <span className="font-mono text-xs text-stone-500">{autoRef}</span>
                 </label>
               </div>
               {!useAutoRef && (
                 <Input
                   id="pay-reference" value={reference}
                   onChange={(e) => setReference(e.target.value)}
-                  placeholder="e.g. MPESA-8HKT4Q2A / cheque no." className="font-mono"
-                  aria-label="Custom payment reference"
+                  placeholder={t('finder.inv.pay.refPh')} className="font-mono"
+                  aria-label={t('finder.inv.pay.refAria')}
                 />
               )}
-              <p className="text-[11px] text-stone-400">Provider-agnostic record — never hard-coded to one rail.</p>
+              <p className="text-[11px] text-stone-400">{t('finder.inv.pay.agnostic')}</p>
             </div>
 
             {/* cost code (optional, F-MONEY) — the finance dimension on the ledger row */}
             <div className="space-y-2">
-              <Label htmlFor="pay-cost-code">Cost code (optional)</Label>
+              <Label htmlFor="pay-cost-code">{t('finder.inv.pay.costCode')}</Label>
               <Input
                 id="pay-cost-code"
                 value={costCode}
                 onChange={(e) => setCostCode(e.target.value)}
-                placeholder="e.g. materials / transport / finishing — defaults to ‘invoice’"
-                aria-label="Optional finance cost code for this payment"
+                placeholder={t('finder.inv.pay.costCodePh')}
+                aria-label={t('finder.inv.pay.costCodeAria')}
               />
-              <p className="text-[11px] text-stone-400">Tag the ledger row with a cost code so finance reports slice spend honestly.</p>
+              <p className="text-[11px] text-stone-400">{t('finder.inv.pay.costCodeNote')}</p>
             </div>
 
             {/* mismatch banner + reviewed-discrepancy checkbox — the human decision */}
@@ -154,35 +159,32 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
               <div className="space-y-2 rounded-md border border-amber-300 bg-amber-50 p-3">
                 <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
                   <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
-                  3-way match — {mismatches.length} open item{mismatches.length === 1 ? '' : 's'} on this invoice
+                  {t(mismatches.length === 1 ? 'finder.inv.pay.mismatchOne' : 'finder.inv.pay.mismatchMany', { count: mismatches.length })}
                 </p>
                 <ul className="space-y-1">
                   {mismatches.slice(0, 4).map((m, i) => (
                     <li key={i} className="text-[11px] leading-relaxed text-amber-800">• {m.name}: {m.issue}</li>
                   ))}
-                  {mismatches.length > 4 && <li className="text-[11px] text-amber-700">+{mismatches.length - 4} more</li>}
+                  {mismatches.length > 4 && <li className="text-[11px] text-amber-700">{t('finder.inv.pay.more', { count: mismatches.length - 4 })}</li>}
                 </ul>
                 <label className="flex min-h-11 cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-white p-2.5">
                   <Checkbox
                     checked={ack}
                     onCheckedChange={(v) => setAck(Boolean(v))}
-                    aria-label="I have reviewed the discrepancy with the supplier"
+                    aria-label={t('finder.inv.pay.ackAria')}
                     className="mt-0.5"
                   />
                   <span className="text-xs leading-relaxed text-stone-700">
-                    I have reviewed the discrepancy with the supplier and choose to pay {formatKes(invoice.total)} anyway.
-                    This decision is recorded in the audit trail.
+                    {t('finder.inv.pay.ack', { amount: formatKes(invoice.total) })}
                   </span>
                 </label>
-                <p className="text-[10px] leading-relaxed text-amber-700">
-                  The system recommends review — it never silently releases unmatched amounts, and it never decides for you.
-                </p>
+                <p className="text-[10px] leading-relaxed text-amber-700">{t('finder.inv.pay.recNote')}</p>
               </div>
             )}
 
             <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-[11px] leading-relaxed text-stone-500">
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
-              Simulated rails — Daraja/bank sandbox wiring pending. The reference and method are recorded exactly as entered; one Transaction entry, never edited afterwards.
+              {t('finder.inv.pay.simNote')}
             </p>
           </div>
         )}
@@ -191,37 +193,37 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
           <div className="grid gap-4 py-1">
             <div className="space-y-1.5 rounded-md border border-stone-200 p-3 text-sm">
               <p className="flex items-center justify-between gap-3">
-                <span className="text-stone-500">Amount</span>
+                <span className="text-stone-500">{t('finder.inv.pay.amount')}</span>
                 <span className="font-bold tabular-nums text-stone-900">{formatKes(invoice.total)}</span>
               </p>
               <p className="flex items-center justify-between gap-3">
-                <span className="text-stone-500">Method</span>
-                <span className="font-medium text-stone-800">{PAYMENT_METHOD_LABELS[method]?.label ?? method}</span>
+                <span className="text-stone-500">{t('finder.inv.pay.confirmMethod')}</span>
+                <span className="font-medium text-stone-800">{methodLabels[method]?.label ?? method}</span>
               </p>
               <p className="flex items-center justify-between gap-3">
-                <span className="text-stone-500">Reference</span>
+                <span className="text-stone-500">{t('finder.inv.pay.confirmReference')}</span>
                 <span className="font-mono text-xs text-stone-800">{finalReference}</span>
               </p>
               <p className="flex items-center justify-between gap-3">
-                <span className="text-stone-500">Cost code</span>
+                <span className="text-stone-500">{t('finder.inv.pay.confirmCostCode')}</span>
                 <span className="font-mono text-xs text-stone-800">{costCode.trim() || 'invoice'}</span>
               </p>
               {method === 'wallet' && (
                 <p className="flex items-center justify-between gap-3">
-                  <span className="text-stone-500">Wallet after</span>
+                  <span className="text-stone-500">{t('finder.inv.pay.walletAfter')}</span>
                   <span className="font-medium tabular-nums text-stone-800">{formatKes(Math.max(0, walletBalance - invoice.total))}</span>
                 </p>
               )}
               {hasMismatch && (
                 <p className="flex items-center justify-between gap-3">
-                  <span className="text-stone-500">3-way items</span>
-                  <span className="font-medium text-amber-800">{mismatches.length} reviewed &amp; acknowledged</span>
+                  <span className="text-stone-500">{t('finder.inv.pay.threeWay')}</span>
+                  <span className="font-medium text-amber-800">{t('finder.inv.pay.acked', { count: mismatches.length })}</span>
                 </p>
               )}
             </div>
             <p className="flex items-start gap-1.5 rounded-md bg-stone-50 p-2.5 text-xs leading-relaxed text-stone-500">
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden />
-              One deliberate click, not two accidental ones — the payment is recorded in the append-only ledger and cannot be edited afterwards.
+              {t('finder.inv.pay.careful')}
             </p>
           </div>
         )}
@@ -229,18 +231,18 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
         <DialogFooter>
           {step === 'form' ? (
             <>
-              <Button variant="outline" onClick={() => { onClose(); reset() }} disabled={busy}>Cancel</Button>
+              <Button variant="outline" onClick={() => { onClose(); reset() }} disabled={busy}>{t('dialog.expense.cancel')}</Button>
               <Button
                 onClick={() => setStep('confirm')}
                 disabled={busy || !formValid}
                 className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
               >
-                <Banknote className="h-4 w-4" aria-hidden /> Continue
+                <Banknote className="h-4 w-4" aria-hidden /> {t('finder.inv.pay.continue')}
               </Button>
             </>
           ) : (
             <>
-              <Button variant="outline" onClick={() => setStep('form')} disabled={busy}>Back</Button>
+              <Button variant="outline" onClick={() => setStep('form')} disabled={busy}>{t('finder.inv.pay.back')}</Button>
               <Button
                 onClick={() => {
                   onConfirm({ method, reference: finalReference, costCode: costCode.trim() || null, acknowledgeMismatch: hasMismatch })
@@ -249,7 +251,7 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
                 disabled={busy}
                 className="min-h-11 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
               >
-                <Check className="h-4 w-4" aria-hidden /> Confirm payment
+                <Check className="h-4 w-4" aria-hidden /> {t('finder.inv.pay.confirm')}
               </Button>
             </>
           )}
@@ -261,13 +263,14 @@ export function PayInvoiceDialog({ invoice, report, walletBalance, busy, onConfi
 
 /** Paid-state chip shown in lists/details: method + reference (+ ledger ref). */
 export function PaymentRecordBadge({ invoice, ledgerRef }: { invoice: InvoiceWithLines; ledgerRef?: string | null }) {
+  const t = useT()
   if (invoice.status !== 'paid') return null
   return (
     <Badge variant="outline" className="gap-1 font-mono text-[10px] text-stone-600">
       <Banknote className="h-3 w-3" aria-hidden />
       {(invoice.paymentMethod ?? '').toUpperCase()}{invoice.paymentReference ? ` · ${invoice.paymentReference}` : ''}
       {ledgerRef && (
-        <span className="flex items-center gap-0.5 text-stone-500" title="Double-entry ledger transaction">
+        <span className="flex items-center gap-0.5 text-stone-500" title={t('finder.inv.pay.ledgerTitle')}>
           <BookOpen className="h-3 w-3" aria-hidden /> {ledgerRef}
         </span>
       )}

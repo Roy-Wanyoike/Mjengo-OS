@@ -134,7 +134,16 @@ vi.mock('@/backend/lib/db', () => {
 import { db } from '@/backend/lib/db'
 import { buildBudgetVarianceReport } from '@/backend/modules/reports/service'
 import { buildProcurementReportCSV } from '@/frontend/mjengo/report-utils'
+import { translate } from '@/frontend/i18n/provider'
+import { enDict } from '@/frontend/i18n/dicts/en'
+import { swDict } from '@/frontend/i18n/dicts/sw'
 import type { ProjectPayload } from '@/backend/lib/mjengo'
+
+// The report builders honor the active locale (#125): header/label copy comes
+// from the caller's t(). These tests exercise the EN report exactly as an
+// EN-locale user downloads it (plus one SW spot-check below).
+const t = (key: string, vars?: Record<string, string | number>): string =>
+  translate(enDict, key, vars)
 
 const state = (db as unknown as { __state: {
   projects: Map<string, Record<string, unknown>>
@@ -502,7 +511,7 @@ function discrepancyRows(csv: string): string[][] {
 
 describe('procurement report CSV — discrepancy rows count evidence per line', () => {
   it('short lines emit rows with ordered/received/short and line-scoped photo evidence', () => {
-    const csv = buildProcurementReportCSV(procurementPayload(
+    const csv = buildProcurementReportCSV(t, procurementPayload(
       [{
         orderCode: 'PO-2026-000101', supplierName: 'Kisumu Builders', status: 'delivering',
         subtotal: 1000.4, deliveryFee: 99.6, total: 1100.0,
@@ -527,7 +536,7 @@ describe('procurement report CSV — discrepancy rows count evidence per line', 
   })
 
   it('a discrepancy-STATUS delivery lists every line (even at full qty) — Short 0 is honest, singular "1 photo"', () => {
-    const csv = buildProcurementReportCSV(procurementPayload(
+    const csv = buildProcurementReportCSV(t, procurementPayload(
       [{
         orderCode: 'PO-2026-000102', supplierName: 'Acme', status: 'received',
         subtotal: 0, deliveryFee: 0, total: 0,
@@ -546,7 +555,7 @@ describe('procurement report CSV — discrepancy rows count evidence per line', 
   })
 
   it('an unmatched orderLineId falls back to "line <id>"; zero line-scoped photos → empty evidence cell', () => {
-    const csv = buildProcurementReportCSV(procurementPayload(
+    const csv = buildProcurementReportCSV(t, procurementPayload(
       [{
         orderCode: 'PO-2026-000103', supplierName: 'Acme', status: 'received',
         subtotal: 0, deliveryFee: 0, total: 0,
@@ -565,7 +574,7 @@ describe('procurement report CSV — discrepancy rows count evidence per line', 
   })
 
   it('clean deliveries emit the honest "(no delivery discrepancies on record)" row', () => {
-    const csv = buildProcurementReportCSV(procurementPayload(
+    const csv = buildProcurementReportCSV(t, procurementPayload(
       [{
         orderCode: 'PO-2026-000104', supplierName: 'Acme', status: 'received',
         subtotal: 0, deliveryFee: 0, total: 0,
@@ -583,7 +592,7 @@ describe('procurement report CSV — discrepancy rows count evidence per line', 
   })
 
   it('header + requests + PO sections carry the real row content (rounded KES, ISO dates)', () => {
-    const csv = buildProcurementReportCSV(procurementPayload(
+    const csv = buildProcurementReportCSV(t, procurementPayload(
       [{
         orderCode: 'PO-2026-000101', supplierName: 'Kisumu Builders', status: 'delivering',
         subtotal: 1000.4, deliveryFee: 99.6, total: 1100.0, lines: [], deliveries: [],
@@ -600,5 +609,22 @@ describe('procurement report CSV — discrepancy rows count evidence per line', 
     expect(rows[2][0]).toContain('from live project data (day 12)')
     expect(rows).toContainEqual(['MR-2026-000001', 'approved', '2', '2026-02-01', '', '', '', ''])
     expect(rows).toContainEqual(['PO-2026-000101', 'Kisumu Builders', 'delivering', '1000', '100', '1100', '', ''])
+  })
+
+  it('the report content honors the active locale (#125) — SW renders Kiswahili headers', () => {
+    const tSw = (key: string, vars?: Record<string, string | number>): string =>
+      translate(swDict, key, vars)
+    const csv = buildProcurementReportCSV(tSw, procurementPayload(
+      [{ orderCode: 'PO-2026-000101', supplierName: 'Acme', status: 'received', subtotal: 0, deliveryFee: 0, total: 0, lines: [], deliveries: [] }],
+      [],
+    ))
+    const rows = csvRows(csv)
+    expect(rows[0][0]).toBe('MjengoOS — Ripoti ya ununuzi')
+    expect(rows[1]).toEqual(['Mradi: Riverside Villas', 'Mteja: Mama Njeri', 'Mahali: Karen', '', '', '', '', ''])
+    expect(rows[2][0]).toContain('Imetengenezwa:')
+    expect(rows[2][0]).toContain('siku 12')
+    // data rows stay verbatim (order code, supplier name, DB enum status)
+    expect(rows.some((r) => r[0] === 'PO-2026-000101' && r[2] === 'received')).toBe(true)
+    expect(rows.some((r) => r[0] === '(hakuna tofauti za mizigo kwenye rekodi)')).toBe(true)
   })
 })

@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from '@/frontend/ui/textarea'
 import { AlertTriangle, Camera, FileText, MapPin, PackageCheck, ReceiptText, Send, Truck, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { useT } from '@/frontend/i18n/provider'
 import type { ActionType } from '@/backend/lib/mjengo'
 import type { OrderWithDetail } from '@/backend/modules/supply/types'
 import { dateShort } from '@/frontend/lib/format'
@@ -33,11 +34,12 @@ export function OrderCard({
   onBusy?: () => void
 }) {
   const { dispatch, online, outbox, actionBusy } = useMjengo()
+  const t = useT()
   const [receiveOpen, setReceiveOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [reason, setReason] = useState('')
   const busy = actionBusy !== null
-  const offlineNote = `Saved on-device — queued (${outbox.length})`
+  const offlineNote = t('field.savedQueued', { count: outbox.length })
 
   const deliveries = order.deliveries
   const activeDelivery = deliveries.find((d) => d.status === 'dispatched') ?? deliveries[deliveries.length - 1] ?? null
@@ -47,7 +49,7 @@ export function OrderCard({
   async function act(type: ActionType, payload: Record<string, unknown>, label: string, success: string) {
     const ok = await dispatch(type, payload, label)
     if (ok) toast.success(online ? success : offlineNote)
-    else toast.error('The server blocked that step — check the order status')
+    else toast.error(t('finder.po.actFailed'))
   }
 
   return (
@@ -59,56 +61,55 @@ export function OrderCard({
               <span className="font-mono text-sm font-bold text-stone-800">{order.orderCode}</span>
               <OrderStatusBadge status={order.status} />
               {order.requestCode && (
-                <Badge variant="outline" className="text-[10px] font-normal text-stone-500">from {order.requestCode}</Badge>
+                <Badge variant="outline" className="text-[10px] font-normal text-stone-500">{t('finder.po.from', { code: order.requestCode })}</Badge>
               )}
             </CardTitle>
             <CardDescription>
-              {order.supplierName} · {formatKes(order.total)} total (delivery {formatKes(order.deliveryFee)}) ·
-              payment: {order.paymentSource} · placed by {order.createdByRole} · {dateShort(order.createdAt)}
+              {t('finder.po.desc', { supplier: order.supplierName, total: formatKes(order.total), delivery: formatKes(order.deliveryFee), payment: order.paymentSource, role: order.createdByRole, date: dateShort(order.createdAt) })}
             </CardDescription>
           </div>
           {canManage && (
             <div className="flex flex-wrap justify-end gap-1.5">
               {order.status === 'approved' && (
                 <Button size="sm" className="h-9 min-h-9 gap-1 bg-sky-600 text-xs text-white hover:bg-sky-700" disabled={busy}
-                  onClick={() => void act('order.send', { id: order.id }, `PO sent: ${order.orderCode}`, `${order.orderCode} sent to ${order.supplierName}`)}
-                  aria-label={`Send ${order.orderCode} to the supplier`}>
-                  <Send className="h-3.5 w-3.5" aria-hidden /> Send
+                  onClick={() => void act('order.send', { id: order.id }, t('finder.po.audit.sent', { code: order.orderCode }), t('finder.po.toast.sent', { code: order.orderCode, supplier: order.supplierName }))}
+                  aria-label={t('finder.po.sendAria', { code: order.orderCode })}>
+                  <Send className="h-3.5 w-3.5" aria-hidden /> {t('finder.po.send')}
                 </Button>
               )}
               {order.status === 'sent' && (
                 <>
                   <Button size="sm" className="h-9 min-h-9 gap-1 bg-teal-600 text-xs text-white hover:bg-teal-700" disabled={busy}
-                    onClick={() => void act('order.confirm', { id: order.id }, `PO confirmed: ${order.orderCode}`, `${order.orderCode} confirmed — dispatch next`)}
-                    aria-label={`Confirm ${order.orderCode} (supplier confirms, simulated)`}>
-                    Confirm
+                    onClick={() => void act('order.confirm', { id: order.id }, t('finder.po.audit.confirmed', { code: order.orderCode }), t('finder.po.toast.confirmed', { code: order.orderCode }))}
+                    aria-label={t('finder.po.confirmAria', { code: order.orderCode })}>
+                    {t('finder.po.confirm')}
                   </Button>
                   <Button size="sm" variant="ghost" className="h-9 min-h-9 gap-1 text-xs text-stone-500 hover:text-rose-600" disabled={busy}
                     onClick={() => { setCancelOpen(true); setReason('') }}
-                    aria-label={`Cancel ${order.orderCode}`}>
-                    <X className="h-3.5 w-3.5" aria-hidden /> Cancel
+                    aria-label={t('finder.po.cancelAria', { code: order.orderCode })}>
+                    <X className="h-3.5 w-3.5" aria-hidden /> {t('finder.po.cancelBtn')}
                   </Button>
                 </>
               )}
               {order.status === 'confirmed' && (
                 <Button size="sm" className="h-9 min-h-9 gap-1 bg-amber-600 text-xs text-white hover:bg-amber-700" disabled={busy}
-                  onClick={() => void act('order.dispatch', { orderId: order.id }, `PO dispatched: ${order.orderCode}`, `${order.orderCode} dispatched — truck in transit`)}
-                  aria-label={`Dispatch ${order.orderCode}`}>
-                  <Truck className="h-3.5 w-3.5" aria-hidden /> Dispatch
+                  onClick={() => void act('order.dispatch', { orderId: order.id }, t('finder.po.audit.dispatched', { code: order.orderCode }), t('finder.po.toast.dispatched', { code: order.orderCode }))}
+                  aria-label={t('finder.po.dispatchAria', { code: order.orderCode })}>
+                  <Truck className="h-3.5 w-3.5" aria-hidden /> {t('finder.po.dispatch')}
                 </Button>
               )}
               {order.status === 'delivering' && activeDelivery?.status === 'dispatched' && (
                 <Button size="sm" className="h-9 min-h-9 gap-1 bg-emerald-600 text-xs text-white hover:bg-emerald-700" disabled={busy}
                   onClick={() => setReceiveOpen(true)}
-                  aria-label={`Receive the delivery for ${order.orderCode}`}>
-                  <Camera className="h-3.5 w-3.5" aria-hidden /> Receive delivery
+                  aria-label={t('finder.po.receiveAria', { code: order.orderCode })}>
+                  <Camera className="h-3.5 w-3.5" aria-hidden /> {t('finder.po.receive')}
                 </Button>
               )}
               {order.status === 'delivered' && (
                 <Button size="sm" variant="outline" className="h-9 min-h-9 gap-1 text-xs" disabled={busy}
-                  onClick={() => void act('order.close', { id: order.id }, `PO closed: ${order.orderCode}`, `${order.orderCode} closed after verified delivery`)}
-                  aria-label={`Close ${order.orderCode}`}>
-                  <PackageCheck className="h-3.5 w-3.5" aria-hidden /> Close
+                  onClick={() => void act('order.close', { id: order.id }, t('finder.po.audit.closed', { code: order.orderCode }), t('finder.po.toast.closed', { code: order.orderCode }))}
+                  aria-label={t('finder.po.closeAria', { code: order.orderCode })}>
+                  <PackageCheck className="h-3.5 w-3.5" aria-hidden /> {t('finder.po.close')}
                 </Button>
               )}
             </div>
@@ -119,13 +120,13 @@ export function OrderCard({
         {/* lines */}
         <div className="overflow-x-auto rounded-md border border-stone-200">
           <table className="w-full min-w-[420px] text-sm">
-            <caption className="sr-only">Lines for {order.orderCode}</caption>
+            <caption className="sr-only">{t('finder.po.caption', { code: order.orderCode })}</caption>
             <thead>
               <tr className="border-b border-stone-200 bg-stone-50 text-left text-[11px] uppercase tracking-wide text-stone-400">
-                <th scope="col" className="px-3 py-2 font-medium">Item</th>
-                <th scope="col" className="px-2 py-2 text-right font-medium">Qty</th>
-                <th scope="col" className="px-2 py-2 text-right font-medium">Unit</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">Line total</th>
+                <th scope="col" className="px-3 py-2 font-medium">{t('finder.inv.det.col.item')}</th>
+                <th scope="col" className="px-2 py-2 text-right font-medium">{t('finder.inv.det.col.qty')}</th>
+                <th scope="col" className="px-2 py-2 text-right font-medium">{t('finder.inv.det.col.unit')}</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium">{t('finder.inv.print.col.lineTotal')}</th>
               </tr>
             </thead>
             <tbody>
@@ -137,7 +138,7 @@ export function OrderCard({
                     <td className="px-3 py-2 text-stone-700">{l.name}</td>
                     <td className="px-2 py-2 text-right tabular-nums text-stone-700">
                       {fmtQty(l.qty)} <span className="text-[10px] text-stone-400">{l.unit}</span>
-                      {dl && <span className="block text-[10px] text-stone-400">received {fmtQty(dl.qtyReceived)}</span>}
+                      {dl && <span className="block text-[10px] text-stone-400">{t('finder.po.received', { qty: fmtQty(dl.qtyReceived) })}</span>}
                     </td>
                     <td className="px-2 py-2 text-right tabular-nums text-stone-700">{formatKes(l.unitPrice)}</td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium text-stone-900">{formatKes(l.lineTotal)}</td>
@@ -170,29 +171,26 @@ export function OrderCard({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <DeliveryStatusBadge status={d.status} />
                 <p className="text-[11px] text-stone-500">
-                  dispatched {d.dispatchedAt ? dateShort(d.dispatchedAt) : '—'}
-                  {d.receivedAt ? ` · received ${dateShort(d.receivedAt)}` : ''}
-                  {d.receivedBy ? ` by ${d.receivedBy}` : ''}
+                  {t('finder.po.dispatchedAt', { date: d.dispatchedAt ? dateShort(d.dispatchedAt) : '—' })}
+                  {d.receivedAt ? t('finder.po.receivedSuffix', { date: dateShort(d.receivedAt) }) : ''}
+                  {d.receivedBy ? t('finder.po.bySuffix', { by: d.receivedBy }) : ''}
                 </p>
               </div>
               {d.status === 'discrepancy' && shortLines.length > 0 && (
                 <div role="alert" className="rounded-md border border-orange-300 bg-white p-3">
                   <p className="flex items-center gap-1.5 text-sm font-semibold text-orange-900">
                     <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
-                    Ordered {fmtQty(shortLines[0].qtyOrdered)} · Received {fmtQty(shortLines[0].qtyReceived)} —{' '}
-                    {fmtQty(totalMissing)} missing, flagged for review
+                    {t('finder.po.discrepancyLine', { ordered: fmtQty(shortLines[0].qtyOrdered), received: fmtQty(shortLines[0].qtyReceived), missing: fmtQty(totalMissing) })}
                   </p>
                   {shortLines.length > 1 && (
                     <ul className="pt-1 pl-5 text-[11px] text-orange-800 list-disc">
                       {shortLines.slice(1).map((l) => (
-                        <li key={l.id}>another line short: ordered {fmtQty(l.qtyOrdered)} · received {fmtQty(l.qtyReceived)}</li>
+                        <li key={l.id}>{t('finder.po.anotherShort', { ordered: fmtQty(l.qtyOrdered), received: fmtQty(l.qtyReceived) })}</li>
                       ))}
                     </ul>
                   )}
                   {d.note && <p className="pt-1.5 text-xs italic text-orange-800">{d.note}</p>}
-                  <p className="pt-1.5 text-[11px] text-stone-500">
-                    Client + contractor notified · payment release stays gated by the invoices 3-way match — a human reconciles with the supplier.
-                  </p>
+                  <p className="pt-1.5 text-[11px] text-stone-500">{t('finder.po.notified')}</p>
                   {linePhotoRows.map((r) => (
                     <LinePhotoThumbs key={r.lineId} photos={r.photos} lineName={r.name} />
                   ))}
@@ -203,7 +201,7 @@ export function OrderCard({
                 <p className="flex flex-wrap items-center gap-3 text-[11px] text-stone-500">
                   {d.photoCount > 0 && d.photos.length === 0 && (
                     <span className="flex items-center gap-1">
-                      <Camera className="h-3 w-3" aria-hidden /> {d.photoCount} photo{d.photoCount === 1 ? '' : 's'} on record — count only, no files attached
+                      <Camera className="h-3 w-3" aria-hidden /> {t(d.photoCount === 1 ? 'finder.po.photosOnRecordOne' : 'finder.po.photosOnRecordMany', { count: d.photoCount })}
                     </span>
                   )}
                   {d.gpsLat !== null && d.gpsLng !== null && (
@@ -227,7 +225,7 @@ export function OrderCard({
         {['confirmed', 'delivering', 'delivered', 'closed'].includes(order.status) && (
           <p className="flex items-center gap-1.5 text-[11px] text-stone-500">
             <ReceiptText className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
-            Invoice → the invoices section below handles submission, client decision, 3-way match and payment.
+            {t('finder.po.invoiceHint')}
           </p>
         )}
         {order.status === 'cancelled' && order.note && (
@@ -250,24 +248,24 @@ export function OrderCard({
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <X className="h-5 w-5 text-rose-600" aria-hidden /> Cancel {order.orderCode}
+              <X className="h-5 w-5 text-rose-600" aria-hidden /> {t('finder.po.cancelTitle', { code: order.orderCode })}
             </DialogTitle>
             <DialogDescription>
-              Cancelling a sent order needs a reason — it lands in the ledger trail.
+              {t('finder.po.cancelDesc')}
             </DialogDescription>
           </DialogHeader>
-          <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Supplier cannot deliver before the pour" aria-label="Cancellation reason" />
+          <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t('finder.po.cancelPh')} aria-label={t('finder.po.cancelAriaLabel')} />
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelOpen(false)}>Keep order</Button>
+            <Button variant="outline" onClick={() => setCancelOpen(false)}>{t('finder.po.keep')}</Button>
             <Button
               className="gap-1.5 bg-rose-600 text-white hover:bg-rose-700"
               disabled={busy || !reason.trim()}
               onClick={() => {
-                void act('order.cancel', { id: order.id, reason: reason.trim() }, `PO cancelled: ${order.orderCode}`, `${order.orderCode} cancelled — reason recorded`)
+                void act('order.cancel', { id: order.id, reason: reason.trim() }, t('finder.po.audit.cancelled', { code: order.orderCode }), t('finder.po.toast.cancelled', { code: order.orderCode }))
                 setCancelOpen(false)
               }}
             >
-              <FileText className="h-4 w-4" aria-hidden /> Cancel order
+              <FileText className="h-4 w-4" aria-hidden /> {t('finder.po.cancelOrder')}
             </Button>
           </DialogFooter>
         </DialogContent>

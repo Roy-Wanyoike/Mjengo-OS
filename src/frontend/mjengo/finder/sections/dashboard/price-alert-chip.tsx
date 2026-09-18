@@ -8,6 +8,7 @@
 
 import { TrendingDown, TrendingUp } from 'lucide-react'
 import { Badge } from '@/frontend/ui/badge'
+import { useT } from '@/frontend/i18n/provider'
 import { priceDelta } from '@/backend/modules/supply/insights'
 import type { IntelSlice } from '@/backend/modules/intel/types'
 
@@ -15,6 +16,7 @@ import type { IntelSlice } from '@/backend/modules/intel/types'
 type PricePoint = IntelSlice['pricePoints'][number]
 
 export function PriceAlertChip({ pricePoints }: { pricePoints: PricePoint[] }) {
+  const t = useT()
   // recordedAt arrives as an ISO string over the payload API (JSON) — normalize
   const cement = priceDelta(
     pricePoints.map((p) => ({ ...p, recordedAt: new Date(p.recordedAt).toISOString() })),
@@ -30,10 +32,10 @@ export function PriceAlertChip({ pricePoints }: { pricePoints: PricePoint[] }) {
       // shrink-0) so the chip wraps on narrow screens instead of blowing the
       // card-header grid track past the viewport (the 390px overflow case).
       className={`gap-1 whitespace-normal text-left font-normal ${up ? 'border-orange-200 bg-orange-50 text-orange-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}
-      title={`Avg across regions: ${cement.from} → ${cement.to} over the last ${cement.windowDays} days (intel price points)`}
+      title={t('finder.price.title', { from: cement.from, to: cement.to, days: cement.windowDays })}
     >
       {up ? <TrendingUp className="h-3 w-3" aria-hidden /> : <TrendingDown className="h-3 w-3" aria-hidden />}
-      Cement {up ? '+' : ''}{cement.pct}% over 30d — consider scheduling orders early
+      {t('finder.price.cement', { pct: `${up ? '+' : ''}${cement.pct}` })}
     </Badge>
   )
 }

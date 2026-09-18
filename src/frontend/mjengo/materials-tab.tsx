@@ -54,7 +54,7 @@ export function MaterialsTab() {
   function exportLedger() {
     if (!data) return
     const filename = `${projectFilePrefix(data)}-materials-ledger.csv`
-    downloadCSV(filename, materialsLedgerCSV(data))
+    downloadCSV(filename, materialsLedgerCSV(t, data))
     toast.success(t('field.exported', { file: filename }))
   }
 
@@ -527,7 +527,7 @@ function SiteStoreCard() {
   function exportReconciliation() {
     if (!data) return
     const filename = `${projectFilePrefix(data)}-stock-reconciliation.csv`
-    downloadCSV(filename, reconciliationCSV(data))
+    downloadCSV(filename, reconciliationCSV(t, data))
     toast.success(t('field.exported', { file: filename }))
   }
 

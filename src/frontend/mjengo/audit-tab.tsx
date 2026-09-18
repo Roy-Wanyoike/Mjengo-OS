@@ -15,7 +15,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMjengo } from '@/frontend/hooks/use-mjengo'
-import { usePermissions, KNOWN_ROLES, labelForRole } from '@/shared/permissions'
+import { usePermissions, KNOWN_ROLES } from '@/shared/permissions'
+import { useT } from '@/frontend/i18n/provider'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/frontend/ui/card'
 import { Badge } from '@/frontend/ui/badge'
 import { Button } from '@/frontend/ui/button'
@@ -109,10 +110,6 @@ function prettyMeta(meta: AuditEventRow['meta']): string | null {
   }
 }
 
-function kindLabel(kind: string): string {
-  return kind.replace(/_/g, ' ')
-}
-
 // ---------------- component ----------------
 
 interface Filters {
@@ -129,6 +126,7 @@ const EMPTY_FILTERS: Filters = { actor: '', role: '', kind: '', from: '', to: ''
 export function AuditTab() {
   const { role, authenticated } = usePermissions()
   const projectId = useMjengo((s) => s.data?.project?.id ?? null)
+  const t = useT()
 
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS) // form state
   const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS) // last applied
@@ -148,6 +146,16 @@ export function AuditTab() {
     () => Object.values(applied).filter((v) => v !== '').length,
     [applied],
   )
+
+  /** Localized label for an audit kind (audit.kind.* — land/labels.ts pattern). */
+  const kindLabel = useCallback((kind: string): string => {
+    const key = `audit.kind.${kind}`
+    const known = AUDIT_KINDS.includes(kind)
+    return known ? t(key) : kind.replace(/_/g, ' ')
+  }, [t])
+
+  /** Localized role label (role.* — audit-only writers have their own keys). */
+  const roleLabel = useCallback((r: string): string => t(`role.${r}`), [t])
 
   /** Fetch one page. `cursor` set → append (Load more); else replace. */
   const fetchPage = useCallback(
@@ -170,19 +178,19 @@ export function AuditTab() {
 
         const res = await fetch(`/api/audit?${params.toString()}`, { cache: 'no-store' })
         if (res.status === 403) {
-          setDenied('The server rejected this request — audit logs are admin-only.')
+          setDenied(t('audit.deniedApi'))
           setRows([])
           setHasMore(false)
           setNextCursor(null)
           return
         }
         if (res.status === 401) {
-          setError('Session expired — sign in again to view the audit trail.')
+          setError(t('audit.sessionExpired'))
           return
         }
         const json = (await res.json()) as AuditResponse
         if (!json.ok || !json.data) {
-          setError(json.error ?? `Request failed (${res.status})`)
+          setError(json.error ?? t('audit.requestFailed', { status: res.status }))
           if (!appending) {
             setRows([])
             setHasMore(false)
@@ -195,13 +203,13 @@ export function AuditTab() {
         setNextCursor(json.nextCursor ?? null)
         setHasMore(Boolean(json.hasMore))
       } catch {
-        setError('Network error — could not reach the audit API.')
+        setError(t('audit.networkError'))
       } finally {
         if (appending) setLoadingMore(false)
         else setLoading(false)
       }
     },
-    [applied, projectId],
+    [applied, projectId, t],
   )
 
   // First page whenever the applied filters or project change
@@ -235,10 +243,10 @@ export function AuditTab() {
             <ShieldAlert className="w-7 h-7 text-stone-500" />
           </div>
           <div className="space-y-1.5">
-            <h1 className="text-lg font-bold text-stone-900">Admin only</h1>
+            <h1 className="text-lg font-bold text-stone-900">{t('audit.deniedTitle')}</h1>
             <p className="text-sm text-stone-500 leading-relaxed">
-              The audit log is restricted to platform administrators.
-              {role ? ` You are signed in as ${labelForRole(role)}.` : ' You are not signed in.'}
+              {t('audit.deniedBody')}
+              {role ? t('audit.deniedAs', { role: roleLabel(role) }) : t('audit.deniedSignedOut')}
             </p>
           </div>
         </CardContent>
@@ -253,58 +261,54 @@ export function AuditTab() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-stone-900 flex items-center gap-2">
-          <ScrollText className="w-6 h-6 text-amber-600" aria-hidden /> Audit log
+          <ScrollText className="w-6 h-6 text-amber-600" aria-hidden /> {t('audit.title')}
         </h1>
-        <p className="text-sm text-stone-500 mt-1">
-          Every write on this platform lands here — who, what, when, from where. Read-only trail, newest first.
-        </p>
+        <p className="text-sm text-stone-500 mt-1">{t('audit.desc')}</p>
       </div>
 
       {/* Filter bar */}
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold text-stone-700 flex items-center gap-2">
-            <Search className="w-4 h-4 text-stone-400" aria-hidden /> Filters
+            <Search className="w-4 h-4 text-stone-400" aria-hidden /> {t('audit.filters')}
           </CardTitle>
-          <CardDescription className="text-xs">
-            Narrow the trail by actor, role, kind or date range · press Apply to run
-          </CardDescription>
+          <CardDescription className="text-xs">{t('audit.filtersDesc')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="space-y-1.5">
-              <label htmlFor="audit-actor" className="text-xs font-medium text-stone-600">Actor</label>
+              <label htmlFor="audit-actor" className="text-xs font-medium text-stone-600">{t('audit.actor')}</label>
               <Input
                 id="audit-actor"
                 value={filters.actor}
                 onChange={(e) => updateFilter('actor', e.target.value)}
-                placeholder="Name or email"
+                placeholder={t('audit.actorPh')}
                 className="min-h-11"
                 autoComplete="off"
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="audit-role" className="text-xs font-medium text-stone-600">Role</label>
+              <label htmlFor="audit-role" className="text-xs font-medium text-stone-600">{t('audit.role')}</label>
               <Select value={filters.role} onValueChange={(v) => updateFilter('role', v === 'all' ? '' : v)}>
-                <SelectTrigger id="audit-role" className="min-h-11 w-full" aria-label="Filter by role">
-                  <SelectValue placeholder="All roles" />
+                <SelectTrigger id="audit-role" className="min-h-11 w-full" aria-label={t('audit.roleAria')}>
+                  <SelectValue placeholder={t('audit.allRoles')} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all" className="min-h-9">All roles</SelectItem>
+                  <SelectItem value="all" className="min-h-9">{t('audit.allRoles')}</SelectItem>
                   {AUDIT_ROLES.map((r) => (
-                    <SelectItem key={r} value={r} className="min-h-9">{labelForRole(r) === 'Unknown' ? r : labelForRole(r)}</SelectItem>
+                    <SelectItem key={r} value={r} className="min-h-9">{roleLabel(r)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="audit-kind" className="text-xs font-medium text-stone-600">Kind</label>
+              <label htmlFor="audit-kind" className="text-xs font-medium text-stone-600">{t('audit.kind')}</label>
               <Select value={filters.kind} onValueChange={(v) => updateFilter('kind', v === 'all' ? '' : v)}>
-                <SelectTrigger id="audit-kind" className="min-h-11 w-full" aria-label="Filter by event kind">
-                  <SelectValue placeholder="All kinds" />
+                <SelectTrigger id="audit-kind" className="min-h-11 w-full" aria-label={t('audit.kindAria')}>
+                  <SelectValue placeholder={t('audit.allKinds')} />
                 </SelectTrigger>
                 <SelectContent className="max-h-72">
-                  <SelectItem value="all" className="min-h-9">All kinds</SelectItem>
+                  <SelectItem value="all" className="min-h-9">{t('audit.allKinds')}</SelectItem>
                   {AUDIT_KINDS.map((k) => (
                     <SelectItem key={k} value={k} className="min-h-9">{kindLabel(k)}</SelectItem>
                   ))}
@@ -312,35 +316,35 @@ export function AuditTab() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="audit-from" className="text-xs font-medium text-stone-600">From date</label>
+              <label htmlFor="audit-from" className="text-xs font-medium text-stone-600">{t('audit.from')}</label>
               <Input
                 id="audit-from"
                 type="date"
                 value={filters.from}
                 onChange={(e) => updateFilter('from', e.target.value)}
                 className="min-h-11"
-                aria-label="Events from this date"
+                aria-label={t('audit.fromAria')}
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="audit-to" className="text-xs font-medium text-stone-600">To date</label>
+              <label htmlFor="audit-to" className="text-xs font-medium text-stone-600">{t('audit.to')}</label>
               <Input
                 id="audit-to"
                 type="date"
                 value={filters.to}
                 onChange={(e) => updateFilter('to', e.target.value)}
                 className="min-h-11"
-                aria-label="Events up to this date"
+                aria-label={t('audit.toAria')}
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="audit-q" className="text-xs font-medium text-stone-600">Search text</label>
+              <label htmlFor="audit-q" className="text-xs font-medium text-stone-600">{t('audit.q')}</label>
               <Input
                 id="audit-q"
                 value={filters.q}
                 onChange={(e) => updateFilter('q', e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') applyFilters() }}
-                placeholder="Summary, entity, request id…"
+                placeholder={t('audit.qPh')}
                 className="min-h-11"
                 autoComplete="off"
               />
@@ -354,7 +358,7 @@ export function AuditTab() {
               className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white min-h-9"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <Search className="w-4 h-4" aria-hidden />}
-              Apply filters
+              {t('audit.apply')}
             </Button>
             <Button
               size="sm"
@@ -363,11 +367,11 @@ export function AuditTab() {
               disabled={loading || loadingMore || (activeFilterCount === 0 && rows.length === 0)}
               className="gap-1.5 min-h-9"
             >
-              <RotateCcw className="w-4 h-4" aria-hidden /> Reset
+              <RotateCcw className="w-4 h-4" aria-hidden /> {t('audit.reset')}
             </Button>
             {activeFilterCount > 0 && (
               <span className="text-xs text-stone-500" aria-live="polite">
-                {activeFilterCount} filter{activeFilterCount === 1 ? '' : 's'} active
+                {t(activeFilterCount === 1 ? 'audit.filtersActiveOne' : 'audit.filtersActiveMany', { count: activeFilterCount })}
               </span>
             )}
           </div>
@@ -380,7 +384,7 @@ export function AuditTab() {
           <CardContent className="p-4 flex items-start gap-3">
             <ShieldAlert className="w-5 h-5 text-red-600 shrink-0 mt-0.5" aria-hidden />
             <div>
-              <p className="text-sm font-semibold text-red-800">Access denied</p>
+              <p className="text-sm font-semibold text-red-800">{t('audit.accessDenied')}</p>
               <p className="text-xs text-red-700 mt-0.5">{denied}</p>
             </div>
           </CardContent>
@@ -393,7 +397,7 @@ export function AuditTab() {
           <CardContent className="p-4 flex items-start gap-3">
             <Activity className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" aria-hidden />
             <div className="flex-1">
-              <p className="text-sm font-semibold text-amber-900">Could not load the audit trail</p>
+              <p className="text-sm font-semibold text-amber-900">{t('audit.loadFailed')}</p>
               <p className="text-xs text-amber-800 mt-0.5">{error}</p>
               <Button
                 size="sm"
@@ -401,7 +405,7 @@ export function AuditTab() {
                 className="mt-2 gap-1.5 min-h-9"
                 onClick={() => void fetchPage(null)}
               >
-                <RotateCcw className="w-3.5 h-3.5" aria-hidden /> Retry
+                <RotateCcw className="w-3.5 h-3.5" aria-hidden /> {t('audit.retry')}
               </Button>
             </div>
           </CardContent>
@@ -412,16 +416,14 @@ export function AuditTab() {
       <Card className="border-stone-200 shadow-sm">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-semibold text-stone-700 flex items-center justify-between gap-2 flex-wrap">
-            <span>Events</span>
+            <span>{t('audit.events')}</span>
             {!loading && (
               <span className="text-xs font-normal text-stone-400">
-                {rows.length} shown{hasMore ? ' · more available' : ' · end of trail'}
+                {t(hasMore ? 'audit.shownMore' : 'audit.shownEnd', { count: rows.length })}
               </span>
             )}
           </CardTitle>
-          <CardDescription className="text-xs">
-            Tap a row for the full event — meta, IP, request id. Times in EAT.
-          </CardDescription>
+          <CardDescription className="text-xs">{t('audit.eventsDesc')}</CardDescription>
         </CardHeader>
         <CardContent className="px-0 pb-0">
           {loading ? (
@@ -440,12 +442,12 @@ export function AuditTab() {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead className="pl-4 text-stone-500 text-xs">Time</TableHead>
-                    <TableHead className="text-stone-500 text-xs">Actor</TableHead>
-                    <TableHead className="text-stone-500 text-xs">Kind</TableHead>
-                    <TableHead className="text-stone-500 text-xs min-w-48">Summary</TableHead>
-                    <TableHead className="text-stone-500 text-xs hidden md:table-cell">Entity</TableHead>
-                    <TableHead className="w-8" aria-label="Expand row" />
+                    <TableHead className="pl-4 text-stone-500 text-xs">{t('audit.col.time')}</TableHead>
+                    <TableHead className="text-stone-500 text-xs">{t('audit.col.actor')}</TableHead>
+                    <TableHead className="text-stone-500 text-xs">{t('audit.col.kind')}</TableHead>
+                    <TableHead className="text-stone-500 text-xs min-w-48">{t('audit.col.summary')}</TableHead>
+                    <TableHead className="text-stone-500 text-xs hidden md:table-cell">{t('audit.col.entity')}</TableHead>
+                    <TableHead className="w-8" aria-label={t('audit.col.expand')} />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -455,11 +457,11 @@ export function AuditTab() {
                         <EmptyState
                           compact
                           icon={ScrollText}
-                          title="No audit events match these filters."
+                          title={t('audit.emptyTitle')}
                           description={
                             activeFilterCount > 0
-                              ? 'Try widening the date range or clearing filters.'
-                              : 'Nothing has been logged for this project yet.'
+                              ? t('audit.emptyFiltered')
+                              : t('audit.emptyProject')
                           }
                         />
                       </TableCell>
@@ -471,7 +473,7 @@ export function AuditTab() {
                       tabIndex={0}
                       role="button"
                       aria-haspopup="dialog"
-                      aria-label={`Audit event: ${row.summary}`}
+                      aria-label={t('audit.eventAria', { summary: row.summary })}
                       onClick={() => setDetail(row)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
@@ -526,7 +528,7 @@ export function AuditTab() {
                 onClick={() => void fetchPage(nextCursor)}
               >
                 {loadingMore ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <ChevronRight className="w-4 h-4" aria-hidden />}
-                {loadingMore ? 'Loading…' : 'Load more events'}
+                {loadingMore ? t('audit.loading') : t('audit.loadMore')}
               </Button>
             </div>
           )}
@@ -550,29 +552,29 @@ export function AuditTab() {
               </DialogHeader>
 
               <dl className="grid grid-cols-[92px_1fr] gap-x-3 gap-y-2.5 text-sm">
-                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><Fingerprint className="w-3.5 h-3.5" aria-hidden /> Actor</dt>
+                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><Fingerprint className="w-3.5 h-3.5" aria-hidden /> {t('audit.detail.actor')}</dt>
                 <dd className="text-stone-800">{detail.actor}</dd>
-                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><Server className="w-3.5 h-3.5" aria-hidden /> Entity</dt>
+                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><Server className="w-3.5 h-3.5" aria-hidden /> {t('audit.detail.entity')}</dt>
                 <dd className="text-stone-800 break-all">
                   {detail.entity ?? '—'}{detail.entityId ? <span className="text-stone-400"> · {detail.entityId}</span> : null}
                 </dd>
-                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" aria-hidden /> IP</dt>
+                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" aria-hidden /> {t('audit.detail.ip')}</dt>
                 <dd className="text-stone-800 break-all">{detail.ip ?? '—'}</dd>
-                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><MonitorSmartphone className="w-3.5 h-3.5" aria-hidden /> Agent</dt>
+                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><MonitorSmartphone className="w-3.5 h-3.5" aria-hidden /> {t('audit.detail.agent')}</dt>
                 <dd className="text-xs text-stone-600 break-all leading-snug">{detail.userAgent ?? '—'}</dd>
-                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" aria-hidden /> Request</dt>
+                <dt className="text-xs font-semibold text-stone-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" aria-hidden /> {t('audit.detail.request')}</dt>
                 <dd className="text-xs text-stone-600 break-all">{detail.requestId ?? '—'}</dd>
               </dl>
 
               {detailMeta ? (
                 <div>
-                  <p className="text-xs font-semibold text-stone-500 mb-1.5">Detail (meta)</p>
+                  <p className="text-xs font-semibold text-stone-500 mb-1.5">{t('audit.detail.meta')}</p>
                   <pre className="text-[11px] leading-relaxed text-stone-700 bg-stone-50 border border-stone-200 rounded-lg p-3 max-h-64 overflow-auto whitespace-pre-wrap break-all [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-stone-300 [&::-webkit-scrollbar-thumb]:rounded-full">
                     {detailMeta}
                   </pre>
                 </div>
               ) : (
-                <p className="text-xs text-stone-400">No extra meta recorded for this event.</p>
+                <p className="text-xs text-stone-400">{t('audit.detail.noMeta')}</p>
               )}
             </>
           )}

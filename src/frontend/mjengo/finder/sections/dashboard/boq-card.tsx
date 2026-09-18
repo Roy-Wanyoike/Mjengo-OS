@@ -18,6 +18,7 @@ import { Input } from '@/frontend/ui/input'
 import { Label } from '@/frontend/ui/label'
 import { Check, ClipboardList, FileStack, Loader2, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useT } from '@/frontend/i18n/provider'
 import { formatKes } from '../requests/bits'
 import type { BoqRow } from '@/backend/modules/inventory/types'
 
@@ -37,24 +38,26 @@ function newDraftLine(): DraftLine {
 }
 
 function BoqStatusBadge({ status }: { status: string }) {
+  const t = useT()
   if (status === 'approved') {
-    return <Badge className="border-0 gap-1 bg-emerald-100 text-emerald-800 hover:bg-emerald-100"><Check className="h-3 w-3" aria-hidden /> Approved</Badge>
+    return <Badge className="border-0 gap-1 bg-emerald-100 text-emerald-800 hover:bg-emerald-100"><Check className="h-3 w-3" aria-hidden /> {t('finder.boq.status.approved')}</Badge>
   }
   if (status === 'superseded') {
-    return <Badge className="border-0 gap-1 bg-stone-200 text-stone-600 hover:bg-stone-200">Superseded</Badge>
+    return <Badge className="border-0 gap-1 bg-stone-200 text-stone-600 hover:bg-stone-200">{t('finder.boq.status.superseded')}</Badge>
   }
-  return <Badge className="border-0 gap-1 bg-amber-100 text-amber-900 hover:bg-amber-100">Draft</Badge>
+  return <Badge className="border-0 gap-1 bg-amber-100 text-amber-900 hover:bg-amber-100">{t('finder.boq.status.draft')}</Badge>
 }
 
 export function BoqCard({ canManage }: { canManage: boolean }) {
   const { data, dispatch, online, outbox, actionBusy } = useMjengo()
+  const t = useT()
   const [createOpen, setCreateOpen] = useState(false)
   const [boqName, setBoqName] = useState('')
   const [draftLines, setDraftLines] = useState<DraftLine[]>([newDraftLine()])
   const [addLineTarget, setAddLineTarget] = useState<BoqRow | null>(null)
   const [addLine, setAddLine] = useState({ materialName: '', unit: '', qty: '', estUnitPrice: '', category: '' })
   const busy = actionBusy !== null
-  const offlineNote = `Saved on-device — queued (${outbox.length})`
+  const offlineNote = t('field.savedQueued', { count: outbox.length })
   const boqs = data?.boq.boqs ?? []
 
   if (!data) return null
@@ -75,21 +78,21 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
         estUnitPrice: Number(l.estUnitPrice) >= 0 ? Number(l.estUnitPrice) : 0,
         ...(l.category.trim() ? { category: l.category.trim() } : {}),
       }))
-    if (!boqName.trim()) { toast.error('Give the BOQ a name'); return }
-    if (!lines.length) { toast.error('Add at least one line — material name + quantity'); return }
-    if (lines.some((l) => !(l.qty > 0))) { toast.error('Every line needs a quantity greater than zero'); return }
-    const ok = await dispatch('boq.create', { name: boqName.trim(), lines }, `BOQ created: ${boqName.trim()}`)
+    if (!boqName.trim()) { toast.error(t('finder.boq.toast.name')); return }
+    if (!lines.length) { toast.error(t('finder.boq.toast.lines')); return }
+    if (lines.some((l) => !(l.qty > 0))) { toast.error(t('finder.boq.toast.qty')); return }
+    const ok = await dispatch('boq.create', { name: boqName.trim(), lines }, t('finder.boq.audit.created', { name: boqName.trim() }))
     if (ok) {
-      toast.success(online ? `${boqName.trim()} created — ${lines.length} line(s)` : offlineNote)
+      toast.success(online ? t('finder.boq.toast.created', { name: boqName.trim(), count: lines.length }) : offlineNote)
       setCreateOpen(false)
-    } else toast.error('Could not create the BOQ')
+    } else toast.error(t('finder.boq.toast.createFailed'))
   }
 
   async function saveAddLine() {
     if (!addLineTarget) return
     const qty = Number(addLine.qty)
-    if (!addLine.materialName.trim()) { toast.error('Material name is required'); return }
-    if (!(qty > 0)) { toast.error('Quantity must be greater than zero'); return }
+    if (!addLine.materialName.trim()) { toast.error(t('finder.boq.toast.materialName')); return }
+    if (!(qty > 0)) { toast.error(t('finder.boq.toast.qtyPositive')); return }
     const ok = await dispatch('boq.line.upsert', {
       boqId: addLineTarget.id,
       materialName: addLine.materialName.trim(),
@@ -97,21 +100,21 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
       qty,
       estUnitPrice: Number(addLine.estUnitPrice) >= 0 ? Number(addLine.estUnitPrice) : 0,
       ...(addLine.category.trim() ? { category: addLine.category.trim() } : {}),
-    }, `BOQ line added: ${addLine.materialName.trim()}`)
+    }, t('finder.boq.audit.lineAdded', { name: addLine.materialName.trim() }))
     if (ok) {
-      toast.success(online ? `Line added to ${addLineTarget.name}` : offlineNote)
+      toast.success(online ? t('finder.boq.toast.lineAdded', { name: addLineTarget.name }) : offlineNote)
       setAddLineTarget(null)
-    } else toast.error('Could not add the line')
+    } else toast.error(t('finder.boq.toast.addLineFailed'))
   }
 
   async function approve(boq: BoqRow) {
-    const ok = await dispatch('boq.approve', { id: boq.id }, `BOQ approved: ${boq.name}`)
-    if (ok) toast.success(online ? `${boq.name} approved — ready to generate the material request` : offlineNote)
-    else toast.error('Could not approve — it may already be approved')
+    const ok = await dispatch('boq.approve', { id: boq.id }, t('finder.boq.audit.approved', { name: boq.name }))
+    if (ok) toast.success(online ? t('finder.boq.toast.approved', { name: boq.name }) : offlineNote)
+    else toast.error(t('finder.boq.toast.approveFailed'))
   }
 
   async function generateRequest(boq: BoqRow) {
-    const ok = await dispatch('boq.to_request', { id: boq.id }, `Material request generated from ${boq.name}`)
+    const ok = await dispatch('boq.to_request', { id: boq.id }, t('finder.boq.audit.mr', { name: boq.name }))
     if (ok) {
       // The store refreshed synchronously on dispatch — find the new draft MR
       // (its notes reference this BOQ) so the toast can show the requestCode.
@@ -120,10 +123,10 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
         (r) => r.status === 'draft' && (r.notes ?? '').includes(`From BOQ "${boq.name}"`),
       )
       toast.success(
-        `${created?.requestCode ?? 'Material request'} generated from ${boq.name} — submit it from the Requests section below.`,
+        t('finder.boq.toast.mrGenerated', { code: created?.requestCode ?? t('finder.boq.audit.mr', { name: boq.name }), name: boq.name }),
         { duration: 7000 },
       )
-    } else toast.error('Could not generate the material request — the BOQ needs lines')
+    } else toast.error(t('finder.boq.toast.mrFailed'))
   }
 
   return (
@@ -131,25 +134,23 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
       <CardHeader className="flex flex-row items-start justify-between space-y-0">
         <div className="space-y-1.5">
           <CardTitle className="flex items-center gap-2 text-lg text-stone-900">
-            <FileStack className="h-5 w-5 text-amber-600" aria-hidden /> BOQ — bill of quantities
+            <FileStack className="h-5 w-5 text-amber-600" aria-hidden /> {t('finder.boq.title')}
             <Badge variant="outline" className="text-[10px] font-medium text-stone-500">{boqs.length}</Badge>
           </CardTitle>
           <CardDescription>
-            Versioned estimates per material — approve one, then generate the material request (MR) that starts the
-            procurement chain (spec §28).
+            {t('finder.boq.desc')}
           </CardDescription>
         </div>
         {canManage && (
-          <Button size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={openCreate} aria-label="Create a new BOQ">
-            <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">New BOQ</span>
+          <Button size="sm" className="min-h-11 gap-1.5 bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={openCreate} aria-label={t('finder.boq.newAria')}>
+            <Plus className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('finder.boq.new')}</span>
           </Button>
         )}
       </CardHeader>
       <CardContent>
         {boqs.length === 0 ? (
           <p className="rounded-lg border border-dashed border-stone-300 p-6 text-center text-xs text-stone-500">
-            No BOQs yet — create one with estimated quantities and prices, approve it, and generate the material
-            request from here.
+            {t('finder.boq.empty')}
           </p>
         ) : (
           <div className="space-y-3">
@@ -163,8 +164,7 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
                       <BoqStatusBadge status={boq.status} />
                     </p>
                     <p className="text-[11px] text-stone-500">
-                      {boq.lines.length} line{boq.lines.length === 1 ? '' : 's'} · est. total{' '}
-                      <span className="font-semibold tabular-nums text-stone-700">{formatKes(boq.total)}</span>
+                      {t(boq.lines.length === 1 ? 'finder.boq.linesOne' : 'finder.boq.linesMany', { count: boq.lines.length, total: formatKes(boq.total) })}
                     </p>
                   </div>
                   {canManage && (
@@ -172,17 +172,17 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
                       <Button
                         size="sm" variant="outline" className="h-8 min-h-8 gap-1 px-2 text-xs" disabled={busy}
                         onClick={() => { setAddLineTarget(boq); setAddLine({ materialName: '', unit: '', qty: '', estUnitPrice: '', category: '' }) }}
-                        aria-label={`Add a line to ${boq.name}`}
+                        aria-label={t('finder.boq.addLineAria', { name: boq.name })}
                       >
-                        <Plus className="h-3.5 w-3.5" aria-hidden /> Add line
+                        <Plus className="h-3.5 w-3.5" aria-hidden /> {t('finder.boq.addLine')}
                       </Button>
                       {boq.status === 'draft' && (
                         <Button
                           size="sm" className="h-8 min-h-8 gap-1 bg-emerald-600 px-2 text-xs text-white hover:bg-emerald-700" disabled={busy}
                           onClick={() => void approve(boq)}
-                          aria-label={`Approve ${boq.name}`}
+                          aria-label={t('finder.boq.approveAria', { name: boq.name })}
                         >
-                          <Check className="h-3.5 w-3.5" aria-hidden /> Approve
+                          <Check className="h-3.5 w-3.5" aria-hidden /> {t('finder.boq.approve')}
                         </Button>
                       )}
                       <Button
@@ -190,10 +190,10 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
                         className={`h-8 min-h-8 gap-1 px-2 text-xs ${boq.status === 'approved' ? 'bg-amber-600 text-white hover:bg-amber-700' : 'text-stone-600'}`}
                         disabled={busy || boq.status !== 'approved' || boq.lines.length === 0}
                         onClick={() => void generateRequest(boq)}
-                        aria-label={`Generate a material request from ${boq.name}`}
-                        title={boq.status !== 'approved' ? 'Approve the BOQ first' : 'Creates a draft MR from every line'}
+                        aria-label={t('finder.boq.generateAria', { name: boq.name })}
+                        title={boq.status !== 'approved' ? t('finder.boq.approveFirst') : t('finder.boq.createsDraft')}
                       >
-                        <ClipboardList className="h-3.5 w-3.5" aria-hidden /> Generate MR
+                        <ClipboardList className="h-3.5 w-3.5" aria-hidden /> {t('finder.boq.generate')}
                       </Button>
                     </div>
                   )}
@@ -201,13 +201,13 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
                 {boq.lines.length > 0 && (
                   <div className="overflow-x-auto border-t border-stone-100">
                     <table className="w-full min-w-[480px] text-sm">
-                      <caption className="sr-only">Lines of {boq.name}</caption>
+                      <caption className="sr-only">{t('finder.boq.caption', { name: boq.name })}</caption>
                       <thead>
                         <tr className="bg-stone-50/70 text-left text-[11px] uppercase tracking-wide text-stone-400">
-                          <th scope="col" className="px-3 py-1.5 font-medium">Material</th>
-                          <th scope="col" className="px-2 py-1.5 text-right font-medium">Qty</th>
-                          <th scope="col" className="px-2 py-1.5 text-right font-medium">Est. unit</th>
-                          <th scope="col" className="px-3 py-1.5 text-right font-medium">Est. total</th>
+                          <th scope="col" className="px-3 py-1.5 font-medium">{t('finder.boq.col.material')}</th>
+                          <th scope="col" className="px-2 py-1.5 text-right font-medium">{t('finder.boq.col.qty')}</th>
+                          <th scope="col" className="px-2 py-1.5 text-right font-medium">{t('finder.boq.col.estUnit')}</th>
+                          <th scope="col" className="px-3 py-1.5 text-right font-medium">{t('finder.boq.col.estTotal')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -236,34 +236,33 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>New BOQ</DialogTitle>
+            <DialogTitle>{t('finder.boq.createTitle')}</DialogTitle>
             <DialogDescription>
-              Bill of quantities with estimated quantities and prices (spec §28). Lines convert into a material
-              request once the BOQ is approved.
+              {t('finder.boq.createDesc')}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="boq-name">BOQ name</Label>
-              <Input id="boq-name" value={boqName} onChange={(e) => setBoqName(e.target.value)} placeholder="e.g. Nyumba Yangu — QS estimate v2" />
+              <Label htmlFor="boq-name">{t('finder.boq.nameLabel')}</Label>
+              <Input id="boq-name" value={boqName} onChange={(e) => setBoqName(e.target.value)} placeholder={t('finder.boq.namePh')} />
             </div>
             <div className="space-y-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">Lines</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">{t('finder.boq.linesLabel')}</p>
               {draftLines.map((line, i) => (
                 <div key={line.key} className="space-y-1.5 rounded-lg border border-stone-200 px-2 py-2">
                   <div className="grid grid-cols-[1fr_4rem_4.5rem_5.5rem_auto] items-center gap-1.5">
                     <Input
                       value={line.materialName}
                       onChange={(e) => setDraftLines((ls) => ls.map((l) => (l.key === line.key ? { ...l, materialName: e.target.value } : l)))}
-                      placeholder={`Material ${i + 1}`}
-                      aria-label={`Material name for line ${i + 1}`}
+                      placeholder={t('finder.boq.lineMaterialPh', { n: i + 1 })}
+                      aria-label={t('finder.boq.lineNameAria', { n: i + 1 })}
                       className="h-8 text-xs"
                     />
                     <Input
                       value={line.unit}
                       onChange={(e) => setDraftLines((ls) => ls.map((l) => (l.key === line.key ? { ...l, unit: e.target.value } : l)))}
-                      placeholder="unit"
-                      aria-label={`Unit for line ${i + 1}`}
+                      placeholder={t('finder.boq.lineUnitPh')}
+                      aria-label={t('finder.boq.lineUnitAria', { n: i + 1 })}
                       className="h-8 text-xs"
                     />
                     <Input
@@ -272,8 +271,8 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
                       min={0}
                       value={line.qty}
                       onChange={(e) => setDraftLines((ls) => ls.map((l) => (l.key === line.key ? { ...l, qty: e.target.value } : l)))}
-                      placeholder="qty"
-                      aria-label={`Quantity for line ${i + 1}`}
+                      placeholder={t('finder.boq.lineQtyPh')}
+                      aria-label={t('finder.boq.lineQtyAria', { n: i + 1 })}
                       className="h-8 text-right text-xs tabular-nums"
                     />
                     <Input
@@ -282,15 +281,15 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
                       min={0}
                       value={line.estUnitPrice}
                       onChange={(e) => setDraftLines((ls) => ls.map((l) => (l.key === line.key ? { ...l, estUnitPrice: e.target.value } : l)))}
-                      placeholder="KSh/u"
-                      aria-label={`Estimated unit price for line ${i + 1}`}
+                      placeholder={t('finder.boq.linePricePh')}
+                      aria-label={t('finder.boq.linePriceAria', { n: i + 1 })}
                       className="h-8 text-right text-xs tabular-nums"
                     />
                     <Button
                       type="button" variant="ghost" size="sm"
                       className="h-8 w-8 min-h-8 p-0 text-stone-400 hover:text-rose-600"
                       onClick={() => setDraftLines((ls) => (ls.length > 1 ? ls.filter((l) => l.key !== line.key) : ls))}
-                      aria-label={`Remove line ${i + 1}`}
+                      aria-label={t('finder.boq.lineRemoveAria', { n: i + 1 })}
                       disabled={draftLines.length === 1}
                     >
                       <Trash2 className="h-3.5 w-3.5" aria-hidden />
@@ -299,21 +298,21 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
                   <Input
                     value={line.category}
                     onChange={(e) => setDraftLines((ls) => ls.map((l) => (l.key === line.key ? { ...l, category: e.target.value } : l)))}
-                    placeholder="Category (optional) — e.g. structural, finishes, plumbing"
-                    aria-label={`Category for line ${i + 1}`}
+                    placeholder={t('finder.boq.categoryPh')}
+                    aria-label={t('finder.boq.categoryAria', { n: i + 1 })}
                     className="h-8 text-xs"
                   />
                 </div>
               ))}
               <Button type="button" variant="outline" size="sm" className="h-8 min-h-8 gap-1 text-xs" onClick={() => setDraftLines((ls) => [...ls, newDraftLine()])}>
-                <Plus className="h-3.5 w-3.5" aria-hidden /> Add line
+                <Plus className="h-3.5 w-3.5" aria-hidden /> {t('finder.boq.addLine')}
               </Button>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>{t('dialog.expense.cancel')}</Button>
             <Button className="gap-1.5 bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={() => void createBoq()}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null} Create BOQ
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null} {t('finder.boq.createBtn')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -323,36 +322,36 @@ export function BoqCard({ canManage }: { canManage: boolean }) {
       <Dialog open={Boolean(addLineTarget)} onOpenChange={(v) => !v && setAddLineTarget(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Add line — {addLineTarget?.name}</DialogTitle>
-            <DialogDescription>One material estimate row (spec §28).</DialogDescription>
+            <DialogTitle>{t('finder.boq.addLineTitle', { name: addLineTarget?.name ?? '' })}</DialogTitle>
+            <DialogDescription>{t('finder.boq.addLineDesc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="bl-material">Material</Label>
-              <Input id="bl-material" value={addLine.materialName} onChange={(e) => setAddLine({ ...addLine, materialName: e.target.value })} placeholder="e.g. River sand" />
+              <Label htmlFor="bl-material">{t('finder.boq.materialLabel')}</Label>
+              <Input id="bl-material" value={addLine.materialName} onChange={(e) => setAddLine({ ...addLine, materialName: e.target.value })} placeholder={t('finder.boq.materialPh')} />
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="bl-unit">Unit</Label>
-                <Input id="bl-unit" value={addLine.unit} onChange={(e) => setAddLine({ ...addLine, unit: e.target.value })} placeholder="tonne" />
+                <Label htmlFor="bl-unit">{t('finder.boq.unitLabel')}</Label>
+                <Input id="bl-unit" value={addLine.unit} onChange={(e) => setAddLine({ ...addLine, unit: e.target.value })} placeholder={t('finder.boq.unitPh')} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="bl-qty">Qty</Label>
+                <Label htmlFor="bl-qty">{t('finder.boq.qtyLabel')}</Label>
                 <Input id="bl-qty" type="number" inputMode="decimal" min={0} value={addLine.qty} onChange={(e) => setAddLine({ ...addLine, qty: e.target.value })} placeholder="5" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="bl-price">Est. KSh/u</Label>
+                <Label htmlFor="bl-price">{t('finder.boq.estLabel')}</Label>
                 <Input id="bl-price" type="number" inputMode="decimal" min={0} value={addLine.estUnitPrice} onChange={(e) => setAddLine({ ...addLine, estUnitPrice: e.target.value })} placeholder="2200" />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="bl-category">Category (optional)</Label>
-              <Input id="bl-category" value={addLine.category} onChange={(e) => setAddLine({ ...addLine, category: e.target.value })} placeholder="e.g. structural / finishes" />
+              <Label htmlFor="bl-category">{t('finder.boq.catLabel')}</Label>
+              <Input id="bl-category" value={addLine.category} onChange={(e) => setAddLine({ ...addLine, category: e.target.value })} placeholder={t('finder.boq.catPh')} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddLineTarget(null)}>Cancel</Button>
-            <Button className="bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={() => void saveAddLine()}>Add line</Button>
+            <Button variant="outline" onClick={() => setAddLineTarget(null)}>{t('dialog.expense.cancel')}</Button>
+            <Button className="bg-amber-600 text-white hover:bg-amber-700" disabled={busy} onClick={() => void saveAddLine()}>{t('finder.boq.addLine')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
