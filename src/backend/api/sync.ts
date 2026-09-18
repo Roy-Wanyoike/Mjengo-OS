@@ -9,6 +9,7 @@ import { SUPPLIER_ACTIONS } from '@/shared/supplier-actions'
 import { route, genericError } from '@/backend/lib/route-kit'
 import { safeErrorMessage, sessionSupplierId } from '@/backend/lib/guard'
 import { actionFlagGateMessage } from '@/backend/lib/action-flag-gate'
+import { syncPrincipal } from '@/backend/lib/idempotency'
 
 // OFFLINE-FIRST SYNC + DETERMINISTIC CONFLICT RESOLUTION (spec §40 / §41, W1-SYNC)
 // ============================================================================
@@ -626,8 +627,24 @@ export const POST = route(
         // double-applying a money movement. This kills the offline double-payment
         // vector: applyAction's money services are additionally guarded by their
         // own natural keys, so a lost ack can never re-post money.
+        // #177: the marker lives in the `sync:<projectId|global>` principal
+        // namespace (lib/idempotency.ts syncPrincipal — the SAME project
+        // segment the key itself embeds, so migration 17's backfill kept every
+        // existing marker reachable). These markers are server-generated and
+        // store no response body, so there is no cross-actor oracle here — the
+        // project segment is the honest scope for the offline dedupe.
         const idemKey = `sync:${itemProjectId ?? 'global'}:${action.id}`
-        if (await db.idempotencyRecord.findUnique({ where: { key: idemKey } })) {
+        if (
+          await db.idempotencyRecord.findUnique({
+            where: {
+              principal_scope_key: {
+                principal: syncPrincipal(itemProjectId),
+                scope: `sync:${action.type}`,
+                key: idemKey,
+              },
+            },
+          })
+        ) {
           results.push({ id: action.id, ok: true })
           continue
         }
@@ -635,7 +652,18 @@ export const POST = route(
         // (2) Exact-replay fingerprint (same payload under a NEW item id) for
         // no-op-by-nature actions → one apply, both items synced (§41 rule 3).
         const fpKey = replayFingerprintKey(itemProjectId, action)
-        if (fpKey && (await db.idempotencyRecord.findUnique({ where: { key: fpKey } }))) {
+        if (
+          fpKey &&
+          (await db.idempotencyRecord.findUnique({
+            where: {
+              principal_scope_key: {
+                principal: syncPrincipal(itemProjectId),
+                scope: `syncfp:${action.type}`,
+                key: fpKey,
+              },
+            },
+          }))
+        ) {
           results.push({ id: action.id, ok: true })
           continue
         }
@@ -697,7 +725,12 @@ export const POST = route(
         await applyAction(action.type, actorPayload, isClient ? pinnedProject!.id : action.projectId)
         try {
           await db.idempotencyRecord.create({
-            data: { key: idemKey, scope: `sync:${action.type}`, projectId: itemProjectId },
+            data: {
+              principal: syncPrincipal(itemProjectId),
+              key: idemKey,
+              scope: `sync:${action.type}`,
+              projectId: itemProjectId,
+            },
           })
         } catch {
           // Unique collision = a concurrent flush already recorded this item —
@@ -706,7 +739,12 @@ export const POST = route(
         if (fpKey) {
           try {
             await db.idempotencyRecord.create({
-              data: { key: fpKey, scope: `syncfp:${action.type}`, projectId: itemProjectId },
+              data: {
+                principal: syncPrincipal(itemProjectId),
+                key: fpKey,
+                scope: `syncfp:${action.type}`,
+                projectId: itemProjectId,
+              },
             })
           } catch {
             // Same story — a concurrent identical item already recorded it.

@@ -86,8 +86,14 @@ vi.mock('@/backend/lib/db', () => {
       state.deliveries = []
       state.catalogCreated = []
       state.idemRows = [
-        // A previously-recorded supplier replay (drives the replay-shape pin).
-        { key: 'sup-replay-1', scope: 'order.dispatch', projectId: 'p-1', responseBody: '{"id":"po-1","status":"delivering","orderCode":"PO-2026-000013"}' },
+        // A previously-recorded supplier replay (drives the replay-shape pin) —
+        // #177: it lives in the replay test's supplier principal namespace
+        // (that test pins the session email explicitly so this is stable).
+        {
+          principal: 'user:supplier.replay@test.dev|project:p-1',
+          key: 'sup-replay-1', scope: 'order.dispatch', projectId: 'p-1',
+          responseBody: '{"id":"po-1","status":"delivering","orderCode":"PO-2026-000013"}',
+        },
       ]
       state.lastNotifWhere = undefined
       state.calls = {
@@ -429,8 +435,21 @@ vi.mock('@/backend/lib/db', () => {
       },
     },
     idempotencyRecord: {
-      async findUnique({ where }: { where: { key: string } }) {
-        return state.idemRows.find((r) => r.key === where.key) ?? null
+      // #177: lookups arrive as the (principal, scope, key) composite unique
+      // (both /api/actions replays and /api/sync dedupe markers).
+      async findUnique({
+        where,
+      }: {
+        where: { principal_scope_key?: { principal: string; scope: string; key: string }; key?: string }
+      }) {
+        const c = where.principal_scope_key
+        return (
+          state.idemRows.find((r) =>
+            c
+              ? r.principal === c.principal && r.scope === c.scope && r.key === c.key
+              : r.key === where.key,
+          ) ?? null
+        )
       },
       async create({ data }: { data: Row }) {
         state.idemRows.push({ ...data })
@@ -940,7 +959,9 @@ describe('POST /api/actions — the supplier pin (REAL applyAction)', () => {
   })
 
   it('supplier replay (Idempotency-Key) → the stored result ONLY — never the buyer payload keys', async () => {
-    sessionFor('supplier', { supplierId: 'sup-1' })
+    // The pinned email puts the session in the SAME #177 principal namespace
+    // the seeded record was written to (user:…|project:p-1).
+    sessionFor('supplier', { supplierId: 'sup-1', email: 'supplier.replay@test.dev' })
     const res = await actionsPost(
       actionReq('order.dispatch', { orderId: 'po-1' }, { projectId: 'p-1', headers: { 'idempotency-key': 'sup-replay-1' } }),
     )

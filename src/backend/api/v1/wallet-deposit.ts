@@ -1,5 +1,6 @@
 import { FINANCE_ROLES } from '@/backend/lib/guard'
 import { logAudit, summarizeAction } from '@/backend/lib/audit'
+import { principalForSession } from '@/backend/lib/idempotency'
 import { route } from '@/backend/lib/route-kit'
 import { depositWallet, walletWithBalance } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
@@ -50,6 +51,10 @@ export const POST = route(
     const ownerProjectId = wallet.ownerType === 'project' ? wallet.ownerId ?? projectId : projectId
     return await withIdempotency(
       req,
+      // #177: per wallet/actor — the URL wallet is part of the caller's
+      // keyspace, so the same key on a DIFFERENT wallet is a fresh request,
+      // never this wallet's stored result.
+      principalForSession(session, `wallet:${id}`),
       'v1.wallet.deposit',
       ownerProjectId || null,
       async () => {

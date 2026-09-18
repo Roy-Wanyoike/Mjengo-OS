@@ -122,7 +122,10 @@ const idempotencyParam = {
     'refused with 409 — the stored result is never silently replayed for a request it did ' +
     'not produce (issue #75 / BE-9: the payload fingerprint is stored with the record by ' +
     'modules/wallet/http.ts withIdempotency). Failed runs are never recorded, so a retry ' +
-    'after a 4xx/5xx is always possible.',
+    'after a 4xx/5xx is always possible. The keyspace is scoped PER PRINCIPAL (issue #177 / ' +
+    'SEC-10): records live in the caller\'s namespace (user + the wallet / payment request ' +
+    'this route acts on), so one actor\'s key can never claim or replay another actor\'s ' +
+    'record — a different actor\'s identical key is simply a fresh request.',
 }
 
 const walletIdParam = {

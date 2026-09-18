@@ -1,5 +1,6 @@
 import { FINANCE_ROLES } from '@/backend/lib/guard'
 import { logAudit, summarizeAction } from '@/backend/lib/audit'
+import { principalForSession } from '@/backend/lib/idempotency'
 import { route } from '@/backend/lib/route-kit'
 import { withdrawWallet, walletWithBalance } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
@@ -47,6 +48,9 @@ export const POST = route(
     const ownerProjectId = wallet.ownerType === 'project' ? wallet.ownerId ?? projectId : projectId
     return await withIdempotency(
       req,
+      // #177: per wallet/actor — the URL wallet is part of the caller's
+      // keyspace (see wallet-deposit.ts).
+      principalForSession(session, `wallet:${id}`),
       'v1.wallet.withdraw',
       ownerProjectId || null,
       async () => {

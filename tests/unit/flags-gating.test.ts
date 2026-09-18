@@ -81,9 +81,14 @@ vi.mock('@/backend/lib/db', () => {
       { key: 'land_verification', enabled: true, description: 'Land' },
       { key: 'low_data', enabled: false, description: 'Low-data mode option' },
     ],
-    // A previously-recorded wallet replay (drives the gate-vs-replay pins).
+    // A previously-recorded wallet replay (drives the gate-vs-replay pins) —
+    // #177: in the contractor's project:none namespace (the replay test
+    // dispatches with no body projectId, so that is the lookup principal).
     idemRows: [
-      { key: 'idem-wallet-1', scope: 'payment.pay', projectId: 'p-1', responseBody: '{"ok":true}' },
+      {
+        principal: 'user:contractor@test.dev|project:none',
+        key: 'idem-wallet-1', scope: 'payment.pay', projectId: 'p-1', responseBody: '{"ok":true}',
+      },
     ] as Array<Record<string, unknown>>,
   }
   const db = {
@@ -134,7 +139,20 @@ vi.mock('@/backend/lib/db', () => {
       },
     },
     idempotencyRecord: {
-      async findUnique({ where }: { where: { key: string } }) {
+      // #177: lookups arrive as the (principal, scope, key) composite unique.
+      async findUnique({
+        where,
+      }: {
+        where: { principal_scope_key?: { principal: string; scope: string; key: string }; key?: string }
+      }) {
+        const c = where.principal_scope_key
+        if (c) {
+          return (
+            state.idemRows.find(
+              (r) => r.principal === c.principal && r.scope === c.scope && r.key === c.key,
+            ) ?? null
+          )
+        }
         return state.idemRows.find((r) => r.key === where.key) ?? null
       },
       async create({ data }: { data: Record<string, unknown> }) {
@@ -241,8 +259,16 @@ vi.mock('@/backend/modules/wallet/http', async () => {
     // Passthrough with the real contract: the fn's result is wrapped as
     // { ok: true, data } (jsonOk). Idempotency replays are the real
     // module's job — these tests pin the flag gate, not §57.
-    withIdempotency: vi.fn(async (_req: unknown, _scope: string, _projectId: string | null, fn: () => unknown) =>
-      NextResponse.json({ ok: true, data: await fn() })),
+    // #177: real signature is (req, principal, scope, projectId, run, payload?).
+    withIdempotency: vi.fn(
+      async (
+        _req: unknown,
+        _principal: string,
+        _scope: string,
+        _projectId: string | null,
+        fn: () => unknown,
+      ) => NextResponse.json({ ok: true, data: await fn() }),
+    ),
     jsonOk: (data: unknown, extra?: Record<string, unknown>) =>
       NextResponse.json({ ok: true, data, ...(extra ?? {}) }),
   }

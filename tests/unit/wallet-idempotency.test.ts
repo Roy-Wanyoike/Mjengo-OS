@@ -20,6 +20,14 @@
  * DIFFERENT payload answers 409 instead of silently replaying the stored
  * body. Legacy records (no envelope) keep replaying.
  *
+ * #177 (SEC-10): the keyspace is PER PRINCIPAL — withIdempotency takes the
+ * caller's principal (user:<email>[|resource]) and the record is keyed by
+ * the (principal, scope, key) composite. Pinned alongside the classic
+ * matrix: a DIFFERENT principal presenting the same key executes FRESH
+ * (never a cross-actor replay, two records, one per namespace); the same
+ * actor on a DIFFERENT wallet resource is likewise a fresh request; the 409
+ * only fires WITHIN one principal's records.
+ *
  * Pinned:
  *   · same logical withdraw, retried → ONE ledger debit, same ledgerRef;
  *   · a retried withdrawal that emptied the wallet still replays (no
@@ -27,9 +35,10 @@
  *   · distinct content (different note/amount) or a distinct explicit key
  *     still posts a second, intentional movement — the header path works;
  *   · transfer retry → one debit + one credit, same ledgerRef;
- *   · withIdempotency: same key + same payload → replay; same key +
+ *   · withIdempotency: same principal + key + payload → replay; same key +
  *     different payload → 409 (run never re-executed); legacy record →
- *     replay; no key → plain execution, nothing recorded.
+ *     replay; no key → plain execution, nothing recorded; a DIFFERENT
+ *     principal's identical key → fresh run, never the other actor's body.
  */
 import { NextRequest } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -149,12 +158,20 @@ vi.mock('@/backend/lib/db', () => {
     },
   }
   const idempotencyRecord = {
-    async findUnique({ where }: { where: { key: string } }) {
-      const r = state.idem.get(where.key)
+    // #177: the (principal, scope, key) composite unique is the lookup shape;
+    // the in-memory Map is keyed by the same triple so two actors' records
+    // with the SAME caller key can coexist (the composite unique's job).
+    async findUnique({
+      where,
+    }: {
+      where: { principal_scope_key?: { principal: string; scope: string; key: string }; key?: string }
+    }) {
+      const c = where.principal_scope_key
+      const r = c ? state.idem.get(`${c.principal}||${c.scope}||${c.key}`) : undefined
       return r ? { ...r } : null
     },
     async create({ data }: { data: Record<string, unknown> }) {
-      state.idem.set(data.key as string, { ...data })
+      state.idem.set(`${data.principal}||${data.scope}||${data.key}`, { ...data })
       return { ...data }
     },
   }
@@ -295,26 +312,30 @@ describe('transferWallet — deterministic natural idempotency key (BE-3)', () =
   })
 })
 
-// ------------------------------------- BE-9: withIdempotency payload mismatch
+// ------------------------------------- BE-9 + #177: withIdempotency — fingerprint + per-principal keyspace
 
 describe('withIdempotency — payload fingerprint + 409 on key reuse with a different body (BE-9)', () => {
   const url = 'http://localhost/api/v1/wallets/w-1/withdraw'
   const reqWithKey = (key: string) =>
     new NextRequest(url, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': key } })
+  // #177: every call now names its principal — the finance actor scoped to
+  // the URL wallet (what wallet-withdraw.ts derives for a finance session).
+  const PRINCIPAL = 'user:finance@demo.test|wallet:w-1'
 
-  it('first run records the result WITH the payload hash; same key + same payload → replay without re-running', async () => {
+  it('first run records the result WITH the payload hash; same principal + key + payload → replay without re-running', async () => {
     const run = vi.fn(async () => ({ walletCode: 'W-0001', ledgerRef: 'LX-1', balance: 7_500 }))
-    const first = await withIdempotency(reqWithKey('k-1'), 'v1.wallet.withdraw', 'p-1', run, { amount: 2_500 })
+    const first = await withIdempotency(reqWithKey('k-1'), PRINCIPAL, 'v1.wallet.withdraw', 'p-1', run, { amount: 2_500 })
     expect(first.status).toBe(200)
     expect(await first.json()).toEqual({ ok: true, data: { walletCode: 'W-0001', ledgerRef: 'LX-1', balance: 7_500 } })
-    const record = state.idem.get('k-1') as Record<string, unknown>
+    const record = state.idem.get(`${PRINCIPAL}||v1.wallet.withdraw||k-1`) as Record<string, unknown>
+    expect(record.principal).toBe(PRINCIPAL)
     expect(record.scope).toBe('v1.wallet.withdraw')
     expect(record.projectId).toBe('p-1')
     const stored = JSON.parse(record.responseBody as string)
     expect(stored.body).toEqual({ walletCode: 'W-0001', ledgerRef: 'LX-1', balance: 7_500 })
     expect(stored.payloadHash).toMatch(/^[0-9a-f]{64}$/)
 
-    const replay = await withIdempotency(reqWithKey('k-1'), 'v1.wallet.withdraw', 'p-1', run, { amount: 2_500 })
+    const replay = await withIdempotency(reqWithKey('k-1'), PRINCIPAL, 'v1.wallet.withdraw', 'p-1', run, { amount: 2_500 })
     expect(replay.status).toBe(200)
     expect(await replay.json()).toEqual({
       ok: true, data: { walletCode: 'W-0001', ledgerRef: 'LX-1', balance: 7_500 },
@@ -323,28 +344,28 @@ describe('withIdempotency — payload fingerprint + 409 on key reuse with a diff
     expect(run).toHaveBeenCalledTimes(1) // never re-executed
   })
 
-  it('same key + DIFFERENT payload → 409, the stored body is NOT replayed, the run never executes', async () => {
+  it('same principal + key + DIFFERENT payload → 409, the stored body is NOT replayed, the run never executes', async () => {
     const run = vi.fn(async () => ({ walletCode: 'W-0001', ledgerRef: 'LX-2', balance: 7_500 }))
-    await withIdempotency(reqWithKey('k-2'), 'v1.wallet.withdraw', 'p-1', run, { amount: 2_500 })
-    const conflict = await withIdempotency(reqWithKey('k-2'), 'v1.wallet.withdraw', 'p-1', run, { amount: 999 })
+    await withIdempotency(reqWithKey('k-2'), PRINCIPAL, 'v1.wallet.withdraw', 'p-1', run, { amount: 2_500 })
+    const conflict = await withIdempotency(reqWithKey('k-2'), PRINCIPAL, 'v1.wallet.withdraw', 'p-1', run, { amount: 999 })
     expect(conflict.status).toBe(409)
     const body = (await conflict.json()) as { error: string }
     expect(body.error).toMatch(/different payload/i)
     expect(body.ok).toBeUndefined() // v1 error shape: { error } only
     expect(run).toHaveBeenCalledTimes(1)
     // the record is untouched: a same-payload retry still replays
-    const replay = await withIdempotency(reqWithKey('k-2'), 'v1.wallet.withdraw', 'p-1', run, { amount: 2_500 })
+    const replay = await withIdempotency(reqWithKey('k-2'), PRINCIPAL, 'v1.wallet.withdraw', 'p-1', run, { amount: 2_500 })
     expect(replay.status).toBe(200)
     expect(((await replay.json()) as Record<string, unknown>).replayed).toBe(true)
   })
 
   it('LEGACY records (stored before the fingerprint) still replay unconditionally — back-compat', async () => {
-    state.idem.set('k-legacy', {
-      key: 'k-legacy', scope: 'v1.wallet.withdraw', projectId: 'p-1',
+    state.idem.set(`${PRINCIPAL}||v1.wallet.withdraw||k-legacy`, {
+      principal: PRINCIPAL, key: 'k-legacy', scope: 'v1.wallet.withdraw', projectId: 'p-1',
       responseBody: JSON.stringify({ walletCode: 'W-0001', ledgerRef: 'LX-OLD', balance: 1 }),
     })
     const run = vi.fn(async () => ({ ledgerRef: 'LX-NEW' }))
-    const res = await withIdempotency(reqWithKey('k-legacy'), 'v1.wallet.withdraw', 'p-1', run, { amount: 5 })
+    const res = await withIdempotency(reqWithKey('k-legacy'), PRINCIPAL, 'v1.wallet.withdraw', 'p-1', run, { amount: 5 })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({
       ok: true, data: { walletCode: 'W-0001', ledgerRef: 'LX-OLD', balance: 1 },
@@ -356,9 +377,70 @@ describe('withIdempotency — payload fingerprint + 409 on key reuse with a diff
   it('no key → the run executes plainly and nothing is recorded (the header stays optional)', async () => {
     const run = vi.fn(async () => ({ ok: true }))
     const req = new NextRequest(url, { method: 'POST', headers: { 'content-type': 'application/json' } })
-    const res = await withIdempotency(req, 'v1.wallet.withdraw', 'p-1', run, { amount: 1 })
+    const res = await withIdempotency(req, PRINCIPAL, 'v1.wallet.withdraw', 'p-1', run, { amount: 1 })
     expect(res.status).toBe(200)
     expect(run).toHaveBeenCalledTimes(1)
     expect(state.idem.size).toBe(0)
+  })
+})
+
+describe('withIdempotency — per-principal keyspace (#177 / SEC-10)', () => {
+  const url = 'http://localhost/api/v1/wallets/w-1/withdraw'
+  const reqWithKey = (key: string) =>
+    new NextRequest(url, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': key } })
+  const FINANCE_A = 'user:finance-a@demo.test|wallet:w-1'
+  const FINANCE_B = 'user:finance-b@demo.test|wallet:w-1'
+
+  it('a DIFFERENT actor presenting the SAME key → fresh run, NEVER actor A\'s stored body, two records in two namespaces', async () => {
+    const runA = vi.fn(async () => ({ ledgerRef: 'LX-A', secret: 'actor-A-only' }))
+    const runB = vi.fn(async () => ({ ledgerRef: 'LX-B' }))
+    await withIdempotency(reqWithKey('shared-key'), FINANCE_A, 'v1.wallet.withdraw', 'p-1', runA, { amount: 100 })
+
+    const foreign = await withIdempotency(reqWithKey('shared-key'), FINANCE_B, 'v1.wallet.withdraw', 'p-1', runB, { amount: 100 })
+    expect(foreign.status).toBe(200)
+    const body = (await foreign.json()) as Record<string, unknown>
+    expect(body.replayed).toBeUndefined() // NOT a replay — actor B's own fresh run
+    expect(body.data).toEqual({ ledgerRef: 'LX-B' }) // actor A's body never crossed over
+    expect(runB).toHaveBeenCalledTimes(1)
+
+    // Two records, one per namespace — the composite unique holds both.
+    const rows = [...state.idem.values()]
+    expect(rows).toHaveLength(2)
+    expect(rows.filter((r) => r.principal === FINANCE_A && r.key === 'shared-key')).toHaveLength(1)
+    expect(rows.filter((r) => r.principal === FINANCE_B && r.key === 'shared-key')).toHaveLength(1)
+
+    // And actor A retrying still replays THEIR stored result, byte-identical.
+    const retryA = await withIdempotency(reqWithKey('shared-key'), FINANCE_A, 'v1.wallet.withdraw', 'p-1', runA, { amount: 100 })
+    expect(((await retryA.json()) as Record<string, unknown>).replayed).toBe(true)
+    expect(runA).toHaveBeenCalledTimes(1)
+  })
+
+  it('the SAME actor on a DIFFERENT wallet (same key) → fresh run, never the other wallet\'s stored result', async () => {
+    const run = vi.fn(async () => ({ ledgerRef: 'LX-1' }))
+    await withIdempotency(reqWithKey('k-w'), 'user:finance@demo.test|wallet:w-1', 'v1.wallet.withdraw', 'p-1', run, { amount: 100 })
+    const other = await withIdempotency(
+      new NextRequest('http://localhost/api/v1/wallets/w-2/withdraw', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'k-w' },
+      }),
+      'user:finance@demo.test|wallet:w-2',
+      'v1.wallet.withdraw',
+      'p-1',
+      run,
+      { amount: 100 },
+    )
+    expect(other.status).toBe(200)
+    const body = (await other.json()) as Record<string, unknown>
+    expect(body.replayed).toBeUndefined() // w-1's stored result was NOT served for w-2
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(state.idem.size).toBe(2)
+  })
+
+  it('the 409 does NOT fire across principals — a foreign actor\'s identical key is a fresh request, not a conflict', async () => {
+    const run = vi.fn(async () => ({ ledgerRef: 'LX' }))
+    await withIdempotency(reqWithKey('k-x'), FINANCE_A, 'v1.wallet.withdraw', 'p-1', run, { amount: 250 })
+    const foreign = await withIdempotency(reqWithKey('k-x'), FINANCE_B, 'v1.wallet.withdraw', 'p-1', run, { amount: 999 })
+    expect(foreign.status).toBe(200) // different payload AND different actor → fresh, no 409
+    expect(run).toHaveBeenCalledTimes(2)
   })
 })

@@ -75,20 +75,43 @@ vi.mock('@/backend/lib/guard', async () => {
 // allowlist tests below dispatch nothing; the replay-pin tests at the bottom
 // only need the idempotency records (a replay never re-applies anything).
 vi.mock('@/backend/lib/db', () => {
-  // Pre-recorded IdempotencyRecords — the replay fixtures (spec §57):
-  //   · replay-own-p1      — a p-1 client's own key (the 200 replay)
-  //   · replay-foreign-p2  — a p-2 key (the foreign-project probe)
-  //   · replay-owner-global— an owner's global action (projectId null)
+  // Pre-recorded IdempotencyRecords — the replay fixtures (spec §57), each
+  // living in its #177 PRINCIPAL namespace (the lookup shape the route uses):
+  //   · replay-own-p1      — the p-1 client's own key (user:client…|project:p-1)
+  //   · replay-reassigned  — a HIT-shaped record whose projectId disagrees
+  //                          with the session pin (post-#177 the writer keeps
+  //                          principal-project and projectId equal, so this is
+  //                          the BE-6 defense-in-depth backstop, not the
+  //                          primary guard — #177's scoping is)
+  //   · replay-noproject   — the same client's key from a project-less stint
+  //                          (user:client…|project:none, record project p-1)
+  //   · replay-foreign-p2  — ANOTHER client's p-2 key (a foreign ACTOR — the
+  //                          #177 cross-actor probe; lives in their namespace)
+  //   · replay-owner-global— an owner's global action (project:none namespace)
+  //   · replay-sup-p1      — the supplier's own key (user:supplier…|project:p-1)
   const idemRows = [
-    { key: 'replay-own-p1', scope: 'comment.add', projectId: 'p-1', responseBody: '{"id":"c-1","text":"approved"}' },
-    { key: 'replay-foreign-p2', scope: 'comment.add', projectId: 'p-2', responseBody: '{"id":"c-2","text":"leak"}' },
-    { key: 'replay-owner-global', scope: 'task.update', projectId: null, responseBody: '{"id":"t-1"}' },
+    { principal: 'user:client@client-actions.test.dev|project:p-1', key: 'replay-own-p1', scope: 'comment.add', projectId: 'p-1', responseBody: '{"id":"c-1","text":"approved"}' },
+    { principal: 'user:client@client-actions.test.dev|project:p-1', key: 'replay-reassigned', scope: 'comment.add', projectId: 'p-2', responseBody: '{"id":"c-9","text":"old project"}' },
+    { principal: 'user:client@client-actions.test.dev|project:none', key: 'replay-noproject', scope: 'comment.add', projectId: 'p-1', responseBody: '{"id":"c-8","text":"stale"}' },
+    { principal: 'user:p2-client@client-actions.test.dev|project:p-2', key: 'replay-foreign-p2', scope: 'comment.add', projectId: 'p-2', responseBody: '{"id":"c-2","text":"leak"}' },
+    { principal: 'user:contractor@client-actions.test.dev|project:none', key: 'replay-owner-global', scope: 'task.update', projectId: null, responseBody: '{"id":"t-1"}' },
+    { principal: 'user:supplier@client-actions.test.dev|project:p-1', key: 'replay-sup-p1', scope: 'comment.add', projectId: 'p-1', responseBody: '{"id":"c-3","text":"supplier note"}' },
   ]
   return {
     db: {
       idempotencyRecord: {
-        async findUnique({ where }: { where: { key: string } }) {
-          return idemRows.find((r) => r.key === where.key) ?? null
+        // #177: the (principal, scope, key) composite unique is the lookup shape.
+        async findUnique({
+          where,
+        }: {
+          where: { principal_scope_key?: { principal: string; scope: string; key: string }; key?: string }
+        }) {
+          const c = where.principal_scope_key
+          return (
+            idemRows.find((r) =>
+              c ? r.principal === c.principal && r.scope === c.scope && r.key === c.key : r.key === where.key,
+            ) ?? null
+          )
         },
         async create({ data }: Record<string, unknown>) { return { ...data } },
       },
@@ -235,16 +258,18 @@ describe('dispatcher registry hygiene (the arrays CLIENT_ACTIONS depends on)', (
   })
 })
 
-// ------------------ BE-6 (issue #104): the Idempotency-Key replay tenant pin
+// ------------------ BE-6 (issue #104) + #177 (SEC-10): the replay keyspace
 
-describe('POST /api/actions — an Idempotency-Key replays only within the session pins (BE-6)', () => {
+describe('POST /api/actions — an Idempotency-Key replays only within the session pins (BE-6 + #177)', () => {
   /** A client-allowlisted, non-flag-family action — the flag gate passes
    *  without reading the flag table, so the replay branch is reached. */
-  function replayReq(key: string): NextRequest {
+  function replayReq(key: string, opts: { type?: string; projectId?: string | null } = {}): NextRequest {
+    const type = opts.type ?? 'comment.add'
+    const projectId = 'projectId' in opts ? opts.projectId : 'p-1'
     return new NextRequest('http://localhost/api/actions', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'idempotency-key': key },
-      body: JSON.stringify({ type: 'comment.add', payload: { text: 'hi' }, projectId: 'p-1' }),
+      body: JSON.stringify({ type, payload: { text: 'hi' }, ...(projectId !== null ? { projectId } : {}) }),
     })
   }
 
@@ -273,16 +298,6 @@ describe('POST /api/actions — an Idempotency-Key replays only within the sessi
     ] as never)
   })
 
-  it('client session + a FOREIGN key (record on another project) → 403, NO payload leaked', async () => {
-    sessionFor('client', { projectId: 'p-1' })
-    const res = await actionsPost(replayReq('replay-foreign-p2'), undefined)
-    expect(res.status).toBe(403)
-    expect(await res.json()).toEqual({ ok: false, error: 'Not permitted for this project' })
-    // The foreign project's payload was never built, never shipped.
-    expect(getProjectPayload).not.toHaveBeenCalled()
-    expect(getProjectsList).not.toHaveBeenCalled()
-  })
-
   it('client session + its OWN key → the historical replay (stored result + refreshed payload)', async () => {
     sessionFor('client', { projectId: 'p-1' })
     const res = await actionsPost(replayReq('replay-own-p1'), undefined)
@@ -298,44 +313,64 @@ describe('POST /api/actions — an Idempotency-Key replays only within the sessi
     expect(getProjectPayload).toHaveBeenCalledWith('p-1')
   })
 
-  it('client session with NO project assigned → 403 fail closed (any key is foreign)', async () => {
-    sessionFor('client', { projectId: null })
-    const res = await actionsPost(replayReq('replay-own-p1'), undefined)
-    expect(res.status).toBe(403)
-    expect(await res.json()).toEqual({ ok: false, error: 'Not permitted for this project' })
-    expect(getProjectPayload).not.toHaveBeenCalled()
-  })
-
-  it('client session + an owner\'s GLOBAL record (projectId null) → 403 (not a client key by construction)', async () => {
+  it('BE-6 residual (replay-hit record, other projectId): the client pin still refuses — 403, NO payload leaked', async () => {
+    // #177 closes the cross-ACTOR oracle (see the foreign-actor pin in
+    // idempotency-scope.test.ts); this pin keeps the BE-6 defense-in-depth
+    // for the shape it still guards — a record that HITS the caller's
+    // namespace but whose projectId disagrees with the session pin. The
+    // #177 writer keeps principal-project and projectId equal, so a live
+    // record like this means a writer bug — the pin is the backstop.
     sessionFor('client', { projectId: 'p-1' })
-    const res = await actionsPost(replayReq('replay-owner-global'), undefined)
+    const res = await actionsPost(replayReq('replay-reassigned'), undefined)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ ok: false, error: 'Not permitted for this project' })
+    // The foreign project's payload was never built, never shipped.
+    expect(getProjectPayload).not.toHaveBeenCalled()
+    expect(getProjectsList).not.toHaveBeenCalled()
+  })
+
+  it('client session with NO project assigned → 403 fail closed (their project:none records are still foreign)', async () => {
+    sessionFor('client', { projectId: null })
+    const res = await actionsPost(replayReq('replay-noproject'), undefined)
     expect(res.status).toBe(403)
     expect(await res.json()).toEqual({ ok: false, error: 'Not permitted for this project' })
     expect(getProjectPayload).not.toHaveBeenCalled()
   })
 
-  it('MIRROR: an owner role replaying the same foreign key → the full historical replay (unchanged)', async () => {
+  it('MIRROR: an owner replaying their OWN global record (no projectId in the retry either) → the full historical replay (unchanged)', async () => {
     sessionFor('contractor')
-    const res = await actionsPost(replayReq('replay-foreign-p2'), undefined)
+    const res = await actionsPost(replayReq('replay-owner-global', { type: 'task.update', projectId: null }), undefined)
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, unknown>
     expect(body.replayed).toBe(true)
-    expect(body.result).toEqual({ id: 'c-2', text: 'leak' })
+    expect(body.result).toEqual({ id: 't-1' })
     expect('data' in body).toBe(true)
     expect('projects' in body).toBe(true)
-    expect(getProjectPayload).toHaveBeenCalledWith('p-2')
+    expect(getProjectPayload).toHaveBeenCalledWith(null)
   })
 
-  it('MIRROR: a supplier session replaying → the stored result ONLY (no buyer payload keys)', async () => {
+  it('MIRROR: a supplier session replaying its OWN key → the stored result ONLY (no buyer payload keys)', async () => {
     sessionFor('supplier', { supplierId: 'sup-1' })
-    const res = await actionsPost(replayReq('replay-foreign-p2'), undefined)
+    const res = await actionsPost(replayReq('replay-sup-p1'), undefined)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({
       ok: true,
       replayed: true,
       scope: 'comment.add',
-      result: { id: 'c-2', text: 'leak' },
+      result: { id: 'c-3', text: 'supplier note' },
     })
+    expect(getProjectPayload).not.toHaveBeenCalled()
+    expect(getProjectsList).not.toHaveBeenCalled()
+  })
+
+  it('#177: a sessionless, tokenless caller presenting ANY key → 401, never a replay (the unauth replay oracle is closed)', async () => {
+    // Pre-#177 the global-keyspace lookup ran before any auth: a caller with
+    // NO session and NO share token could replay a stored result outright.
+    // Now there is no principal to scope a replay against — the lookup is
+    // skipped and the fresh branch's 401 answers.
+    const res = await actionsPost(replayReq('replay-foreign-p2'), undefined)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: 'Sign in required' })
     expect(getProjectPayload).not.toHaveBeenCalled()
     expect(getProjectsList).not.toHaveBeenCalled()
   })

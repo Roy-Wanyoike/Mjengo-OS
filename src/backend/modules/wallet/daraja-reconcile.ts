@@ -71,8 +71,9 @@
 // deployment is unchanged).
 
 import { db } from '@/backend/lib/db'
+import { SYSTEM_PRINCIPAL } from '@/backend/lib/idempotency'
 import { enqueue } from '@/backend/modules/jobs/service'
-import { DARAJA_CALLBACK_KEY_PREFIX, DARAJA_INTENT_KEY_PREFIX, processDarajaStkCallback } from './daraja-callback'
+import { CALLBACK_SCOPE, DARAJA_CALLBACK_KEY_PREFIX, DARAJA_INTENT_KEY_PREFIX, processDarajaStkCallback } from './daraja-callback'
 import { log } from '@/backend/lib/log'
 
 /** The JobType this module registers (jobs/handlers.ts dispatches on it). */
@@ -218,9 +219,17 @@ export async function runDarajaReconcile(): Promise<DarajaReconcileResult> {
     const checkout = checkoutOfIntentKey(row.key)
 
     // Durable dedupe backstop: a completed callback record means settled —
-    // by the real callback OR an earlier sweep. Nothing to do.
+    // by the real callback OR an earlier sweep. Nothing to do. (#177: the
+    // daraja markers live in the fixed 'system' principal — daraja-callback.ts
+    // writes them with the same derivation.)
     const completed = await db.idempotencyRecord.findUnique({
-      where: { key: `${DARAJA_CALLBACK_KEY_PREFIX}${checkout}` },
+      where: {
+        principal_scope_key: {
+          principal: SYSTEM_PRINCIPAL,
+          scope: CALLBACK_SCOPE,
+          key: `${DARAJA_CALLBACK_KEY_PREFIX}${checkout}`,
+        },
+      },
     })
     if (completed) {
       result.settledEarlier += 1

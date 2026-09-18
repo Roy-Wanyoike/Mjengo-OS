@@ -188,7 +188,12 @@ vi.mock('@/backend/lib/db', () => {
       async findFirst({ where }: { where: Row }) { return firstOf(state.milestones, where) },
     },
     idempotencyRecord: {
-      async findUnique({ where }: { where: Row }) { return state.idempotency.get(String(where.key)) ?? null },
+      // #177: lookups arrive as the (principal, scope, key) composite — the
+      // raw key stays unique within this suite's single-namespace flushes.
+      async findUnique({ where }: { where: Row & { principal_scope_key?: { key: string } } }) {
+        const k = String(where.principal_scope_key?.key ?? where.key)
+        return state.idempotency.get(k) ?? null
+      },
       async create({ data }: { data: Row }) {
         const row = { id: `idem_${++state.seq}`, ...data }
         state.idempotency.set(String(row.key), row)

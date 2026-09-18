@@ -1,6 +1,7 @@
 import { PAYMENT_ROLES } from '@/backend/lib/guard'
 import { db } from '@/backend/lib/db'
 import { logAudit, summarizeAction } from '@/backend/lib/audit'
+import { principalForSession } from '@/backend/lib/idempotency'
 import { route } from '@/backend/lib/route-kit'
 import { payPaymentRequest } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
@@ -66,6 +67,10 @@ export const POST = route(
 
     return await withIdempotency(
       req,
+      // #177: per payment-request/actor — the request being paid is part of
+      // the caller's keyspace: the same key for a DIFFERENT request is a
+      // fresh request, never this request's stored result.
+      principalForSession(session, `payment:${request.id}`),
       'v1.payment.pay',
       request.projectId,
       async () => {
