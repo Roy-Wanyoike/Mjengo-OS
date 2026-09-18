@@ -17,13 +17,21 @@
  *     WALLET/LAND/SUPPLY types, flag-family safe by construction;
  *   · UNKNOWN PHONE → honest "not registered" reply, zero rows written;
  *   · SECRET SET → unsigned/mismatched X-Signature → 401 (timing-safe
- *     compare); UNSET → documented open demo posture;
- *   · PRODUCTION FAIL-CLOSED (SEC-4, audit wave 2): NODE_ENV=production +
- *     unset secret → 503 JSON configuration error BEFORE any processing
- *     (zero writes, zero audits, zero rate-limit consumption); production +
- *     secret set keeps working (503 never shadows the HMAC gate);
- *     NODE_ENV=test + unset keeps the open demo posture exactly;
- *   · RATE LIMITS: 20/min/phone and 40/min/IP buckets, 429 + Retry-After;
+ *     compare); UNSET → the open demo posture, now an EXPLICIT opt-in
+ *     (issue #156: the fixtures set WEBHOOK_OPEN_POSTURE=1);
+ *   · FAIL-CLOSED POSTURE (SEC-4 + issue #156): an unset secret refuses
+ *     POST with 503 in EVERY runtime unless WEBHOOK_OPEN_POSTURE=1 opts
+ *     into the open demo posture OUTSIDE production. Pinned: production +
+ *     unset → 503 (the opt-in is IGNORED there); non-prod + unset + no
+ *     opt-in → 503 before any processing (zero writes, zero audits, zero
+ *     rate-limit consumption); non-prod + opt-in → open posture; secret
+ *     set → the HMAC gate answers, never the 503 gate;
+ *   · RATE LIMITS: 20/min/phone and 40/min/IP buckets, 429 + Retry-After.
+ *     The per-IP key is trust-aware (issue #156): the fixtures run
+ *     TRUST_PROXY=1 (distinct XFF values = distinct principals, keeping
+ *     the per-test uniqueIp() bucket isolation honest), and a dedicated
+ *     test pins the UNSET posture — rotating XFF values share the one anon
+ *     bucket and cannot refresh it;
  *   · VERSION: attendance written via WhatsApp bumps Attendance.version —
  *     the same appliers /api/actions, /api/sync and the USSD line share, so
  *     the offline sync's stale-version rejection keeps working;
@@ -255,17 +263,30 @@ function seedPhoto(id: string, createdAt: Date, caption = 'Scaffolding north sid
   return row
 }
 
+// The route-test fixture posture (issue #156): vitest runs NODE_ENV=test,
+// and since #156 an unset secret fails closed in EVERY runtime unless the
+// open posture is explicitly opted into. These fixtures set exactly what a
+// dev/demo deployment would: WEBHOOK_OPEN_POSTURE=1 (the open
+// gateway-trust posture under test — without it every test below would
+// rightly get the 503) and TRUST_PROXY=1 (the one topology where distinct
+// x-forwarded-for values are distinct throttle principals — keeps the
+// per-test uniqueIp() bucket isolation honest). The TRUST_PROXY-unset
+// collapse has its own dedicated tests below.
 beforeEach(() => {
   vi.useFakeTimers({ now: T0 })
   vi.clearAllMocks()
   process.env.NEXTAUTH_SECRET = 'unit-test-secret'
   delete process.env.WHATSAPP_WEBHOOK_SECRET
+  process.env.WEBHOOK_OPEN_POSTURE = '1'
+  process.env.TRUST_PROXY = '1'
   state.reset()
 })
 
 afterEach(() => {
   vi.useRealTimers()
   delete process.env.WHATSAPP_WEBHOOK_SECRET
+  delete process.env.WEBHOOK_OPEN_POSTURE
+  delete process.env.TRUST_PROXY
   delete process.env.NEXTAUTH_SECRET
 })
 
@@ -527,11 +548,12 @@ describe('X-Signature — HMAC shared-secret verification (WHATSAPP_WEBHOOK_SECR
     expect((await res.text()).endsWith(FOOTER)).toBe(true)
   })
 
-  it('UNSET secret → documented open demo posture: plain POST goes through', async () => {
+  it('UNSET secret + WEBHOOK_OPEN_POSTURE=1 (the fixture opt-in) → open demo posture: plain POST goes through', async () => {
     delete process.env.WHATSAPP_WEBHOOK_SECRET
     const res = await whatsappPost(waReq(KAMAU, 'HELP'))
     expect(res.status).toBe(200)
     expect((await res.text()).endsWith(FOOTER)).toBe(true)
+    expect(process.env.WEBHOOK_OPEN_POSTURE).toBe('1') // the explicit opt-in, not an accident
   })
 })
 
@@ -597,17 +619,76 @@ describe('production fail-closed — unset secret → 503, no processing (SEC-4)
     })
   })
 
-  it("NODE_ENV='test' + UNSET secret → the open demo posture is untouched (dev/demo keeps warn-and-accept)", async () => {
+  it('production IGNORES the opt-in: WEBHOOK_OPEN_POSTURE=1 + unset secret → STILL 503 (issue #156)', async () => {
+    // The beforeEach fixture already sets WEBHOOK_OPEN_POSTURE=1 — production
+    // must not read it. (Set it explicitly anyway so the intent is visible.)
+    process.env.WEBHOOK_OPEN_POSTURE = '1'
+    await asProduction(async () => {
+      const res = await whatsappPost(waReq(KAMAU, 'PRESENT'))
+      expect(res.status).toBe(503)
+      expect(state.attendance.size).toBe(0)
+      expect(state.writes).toBe(0)
+      expect(state.audits).toEqual([])
+    })
+  })
+})
+
+// ------------------------------------------- open-posture opt-in (issue #156)
+
+describe('open-posture opt-in — WEBHOOK_OPEN_POSTURE gates unauthenticated writes (issue #156)', () => {
+  it('non-production + unset secret + NO opt-in → 503 (the new fail-closed default), zero processing', async () => {
+    delete process.env.WEBHOOK_OPEN_POSTURE
+    const res = await whatsappPost(waReq(KAMAU, 'PRESENT'))
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { error?: string }
+    expect(body.error).toContain('WHATSAPP_WEBHOOK_SECRET is not configured')
+    expect(body.error).toContain('WEBHOOK_OPEN_POSTURE') // the honest remedy is named
+    expect(state.writes).toBe(0)
+    expect(state.audits).toEqual([])
+  })
+
+  it('a runtime with NO NODE_ENV at all (bare container) + no opt-in → 503 too', async () => {
+    delete process.env.WEBHOOK_OPEN_POSTURE
     const prev = process.env.NODE_ENV
-    process.env.NODE_ENV = 'test'
+    delete process.env.NODE_ENV // `docker run` of the image without NODE_ENV
     try {
-      const res = await whatsappPost(waReq(KAMAU, 'HELP'))
-      expect(res.status).toBe(200)
-      expect((await res.text()).endsWith(FOOTER)).toBe(true)
+      const res = await whatsappPost(waReq(KAMAU, 'PRESENT'))
+      expect(res.status).toBe(503)
+      expect(state.attendance.size).toBe(0)
+      expect(state.writes).toBe(0)
     } finally {
       if (prev === undefined) delete process.env.NODE_ENV
       else process.env.NODE_ENV = prev
     }
+  })
+
+  it('opt-in set to 0/false/blank is NOT an opt-in → 503', async () => {
+    for (const v of ['', '0', 'false']) {
+      process.env.WEBHOOK_OPEN_POSTURE = v
+      const res = await whatsappPost(waReq(KAMAU, 'HELP'))
+      expect(res.status, `WEBHOOK_OPEN_POSTURE="${v}"`).toBe(503)
+    }
+    expect(state.writes).toBe(0)
+  })
+
+  it('non-production + unset secret + WEBHOOK_OPEN_POSTURE=1 → 200 (the explicit open demo posture)', async () => {
+    process.env.WEBHOOK_OPEN_POSTURE = '1' // the beforeEach default, restated
+    const res = await whatsappPost(waReq(KAMAU, 'HELP'))
+    expect(res.status).toBe(200)
+    expect((await res.text()).endsWith(FOOTER)).toBe(true)
+  })
+
+  it('non-production + secret SET → the HMAC gate answers regardless of the opt-in (503 never shadows it)', async () => {
+    process.env.WHATSAPP_WEBHOOK_SECRET = 'wa-unit-secret'
+    delete process.env.WEBHOOK_OPEN_POSTURE
+    const rawBody = JSON.stringify({ from: KAMAU, text: 'HELP', timestamp: '2026-02-14T09:00:00Z' })
+    const unsigned = await whatsappPost(waReq(KAMAU, 'HELP', { raw: rawBody }))
+    expect(unsigned.status).toBe(401)
+    const signed = await whatsappPost(waReq(KAMAU, 'HELP', {
+      raw: rawBody,
+      headers: { 'x-signature': createHmac('sha256', 'wa-unit-secret').update(rawBody).digest('hex') },
+    }))
+    expect(signed.status).toBe(200)
   })
 })
 
@@ -648,6 +729,29 @@ describe('rate limits — 20/min/phone + 40/min/IP (fake-timer determinism)', ()
     expect(blocked.status).toBe(429)
     expect(await blocked.json()).toMatchObject({ error: 'Too many requests' })
     expect(state.writes).toBe(0) // 40 unknown-phone replies — never a single row
+  })
+
+  it('issue #156: TRUST_PROXY UNSET → rotating x-forwarded-for does NOT refresh the per-IP bucket', async () => {
+    // The old first-XFF semantics let a scripted client mint a fresh bucket
+    // per request by rotating the forgeable header. Now (TRUST_PROXY unset —
+    // direct exposure) the header is ignored: every POST shares the ONE anon
+    // bucket, so the 40/min limit actually binds.
+    delete process.env.TRUST_PROXY
+    try {
+      for (let i = 0; i < 40; i++) {
+        const phone = `07120${String(20000 + i).slice(1)}` // unique per request
+        const spoofedXff = `198.51.${Math.floor(i / 250)}.${(i % 250) + 1}` // ROTATING "IP"
+        const res = await whatsappPost(waReq(phone, 'HELP', { ip: spoofedXff }))
+        expect(res.status, `request ${i + 1} should pass despite rotation`).toBe(200)
+      }
+      // a brand-new spoofed "IP" is still the same anon principal → blocked
+      const blocked = await whatsappPost(waReq('0712999999', 'HELP', { ip: '203.0.113.99' }))
+      expect(blocked.status).toBe(429)
+      expect(await blocked.json()).toMatchObject({ error: 'Too many requests' })
+      expect(state.writes).toBe(0)
+    } finally {
+      process.env.TRUST_PROXY = '1' // restore the fixture posture
+    }
   })
 })
 
@@ -761,8 +865,10 @@ describe('GET /api/whatsapp — the contract doc (plain text)', () => {
     expect(doc).toContain('comment.add')
     expect(doc).toContain('WHATSAPP_WEBHOOK_SECRET')
     expect(doc).toContain('X-Signature')
+    expect(doc).toContain('WEBHOOK_OPEN_POSTURE=1') // the opt-in is documented (issue #156)
     expect(doc).toContain('20 requests/min per phone')
     expect(doc).toContain('40 requests/min per client IP')
+    expect(doc).toContain('trust-aware') // the per-IP key semantics (issue #156)
     expect(doc).toContain('— MjengoOS sim')
     expect(doc).toContain('not registered')
     expect(doc).toContain('no provider wired') // the honesty claim, verbatim

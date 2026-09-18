@@ -48,7 +48,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { NextRequest } from 'next/server'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // W6-1: the share GET now imports the AI draw-review module (which imports
 // the provider seam → z-ai-web-dev-sdk). The SDK is mocked like every other
@@ -494,6 +494,16 @@ function pureInput() {
 beforeEach(() => {
   state.reset()
   seedWorld()
+  // Trusted-proxy fixture (issue #156): the share-route tests isolate the
+  // share.get rate-limit bucket with per-test x-forwarded-for values, which
+  // are distinct principals only behind TRUST_PROXY=1 — the default posture
+  // now ignores the forgeable header and shares one anon bucket (pinned in
+  // tests/unit/rate-limit.test.ts). Restored in afterEach.
+  process.env.TRUST_PROXY = '1'
+})
+
+afterEach(() => {
+  delete process.env.TRUST_PROXY
 })
 
 // ================================================================ pure builder

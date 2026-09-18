@@ -39,18 +39,35 @@ import { createSqliteStores, resolveRateLimitSqlitePath } from '@/backend/lib/ra
 // ---------------------------------------------------------------- primitives
 
 /**
- * TRUST_PROXY (W-AUDIT finding #1): x-forwarded-for is a comma-separated
- * chain the CLIENT can seed with arbitrary values ("spoof, real" after one
- * appending proxy). Which entry to believe therefore depends on deployment:
- *   · UNSET (default, local dev / direct exposure): take the FIRST value —
- *     the historical behavior. With no trusted proxy in front the header is
- *     client-controlled either way, and loopback dev traffic has none.
+ * TRUST_PROXY (W-AUDIT finding #1 → issue #156): x-forwarded-for is a
+ * comma-separated chain the CLIENT can seed with arbitrary values ("spoof,
+ * real" after one appending proxy). Which entry to believe therefore depends
+ * on deployment:
+ *   · UNSET (default, local dev / direct exposure): the header is IGNORED —
+ *     '' is returned, collapsing every unauthenticated caller onto the ONE
+ *     shared 'anon' bucket (issue #156). The historical first-value behavior
+ *     let a client mint a fresh rate-limit bucket per request by rotating the
+ *     forgeable left-most value, which is no throttle at all; a single honest
+ *     bucket is fail-closed against that (and matches the website contact
+ *     route's own default posture, issue #131).
  *   · SET (any non-empty value except 0/false): we sit behind exactly ONE
  *     appending reverse proxy (Caddy in the compose self-host). The LAST
  *     value is the entry OUR proxy appended — its view of the client — so
  *     spoofed values left of it cannot mint rate-limit buckets or fresh
  *     (email, ip) lockout identities. Set it only in that one-proxy topology;
  *     with a chain of proxies the last value is a proxy, not the client.
+ *
+ * AGGREGATOR-MULTIPLEXING TRADEOFF (kept honest next to the change): with
+ * TRUST_PROXY unset, ALL callers share one 'anon' bucket per limit — right
+ * for direct exposure (one hostile host cannot rotate buckets), blunt when a
+ * real USSD/WhatsApp aggregator or relay multiplexes many MSISDNs through
+ * one gateway IP and legitimately needs aggregate headroom. That deployment
+ * must either set TRUST_PROXY=1 behind a proxy it controls (per-client keys)
+ * or raise the route limit / key on the aggregator's authenticated identity
+ * (X-Signature) — the per-IP bucket was never a per-aggregator entitlement.
+ * The Daraja IP allowlist consumes this function too: with TRUST_PROXY unset
+ * its resolved IP is '' → unresolvable → denied (fail closed; an allowlist
+ * keyed on a forgeable header never actually filtered anything).
  */
 export function clientIpFromHeaders(
   headers: Headers | Record<string, string> | undefined | null,
@@ -68,7 +85,10 @@ export function clientIpFromHeaders(
     .map((v) => v.trim())
     .filter(Boolean)
   if (values.length === 0) return ''
-  return isTrustProxyEnabled() ? values[values.length - 1] : values[0]
+  // Untrusted header (no TRUST_PROXY) → no IP at all, never the first
+  // (client-seeded) value — see the tradeoff note above (issue #156).
+  if (!isTrustProxyEnabled()) return ''
+  return values[values.length - 1]
 }
 
 /** True when TRUST_PROXY is explicitly enabled (non-empty, not 0/false). */
