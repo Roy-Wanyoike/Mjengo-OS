@@ -1590,14 +1590,19 @@ const spec = {
       'list/detail), the Phase C READ-ONLY money-governance resources (milestones list/detail, escrow, ' +
       'invoices list/detail — no mutations outside the money family), and the Phase D READ-ONLY site + market + ' +
       'intel resources (workers list/detail, attendance, task detail, suppliers, parcels, intel digest, ' +
-      'budget-variance mirror — no mutations at all) — the two wave-3 app-level GETs: ' +
-      '/api/audit (admin audit log, spec §44) and /api/reports/budget-variance (QS report) — and the ' +
+      'budget-variance mirror — no mutations at all) — plus the three enumerated app reads: ' +
+      '/api/audit (admin audit log, spec §44), /api/reports/budget-variance (QS report), and the ' +
       'document-intelligence route /api/ai/extract-document (GET review queue / POST extraction draft / PUT ' +
       'human review gate; issue #153 — the one non-v1 mutation surface documented here, because its review ' +
       'gate is the app\'s "AI assists, humans decide" control and it now has an operator surface in the ' +
-      'Copilot tab). The other /api/ai/* routes stay undocumented app surface (analyze-photo, voice-log, ' +
-      'parse-text, anomaly-scan, recap, authenticity-screen — consumed by the webapp itself; API-14 tracks ' +
-      'extending the doc further).',
+      'Copilot tab). The other 30 route paths are deliberately OUT of this document — the app mutation surface ' +
+      '(/api/actions with its 124 action types, /api/sync), the webapp-private reads and upload/push families, ' +
+      'the remaining /api/ai/* routes (analyze-photo, voice-log, parse-text, anomaly-scan, recap, ' +
+      'authenticity-screen), and the external-by-design USSD/WhatsApp/Daraja gateway contracts: their ' +
+      'contracts are documented at their seams (runtime GET contracts on the gateway routes, the ActionType ' +
+      'registry + route zod schemas, the API baseline inventory). That scope decision — the full pointer ' +
+      'table and the revisit triggers (API-10 registry, mobile client, integrator program) — is recorded in ' +
+      'ADR 0008 (docs/adr/0008-openapi-scope.md).',
   },
   servers: [{ url: '/', description: 'Same-origin (the app that rendered this document).' }],
   tags: [

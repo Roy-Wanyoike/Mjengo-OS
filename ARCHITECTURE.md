@@ -18,7 +18,11 @@ Next.js 16 (App Router, RSC shell + client app)
   │                  + the /api/v1 REST surface (27 OpenAPI-documented paths,
   │                  30 incl. /api/audit + /api/reports/budget-variance
   │                  + /api/ai/extract-document — issue #153 —
-  │                  contract served at /api/openapi.json)
+  │                  contract served at /api/openapi.json; the document's
+  │                  scope is decided in ADR 0008 — v1 + the enumerated app
+  │                  reads, with the app-surface/gateway contracts living at
+  │                  their seams, and tests/unit/openapi-cross-check.test.ts
+  │                  enforcing documented ⇔ implemented 1:1)
   ├── frontend/      src/frontend/** — web UI: mjengo/ (tab surfaces, role-aware),
   │                  ui/ (shadcn primitives), auth/, i18n/, hooks/
   │                  (use-mjengo.ts: zustand + persisted offline outbox)
@@ -190,7 +194,7 @@ this order — each step is independently valuable:
 | Capability | Target technology | Trigger to migrate |
 |---|---|---|
 | Web clients | Next.js 16 + React 19 (keep) + Expo/React Native field app | Field crews need native camera/GPS/push beyond PWA |
-| API contract | REST + OpenAPI 3.1 generated from `/api/v1` | External integrators / SDK consumers appear |
+| API contract | REST + OpenAPI 3.1 generated from `/api/v1` (scope decision: ADR 0008 — the doc covers v1 + enumerated app reads; actions/sync join when the API-10 registry lands) | External integrators / SDK consumers appear |
 | Core backend | Java 25 LTS + Spring Boot modular monolith (modules mirror `src/backend/modules/*`) | Team grows beyond TypeScript; or need for Spring's transactional tooling |
 | Database | PostgreSQL 18 + PostGIS | Multi-tenant scale, real geospatial queries ("cement within 15km of site") |
 | Durable workflows | Temporal (approvals, payments, delivery, document processing) | Long-running sagas need crash-resume guarantees beyond JobRecord |
