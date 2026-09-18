@@ -1019,6 +1019,6 @@ describe('i18n parity + migration shape', () => {
     // The Prisma model block exists with the same columns.
     const schema = readFileSync(fileURLToPath(new URL('../../prisma/schema.prisma', import.meta.url)), 'utf8')
     expect(schema).toContain('model TrustDigest {')
-    expect(schema).toContain('trustDigests       TrustDigest[]')
+    expect(schema).toMatch(/trustDigests\s+TrustDigest\[\]/) // whitespace-agnostic (the #174 realignment is cosmetic)
   })
 })

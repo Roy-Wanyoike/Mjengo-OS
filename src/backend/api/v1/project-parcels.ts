@@ -3,7 +3,7 @@ import { getProjectPayload } from '@/backend/lib/mjengo'
 import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { projectIdRef, projectParcelsQuery, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied, supplierProjectDenied } from './scope'
+import { clientProjectDenied, membershipProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/projects/:id/parcels (Phase D, read-only — the land family) —
 // src/app/api/v1/projects/[id]/parcels/route.ts is the shim.
@@ -65,6 +65,13 @@ export const GET = route(
     if (!payload) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, payload.project.id)
     if (denied) return denied
+    // SEC-6 (issue #174): the site-team membership pin — supervisor /
+    // procurement / qs / finance read only the projects they hold a
+    // ProjectMembership row on (fail closed on zero rows); contractor/admin
+    // keep the explicit portfolio-wide grant. Same uniform 403 body as the
+    // client pin, after the resolve (resolve-then-pin, the v1 precedent).
+    const membershipDenied = await membershipProjectDenied(session, payload.project.id)
+    if (membershipDenied) return membershipDenied
     // W5-3: supplier sessions are not project readers. Uniform 403 — no
     // project data is returned.
     const supplierDenied = supplierProjectDenied(session)

@@ -4,7 +4,7 @@ import { requireFlagOn } from '@/backend/modules/intel/flags'
 import { loadSupplySlice } from '@/backend/modules/supply/repository'
 import { projectIdRef, projectDeliveriesQuery, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied, supplierSessionId } from './scope'
+import { clientProjectDenied, membershipProjectDenied, supplierSessionId } from './scope'
 import { deliveryRecord } from './supply-rows'
 
 // /api/v1/projects/:id/deliveries (Phase B, read-only — the supply resource's
@@ -66,6 +66,13 @@ export const GET = route(
     if (!project) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, id)
     if (denied) return denied
+    // SEC-6 (issue #174): the site-team membership pin — supervisor /
+    // procurement / qs / finance read only the projects they hold a
+    // ProjectMembership row on (fail closed on zero rows); contractor/admin
+    // keep the explicit portfolio-wide grant. Same uniform 403 body as the
+    // client pin, after the resolve (resolve-then-pin, the v1 precedent).
+    const membershipDenied = await membershipProjectDenied(session, id)
+    if (membershipDenied) return membershipDenied
     // W5-3 supplier row pin: their orders' deliveries only (fail closed with
     // no link).
     const supplierId = supplierSessionId(session)

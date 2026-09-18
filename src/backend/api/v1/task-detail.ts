@@ -2,7 +2,7 @@ import { db } from '@/backend/lib/db'
 import { route } from '@/backend/lib/route-kit'
 import { taskIdRef, taskDetailQuery, validateQuery } from './schemas'
 import { mapServiceError, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied, supplierProjectDenied } from './scope'
+import { clientProjectDenied, membershipProjectDenied, supplierProjectDenied } from './scope'
 
 // /api/v1/tasks/:id (Phase D, read-only — the projects/tasks family) —
 // src/app/api/v1/tasks/[id]/route.ts is the shim. The LIST lives at
@@ -61,6 +61,13 @@ export const GET = route(
     if (!task) return v1Err(404, 'Task not found')
     const denied = clientProjectDenied(session, task.phase.projectId)
     if (denied) return denied
+    // SEC-6 (issue #174): the site-team membership pin — supervisor /
+    // procurement / qs / finance read only the projects they hold a
+    // ProjectMembership row on (fail closed on zero rows); contractor/admin
+    // keep the explicit portfolio-wide grant. Same uniform 403 body as the
+    // client pin, after the resolve (resolve-then-pin, the v1 precedent).
+    const membershipDenied = await membershipProjectDenied(session, task.phase.projectId)
+    if (membershipDenied) return membershipDenied
     // W5-3: supplier sessions are not project readers. Uniform 403 — no
     // project data is returned.
     const supplierDenied = supplierProjectDenied(session)

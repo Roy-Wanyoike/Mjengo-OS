@@ -1054,9 +1054,19 @@ const workerDetailSchema = {
   ],
   properties: {
     ...workerSummarySchema.properties,
-    idNumber: { type: ['string', 'null'], description: 'National ID as given — no verification claim.' },
-    emergencyContactName: { type: ['string', 'null'] },
-    emergencyContactPhone: { type: ['string', 'null'] },
+    idNumber: {
+      type: ['string', 'null'],
+      description:
+        'National ID as given — no verification claim. SEC-6 (#174): served only to membership-holders of the worker\'s project, contractor/admin and the project\'s own client — null for every other reader (byte-identical to a worker with no ID on file).',
+    },
+    emergencyContactName: {
+      type: ['string', 'null'],
+      description: 'SEC-6 (#174): membership/portfolio/client-gated like idNumber — null for non-members.',
+    },
+    emergencyContactPhone: {
+      type: ['string', 'null'],
+      description: 'SEC-6 (#174): membership/portfolio/client-gated like idNumber — null for non-members.',
+    },
     attendanceSummary: {
       type: 'object',
       description: 'True totals over the worker\'s WHOLE attendance history (the list honestly cannot carry these).',

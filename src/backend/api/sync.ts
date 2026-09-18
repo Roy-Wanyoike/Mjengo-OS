@@ -3,6 +3,7 @@ import { createHash } from 'crypto'
 import { db } from '@/backend/lib/db'
 import { snapCents } from '@/backend/lib/money'
 import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/backend/lib/mjengo'
+import { ownerReadScope } from '@/backend/lib/membership-scope'
 import { CLIENT_ACTIONS } from '@/shared/client-actions'
 import { route, genericError } from '@/backend/lib/route-kit'
 import { safeErrorMessage } from '@/backend/lib/guard'
@@ -514,6 +515,12 @@ async function detectConflict(projectId: string, action: QueuedAction): Promise<
  *  · supplier-role sessions (W5-3): 403 — the SupplierPortal dispatches
  *    online-only (the share-client posture) and owns NO outbox, so nothing of
  *    theirs can ever arrive here; fail closed rather than re-implement the pin
+ *  · SEC-6 (issue #174): supervisor/procurement/qs/finance keep the per-item
+ *    contract above (mutation scoping is the recorded SECURITY.md follow-up),
+ *    but the payload REFRESH is membership-scoped — data answers only a
+ *    project inside their ProjectMembership set and the projects roster is
+ *    filtered to the same set (zero rows → data null + empty roster, fail
+ *    closed).
  *
  * Route-kit folds the auth guard + 30 flushes/min rate limit (S-SEC: sync
  * batches many actions per request, so without it the per-request 60/min
@@ -702,6 +709,14 @@ export const POST = route(
 
     // Payload refresh: site team — top-level projectId > single distinct item
     // projectId > first project. Clients — always their pinned project only.
+    // SEC-6 (issue #174): for supervisor/procurement/qs/finance the refresh
+    // is a READ, so it follows the membership scope — the payload answers a
+    // projectId inside their membership set (their first membership when
+    // nothing was resolvable), and the projects roster is filtered to the
+    // same set. Zero rows → data null + empty roster (fail closed, the
+    // client-without-a-project posture) — NEVER the portfolio first-project
+    // fallback. Mutations above stay as documented in SECURITY.md (the
+    // recorded follow-up).
     let data: Awaited<ReturnType<typeof getProjectPayload>> = null
     let projects: Awaited<ReturnType<typeof getProjectsList>> = []
     if (isClient) {
@@ -711,9 +726,21 @@ export const POST = route(
     } else {
       const distinctIds = Array.from(new Set(actions.map((a) => a.projectId).filter(Boolean))) as string[]
       const dataPid = projectId || (distinctIds.length === 1 ? distinctIds[0] : null)
-      const [d, list] = await Promise.all([getProjectPayload(dataPid), getProjectsList()])
-      data = d
-      projects = list
+      const ownerScope = await ownerReadScope(session)
+      if (ownerScope.kind === 'memberships') {
+        const pid =
+          dataPid && ownerScope.projectIds.includes(dataPid) ? dataPid : ownerScope.projectIds[0] ?? null
+        const [d, list] = await Promise.all([
+          pid ? getProjectPayload(pid) : Promise.resolve(null),
+          getProjectsList(),
+        ])
+        data = d
+        projects = list.filter((p) => ownerScope.projectIds.includes(p.id))
+      } else {
+        const [d, list] = await Promise.all([getProjectPayload(dataPid), getProjectsList()])
+        data = d
+        projects = list
+      }
     }
     return NextResponse.json({
       ok: true,

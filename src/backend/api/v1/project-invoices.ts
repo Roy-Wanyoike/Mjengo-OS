@@ -2,7 +2,7 @@ import { route } from '@/backend/lib/route-kit'
 import { getProjectPayload } from '@/backend/lib/mjengo'
 import { projectInvoicesQuery, projectIdRef, validateQuery } from './schemas'
 import { mapServiceError, pageOfKind, v1Err, v1Ok, V1_READ_LIMIT } from './respond'
-import { clientProjectDenied, supplierSessionId } from './scope'
+import { clientProjectDenied, membershipProjectDenied, supplierSessionId } from './scope'
 
 // /api/v1/projects/:id/invoices (Phase C, read-only — the money-governance
 // family) — src/app/api/v1/projects/[id]/invoices/route.ts is the shim.
@@ -58,6 +58,13 @@ export const GET = route(
     if (!payload) return v1Err(404, 'Project not found')
     const denied = clientProjectDenied(session, payload.project.id)
     if (denied) return denied
+    // SEC-6 (issue #174): the site-team membership pin — supervisor /
+    // procurement / qs / finance read only the projects they hold a
+    // ProjectMembership row on (fail closed on zero rows); contractor/admin
+    // keep the explicit portfolio-wide grant. Same uniform 403 body as the
+    // client pin, after the resolve (resolve-then-pin, the v1 precedent).
+    const membershipDenied = await membershipProjectDenied(session, payload.project.id)
+    if (membershipDenied) return membershipDenied
     // W5-3 supplier row pin: their invoices only (fail closed with no link).
     const supplierId = supplierSessionId(session)
     if (session.user.role === 'supplier' && !supplierId) {
