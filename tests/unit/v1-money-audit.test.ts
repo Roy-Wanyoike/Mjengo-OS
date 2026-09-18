@@ -69,8 +69,20 @@ vi.mock('@/backend/lib/db', () => {
       async update() { throw new Error('not used here') },
     },
     idempotencyRecord: {
-      async findUnique({ where }: { where: { key: string } }) {
-        return (state.idemRows.find((r) => r.key === where.key) as IdemRow | undefined) ?? null
+      // #177: lookups arrive as the (principal, scope, key) composite unique.
+      async findUnique({
+        where,
+      }: {
+        where: { principal_scope_key?: { principal: string; scope: string; key: string }; key?: string }
+      }) {
+        const c = where.principal_scope_key
+        return (
+          (state.idemRows.find((r) =>
+            c
+              ? r.principal === c.principal && r.scope === c.scope && r.key === c.key
+              : r.key === where.key,
+          ) as IdemRow | undefined) ?? null
+        )
       },
       async create({ data }: { data: Record<string, unknown> }) {
         state.idemRows.push({ ...data })

@@ -144,8 +144,23 @@ vi.mock('@/backend/lib/db', () => {
       }),
     },
     idempotencyRecord: {
-      findUnique: vi.fn(async ({ where }: { where: { key: string } }) =>
-        (state.idemRows.find((r) => r.key === where.key) as Record<string, unknown> | undefined) ?? null),
+      // #177: lookups arrive as the (principal, scope, key) composite unique.
+      findUnique: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { principal_scope_key?: { principal: string; scope: string; key: string }; key?: string }
+        }) => {
+          const c = where.principal_scope_key
+          return (
+            (state.idemRows.find((r) =>
+              c
+                ? r.principal === c.principal && r.scope === c.scope && r.key === c.key
+                : r.key === where.key,
+            ) as Record<string, unknown> | undefined) ?? null
+          )
+        },
+      ),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         state.idemRows.push({ ...data })
         return { ...data }
@@ -902,6 +917,9 @@ describe('POST /api/v1/wallets/:id/deposit — credit from a cash rail', () => {
     expect(first).toEqual({ ok: true, data: { walletCode: 'W-0001', ledgerRef: 'LT-0006', balance: 2_450 } })
     expect(state().idemRows).toEqual([
       {
+        // #177: the record lives in the CALLER's namespace — this finance
+        // session's key, scoped to the URL wallet.
+        principal: 'user:finance@test.dev|wallet:w-1',
         key: 'dep-1', scope: 'v1.wallet.deposit', projectId: 'p-1',
         responseBody: JSON.stringify({
           payloadHash: payloadFingerprint({ amount: 1_000 }),

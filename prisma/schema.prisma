@@ -1127,13 +1127,27 @@ model LedgerMaintenance {
 
 // Idempotency guard (spec §57): repeated Idempotency-Key requests replay the
 // original response instead of double-applying money movements.
+// #177 (SEC-10): the replay keyspace is scoped PER PRINCIPAL — the composite
+// unique (principal, scope, key) replaced the old GLOBAL unique on `key`, so
+// one actor's caller-chosen key can never collide with, claim or replay
+// another actor's record. `principal` is derived at the ONE seam
+// (src/backend/lib/idempotency.ts): `user:<email>[|<resource>]` for sessions
+// (resource = the wallet/payment/project the route acts on), `share:<sha256>`
+// for share-link callers, `sync:<projectId|global>` for the offline-outbox
+// dedupe markers, `system` for server-generated Daraja markers. Legacy
+// pre-#177 rows were backfilled by migration 17 (derivable sync/system rows
+// keep their namespace; caller-key rows → 'legacy', unreachable by the new
+// namespaced lookups — fail-closed, no cross-actor oracle).
 model IdempotencyRecord {
   id           String   @id @default(cuid())
-  key          String   @unique
+  principal    String   @default("") // whose key this is — see the #177 note above
+  key          String // caller-chosen (header) or server-generated key
   scope        String // action type / route the key applies to
   projectId    String?
   responseBody String? // JSON string of the original result
   createdAt    DateTime @default(now())
+
+  @@unique([principal, scope, key]) // #177: per-principal keyspace (was: key @unique — global)
 }
 
 // Universal wallet account (spec §37/§38) — reusable financial infrastructure.

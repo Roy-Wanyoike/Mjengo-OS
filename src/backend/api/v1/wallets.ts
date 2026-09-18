@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { FINANCE_ROLES } from '@/backend/lib/guard'
+import { principalForSession } from '@/backend/lib/idempotency'
 import { route } from '@/backend/lib/route-kit'
 import { createWallet, listWallets } from '@/backend/modules/wallet/service'
 import { jsonOk, withIdempotency } from '@/backend/modules/wallet/http'
@@ -96,6 +97,9 @@ export const POST = route(
     }
     return await withIdempotency(
       req,
+      // #177: per-actor (wallet creation targets no existing resource — the
+      // payload fingerprint below still 409s a same-key/different-body reuse).
+      principalForSession(session),
       'v1.wallet.create',
       projectId ?? null,
       () => createWallet(projectId ?? 'platform', body),

@@ -39,6 +39,7 @@
 
 import { db } from '@/backend/lib/db'
 import { centsToKes, fmtKes } from '@/backend/lib/money'
+import { SYSTEM_PRINCIPAL } from '@/backend/lib/idempotency'
 import { cashAccountForMethod, postLedgerTransactionInTx } from '@/backend/modules/ledger/service'
 import { notify } from '@/backend/modules/notify/service'
 import { phaseIdForMilestonePayment } from './service'
@@ -55,7 +56,10 @@ export const DARAJA_CALLBACK_KEY_PREFIX = 'daraja.callback:'
 export const DARAJA_UNRESOLVED_KEY_PREFIX = 'daraja.unresolved:'
 
 const INTENT_SCOPE = 'payment.provider_intent'
-const CALLBACK_SCOPE = 'payment.daraja_callback'
+// #177: exported — daraja-reconcile.ts reads completed-callback markers
+// through the same (principal, scope, key) composite; one definition so the
+// write and the lookup cannot drift.
+export const CALLBACK_SCOPE = 'payment.daraja_callback'
 const UNRESOLVED_SCOPE = 'payment.provider_unresolved'
 
 /** In-memory replay guard (single process; the DB record is the durable one). */
@@ -129,6 +133,10 @@ export interface DarajaUnresolvedInitiationPayload {
 export async function recordDarajaIntent(intent: DarajaIntentPayload): Promise<void> {
   await db.idempotencyRecord.create({
     data: {
+      // #177: server-generated markers live in the fixed 'system' principal
+      // (keys are provider refs, never caller-chosen — migration 17 backfilled
+      // the pre-#177 daraja rows to the same namespace).
+      principal: SYSTEM_PRINCIPAL,
       key: `${DARAJA_INTENT_KEY_PREFIX}${intent.providerRef}`,
       scope: INTENT_SCOPE,
       projectId: intent.projectId,
@@ -154,6 +162,7 @@ export async function recordDarajaUnresolvedInitiation(
 ): Promise<void> {
   await db.idempotencyRecord.create({
     data: {
+      principal: SYSTEM_PRINCIPAL, // #177 — see recordDarajaIntent
       key: `${DARAJA_UNRESOLVED_KEY_PREFIX}${initiation.providerRef}:${initiation.paymentRequestId}`,
       scope: UNRESOLVED_SCOPE,
       projectId: initiation.projectId,
@@ -300,7 +309,13 @@ export async function processDarajaStkCallback(
   // 2. Durable replay guard — completed callbacks only (failures are never
   //    recorded, so honest retries stay possible; see withIdempotency).
   const completed = await db.idempotencyRecord.findUnique({
-    where: { key: `${DARAJA_CALLBACK_KEY_PREFIX}${checkoutRequestID}` },
+    where: {
+      principal_scope_key: {
+        principal: SYSTEM_PRINCIPAL,
+        scope: CALLBACK_SCOPE,
+        key: `${DARAJA_CALLBACK_KEY_PREFIX}${checkoutRequestID}`,
+      },
+    },
   })
   if (completed) {
     rememberCheckout(checkoutRequestID)
@@ -345,7 +360,13 @@ async function completeVerifiedIntent(
   const { checkoutRequestID } = cb
   const originLabel = origin === 'reconcile-sweep' ? 'reconciliation sweep' : 'callback'
   const intentRow = await db.idempotencyRecord.findUnique({
-    where: { key: `${DARAJA_INTENT_KEY_PREFIX}${checkoutRequestID}` },
+    where: {
+      principal_scope_key: {
+        principal: SYSTEM_PRINCIPAL,
+        scope: INTENT_SCOPE,
+        key: `${DARAJA_INTENT_KEY_PREFIX}${checkoutRequestID}`,
+      },
+    },
   })
   const intent = parseIntent(intentRow)
   if (!intent) {
@@ -443,6 +464,7 @@ async function completeVerifiedIntent(
   try {
     await db.idempotencyRecord.create({
       data: {
+        principal: SYSTEM_PRINCIPAL, // #177 — see recordDarajaIntent
         key: `${DARAJA_CALLBACK_KEY_PREFIX}${checkoutRequestID}`,
         scope: CALLBACK_SCOPE,
         projectId: intent.projectId,

@@ -69,9 +69,19 @@ function parseStoredEnvelope(raw: string | null | undefined): StoredEnvelope | n
  * error shape ({ error }) and does NOT replay. Same payload → replay
  * verbatim. Routes that pass no payload keep the historical unconditional
  * replay (legacy records always do).
+ *
+ * Per-principal keyspace (#177 / SEC-10): the record lives in the CALLER'S
+ * namespace — the route passes the principal derived at the one seam
+ * (lib/idempotency.ts principalForSession, with the wallet / payment
+ * request the route acts on as the resource suffix). A foreign actor
+ * presenting someone else's key MISSES here (their run executes fresh and
+ * records in THEIR namespace) — never a cross-actor replay. The 409 above
+ * likewise only fires WITHIN one principal's records; a different actor's
+ * identical key is not a conflict, it is a different logical request.
  */
 export async function withIdempotency(
   req: NextRequest,
+  principal: string,
   scope: string,
   projectId: string | null,
   run: () => Promise<unknown>,
@@ -85,7 +95,9 @@ export async function withIdempotency(
     const data = await run()
     return jsonOk(data)
   }
-  const existing = await db.idempotencyRecord.findUnique({ where: { key } })
+  const existing = await db.idempotencyRecord.findUnique({
+    where: { principal_scope_key: { principal, scope, key } },
+  })
   if (existing) {
     const envelope = parseStoredEnvelope(existing.responseBody)
     if (envelope && payload !== undefined && envelope.payloadHash !== payloadFingerprint(payload)) {
@@ -115,6 +127,7 @@ export async function withIdempotency(
   try {
     await db.idempotencyRecord.create({
       data: {
+        principal,
         key,
         scope,
         projectId,

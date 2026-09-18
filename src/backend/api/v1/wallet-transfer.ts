@@ -1,5 +1,6 @@
 import { FINANCE_ROLES } from '@/backend/lib/guard'
 import { logAudit, summarizeAction } from '@/backend/lib/audit'
+import { principalForSession } from '@/backend/lib/idempotency'
 import { route } from '@/backend/lib/route-kit'
 import { transferWallet, walletWithBalance } from '@/backend/modules/wallet/service'
 import { withIdempotency } from '@/backend/modules/wallet/http'
@@ -57,6 +58,10 @@ export const POST = route(
     if (sameRef) return v1Err(422, 'Cannot transfer to the same wallet', 'toWalletId')
     return await withIdempotency(
       req,
+      // #177: per wallet/actor — BOTH endpoints of the movement are part of
+      // the caller's keyspace: the same key for a different source/destination
+      // pair is a fresh request, never this pair's stored result.
+      principalForSession(session, `wallets:${id}>${body.toWalletId}`),
       'v1.wallet.transfer',
       ownerProjectId || null,
       async () => {

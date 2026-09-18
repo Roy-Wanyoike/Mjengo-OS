@@ -134,8 +134,13 @@ vi.mock('@/backend/lib/db', () => {
     },
   }
   const idempotencyRecord = {
-    async findUnique({ where }: { where: { key: string } }) {
-      const r = state.idempotency.get(where.key)
+    // #177: daraja lookups arrive as the (principal, scope, key) composite —
+    // all daraja markers live in the 'system' namespace, so the raw-keyed
+    // Map stays faithful.
+    async findUnique({
+      where,
+    }: { where: { principal_scope_key?: { key: string }; key?: string } }) {
+      const r = state.idempotency.get(where.principal_scope_key?.key ?? where.key ?? '')
       return r ? { ...r } : null
     },
     async findMany({

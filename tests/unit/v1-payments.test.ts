@@ -89,8 +89,23 @@ vi.mock('@/backend/lib/db', () => {
       }),
     },
     idempotencyRecord: {
-      findUnique: vi.fn(async ({ where }: { where: { key: string } }) =>
-        (state.idemRows.find((r) => r.key === where.key) as Record<string, unknown> | undefined) ?? null),
+      // #177: lookups arrive as the (principal, scope, key) composite unique.
+      findUnique: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { principal_scope_key?: { principal: string; scope: string; key: string }; key?: string }
+        }) => {
+          const c = where.principal_scope_key
+          return (
+            (state.idemRows.find((r) =>
+              c
+                ? r.principal === c.principal && r.scope === c.scope && r.key === c.key
+                : r.key === where.key,
+            ) as Record<string, unknown> | undefined) ?? null
+          )
+        },
+      ),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         state.idemRows.push({ ...data })
         return { ...data }
@@ -353,6 +368,9 @@ describe('POST /api/v1/payments — Idempotency-Key (real withIdempotency)', () 
     expect(first.status).toBe(200)
     expect(state().idemRows).toEqual([
       {
+        // #177: the record lives in the CALLER's namespace — this finance
+        // session's key, scoped to the payment request being paid.
+        principal: 'user:finance@test.dev|payment:pr-1',
         key: 'pay-1',
         scope: 'v1.payment.pay',
         projectId: 'p-1',
@@ -365,14 +383,28 @@ describe('POST /api/v1/payments — Idempotency-Key (real withIdempotency)', () 
     expect(svc.payPaymentRequest).toHaveBeenCalledTimes(1)
   })
 
-  it('a key reused for a DIFFERENT payment request → 409 (BE-9: the stored result is never replayed for a request it did not produce)', async () => {
+  it('#177: the same key for a DIFFERENT payment request → a FRESH pay in that request\'s own namespace (never the other request\'s stored result)', async () => {
+    // Pre-#177 the global keyspace made this a 409 (BE-9 caught the key
+    // reuse across requests by payload fingerprint). #177 scopes the record
+    // per payment-request/actor, so pr-2's lookup MISSes pr-1's record
+    // entirely: it is a different logical request, dispatched fresh — the
+    // cross-request confusion the issue describes is closed by scoping, and
+    // the BE-9 409 still guards same-request key reuse with a different
+    // body (pinned in wallet-idempotency.test.ts and the deposit suite).
     sessionFor('finance')
     await paymentsPost(payReq({ paymentRequestId: 'pr-1' }, { 'idempotency-key': 'pay-1b' }))
     svc.payPaymentRequest.mockClear()
-    const conflict = await paymentsPost(payReq({ paymentRequestId: 'pr-2' }, { 'idempotency-key': 'pay-1b' }))
-    expect(conflict.status).toBe(409)
-    expect((await bodyOf(conflict)).error).toMatch(/different payload/i)
-    expect(svc.payPaymentRequest).not.toHaveBeenCalled()
+    const other = await paymentsPost(payReq({ paymentRequestId: 'pr-2' }, { 'idempotency-key': 'pay-1b' }))
+    expect(other.status).toBe(200)
+    const body = await bodyOf(other)
+    expect(body.replayed).toBeUndefined() // pr-1's stored result was NOT served
+    expect(svc.payPaymentRequest).toHaveBeenCalledTimes(1) // pr-2 really paid
+    expect(svc.payPaymentRequest).toHaveBeenCalledWith('p-2', expect.objectContaining({ id: 'pr-2' }))
+    // One record per request namespace.
+    expect(state().idemRows.map((r) => r.principal).sort()).toEqual([
+      'user:finance@test.dev|payment:pr-1',
+      'user:finance@test.dev|payment:pr-2',
+    ])
   })
 })
 
@@ -395,7 +427,7 @@ describe('POST /api/v1/payments — wallet flag gate (uniform rule)', () => {
   it('flag OFF beats an EXISTING idempotency record (gate fires before the replay)', async () => {
     process.env.NEXT_FLAGS_OFF = 'wallet'
     invalidateFlagCache()
-    state().idemRows.push({ key: 'pay-locked', scope: 'v1.payment.pay', projectId: 'p-1', responseBody: '{"paid":true}' })
+    state().idemRows.push({ principal: 'user:client@test.dev|payment:pr-1', key: 'pay-locked', scope: 'v1.payment.pay', projectId: 'p-1', responseBody: '{"paid":true}' })
     sessionFor('client', 'p-1')
     const res = await paymentsPost(payReq({ paymentRequestId: 'pr-1' }, { 'idempotency-key': 'pay-locked' }))
     expect(res.status).toBe(403)

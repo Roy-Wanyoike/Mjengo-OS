@@ -13,6 +13,7 @@ import {
 import { kindForAction, withAuditContext } from '@/backend/lib/audit'
 import { currentRequestId } from '@/backend/lib/log'
 import { actionFlagGate } from '@/backend/lib/action-flag-gate'
+import { actionsPrincipal } from '@/backend/lib/idempotency'
 
 // Owner action endpoint — src/app/api/actions/route.ts is the shim.
 // · client-ROLE sessions may only dispatch CLIENT_ACTIONS (403 otherwise) and
@@ -29,12 +30,21 @@ import { actionFlagGate } from '@/backend/lib/action-flag-gate'
 // reads, WITHOUT touching lib/mjengo.ts itself.
 //
 // Idempotency (spec §57): an optional `Idempotency-Key` header is persisted in
-// IdempotencyRecord (key, scope = action type, responseBody) — a repeated key
-// REPLAYS the stored response instead of re-applying the money movement.
-// BE-6 (issue #104): the replay honors the session pins — a client session
-// replays only its own project's key (403 otherwise, before any payload is
-// built); supplier sessions get the result-only replay; owner roles are
-// unchanged.
+// IdempotencyRecord (principal, scope = action type, key, responseBody) — a
+// repeated key REPLAYS the stored response instead of re-applying the money
+// movement. BE-6 (issue #104): the replay honors the session pins — a client
+// session replays only its own project's key (403 otherwise, before any
+// payload is built); supplier sessions get the result-only replay; owner
+// roles are unchanged.
+// #177 (SEC-10): the keyspace is PER PRINCIPAL — the lookup and the write
+// both go through actionsPrincipal() (lib/idempotency.ts): a session
+// caller's key lives in `user:<email>|project:<id>`, a share-link caller's
+// in `share:<sha256(token)>`. A foreign actor presenting someone else's key
+// MISSES (their request is a fresh dispatch that lands in THEIR namespace) —
+// never a cross-actor replay, never the foreign project's payload. A
+// sessionless caller with no share token has no principal at all: the
+// replay lookup is skipped (the fresh branch 401s them anyway — pre-#177 a
+// fully unauthenticated request could replay a stored result).
 //
 // Rate limit (W1-SEC, Doc A §52): 60 actions/min per principal (session email,
 // else IP). Generous for real dispatch bursts; stops scripted abuse of the
@@ -111,8 +121,18 @@ export const POST = publicRoute(
     // accepted too (clients/api-explorers send both spellings — dedupe either way).
     const idempotencyKey =
       req.headers.get('idempotency-key')?.trim() || req.headers.get('x-idempotency-key')?.trim() || null
-    if (idempotencyKey) {
-      const existing = await db.idempotencyRecord.findUnique({ where: { key: idempotencyKey } })
+    // #177: the keyspace is per principal — the SAME derivation the write
+    // below uses (session → user:<email>|project:<pinned-or-body project>,
+    // share link → share:<sha256(token)>). Null = no principal (no session,
+    // no token): nothing to scope a replay against, and the fresh branch
+    // 401s — skip the lookup rather than invent an 'anon' keyspace.
+    const replayPrincipal = actionsPrincipal(session, projectId ?? null, shareToken)
+    if (idempotencyKey && replayPrincipal) {
+      const existing = await db.idempotencyRecord.findUnique({
+        where: {
+          principal_scope_key: { principal: replayPrincipal, scope: String(type), key: idempotencyKey },
+        },
+      })
       if (existing) {
         // Replay the original result — never re-apply a money movement. The
         // refreshed payload keeps the response contract identical for callers.
@@ -205,20 +225,28 @@ export const POST = publicRoute(
     const auditCtx = auditContextFor(req, type, payload)
     const result = await withAuditContext(auditCtx, () => applyAction(type, actorPayload, targetProjectId))
 
-    // Persist the idempotency record AFTER a successful apply (spec §57).
+    // Persist the idempotency record AFTER a successful apply (spec §57), in
+    // the caller's OWN namespace (#177 — actionsPrincipal over the RESOLVED
+    // targetProjectId, which for every caller type equals the value the
+    // replay lookup above derived: clients are session-pinned, everyone
+    // else acts on the body projectId, share links hash the token).
     if (idempotencyKey) {
-      try {
-        await db.idempotencyRecord.create({
-          data: {
-            key: idempotencyKey,
-            scope: String(type),
-            projectId: typeof targetProjectId === 'string' ? targetProjectId : null,
-            responseBody: JSON.stringify(result ?? null),
-          },
-        })
-      } catch {
-        // Unique collision = a concurrent duplicate already recorded — the
-        // original result stands, this response matches it.
+      const writePrincipal = actionsPrincipal(session, targetProjectId ?? null, shareToken)
+      if (writePrincipal) {
+        try {
+          await db.idempotencyRecord.create({
+            data: {
+              principal: writePrincipal,
+              key: idempotencyKey,
+              scope: String(type),
+              projectId: typeof targetProjectId === 'string' ? targetProjectId : null,
+              responseBody: JSON.stringify(result ?? null),
+            },
+          })
+        } catch {
+          // Unique collision = a concurrent duplicate already recorded — the
+          // original result stands, this response matches it.
+        }
       }
     }
 
