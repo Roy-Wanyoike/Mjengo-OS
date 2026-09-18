@@ -3736,4 +3736,18 @@ export const enDict = {
   'fundis.dispatch.editFundi': 'Edit fundi {name}',
   'app.share.regenerateAudit': 'Regenerate client share link',
 
+  // --------------------------------------------- #152 · uikit shared-kit fallbacks
+  // The uikit's own fallback copy — the ErrorBoundary crash card and the
+  // DataTable empty/aria defaults (issue #152). The boundary fallback
+  // deliberately does NOT resolve these through I18nProvider context: it
+  // renders in the worst moment (possibly with the provider itself crashed),
+  // so it reads the persisted locale store directly and translates
+  // provider-free — see src/frontend/mjengo/uikit/error-boundary.tsx.
+  'uikit.errorTitle': 'Something went wrong',
+  'uikit.errorMessage': 'An unexpected error occurred while rendering this section.',
+  'uikit.retry': 'Retry',
+  'uikit.reloadApp': 'Reload app',
+  'uikit.reassurance': 'Nothing was lost — the rest of MjengoOS keeps working.',
+  'uikit.noRows': 'No rows to show',
+  'uikit.tableRegion': '{columns} — scrollable rows',
 } satisfies Dict

@@ -631,8 +631,7 @@ Three workflows live in `.github/workflows/`, all triggered on every push to
   a real `next build` (standalone) with a throwaway SQLite URL + dummy secret
   — the production build must never require real env secrets.
 - **Tests** (`test.yml`) — the full vitest unit suite, **`bun run test`**
-  (3,067 tests across 138 files, all passing — counts as of 2026-09-19;
-  re-run `bunx vitest run` for the current number, since every wave adds
+  (3,067 tests across 138 files, all passing — counts as of 2026-09-19;  re-run `bunx vitest run` for the current number, since every wave adds
   tests), on every push/PR to `main`. No database or secrets required —
   the tests are pure/unit-level by design (a handful of critical-path
   suites spin up a throwaway real SQLite file via `tests/helpers/db.ts`).
@@ -723,8 +722,7 @@ the README wins on current status); the live issue-level roadmap is the
 | `mjengoos-website/` | Marketing site (independent Next.js app, `:3001`, proxied at `/website`) |
 | `prisma/` | `schema.prisma` (68 models), `migrations/` (0_init + additive 1_mjengo_score … 8_trust_digest; 9_schema_reconcile closes the last drift — see DEPLOYMENT.md §4.1), `seed.ts` + `seed-extras/` |
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
-| `tests/unit/` | The vitest suite (138 files, 3,067 tests — counts as of 2026-09-19; re-run vitest for current) — unit-level, no DB or secrets needed (critical-path suites use a throwaway real SQLite file) |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
+| `tests/unit/` | The vitest suite (138 files, 3,067 tests — counts as of 2026-09-19; re-run vitest for current) — unit-level, no DB or secrets needed (critical-path suites use a throwaway real SQLite file) || [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
 | `docs/audit/` | **Phase-0 baseline entry point** — the 2026-09 production-readiness re-audit baselines (API, frontend, website, database, security, mock/demo, integration), one file per surface |
 | [docs/SUPABASE-DATABASE-DESIGN.md](./docs/SUPABASE-DATABASE-DESIGN.md) | Target-state Supabase/PostgreSQL design (68-table DDL, RLS policy matrix, storage, migration + rollback plan; ADR 0002) |
 | [docs/adr/](./docs/adr) | Architecture decision records — 0001 mobile scope (PWA-first), 0002 Supabase database, 0003 repo topology, 0007 next-auth v4→v5 migration plan, 0008 OpenAPI document scope |

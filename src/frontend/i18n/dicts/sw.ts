@@ -3742,4 +3742,18 @@ export const swDict = {
   'fundis.dispatch.editFundi': 'Rekebisha fundi {name}',
   'app.share.regenerateAudit': 'Tengeneza tena kiungo cha kushiriki cha mteja',
 
+  // --------------------------------------------- #152 · uikit shared-kit fallbacks
+  // Nakala za akiba za uikit yenyewe — kadi ya hitilafu ya ErrorBoundary na
+  // hali-tupu/aria za DataTable (issue #152). Kadi ya hitilafu haijali
+  // muktadha wa I18nProvider: inaweza kujitokeza wakati mbaya kabisa
+  // (mtoa-muktadha mwenyewe akiwa ameanguka), kwa hiyo inasoma lugha moja kwa
+  // moja kutoka hifadhi ya mapendeleo na kutafsiri nje ya mtoa-muktadha —
+  // tazama src/frontend/mjengo/uikit/error-boundary.tsx.
+  'uikit.errorTitle': 'Kuna kitu kimeharibika',
+  'uikit.errorMessage': 'Hitilafu isiyotarajiwa ilitokea wakati wa kuonyesha sehemu hii.',
+  'uikit.retry': 'Jaribu tena',
+  'uikit.reloadApp': 'Pakia programu upya',
+  'uikit.reassurance': 'Hakuna kilichopotea — sehemu nyingine za MjengoOS zinaendelea kufanya kazi.',
+  'uikit.noRows': 'Hakuna matokeo ya kuonyesha',
+  'uikit.tableRegion': '{columns} — safu unazoweza kusogeza',
 } satisfies Dict
