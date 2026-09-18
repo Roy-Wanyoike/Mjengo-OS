@@ -8,6 +8,10 @@ import { translate } from '@/frontend/i18n/provider'
 import { enDict } from '@/frontend/i18n/dicts/en'
 import { swDict } from '@/frontend/i18n/dicts/sw'
 import type { ProjectPayload, ProjectListItem, ActionType, WorkerWithAttendance } from '@/backend/lib/mjengo'
+// #207: the ONE low-stock rule — pure module, shared with the backend's
+// payload boundary, so the offline optimistic badge can never disagree with
+// the server's flag once the queued action syncs.
+import { isLowStock } from '@/backend/modules/inventory/low-stock'
 // #128: the outbox core (item shape §40/§41, #132 auto-retry engine, migration
 // normalizer) is shared with the SUPPLIER portal's outbox store — extracted to
 // src/frontend/lib/outbox.ts, parameterized so the two apps never share state.
@@ -342,6 +346,9 @@ function reduceLocal(data: ProjectPayload, type: string,
         m.deliveredCost += total
         m.onSiteQty += payload.quantity
         m.stockValue = m.onSiteQty * m.unitPrice
+        // #207: mirror the server rule (MaterialRow.lowStock) so the badge
+        // tracks the optimistic quantities until the sync refresh lands.
+        m.lowStock = isLowStock({ closingQty: m.onSiteQty, inflowQty: m.deliveredQty })
         d.deliveries.unshift({
           id: uid(), projectId: d.project.id, materialId: m.id, material: undefined as never,
           quantity: payload.quantity, unitCost: cost, totalCost: total,
@@ -360,6 +367,9 @@ function reduceLocal(data: ProjectPayload, type: string,
         m.consumedQty += payload.quantity
         m.onSiteQty = Math.max(0, m.onSiteQty - payload.quantity)
         m.stockValue = m.onSiteQty * m.unitPrice
+        // #207: mirror the server rule (MaterialRow.lowStock) — a queued
+        // consumption that drains the pile shows the badge immediately.
+        m.lowStock = isLowStock({ closingQty: m.onSiteQty, inflowQty: m.deliveredQty })
         d.consumptions.unshift({
           id: uid(), projectId: d.project.id, materialId: m.id, material: undefined as never,
           quantity: payload.quantity, materialName: m.name, unit: m.unit,
@@ -556,6 +566,7 @@ function reduceLocal(data: ProjectPayload, type: string,
       d.materials.push({
         id: uid(), name: String(payload.name), unit: String(payload.unit), unitPrice: Number(payload.unitPrice) || 0,
         deliveredQty: 0, deliveredCost: 0, consumedQty: 0, onSiteQty: 0, stockValue: 0, deliveries: [],
+        lowStock: false, // #207: zero inflow is never low (the rule's own guard)
         createdAt: new Date(), updatedAt: new Date(),
       } as never)
       break

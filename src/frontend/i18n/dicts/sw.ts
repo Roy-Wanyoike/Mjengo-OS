@@ -823,7 +823,7 @@ export const swDict = {
   'mat.store.t.lines': 'Mistari ya akiba',
   'mat.store.t.linesHint': 'Mistari ya InventoryItem (kifaa × mahali) yenye kiasi kilichobaki kilichopatikana kwa hesabu',
   'mat.store.t.low': 'Akiba ndogo',
-  'mat.store.t.lowHint': 'Kilichobaki ≤ 10% ya kila kilichofika kamwe',
+  'mat.store.t.lowHint': 'Ndogo wakati kilichobaki ≤ kiwango cha kuagiza tena (au ≤ 10% ya yaliyofika kama haijawekwa)',
   'mat.store.t.incoming': 'Inakuja',
   'mat.store.t.incomingHint': 'Maagizo ya ununuzi yaliyo njiani (yanatoa mizigo)',
   'mat.store.t.consumed': 'Kilichotumika',

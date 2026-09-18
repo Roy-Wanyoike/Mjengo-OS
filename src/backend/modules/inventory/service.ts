@@ -23,7 +23,9 @@
 import { db } from '@/backend/lib/db'
 import { MAX_MONEY_KES, nonNegativeKesToCents, parseNonNegativeMoneyCents, type Cents } from '@/backend/lib/money'
 import type { TxClient } from '@/backend/modules/ledger/service'
+import { notify } from '@/backend/modules/notify/service'
 import { derivedClosingQty } from './repository'
+import { isLowStock, movementInflowQty } from './low-stock'
 
 export interface MovementResult {
   inventoryItemId: string
@@ -33,6 +35,10 @@ export interface MovementResult {
   type: string
   quantity: number
   closingQty: number
+  /** #207: this movement flipped the item from not-low to low (the notify
+   * trigger — reported so callers/tests can see the crossing, not just the
+   * notification it fired). */
+  lowStockCrossing: boolean
 }
 
 /** Sanity cap per movement (#210): finite ≠ sensible — a qty above this is a
@@ -84,6 +90,84 @@ function parseUnitCost(action: string, raw: unknown): Cents | null {
   return cents
 }
 
+/**
+ * Optional per-item reorder level (#207) — the explicit low-stock threshold.
+ * Absent/nullish → undefined = "not provided": the item's stored level is
+ * LEFT ALONE on upsert-update (and is null on create). Present → finite,
+ * ≥ 0 (0 = "alert only at stockout" — a legitimate setting), within the
+ * same sanity cap as quantities. Same coercion posture as parseMovementQty
+ * (numeric strings accepted — honest outbox replays).
+ */
+function parseReorderLevel(action: string, raw: unknown): number | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`${action}: reorderLevel must be zero or more (got ${typeof raw === 'string' ? `"${raw}"` : String(raw)})`)
+  }
+  if (n > MAX_MOVEMENT_QTY) {
+    throw new Error(`${action}: reorderLevel ${n} exceeds the cap of ${MAX_MOVEMENT_QTY.toLocaleString('en-US')} — check the unit (bags, tonnes…), not the digits`)
+  }
+  return n
+}
+
+/**
+ * #207: did appending `movement` flip the item INTO low stock? Pure — the
+ * same ONE rule as the slice loader (low-stock.ts) evaluated over the
+ * movement log before and after the append. A crossing (and only a
+ * crossing: already-low items staying low never re-notify, and recovering
+ * out of low is not an event) is the notify trigger — one notification per
+ * crossing, never per read.
+ */
+function crossedIntoLowStock(
+  item: { reorderLevel: number | null },
+  movementsBefore: readonly { type: string; quantity: number }[],
+  movement: { type: string; quantity: number },
+): boolean {
+  // An empty log is not a stock state — it is the item being BORN. Its
+  // first movement landing at/below the threshold (only an explicit
+  // reorderLevel can do it; the derived default cannot fire when closing
+  // equals inflow) is an honest first crossing, so "before" is not-low.
+  const before = movementsBefore.length > 0 && lowOf(movementsBefore, item.reorderLevel)
+  const after = lowOf(movementsBefore.concat([movement]), item.reorderLevel)
+  return !before && after
+}
+
+/** The ONE rule (low-stock.ts) over a movement log + threshold. */
+function lowOf(
+  movements: readonly { type: string; quantity: number }[],
+  reorderLevel: number | null,
+): boolean {
+  return isLowStock({
+    closingQty: derivedClosingQty(movements),
+    inflowQty: movementInflowQty(movements),
+    reorderLevel,
+  })
+}
+
+/**
+ * Fire the low-stock notification AFTER the movement transaction committed —
+ * a notification must never be emitted for a rolled-back write, and never
+ * fail an already-committed one (belt-and-braces catch; notify() itself
+ * never throws into the channel seam). Audience: the roles that reorder
+ * (contractor — the notify seam's audienceRole), kind 'stock.low'.
+ */
+async function notifyLowStockCrossing(
+  projectId: string,
+  r: { materialName: string; unit: string; closingQty: number; lowStockCrossing?: boolean },
+): Promise<void> {
+  if (!r.lowStockCrossing) return
+  try {
+    await notify(
+      projectId,
+      `Low stock: ${r.materialName}`,
+      `${r.materialName} is down to ${r.closingQty.toLocaleString('en-US')} ${r.unit} — at or below the low-stock threshold. Reorder before the next pour.`,
+      { kind: 'stock.low', audienceRole: 'contractor' },
+    )
+  } catch {
+    // never fail a committed movement over a notification
+  }
+}
+
 async function upsertItem(
   tx: TxClient,
   projectId: string,
@@ -91,11 +175,15 @@ async function upsertItem(
   unit: string,
   location: string,
   supplierId?: string | null,
+  reorderLevel?: number,
 ) {
   return tx.inventoryItem.upsert({
     where: { projectId_materialName_location: { projectId, materialName, location } },
-    update: { unit, supplierId: supplierId ?? undefined },
-    create: { projectId, materialName, unit, location, supplierId: supplierId ?? null },
+    // reorderLevel: undefined = payload didn't mention it → keep the stored
+    // level; a number = set it (#207 — the upsert is the one existing seam
+    // through which an operator can configure the threshold).
+    update: { unit, supplierId: supplierId ?? undefined, ...(reorderLevel !== undefined ? { reorderLevel } : {}) },
+    create: { projectId, materialName, unit, location, supplierId: supplierId ?? null, reorderLevel: reorderLevel ?? null },
     include: { movements: true },
   })
 }
@@ -124,29 +212,46 @@ async function findItem(tx: TxClient, projectId: string, inventoryItemId: string
 }
 
 export async function openStock(projectId: string, p: any): Promise<MovementResult> {
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const qty = parseMovementQty('inventory.open', p.qty)
     const unitCost = parseUnitCost('inventory.open', p.unitCost)
-    const item = await upsertItem(tx, projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null)
+    const reorderLevel = parseReorderLevel('inventory.open', p.reorderLevel)
+    const item = await upsertItem(tx, projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null, reorderLevel)
     const movement = await appendMovement(tx, projectId, item.id, 'opening', qty, unitCost, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
     const closing = derivedClosingQty(item.movements.concat([movement]))
-    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+    return {
+      inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing,
+      // #207: a brand-new line opened below its own reorder point is low
+      // from birth — an honest crossing, not noise.
+      lowStockCrossing: crossedIntoLowStock(item, item.movements, movement),
+    }
   })
+  await notifyLowStockCrossing(projectId, result)
+  return result
 }
 
 export async function receiveStock(projectId: string, p: any): Promise<MovementResult> {
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const qty = parseMovementQty('inventory.receive', p.qty)
     const unitCost = parseUnitCost('inventory.receive', p.unitCost)
-    const item = await upsertItem(tx, projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null)
+    const reorderLevel = parseReorderLevel('inventory.receive', p.reorderLevel)
+    const item = await upsertItem(tx, projectId, String(p.materialName), String(p.unit), p.location ?? 'Site Store', p.supplierId ?? null, reorderLevel)
     const movement = await appendMovement(tx, projectId, item.id, 'received', qty, unitCost, p.reference ?? null, p.note ?? null, p.recordedBy ?? 'Site Manager')
     const closing = derivedClosingQty(item.movements.concat([movement]))
-    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+    return {
+      inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing,
+      // #207: receiving normally lifts stock OUT of low — but a delivery
+      // that still leaves the item at/below its threshold is a crossing
+      // when it started not-low (e.g. a first delivery under the level).
+      lowStockCrossing: crossedIntoLowStock(item, item.movements, movement),
+    }
   })
+  await notifyLowStockCrossing(projectId, result)
+  return result
 }
 
 export async function consumeStock(projectId: string, p: any): Promise<MovementResult> {
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const qty = parseMovementQty('inventory.consume', p.qty)
     const item = await findItem(tx, projectId, String(p.inventoryItemId))
     // DB-2: project the closing balance from the movements that ALREADY exist
@@ -157,8 +262,13 @@ export async function consumeStock(projectId: string, p: any): Promise<MovementR
     }
     const movement = await appendMovement(tx, projectId, item.id, 'consumed', qty, null, p.reference ?? null, p.note ?? null, p.recordedBy ?? 'Site Manager')
     const closing = derivedClosingQty(item.movements.concat([movement]))
-    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+    return {
+      inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing,
+      lowStockCrossing: crossedIntoLowStock(item, item.movements, movement),
+    }
   })
+  await notifyLowStockCrossing(projectId, result)
+  return result
 }
 
 export async function transferStock(projectId: string, p: any): Promise<any> {
@@ -166,43 +276,75 @@ export async function transferStock(projectId: string, p: any): Promise<any> {
   // back-to-back with no transaction, so a failure between them stranded the
   // "out" half and silently lost stock. The out leg is guarded by the same
   // negative-stock projection as consume.
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const qty = parseMovementQty('inventory.transfer', p.qty)
     const item = await findItem(tx, projectId, String(p.inventoryItemId))
     if (derivedClosingQty(item.movements) - qty < 0) {
       throw new Error('Cannot transfer more than closing stock')
     }
     const out = await appendMovement(tx, projectId, item.id, 'transferred_out', qty, null, null, `→ ${p.toLocation}: ${p.note ?? ''}`, p.recordedBy ?? 'Site Manager')
-    const to = await upsertItem(tx, projectId, item.materialName, item.unit, String(p.toLocation), item.supplierId)
+    // The destination carries the source's reorder point when it is new —
+    // the threshold belongs to the material, and a transfer should not
+    // silently drop it. An existing destination keeps its own level
+    // (undefined = leave alone).
+    const to = await upsertItem(tx, projectId, item.materialName, item.unit, String(p.toLocation), item.supplierId, item.reorderLevel ?? undefined)
     const into = await appendMovement(tx, projectId, to.id, 'transferred_in', qty, null, null, `← ${item.location}`, p.recordedBy ?? 'Site Manager')
-    return { from: { inventoryItemId: item.id, movementId: out.id }, to: { inventoryItemId: to.id, movementId: into.id } }
+    return {
+      from: {
+        inventoryItemId: item.id, movementId: out.id,
+        materialName: item.materialName, unit: item.unit, type: out.type, quantity: out.quantity,
+        closingQty: derivedClosingQty(item.movements.concat([out])),
+        lowStockCrossing: crossedIntoLowStock(item, item.movements, out),
+      },
+      to: {
+        inventoryItemId: to.id, movementId: into.id,
+        materialName: to.materialName, unit: to.unit, type: into.type, quantity: into.quantity,
+        closingQty: derivedClosingQty(to.movements.concat([into])),
+        lowStockCrossing: crossedIntoLowStock(to, to.movements, into),
+      },
+    }
   })
+  // Both legs are checked: the source can cross DOWN (stock left behind
+  // under the threshold), the destination can arrive still under its own.
+  await notifyLowStockCrossing(projectId, result.from)
+  await notifyLowStockCrossing(projectId, result.to)
+  return result
 }
 
 export async function returnStock(projectId: string, p: any): Promise<MovementResult> {
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const qty = parseMovementQty('inventory.return', p.qty)
     const item = await findItem(tx, projectId, String(p.inventoryItemId))
     const movement = await appendMovement(tx, projectId, item.id, 'returned', qty, null, null, p.note ?? null, p.recordedBy ?? 'Site Manager')
     // DB-2: real derived closing — this path used to hardcode closingQty: 0.
     const closing = derivedClosingQty(item.movements.concat([movement]))
-    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+    return {
+      inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing,
+      lowStockCrossing: crossedIntoLowStock(item, item.movements, movement),
+    }
   })
+  await notifyLowStockCrossing(projectId, result)
+  return result
 }
 
 export async function damageStock(projectId: string, p: any): Promise<MovementResult> {
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const qty = parseMovementQty('inventory.damage', p.qty)
     const item = await findItem(tx, projectId, String(p.inventoryItemId))
     const movement = await appendMovement(tx, projectId, item.id, 'damaged', qty, null, null, String(p.damageNote ?? 'damaged'), p.recordedBy ?? 'Site Manager')
     // DB-2: real derived closing — this path used to hardcode closingQty: 0.
     const closing = derivedClosingQty(item.movements.concat([movement]))
-    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+    return {
+      inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing,
+      lowStockCrossing: crossedIntoLowStock(item, item.movements, movement),
+    }
   })
+  await notifyLowStockCrossing(projectId, result)
+  return result
 }
 
 export async function adjustStock(projectId: string, p: any): Promise<MovementResult> {
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     // Signed by design: negative adjusts down, positive adjusts up — zero is
     // a no-op that would only pollute the ledger.
     const qty = parseMovementQty('inventory.adjust', p.qty, { signed: true })
@@ -210,8 +352,13 @@ export async function adjustStock(projectId: string, p: any): Promise<MovementRe
     const movement = await appendMovement(tx, projectId, item.id, 'adjusted', qty, null, null, String(p.reason ?? 'count correction'), p.recordedBy ?? 'Site Manager')
     // DB-2: real derived closing — this path used to hardcode closingQty: 0.
     const closing = derivedClosingQty(item.movements.concat([movement]))
-    return { inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing }
+    return {
+      inventoryItemId: item.id, materialName: item.materialName, unit: item.unit, movementId: movement.id, type: movement.type, quantity: movement.quantity, closingQty: closing,
+      lowStockCrossing: crossedIntoLowStock(item, item.movements, movement),
+    }
   })
+  await notifyLowStockCrossing(projectId, result)
+  return result
 }
 
 // ---- Stock reconciliation (issue #194) ---------------------------------------
@@ -373,6 +520,8 @@ export interface PostCountResult {
     movementId: string | null
     adjustment: number
     closingQty: number
+    /** #207: this posted line flipped the item into low stock. */
+    lowStockCrossing: boolean
   }>
 }
 
@@ -385,7 +534,7 @@ export interface PostCountResult {
  * existing movement row.
  */
 export async function postCountAdjustments(projectId: string, p: any): Promise<PostCountResult> {
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const countId = String(p.countId ?? '')
     if (!countId) throw new Error('inventory.count.post: countId is required')
     const postedBy = String(p.postedBy ?? p.recordedBy ?? 'Site Manager')
@@ -422,6 +571,7 @@ export async function postCountAdjustments(projectId: string, p: any): Promise<P
           movementId: null,
           adjustment: 0,
           closingQty: derivedClosingQty(item.movements),
+          lowStockCrossing: false, // no movement appended — nothing could cross
         })
         continue
       }
@@ -444,6 +594,7 @@ export async function postCountAdjustments(projectId: string, p: any): Promise<P
         movementId: movement.id,
         adjustment,
         closingQty: derivedClosingQty(item.movements.concat([movement])),
+        lowStockCrossing: crossedIntoLowStock(item, item.movements, movement),
       })
     }
 
@@ -455,6 +606,12 @@ export async function postCountAdjustments(projectId: string, p: any): Promise<P
 
     return { countId: count.id, postedAt: postedAt.toISOString(), postedBy, movements }
   })
+  // #207: a count that finds less than the book expected can cross an item
+  // INTO low — notify after the post committed, once per crossing line.
+  for (const m of result.movements) {
+    await notifyLowStockCrossing(projectId, m)
+  }
+  return result
 }
 
 // ---- BOQ ----

@@ -3,6 +3,7 @@
 
 import { db } from '@/backend/lib/db'
 import { centsToKes, mulQtyCents, sumCents } from '@/backend/lib/money'
+import { isLowStock, movementInflowQty } from './low-stock'
 import type { InventorySlice, BoqSlice, StockMovementRow, StockMovementType, StockCountRow, StockCountStatus } from './types'
 
 /**
@@ -97,8 +98,21 @@ export async function loadInventorySlice(projectId: string): Promise<InventorySl
       damagedQty,
       adjustedQty,
       closingQty,
-      stockValue: centsToKes(mulQtyCents(closingQty, lastCost)),
-      lowStock: false,
+      // mulQtyCents refuses qty ≤ 0 by design (money never negative) — a
+      // line consumed to zero (a legal state: the over-consumption guard
+      // only refuses going BELOW zero) or adjusted negative has an honest
+      // zero stock value. Same floor the v1 materials rollup applies.
+      stockValue: closingQty > 0 ? centsToKes(mulQtyCents(closingQty, lastCost)) : 0,
+      // #207: honest lowStock — ONE rule (low-stock.ts), computed in the
+      // same pass as the sums above. Explicit reorderLevel governs when
+      // set; else the derived default: closing ≤ 10% of opening+received+
+      // returned, and a zero-inflow item is never low.
+      reorderLevel: item.reorderLevel,
+      lowStock: isLowStock({
+        closingQty,
+        inflowQty: movementInflowQty(item.movements),
+        reorderLevel: item.reorderLevel,
+      }),
       updatedAt: item.updatedAt.toISOString(),
       movements,
     }

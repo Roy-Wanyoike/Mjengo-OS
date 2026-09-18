@@ -26,6 +26,9 @@ export interface InventoryItemRow {
   adjustedQty: number
   closingQty: number
   stockValue: number
+  /** #207: explicit per-item reorder point — when set it governs the flag. */
+  reorderLevel: number | null
+  /** #207: computed by the ONE rule (modules/inventory/low-stock.ts). */
   lowStock: boolean
   updatedAt: string
 }

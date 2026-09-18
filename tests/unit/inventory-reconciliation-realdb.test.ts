@@ -186,6 +186,35 @@ describe('stock reconciliation — count → variance → count-linked adjustmen
     expect(rawClosing(opened.inventoryItemId)).toBe(5)
   })
 
+  it('#207: posting a shortfall count that crosses an item INTO low writes ONE stock.low notification (real seam, real tables)', async () => {
+    const project = await seedProject(prisma, { name: 'Shortfall Store' })
+    // 100 in, no reorderLevel → the derived threshold is 10 (10% of inflow).
+    const opened = await openStock(project.id, { materialName: 'Cement', unit: 'bag', qty: 100 })
+    // The shelf count finds only 4 → adjustment −96 → closing 4 ≤ 10 → LOW.
+    const recorded = await recordStockCount(project.id, {
+      countedBy: 'Otieno',
+      counts: [{ inventoryItemId: opened.inventoryItemId, countedQty: 4 }],
+    })
+    const posted = await postCountAdjustments(project.id, { countId: recorded.countId })
+    const line = posted.movements.find((m) => m.inventoryItemId === opened.inventoryItemId)!
+    expect(line.lowStockCrossing).toBe(true)
+    expect(line.closingQty).toBe(4)
+
+    // The notify seam wrote exactly ONE row for the crossing: reordering
+    // role, in-app channel, honest 'logged' delivery state, real quantities.
+    const notes = sqlite
+      .prepare(
+        `SELECT kind, audienceRole, channel, deliveryStatus, title, body FROM Notification WHERE projectId = ? AND kind = 'stock.low'`,
+      )
+      .all(project.id) as Array<{ kind: string; audienceRole: string; channel: string; deliveryStatus: string; title: string; body: string }>
+    expect(notes).toHaveLength(1)
+    expect(notes[0].audienceRole).toBe('contractor')
+    expect(notes[0].channel).toBe('in_app')
+    expect(notes[0].deliveryStatus).toBe('logged')
+    expect(notes[0].title).toBe('Low stock: Cement')
+    expect(notes[0].body).toContain('4 bag')
+  })
+
   it('enforces the StockCountItem unique (countId, inventoryItemId) at the DB level', async () => {
     const project = await seedProject(prisma, { name: 'Unique Lines' })
     const opened = await openStock(project.id, { materialName: 'Gravel', unit: 'tonne', qty: 3 })

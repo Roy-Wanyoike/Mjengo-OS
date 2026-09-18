@@ -820,7 +820,7 @@ export const enDict = {
   'mat.store.t.lines': 'Stock lines',
   'mat.store.t.linesHint': 'InventoryItem lines (material × location) with derived closing qty',
   'mat.store.t.low': 'Low stock',
-  'mat.store.t.lowHint': 'Closing ≤ 10% of everything that ever came in',
+  'mat.store.t.lowHint': 'Low when closing ≤ reorder level (or ≤ 10% of inflow if unset)',
   'mat.store.t.incoming': 'Incoming',
   'mat.store.t.incomingHint': 'Purchase orders currently in transit (delivering)',
   'mat.store.t.consumed': 'Consumed',

@@ -632,6 +632,7 @@ Three workflows live in `.github/workflows/`, all triggered on every push to
   — the production build must never require real env secrets.
 - **Tests** (`test.yml`) — the full vitest unit suite, **`bun run test`**
   (2,752 tests across 120 files, all passing — counts as of 2026-09-19;
+  (2,750 tests across 120 files, all passing — counts as of 2026-09-18;
   re-run `bunx vitest run` for the current number, since every wave adds
   tests), on every push/PR to `main`. No database or secrets required —
   the tests are pure/unit-level by design (a handful of critical-path
@@ -724,6 +725,7 @@ the README wins on current status); the live issue-level roadmap is the
 | `prisma/` | `schema.prisma` (68 models), `migrations/` (0_init + additive 1_mjengo_score … 8_trust_digest; 9_schema_reconcile closes the last drift — see DEPLOYMENT.md §4.1), `seed.ts` + `seed-extras/` |
 | `public/` | PWA manifest + service worker, demo site photos, Swahili voice notes |
 | `tests/unit/` | The vitest suite (120 files, 2,752 tests — counts as of 2026-09-19; re-run vitest for current) — unit-level, no DB or secrets needed (critical-path suites use a throwaway real SQLite file) |
+| `tests/unit/` | The vitest suite (120 files, 2,750 tests — counts as of 2026-09-18; re-run vitest for current) — unit-level, no DB or secrets needed (critical-path suites use a throwaway real SQLite file) |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Module map + production migration roadmap |
 | `docs/audit/` | **Phase-0 baseline entry point** — the 2026-09 production-readiness re-audit baselines (API, frontend, website, database, security, mock/demo, integration), one file per surface |
 | [docs/SUPABASE-DATABASE-DESIGN.md](./docs/SUPABASE-DATABASE-DESIGN.md) | Target-state Supabase/PostgreSQL design (68-table DDL, RLS policy matrix, storage, migration + rollback plan; ADR 0002) |
