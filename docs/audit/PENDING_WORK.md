@@ -72,7 +72,7 @@ next-intl/lodash-es/uuid cleanup pass.
 | #40 USSD production telco gateway | Safaricom/onboarding deal | faithful `*384#` simulation, labeled |
 | #43 M-Pesa production certification | Daraja go-live creds/certs | sandbox behind the seam; reconcile sweep keeps books honest |
 | #41 Native app | ADR-0001 revisit triggers | PWA-first (offline shell, installable) |
-| #98 CI billing lock | account billing (owner) | local gates re-run per wave (exact CI commands) |
+| #98 CI billing lock | account billing (owner) | local gates re-run per wave (exact CI commands); docker.yml now also carries the `smoke` job from #198 (compose-up + /api/health probe + migrate-line assert + /website probe) whose first execution rides the first run after unblock |
 
 ## 4. Definition-of-done check for this register
 
