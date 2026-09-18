@@ -20,13 +20,21 @@ import { markRead } from '@/backend/modules/notify/service'
 // sessions may only touch a project they SERVE — one of their purchase
 // orders' projects (BE-12, the supplier-scope row-pin posture).
 //
-// GET (Doc A §42, backend wave) → the project's notifications with OPTIONAL
-// pagination/filter params — the default (no params) is the same newest-first
-// list the UI already consumes:
-//   ?limit=50      page size (1-200, default 50)
-//   ?before=<iso>  keyset cursor — rows strictly older than this createdAt
-//   ?kind=<kind>   exact kind filter
-//   ?unread=true   only unread rows
+// GET (Doc A §42, backend wave) → the project's notifications, paginated:
+//   ?projectId=<id>  the project to read. REQUIRED for owner roles (#157 /
+//                   audit API-6): this GET used to silently adopt the FIRST
+//                   project in the DB (oldest createdAt) for any unpinned
+//                   non-client, non-supplier session — an arbitrary,
+//                   data-dependent default that handed the caller one
+//                   project's feed with a confident 200. Now a 400
+//                   'projectId required — owner roles have no default project'
+//                   when absent (the webapp's only GET caller — the
+//                   settings-tab prefs card — always sends the active
+//                   project's id, so the 400 is unreachable in-app).
+//   ?limit=50        page size (1-200, default 50)
+//   ?before=<iso>    keyset cursor — rows strictly older than this createdAt
+//   ?kind=<kind>     exact kind filter
+//   ?unread=true     only unread rows
 // Client-role sessions are pinned to their own project (param ignored).
 // BE-3 (issue #104): supplier sessions get the SAME scoping the POST half
 // has enforced since BE-12 — the projects they SERVE (their purchase
@@ -34,9 +42,9 @@ import { markRead } from '@/backend/modules/notify/service'
 // 'Not permitted for this project' when not served (byte-identical to
 // POST); with NO project named the rows are their served projects' union —
 // NEVER the portfolio default (first project) this route used to hand any
-// signed-in role. The response also carries the session user's notification
-// `prefs` (Doc A §42 user control) — parsed from User.notificationPrefs, or
-// {} when unset.
+// signed-in role (the owner half of that default fell with #157 above). The
+// response also carries the session user's notification `prefs` (Doc A §42
+// user control) — parsed from User.notificationPrefs, or {} when unset.
 //
 // PUT { prefs } (Doc A §42) → per-kind in-app preferences for the SESSION
 // user: { kind: { inApp: boolean } }, max 20 kinds, unknown kinds rejected
@@ -182,8 +190,9 @@ export const GET = route(
 
     // Project scoping — same rules as POST: client sessions are pinned to
     // their own project; suppliers are scoped to the projects they SERVE
-    // (BE-3/issue #104 — the GET half of POST's BE-12 branch); everyone else
-    // may pass ?projectId= (default: first).
+    // (BE-3/issue #104 — the GET half of POST's BE-12 branch); every owner
+    // role MUST name ?projectId= — #157 removed the arbitrary first-project
+    // default this GET used to fall into (400 when absent).
     let projectId: string | null = sp.get('projectId')?.trim() || null
     /** Supplier-union filter: set (possibly []) when a supplier names no
      *  ?projectId — their served projects' rows, never the default first
@@ -232,8 +241,17 @@ export const GET = route(
       const exists = await db.project.findUnique({ where: { id: projectId }, select: { id: true } })
       if (!exists) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     } else {
-      const first = await db.project.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } })
-      projectId = first?.id ?? null
+      // #157 (audit API-6): this used to adopt the FIRST project in the DB
+      // (oldest createdAt) — an arbitrary, data-dependent default that
+      // handed an unpinned owner role one project's feed with a confident
+      // 200. Owner roles are trusted portfolio-wide, so "no project named"
+      // is a MISSING PARAMETER here, not a default — the honest 400, zero
+      // notification rows read (clients are pinned above; suppliers read
+      // their served union — both branches unchanged).
+      return NextResponse.json(
+        { error: 'projectId required — owner roles have no default project' },
+        { status: 400 },
+      )
     }
 
     // Pagination / filters — all optional; no params = the default list.
@@ -262,7 +280,10 @@ export const GET = route(
       where: {
         // Supplier union: projectId IN their served projects (an empty list
         // matches nothing — the honest empty page for a supplier who serves
-        // no project yet). Every other branch resolved a single projectId.
+        // no project yet). Every other branch resolved a single projectId —
+        // and post-#157 that is EVERY live path: an owner role with no
+        // projectId took the 400 above, so the bare spread below is the
+        // inert fallback, never a reachable "read everything" mode.
         ...(projectId
           ? { projectId }
           : servedProjectIds

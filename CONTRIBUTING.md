@@ -51,8 +51,8 @@ Run the same gates CI runs:
 ```bash
 bun run lint          # eslint — 0 errors, 0 warnings
 bunx tsc --noEmit     # strict typecheck, 0 errors
-bun run test          # vitest — the full unit suite (2,678 tests /
-                      #   116 files — counts as of 2026-09-18; re-run
+bun run test          # vitest — the full unit suite (2,704 tests /
+                      #   118 files — counts as of 2026-09-18; re-run
                       #   vitest for the current number)
 ```
 
