@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 import { Toaster } from "@/frontend/ui/sonner";
 import { AuthSessionProvider } from "@/frontend/auth/session-provider";
@@ -33,11 +34,18 @@ export const viewport: Viewport = {
   themeColor: "#1c1917",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Per-request CSP nonce (issue #178): src/proxy.ts stamps it on every
+  // request; Next applies it to the scripts IT renders, and this layout passes
+  // it to its one hand-written inline script below so the enforced CSP never
+  // blocks the SW registration. Reading headers() makes / dynamic — inherent
+  // to nonce-based CSP (a per-request nonce cannot be statically cached).
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body
@@ -54,6 +62,7 @@ export default function RootLayout({
             public/sw.js. Registered on window load so it never competes with
             first paint, and guarded so non-SW browsers skip it. */}
         <script
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html:
               "if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/sw.js').catch(function(e){console.warn('SW registration skipped:',e)})})}",
