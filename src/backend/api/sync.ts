@@ -5,8 +5,9 @@ import { snapCents } from '@/backend/lib/money'
 import { applyAction, getProjectPayload, getProjectsList, type ActionType } from '@/backend/lib/mjengo'
 import { ownerReadScope } from '@/backend/lib/membership-scope'
 import { CLIENT_ACTIONS } from '@/shared/client-actions'
+import { SUPPLIER_ACTIONS } from '@/shared/supplier-actions'
 import { route, genericError } from '@/backend/lib/route-kit'
-import { safeErrorMessage } from '@/backend/lib/guard'
+import { safeErrorMessage, sessionSupplierId } from '@/backend/lib/guard'
 import { actionFlagGateMessage } from '@/backend/lib/action-flag-gate'
 
 // OFFLINE-FIRST SYNC + DETERMINISTIC CONFLICT RESOLUTION (spec §40 / §41, W1-SYNC)
@@ -512,9 +513,18 @@ async function detectConflict(projectId: string, action: QueuedAction): Promise<
  *    is rejected per-item, the payload refresh returns only their project, and
  *    the projects list is scoped to it (a foreign probe is indistinguishable
  *    from a miss: plain per-item failure / empty response, never foreign data)
- *  · supplier-role sessions (W5-3): 403 — the SupplierPortal dispatches
- *    online-only (the share-client posture) and owns NO outbox, so nothing of
- *    theirs can ever arrive here; fail closed rather than re-implement the pin
+ *  · supplier-role sessions (W5-3 → #128): the SupplierPortal now owns an
+ *    offline outbox and drains it HERE — the supply-side mirror of the client
+ *    pin. Per item: SUPPLIER_ACTIONS allowlist only (a buyer type fails
+ *    per-item with the role refusal); the session stamps __role 'supplier' +
+ *    __supplierId (from the session, never the payload), and applyAction's
+ *    assertSupplierScope re-pins every id to the supplier's own rows — the
+ *    same server-enforced guard /api/actions uses, so this route cannot
+ *    bypass it. The item's projectId STANDS (a supplier's rows span projects;
+ *    the row pin is the guard, not the project). The response NEVER carries
+ *    buyer payloads (data null, projects [] — the portal re-reads
+ *    /api/supplier, the /api/actions supplier posture). A supplier account
+ *    with no linked supplier drains nothing (403, same as /api/actions).
  *  · SEC-6 (issue #174): supervisor/procurement/qs/finance keep the per-item
  *    contract above (mutation scoping is the recorded SECURITY.md follow-up),
  *    but the payload REFRESH is membership-scoped — data answers only a
@@ -546,12 +556,14 @@ export const POST = route(
     const { actions, projectId } = body as { actions?: QueuedAction[]; projectId?: string }
     if (!Array.isArray(actions)) return NextResponse.json({ error: 'actions[] required' }, { status: 400 })
 
-    // W5-3: supplier sessions never own an outbox — the SupplierPortal
-    // dispatches online-only (like the share client view) and its actions go
-    // through POST /api/actions. Fail closed here: a crafted flush cannot
-    // reach the shared supplier gate through this route.
-    if (session.user.role === 'supplier') {
-      return NextResponse.json({ ok: false, error: 'Not permitted for role "supplier"' }, { status: 403 })
+    // #128: supplier sessions drain their OWN outbox here (the supply-side
+    // mirror of the client pin — see the scoping comment above). The linked
+    // supplier id comes from the session only; an unlinked supplier account
+    // drains nothing (403, the exact /api/actions posture).
+    const isSupplier = session.user.role === 'supplier'
+    const pinnedSupplierId = isSupplier ? sessionSupplierId(session) : null
+    if (isSupplier && !pinnedSupplierId) {
+      return NextResponse.json({ ok: false, error: 'Supplier account has no supplier linked' }, { status: 403 })
     }
 
     const isClient = session.user.role === 'client'
@@ -597,6 +609,14 @@ export const POST = route(
             results.push({ id: action.id, ok: false, error: 'Not your project' })
             continue
           }
+        } else if (isSupplier && !(SUPPLIER_ACTIONS as readonly string[]).includes(action.type)) {
+          // #128: suppliers flush only SUPPLIER_ACTIONS (quote.receive/decline,
+          // order.confirm/dispatch, catalog.upsert) — a buyer type fails
+          // per-item with the same role refusal /api/actions answers, and the
+          // batch continues (applyAction would refuse it anyway via
+          // assertSupplierScope; this is the honest early copy).
+          results.push({ id: action.id, ok: false, error: 'Not permitted for role "supplier"' })
+          continue
         }
         const itemProjectId = isClient ? pinnedProject!.id : action.projectId ?? projectId ?? null
 
@@ -666,9 +686,14 @@ export const POST = route(
         }
 
         // (5) Apply — exactly once, with the item's idemKey + fingerprint recorded.
-        const actorPayload = isClient
-          ? { ...(action.payload ?? {}), __actor: session.user.name, __role: 'client' }
-          : { ...(action.payload ?? {}), __actor: session.user.name, __role: session.user.role }
+        // #128: supplier items get the SAME session stamp /api/actions writes
+        // (__role 'supplier' + __supplierId from the session, payload copies
+        // overwritten) so assertSupplierScope pins every id to their own rows.
+        const actorPayload = isSupplier
+          ? { ...(action.payload ?? {}), __actor: session.user.name, __role: 'supplier', __supplierId: pinnedSupplierId }
+          : isClient
+            ? { ...(action.payload ?? {}), __actor: session.user.name, __role: 'client' }
+            : { ...(action.payload ?? {}), __actor: session.user.name, __role: session.user.role }
         await applyAction(action.type, actorPayload, isClient ? pinnedProject!.id : action.projectId)
         try {
           await db.idempotencyRecord.create({
@@ -709,6 +734,9 @@ export const POST = route(
 
     // Payload refresh: site team — top-level projectId > single distinct item
     // projectId > first project. Clients — always their pinned project only.
+    // #128: suppliers — NEVER a buyer payload (data null, projects []); the
+    // portal re-reads GET /api/supplier after the drain, exactly the
+    // /api/actions supplier posture.
     // SEC-6 (issue #174): for supervisor/procurement/qs/finance the refresh
     // is a READ, so it follows the membership scope — the payload answers a
     // projectId inside their membership set (their first membership when
@@ -719,7 +747,10 @@ export const POST = route(
     // recorded follow-up).
     let data: Awaited<ReturnType<typeof getProjectPayload>> = null
     let projects: Awaited<ReturnType<typeof getProjectsList>> = []
-    if (isClient) {
+    if (isSupplier) {
+      data = null
+      projects = []
+    } else if (isClient) {
       const [d, list] = await Promise.all([getProjectPayload(pinnedProject!.id), getProjectsList()])
       data = d
       projects = list.filter((p) => p.id === pinnedProject!.id)

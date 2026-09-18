@@ -454,6 +454,10 @@ export const enDict = {
   'supplier.tab.settings': 'Settings',
   'supplier.action.rejected': 'The server refused that action',
   'supplier.action.network': 'Network error — the action was not sent. Try again.',
+  // #128 — the supplier offline outbox (the rest of the sync copy reuses the
+  // shared outbox.*/sync.* families the owner panel renders).
+  'supplier.outbox.notPermitted': 'This action is not available on the supplier portal — it cannot be queued.',
+  'supplier.outbox.conflictNote': 'Sync conflict — this action was not applied. It stays queued here until it is resolved.',
   'supplier.signout': 'Sign out',
   'supplier.stats.aria': 'What needs your action',
   'supplier.stats.quotes': 'RFQs waiting for your price',

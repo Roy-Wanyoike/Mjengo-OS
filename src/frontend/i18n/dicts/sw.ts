@@ -456,6 +456,10 @@ export const swDict = {
   'supplier.tab.settings': 'Mipangilio',
   'supplier.action.rejected': 'Seva ilikataa ombi hilo',
   'supplier.action.network': 'Hitilafu ya mtandao — ombi halikutumwa. Jaribu tena.',
+  // #128 — foleni ya kifaa ya msambazaji (nakala nyingine ya usawazishaji
+  // inatumia familia za outbox.*/sync.* zinazotumiwa na paneli ya mmiliki).
+  'supplier.outbox.notPermitted': 'Kitendo hiki hakipatikani kwenye portal ya msambazaji — hakiwezi kuingizwa foleni.',
+  'supplier.outbox.conflictNote': 'Mgogoro wa usawazishaji — kitendo hiki hakikutumwa. Kinasalia kwenye foleni hapa hadi kitatatuliwa.',
   'supplier.signout': 'Toka',
   'supplier.stats.aria': 'Kinachohitaji uamuzi wako',
   'supplier.stats.quotes': 'Maombi ya nukuu yanayosubiri bei yako',

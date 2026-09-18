@@ -77,6 +77,15 @@ number; replies are footered "MjengoOS sim". **Supplier role seam (Wave 5,
 shipped):** the marketplace's supply side gets its own scoped role and
 surface (catalog, quotes, orders, delivery confirmation), pinned to one
 supplier — the same fail-closed pattern the client role uses.
+**Offline parity (#128):** the supplier portal runs its own persisted
+outbox (`use-supplier-outbox.ts`, localStorage key `mjengo-supplier-outbox`)
+— offline actions queue, drain through the supplier-scoped `/api/sync`
+(SUPPLIER_ACTIONS allowlist, session-stamped `__supplierId`, rows pinned by
+`assertSupplierScope`), with the same §40 per-item lifecycle, #132 bounded
+auto-retry and #191 auth-blocked recovery as the owner outbox. The shared
+core (item shape, retry engine, migration) lives in `src/frontend/lib/outbox.ts`;
+the two stores never share state — an owner item never drains from the
+supplier session and vice versa.
 
 **MjengoScore discipline:** computed only by the explicit `score.recompute`
 action, from six evidence-derived components (evidence-backed releases,
