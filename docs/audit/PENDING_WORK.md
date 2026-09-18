@@ -43,7 +43,7 @@
 | FE-4 | `feat(offline): supplier-portal outbox parity` | frontend | |
 | WD-1 | `fix(website): per-visitor rate-limit bucket (TRUST_PROXY default posture) + lead-drop alerting` | website | |
 | WD-2 | `feat(website): wire analytics endpoint or remove dead code` | website | |
-| INF-7 | `feat(ops): automated backups + restore runbook + drill` | ops | restore procedure missing (DOC-4) |
+| INF-7 | `feat(ops): automated backups + restore runbook + drill` | ops | 2026-09-18: landed via #199 — `deploy/backup/` (script + systemd timer, shellcheck-clean, drilled incl. live-WAL backup + script-level restore: docs/audit/RESTORE_DRILL_2026-09-18.md) + DEPLOYMENT §7.2.1/§7.2.2; covers app-db/app-photos/website-data (also closes the WD-11 "leads in backup set" gap); operator still owes one full-stack drill on real hardware |
 | OBS-1/2 | `feat(observability): structured logs w/ correlation IDs, error tracking, metrics` | sre | |
 | INF-1 | `fix(deploy): systemd unit drops to non-root service user` | ops | |
 | API-1r | `fix(security): require webhook secrets when secrets are SET but routes also rate-limit per-identity` | backend | residual after SEC-4 |

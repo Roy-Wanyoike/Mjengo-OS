@@ -165,7 +165,7 @@ DEPLOYMENT.md §3 documents the same set plus `PORT`/`HOSTNAME`. Website `.env.e
 
 1. **CI has never executed** (billing lock, issue #98) — restore billing or mirror gates to a free runner; until then every merge's green light is a local claim (INF-4).
 2. **No staging environment** — only local dev and the single prod node; no place to rehearse migrations/deploys.
-3. **No automated backups** — manual `sqlite3 .backup` procedure only; no cron/systemd unit/script, no restore runbook, no backup verification (INF-7/DOC-4).
+3. **No automated backups** — manual `sqlite3 .backup` procedure only; no cron/systemd unit/script, no restore runbook, no backup verification (INF-7/DOC-4) — **landed via #199** (deploy/backup/ + §7.2 restore runbook; one full-stack drill on real hardware still owed by the operator).
 4. **No uptime monitoring/alerting** — `/api/health` exists and is compose-probed, but nothing external watches it or pages anyone.
 5. **No error tracking or alerting** — no Sentry-class sink; failed jobs/notifications only visible if someone looks.
 6. **No log aggregation / structured logs** — console text only; no correlation IDs on log lines (OBS-2).
@@ -187,7 +187,7 @@ DEPLOYMENT.md §3 documents the same set plus `PORT`/`HOSTNAME`. Website `.env.e
 | INF-4 | Medium | CI has never run (billing lock #98): all gates locally-verified; docker.yml builds but never runs/smoke-tests an image; no registry/artifact publishing | "Restore CI execution (billing) + add container smoke test to docker.yml" |
 | INF-5 | Low | `api/jobs/run/route.ts` re-declares the POST handler verbatim from `api/jobs.ts` (documented debt; dual-copy edit hazard) | "Deduplicate the jobs/run POST handler (export raw handler from api/jobs.ts)" |
 | INF-6 | Info | compose `jobs-tick` has no healthcheck — documented-by-design (loop logs are liveness); acceptable, recorded for completeness | — (no issue; document only) |
-| INF-7 | Medium | No automated backup/restore: DEPLOYMENT §7.2 is a manual procedure; nothing schedules, verifies, or rehearses restores | "Ship automated SQLite backup (systemd timer/cron) + restore runbook" |
+| INF-7 | Medium | No automated backup/restore: DEPLOYMENT §7.2 is a manual procedure; nothing schedules, verifies, or rehearses restores — **landed 2026-09-18 via #199** (deploy/backup/ script + systemd timer, drilled; DEPLOYMENT §7.2.1 install + §7.2.2 restore runbook) | "Ship automated SQLite backup (systemd timer/cron) + restore runbook" — done (#199) |
 | INF-8 | Low | ARCHITECTURE.md module map omits `modules/documents` (load-bearing for the storage read/re-sign seam) | "ARCHITECTURE.md: add the documents module to the module tree" |
 | INF-9 | Low | Fresh-clone quickstart risk: `DATABASE_URL=file:../db/custom.db` but `db/` is gitignored and absent in a fresh clone; Prisma does not create parent directories → `migrate deploy` may error "unable to open database file". **Unverified in this sandbox (no installs allowed)** — verify and add `mkdir -p db` if real | "Quickstart: ensure db/ exists before prisma migrate deploy (fresh-clone check)" |
 | OBS-1 | Medium | No error tracking (Sentry-class); prod failures visible only in console/journal/JobRecord rows | "Add error tracking sink (opt-in env) for API + job failures" |
@@ -198,7 +198,7 @@ DEPLOYMENT.md §3 documents the same set plus `PORT`/`HOSTNAME`. Website `.env.e
 | DOC-1 | Low | README/CONTRIBUTING test-count text stale: "1,700 tests / 69 files" vs actual 71 files (badge "1,500+" still conservative-true) | "Refresh test/file counts in README + CONTRIBUTING (71 files)" |
 | DOC-2 | Low | ADR-0002 says "61 models" in context while its related-links + README say 68 — internal drift | "ADR-0002: reconcile the 61-vs-68 model count" |
 | DOC-3 | Low | (= INF-8) ARCHITECTURE module map gap | (same issue as INF-8) |
-| DOC-4 | Low | DEPLOYMENT.md has backup but no restore procedure | (fold into INF-7 issue) |
+| DOC-4 | Low | DEPLOYMENT.md has backup but no restore procedure — **landed via #199** (§7.2.2) | (fold into INF-7 issue) |
 | ENV-1 | Low | `AUTH_SECRET` fallback read in code but undocumented — split-brain risk if operator sets only it | "Document (or remove) the AUTH_SECRET fallback in guard.ts" |
 
 **Positives worth preserving (no action):** fail-closed env gating on every integration; demo data never auto-seeds in containers; compose refuses to start without `NEXTAUTH_SECRET`; `.env.example` placeholder deliberately fails the boot guard; honest in-band simulation labels; verifiable claims (27 v1 paths exact; package.json 0.2.5 == release notes).
