@@ -16,14 +16,17 @@
  *     translation that drops {name} would render the literal "{name}");
  *   · a W7 field-surface file regresses to a raw English toast literal
  *     instead of a t() call (the "no English toast on the field path"
- *     acceptance of issue #79).
+ *     acceptance of issue #79);
+ *   · the uikit fallbacks (ErrorBoundary crash card + DataTable empty/aria
+ *     defaults) resolve the uikit.* dict keys, carry no raw English, and the
+ *     crash card keeps reading the locale provider-free (issue #152).
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { enDict } from '@/frontend/i18n/dicts/en'
 import { swDict } from '@/frontend/i18n/dicts/sw'
-import { translate } from '@/frontend/i18n/provider'
+import { translate, translateForLocale } from '@/frontend/i18n/provider'
 import { TAB_META } from '@/frontend/mjengo/nav/tab-meta'
 import { ALL_TABS, KNOWN_ROLES, ROLE_LABELS } from '@/shared/permissions'
 
@@ -753,5 +756,151 @@ describe('#125: report + CSV artifacts honor the active locale', () => {
     expect(translate(swDict, 'report.daily.movements')).toContain('SITE STORE') // stored proper noun stays
     expect(translate(swDict, 'report.daily.crewLine', { today: 4, expected: 5, wages: 3000, alerts: 1 }))
       .toBe('Wafanyakazi 4/5 leo · mishahara 3000 KES · tahadhari 1 hazijakubaliwa')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #152 uikit fallbacks (audit spot-check): the shared kit's own fallback
+// copy — the ErrorBoundary crash card and the DataTable empty/aria defaults
+// — flows through the dicts in both languages, and the uikit stays free of
+// raw English. Also pins the outside-provider design: the crash card reads
+// the persisted locale store directly, never the I18nProvider context.
+// ---------------------------------------------------------------------------
+
+describe('#152: uikit fallbacks — crash card + empty state resolve the dicts', () => {
+  const UIKIT_FILES = [
+    'src/frontend/mjengo/uikit/error-boundary.tsx',
+    'src/frontend/mjengo/uikit/data-table.tsx',
+    'src/frontend/mjengo/uikit/empty-state.tsx',
+  ] as const
+
+  const literalKeysIn = (src: string) => [
+    ...src.matchAll(/\bt\(\s*'([a-zA-Z0-9_.]+)'/g),
+    ...src.matchAll(/\bt\(\s*"([a-zA-Z0-9_.]+)"/g),
+  ].map((m) => m[1])
+
+  it('every literal t() key the uikit calls exists in both dictionaries', () => {
+    // Catches the #125 regression class: data-table called t('uikit.noRows')
+    // for two waves while NO dictionary carried the key — the empty state
+    // rendered the literal string "uikit.noRows".
+    const keys = new Set(UIKIT_FILES.flatMap((f) => literalKeysIn(readSrc(f))))
+    expect(keys.size, 'the uikit sample found no t() keys (regex drift?)').toBeGreaterThan(2)
+    for (const key of keys) {
+      expect(enKeys.has(key), `en.ts is missing "${key}" (used by the uikit)`).toBe(true)
+      expect(swKeys.has(key), `sw.ts is missing "${key}" (used by the uikit)`).toBe(true)
+    }
+  })
+
+  it('the uikit fallback families exist in both dictionaries', () => {
+    for (const key of [
+      'uikit.errorTitle', 'uikit.errorMessage', 'uikit.retry', 'uikit.reloadApp',
+      'uikit.reassurance', 'uikit.noRows', 'uikit.tableRegion',
+    ]) {
+      expect(enKeys.has(key), `en.ts is missing "${key}"`).toBe(true)
+      expect(swKeys.has(key), `sw.ts is missing "${key}"`).toBe(true)
+    }
+  })
+
+  it('the crash card renders the right copy in both locales (real translateForLocale)', () => {
+    expect(translateForLocale('en', 'uikit.errorTitle')).toBe('Something went wrong')
+    expect(translateForLocale('sw', 'uikit.errorTitle')).toBe('Kuna kitu kimeharibika')
+    expect(translateForLocale('en', 'uikit.errorMessage'))
+      .toBe('An unexpected error occurred while rendering this section.')
+    expect(translateForLocale('sw', 'uikit.errorMessage'))
+      .toBe('Hitilafu isiyotarajiwa ilitokea wakati wa kuonyesha sehemu hii.')
+    expect(translateForLocale('sw', 'uikit.retry')).toBe('Jaribu tena')
+    expect(translateForLocale('sw', 'uikit.reloadApp')).toBe('Pakia programu upya')
+    expect(translateForLocale('sw', 'uikit.reassurance'))
+      .toBe('Hakuna kilichopotea — sehemu nyingine za MjengoOS zinaendelea kufanya kazi.')
+    expect(translateForLocale('en', 'uikit.noRows')).toBe('No rows to show')
+    expect(translateForLocale('sw', 'uikit.noRows')).toBe('Hakuna matokeo ya kuonyesha')
+    expect(translateForLocale('en', 'uikit.tableRegion', { columns: 'Fundi, Status' }))
+      .toBe('Fundi, Status — scrollable rows')
+    expect(translateForLocale('sw', 'uikit.tableRegion', { columns: 'Fundi, Hali' }))
+      .toBe('Fundi, Hali — safu unazoweza kusogeza')
+  })
+})
+
+describe('#152: uikit carries no raw English (the ban scope now includes the shared kit)', () => {
+  // Comments are stripped before scanning — the docblocks legitimately quote
+  // the old English copy while explaining the fix.
+  const stripComments = (src: string) =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+
+  // The legacy hardcoded literals, pinned with their render context so the
+  // pinned names cannot collide with the new t('uikit.*') calls.
+  const LEGACY_RAW_ENGLISH: RegExp[] = [
+    /\?\?\s*['"]Something went wrong['"]/,
+    /aria-hidden\s*\/>\s*Retry/,
+    /aria-hidden\s*\/>\s*Reload app/,
+    /Nothing was lost/,
+    /An unexpected error occurred while rendering/,
+    /title="No rows to show"/,
+  ]
+
+  // General guards for the three shapes raw English took in the uikit:
+  //  · a quoted multi-word string literal starting with a capital letter
+  //    ("Something went wrong", "No rows to show", …);
+  //  · words trailing a self-closing tag on the same line (`/> Retry`);
+  //  · a line consisting solely of sentence words (the reassurance <p>
+  //    body). A three-word minimum plus space/comma/em-dash-only separators
+  //    keep real code out: dashed attributes (`aria-hidden`), multi-line
+  //    call arguments (`error,`), dotted member expressions
+  //    (`return this.props.children`) and two-word statements
+  //    (`return WithBoundary`) all fail it, while every sentence the kit
+  //    ever hardcoded passes.
+  const QUOTED_SENTENCE = /['"`]([A-Z][A-Za-z0-9]*(?:[ ,—'’-][A-Za-z0-9]+)+[.!?…]*)['"`]/
+  const TRAILING_JSX_TEXT = /\/>\s*[A-Za-z][A-Za-z ]+$/
+  const OWN_LINE_JSX_TEXT = /^\s+(?:[A-Za-z0-9'’]+[ ,—]+){2,}[A-Za-z0-9'’]+[.!?…]*\s*$/m
+
+  it('the legacy hardcoded literals are gone from every uikit file', () => {
+    for (const file of [
+      'src/frontend/mjengo/uikit/error-boundary.tsx',
+      'src/frontend/mjengo/uikit/data-table.tsx',
+    ]) {
+      const code = stripComments(readSrc(file))
+      for (const pattern of LEGACY_RAW_ENGLISH) {
+        expect(pattern.test(code), `${file} still matches the legacy literal ${pattern}`).toBe(false)
+      }
+    }
+  })
+
+  it('no new raw English sentence literals or bare JSX text in the uikit', () => {
+    for (const file of [
+      'src/frontend/mjengo/uikit/error-boundary.tsx',
+      'src/frontend/mjengo/uikit/data-table.tsx',
+      'src/frontend/mjengo/uikit/empty-state.tsx',
+    ]) {
+      const code = stripComments(readSrc(file))
+      expect(code.match(QUOTED_SENTENCE), `${file} has a raw quoted English sentence`).toBeNull()
+      expect(code.match(TRAILING_JSX_TEXT), `${file} has bare JSX text after a self-closing tag`).toBeNull()
+      expect(code.match(OWN_LINE_JSX_TEXT), `${file} has an own-line bare JSX text node`).toBeNull()
+    }
+  })
+})
+
+describe('#152: the crash card reads the locale provider-free (design pin)', () => {
+  it('ErrorBoundary never touches the i18n context — the store is its source of truth', () => {
+    const code = readSrc('src/frontend/mjengo/uikit/error-boundary.tsx')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+    // useT() throws outside <I18nProvider> — a fallback that throws while the
+    // provider is down would white-screen the whole app. The store + helper
+    // are the SAME source of truth and dicts the provider itself uses.
+    expect(code, 'the crash card must not depend on the i18n context').not.toContain('useT')
+    expect(code).toContain('useLocalePrefs((s) => s.language)')
+    expect(code).toContain('translateForLocale')
+    // The title override prop still wins over the localized default (#152 AC).
+    expect(readSrc('src/frontend/mjengo/uikit/error-boundary.tsx'))
+      .toContain("title ?? t('uikit.errorTitle')")
+  })
+
+  it('DataTable is a normal in-tree surface — it keeps the canonical useT() hook', () => {
+    // Contrast with the crash card above: the table only ever renders inside
+    // the app tree (below the provider), so the reactive context hook is the
+    // right tool there — no provider-free machinery needed.
+    expect(readSrc('src/frontend/mjengo/uikit/data-table.tsx')).toContain('const t = useT()')
   })
 })

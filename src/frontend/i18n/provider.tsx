@@ -78,6 +78,25 @@ export function translate(dict: Dict, key: string, vars?: Record<string, string 
 }
 
 /**
+ * Provider-free translation for surfaces that may render when the React
+ * context tree is gone or was never there (issue #152): the uikit
+ * ErrorBoundary fallback renders in the worst moment — possibly below a
+ * crashed I18nProvider, or outside any provider at all (shared kit) — and
+ * useT() throws in exactly those situations, which would make the fallback
+ * itself crash and white-screen the app. This helper resolves a key against
+ * an EXPLICIT locale, no context involved; callers read the locale from the
+ * persisted `useLocalePrefs` store (the same source of truth the provider
+ * reads — see uikit/error-boundary.tsx).
+ */
+export function translateForLocale(
+  locale: Locale,
+  key: string,
+  vars?: Record<string, string | number>,
+): string {
+  return translate(DICTS[locale], key, vars)
+}
+
+/**
  * Keeps <html lang> in lockstep with the active locale (issue #130 / audit
  * FE-5, WCAG 3.1.1 language-of-page): screen readers stop pronouncing
  * Kiswahili copy with English phonetics, and translation tools stop guessing.
