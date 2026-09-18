@@ -318,6 +318,12 @@ marketing site at `http://localhost:3000/website` — one origin, the site's
 "Sign in" lands on the app's login screen. To publish the site's own origin
 as well, add a compose override file with `ports: ["3001:3001"]`.
 
+**These three volumes are the deployment's entire state.** `deploy/backup/`
+ships a scheduled backup covering all of them (online SQLite `.backup`
+snapshot of `app-db`, tar+gzip of `app-photos` and `website-data`,
+7 daily / 4 weekly retention) plus a drilled restore runbook — install
+it before real data lands: §7.2.1, restore: §7.2.2.
+
 #### Retrieving contact-form leads (issue #110 / audit WD-8)
 
 The website's contact and demo-request forms (`POST /api/contact`, proxied
@@ -345,7 +351,10 @@ to read it:
 - **Retention cap — read it regularly:** the store keeps only the **500 most
   recent** submissions; every write past 500 drops the oldest entry, and
   there is no rotation or archive file, so dropped leads are gone for good.
-  Retrieve on a cadence, especially during onboarding bursts. The eviction
+  Retrieve on a cadence, especially during onboarding bursts. The scheduled
+  backup (§7.2.1) includes this volume — its retention bounds the loss
+  window — but retrieval (above) is still the only way to actually READ
+  leads. The eviction
   is **not silent** (issue #131): every write past the cap logs
   `[contact] submission cap reached — dropping N oldest …` (with the count)
   to the website container's logs —
@@ -539,11 +548,19 @@ server {
 - **Health:** `GET /api/health` → `{"ok":true,"db":"up","dbLatencyMs":…,
   "jobs":{…},"counts":{…}}`. Wire uptime monitoring to it (the compose
   healthcheck already does).
-- **SQLite backup:** the DB is a single file. Either stop the app and copy
-  the file, or use the online backup API (no stop needed):
+- **Backups — scheduled (issue #199):** `deploy/backup/` ships the whole
+  thing — a script + a systemd timer covering all three stateful volumes:
+  an **online** `sqlite3` `.backup` snapshot of the DB (WAL-safe, no app
+  stop), tar+gzip of the photo and website-data volumes (+ optional
+  app-docs), UTC date-stamped names, 7-daily/4-weekly retention, a
+  sha256 sidecar per artifact, an integrity check on every fresh DB
+  snapshot, and a loud failure contract (non-zero exit + journal line →
+  a FAILED unit an uptime monitor can dead-man-switch on). Install in
+  two minutes: §7.2.1. The manual one-liner remains valid for ad-hoc
+  snapshots — it is the same command the script runs:
   `sqlite3 /srv/mjengo/custom.db ".backup '/srv/backups/mjengo-$(date +%F).db'"`
-  — both produce a consistent snapshot; schedule it daily and keep the
-  uploads volume in the same backup (photos are evidence).
+  — both produce a consistent snapshot; keep the uploads volume in the
+  same backup (photos are evidence). Restores: §7.2.2.
 - **Rate-limit store file (`db/ratelimit.db`, the default since issue #158;
   present whenever the sqlite store initialized):** NOT part of backups — it
   is cache-like counter state (WAL sidecar files included); deleting it while
@@ -552,6 +569,199 @@ server {
   it in your secret manager / `.env` on the host (never in git, never in the
   image). Changing it invalidates all sessions (users just sign in again).
   Do not expose the SQLite file or `db/` via the proxy.
+
+#### 7.2.1 Installing the scheduled backup
+
+`deploy/backup/` holds four files: `mjengo-backup.sh` (the script —
+read its header, it is the canonical contract), `mjengo-backup.service`
++ `mjengo-backup.timer` (the systemd pair, same least-privilege pattern
+as the jobs pair in §7.3) and `mjengo-backup.env.example` (paths +
+retention policy — **no secrets**, so `0644` is fine). One run:
+`.backup` the DB online → integrity-check the snapshot → tar+gzip the
+photo and website volumes → sha256 sidecars → refresh the weekly set on
+the first run of each ~7-day window → prune by age. It deliberately
+reads only the single DB file from the database directory, so
+`db/ratelimit.db` is excluded **by construction**, never by
+configuration that can rot.
+
+```bash
+# once per host: the dedicated service user (skip if the jobs pair
+# already created it — §7.3):
+useradd --system --user-group --home-dir /nonexistent \
+        --shell /usr/sbin/nologin mjengo
+install -D -m 0755 deploy/backup/mjengo-backup.sh  /usr/local/bin/mjengo-backup.sh
+install -D -m 0644 deploy/backup/mjengo-backup.service /etc/systemd/system/
+install -D -m 0644 deploy/backup/mjengo-backup.timer   /etc/systemd/system/
+install -D -m 0644 deploy/backup/mjengo-backup.env.example /etc/mjengo/backup.env
+install -d -o mjengo -g mjengo -m 0700 /var/backups/mjengo
+# docker compose only — let the backup user read the volume data (the
+# files belong to the container's `node` user; the d: default ACL keeps
+# NEW files readable too; bare-metal self-hosts need nothing — the app
+# itself runs as mjengo). Find your mountpoints first:
+#   docker volume ls --format '{{ .Name }}' | grep -E 'app-db|app-photos|website-data'
+#   docker volume inspect mjengo-os_app-db --format '{{ .Mountpoint }}'
+setfacl -R -m  u:mjengo:rwX /var/lib/docker/volumes/mjengo-os_app-db
+setfacl -R -m d:u:mjengo:rwX /var/lib/docker/volumes/mjengo-os_app-db
+setfacl -R -m  u:mjengo:rX  /var/lib/docker/volumes/mjengo-os_app-photos
+setfacl -R -m d:u:mjengo:rX /var/lib/docker/volumes/mjengo-os_app-photos
+setfacl -R -m  u:mjengo:rX  /var/lib/docker/volumes/mjengo-os_website-data
+setfacl -R -m d:u:mjengo:rX /var/lib/docker/volumes/mjengo-os_website-data
+# edit /etc/mjengo/backup.env: set the three source paths for YOUR
+# deployment (compose defaults assume a clone dir named mjengo-os) and
+# retention if you want something other than 7 daily / 4 weekly, then:
+systemctl daemon-reload
+systemctl enable --now mjengo-backup.timer     # the TIMER, not the service
+systemctl start mjengo-backup.service   # first run by hand — then check:
+journalctl -u mjengo-backup.service     # the run's artifact list
+ls -l /var/backups/mjengo/daily/ /var/backups/mjengo/weekly/
+```
+
+Operating notes:
+
+- **Cadence:** daily at 04:30 local (`OnCalendar=*-*-* 04:30:00`,
+  `Persistent=true` — a host that was down fires the missed run at next
+  boot). The backup is online; 04:30 is a quiet window, not a
+  maintenance window. `--dry-run` prints the full plan without writing.
+- **Failure is observable by design:** any failure (unwritable target,
+  missing source, integrity check not `ok`, a photo written mid-tar…)
+  exits non-zero with one `[mjengo-backup] FAILED …` line to stderr —
+  under the timer that is a FAILED unit in the journal. Point an uptime
+  monitor at the unit (dead-man switch: alert when the last successful
+  run gets old) — nothing in-tree pages anyone yet.
+- **Known honest failure mode:** `tar` exits 1 if a file changes while it
+  is being read ("file changed as we read it") — an upload or a contact
+  submission racing the run fails it ON PURPOSE rather than ship a torn
+  archive. Re-run; the next daily timer tick self-heals.
+- **PII:** the website archive contains `submissions.json` — plaintext
+  lead PII (issue #151). Artifacts are written `0600`; treat the backup
+  dir (and any off-host copies — take them!) with the same care as the
+  live file.
+- The sandbox-level drill of the whole chain (including a live WAL
+  writer and a restore): `docs/audit/RESTORE_DRILL_2026-09-18.md`.
+
+#### 7.2.2 Restore runbook (drill it before you need it)
+
+A backup that has never been restored is a hope, not a backup. This
+runbook was executed once at script level on a scratch host — exact
+commands and outputs in `docs/audit/RESTORE_DRILL_2026-09-18.md`. After
+installing §7.2.1, run one full drill on YOUR hardware (the sandbox
+drill could not bring up the compose stack; that part is deliberately
+left as the operator's step).
+
+**The WAL rule (governs every step).** A live SQLite database is up to
+THREE files on disk: `custom.db` plus its `custom.db-wal` and
+`custom.db-shm` sidecars. Never plain-copy, `rsync`, or "sync" any of
+them while the app runs — the copy can capture a half-written page or a
+detached WAL and restore as corruption. Backups are produced by
+sqlite3's online `.backup` (which folds the WAL into one standalone
+file); restores place exactly such a file. Hand-copying is only safe
+after the app is stopped.
+
+**What is in the backup set — and what is not.**
+
+- `app-db` → `mjengo-db-<TS>.db`: the DB snapshot only.
+  `db/ratelimit.db` is **never** backed up (cache-like — see the bullet
+  above) and must **not** be restored: let the app recreate it. A
+  restored one would resurrect stale throttle/lockout state for zero
+  benefit.
+- `app-photos` → `mjengo-photos-<TS>.tar.gz`: the uploads volume
+  (photos are evidence).
+- `website-data` → `mjengo-website-<TS>.tar.gz`: contains
+  `submissions.json`, plaintext lead PII — and because of the 500-entry
+  cap (§6.3), backups may be the ONLY surviving copy of early leads.
+  The archive is PII too (issue #151): store/encrypt off-host copies
+  accordingly.
+- optional `app-docs` → `mjengo-docs-<TS>.tar.gz` if you enabled it.
+
+**Order of operations.** (`<TS>` = the UTC timestamp in the artifact
+names; `<project>` = your compose project name = clone dir name, e.g.
+`mjengo-os`.)
+
+0. **Verify the artifact before trusting it.** A checksum mismatch is
+   the moment to stop, not to improvise:
+
+   ```bash
+   cd /var/backups/mjengo/daily      # or weekly/ for a deeper set
+   sha256sum -c mjengo-db-<TS>.db.sha256 \
+                mjengo-photos-<TS>.tar.gz.sha256 \
+                mjengo-website-<TS>.tar.gz.sha256
+   # any mismatch → do NOT use this set; step back to the previous
+   # daily/weekly set (that is what retention is for)
+   ```
+
+1. **Stop the writers** — the app and anything else touching the
+   volumes (the backup script is NOT one of them; it only reads):
+
+   ```bash
+   docker compose stop app jobs-tick    # restoring website-data too? add: website
+   # bare metal: systemctl stop mjengo-app
+   ```
+
+   NEVER `docker compose down -v` here — `-v` **deletes the volumes**
+   you are about to restore into (it is the fast way to turn a restore
+   into a total loss).
+
+2. **Restore the DB volume.** Find the volume's host path with
+   `docker volume inspect <project>_app-db --format '{{ .Mountpoint }}'`:
+
+   ```bash
+   # docker compose (1000:1000 = the container's `node` user):
+   install -o 1000 -g 1000 -m 0644 mjengo-db-<TS>.db \
+     /var/lib/docker/volumes/<project>_app-db/_data/custom.db
+   # bare metal: install -o mjengo -g mjengo -m 0644 mjengo-db-<TS>.db /srv/mjengo/custom.db
+
+   # CRITICAL — remove any stale sidecars left by the OLD (dead) database.
+   # A fresh main file + a foreign -wal is the classic silent-corruption
+   # trap (demonstrated in the drill transcript):
+   rm -f /var/lib/docker/volumes/<project>_app-db/_data/custom.db-wal \
+         /var/lib/docker/volumes/<project>_app-db/_data/custom.db-shm
+
+   # integrity-check BEFORE starting anything — must print: ok
+   sqlite3 /var/lib/docker/volumes/<project>_app-db/_data/custom.db 'PRAGMA integrity_check;'
+   ```
+
+   Do not restore `ratelimit.db` (see above) — its absence is expected;
+   the app recreates it on boot.
+
+3. **Restore the volume tars:**
+
+   ```bash
+   tar -C /var/lib/docker/volumes/<project>_app-photos/_data   -xzf mjengo-photos-<TS>.tar.gz
+   tar -C /var/lib/docker/volumes/<project>_website-data/_data -xzf mjengo-website-<TS>.tar.gz
+   # extract as root to keep the archived ownership, or follow with:
+   #   chown -R 1000:1000 /var/lib/docker/volumes/<project>_{app-photos,website-data}/_data
+   # (bare metal: chown to the app user instead)
+   ```
+
+4. **Start:** `docker compose up -d` (or `systemctl start mjengo-app`).
+
+5. **Verify:**
+
+   ```bash
+   curl -fsS https://your-host.example/api/health
+   # → 200 {"ok":true,"db":"up",…,"counts":{"projects":…,"workers":…,"notifications":…}}
+
+   # row counts, straight from the file (compare with your pre-incident
+   # numbers — or with the counts in the health reply above):
+   sqlite3 /var/lib/docker/volumes/<project>_app-db/_data/custom.db \
+     'SELECT count(*) FROM Project; SELECT count(*) FROM Worker; SELECT count(*) FROM User;'
+   ```
+
+   Then spot-check one recent project's evidence photos render (an
+   image that 404s means the photos tar is from a different date than
+   the DB — re-do step 3 with the matching `<TS>`; every artifact of
+   one run shares its timestamp).
+
+6. **Aftermath:** the restored snapshot is now the live DB — trigger a
+   fresh backup immediately (`systemctl start mjengo-backup.service`)
+   to re-seed the retention window, and write down what the incident
+   was while it is fresh.
+
+If the app will not start, or `integrity_check` is anything but `ok`:
+stop, re-verify the checksums, fall back to the previous daily/weekly
+set, repeat from step 1. If no set verifies: STOP — do not start the
+app on top of unknown state; that is the moment to get help with the
+raw disk in hand, not to improvise.
 
 ### 7.3 Background jobs scheduler
 
