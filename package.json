@@ -17,7 +17,9 @@
     "site:lint": "cd mjengoos-website && bun run lint",
     "site:typecheck": "cd mjengoos-website && bun run typecheck",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@babel/core": "^8.0.1",
@@ -109,6 +111,7 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@types/react": "^19",
     "@types/react-dom": "^19",
