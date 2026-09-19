@@ -4,6 +4,13 @@
 > links to evidence (per-surface baseline docs) and to a delivery vehicle
 > (merged branch awaiting PR, or a proposed issue). "reg" rows need a GitHub
 > issue at sync time; `scripts/github-sync.sh` carries the paste-ready bodies.
+>
+> **Navigation (2026-09-27, issue #190):** the front door to this folder is
+> [`MASTER_AUDIT.md`](./MASTER_AUDIT.md) — the per-document index, the
+> register-status tally, and the full register-ID → issue-number crosswalk
+> (verified against the tracker). The canonical test-count home is
+> [`TEST_BASELINE.md`](./TEST_BASELINE.md). This file remains the rolling
+> what-remains register.
 
 ## 1. Fixed this wave — branches ready for issue + PR (gates green)
 

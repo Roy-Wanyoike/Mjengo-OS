@@ -88,6 +88,16 @@ Specifically checked and cleared:
 
 ## 5. Test baseline (static inventory)
 
+> **2026-09-27 pointer (issue #190):** this section is the DATED 2026-09-16
+> static inventory (71 files, executed counts pending the orchestrator) and
+> stays unchanged as the historical record. The living test baseline —
+> measured suite shape, families, per-domain inventory, gate commands,
+> current TEST-register status — now lives in
+> [`TEST_BASELINE.md`](./TEST_BASELINE.md) (measured 2026-09-27:
+> 143 files / 3,159 tests). This section is not kept current; the
+> superseding annotations below (2026-09-18 … 2026-09-21) are part of the
+> dated record too.
+
 ### 5.1 Configuration
 - `vitest.config.mts`: environment **node**; include `tests/**/*.test.ts`; `fileParallelism: false` (one fork, conservative for 4GB CI box); alias `@ → ./src`. **No setupFiles. No coverage config, no coverage provider installed** (package.json has no `@vitest/coverage-*`).
 - package.json: `"test": "vitest run"`. **No Playwright/Cypress/Webdriver anywhere in the repo** (no config, no devDependency, no script). All "browser-verified" claims in QA-REPORT-2026-09-10 were manual (screenshots under docs/screenshots/).
