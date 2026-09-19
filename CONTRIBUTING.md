@@ -51,13 +51,22 @@ Run the same gates CI runs:
 ```bash
 bun run lint          # eslint — 0 errors, 0 warnings
 bunx tsc --noEmit     # strict typecheck, 0 errors
+<<<<<<< HEAD
 bun run test          # vitest — the full unit suite (3,159 tests /
                       #   143 files — counts as of 2026-09-27; re-run
                       #   vitest for the current number; the living
                       #   baseline is docs/audit/TEST_BASELINE.md)
+=======
+bun run test          # vitest — the full unit suite (3,171 tests /
+                      #   144 files — counts as of 2026-09-26; re-run
+                      #   vitest for the current number)
+bun run test:coverage # the same suite + coverage floors (issue #185) —
+                      #   what CI runs; ~11% slower than the plain run
+>>>>>>> c950497 (test(qa): vitest coverage config + documented critical-module thresholds (closes #185))
 ```
 
-All three must pass locally.
+All must pass locally (the coverage variant is what CI runs; the plain run
+is the fast inner loop).
 
 **The finance gate** (issue #215): `bun run test:finance` is the one-command
 money-invariant release gate — the 26 suites that pin the money core
@@ -77,6 +86,40 @@ arithmetic) plus the fence test that keeps the gate's own file list honest
   a new money suite is a one-line edit there; `tests/finance/gate.test.ts`
   fails loudly if a money-named test file lands without being consciously
   added to the gate or judged out with a written reason.
+
+**Coverage floors** (issue #185): `bun run test:coverage` runs the same suite
+with `@vitest/coverage-v8` — a text table in the terminal plus
+`coverage/lcov.info` — and enforces **per-module floor thresholds** for the
+critical seams only: the money path (wallet, ledger, supply, invoices,
+`lib/money*.ts`, `lib/idempotency.ts`), the sync/outbox core
+(`backend/api/sync.ts`, `frontend/lib/outbox.ts`), and the guard/auth seams
+(`guard.ts`, `auth.ts`, `next-auth-guard.ts`, `membership-scope.ts`,
+`shared/permissions.ts`). The full measured-coverage table, the
+measured-but-not-floored judgment calls, and the floor values live beside
+the config in `vitest.config.mts`.
+
+- **Why no repo-wide floor (honesty):** `src/` also contains the app-router
+  surface and large UI swaths this node-env suite exercises only via
+  grep-contract tests — a global threshold would either fail the build or be
+  set so low it says nothing (measured repo-wide: ~50% lines / ~38%
+  branches). Floors are scoped where correctness is non-negotiable; the
+  report itself still covers every TypeScript source under `src/**` (minus
+  the generated `src/frontend/ui/**` scaffolding), so a whole module with
+  zero tests is visible at 0%, not hidden.
+- **The ratchet convention:** every floor is `floor(measured)` at the time it
+  was set — today's truth, not an aspiration. When your PR *raises* a
+  module's measured coverage, **bump its floor in the same PR** (the run
+  prints the measured number next to the threshold). Never lower a floor
+  without an issue that documents why. Vitest's
+  `coverage.thresholds.autoUpdate` is deliberately off — the conscious,
+  reviewed config edit *is* the convention.
+- **Glob rot fails loudly:** a threshold glob that matches zero files (module
+  renamed/moved) fails the coverage run, and
+  `tests/unit/coverage-config.test.ts` pins the floor set, the script, the CI
+  artifact step and this documentation at plain `bun run test` speed.
+- CI uploads the lcov report as an artifact on every run (harmless locally:
+  `coverage/` is gitignored). Until #98's billing lock lifts, jobs still
+  don't start — the local run is the gate that actually executes.
 
 **Test-count convention:** living docs (README, CONTRIBUTING, DEPLOYMENT,
 RELEASE-NOTES) quote the suite size only with a date stamp ("counts as of
