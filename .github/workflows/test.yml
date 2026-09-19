@@ -3,6 +3,11 @@
 # allowlist, i18n dictionaries, rate limiting, the 3-way invoice match and the
 # double-entry ledger. Runs on every push/PR to main; no database or secrets
 # required — the tests are pure/unit-level by design.
+# Issue #185: the run is coverage-enabled (`bun run test:coverage` — provider
+# v8, text + lcov) and enforces the per-module floor thresholds documented in
+# vitest.config.mts for the critical modules (money path, sync/outbox core,
+# guard/auth seams). The lcov report is uploaded as an artifact for every run
+# (also once #98's billing lock lifts and jobs actually start).
 name: Tests
 
 on:
@@ -30,5 +35,21 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Run tests (vitest run)
-        run: bun run test
+      # Plain `bun run test` remains the fast local gate; CI runs the same
+      # suite with coverage so the floors are enforced where merges happen.
+      # Measured delta on main @b035c74: 129.5s -> 143.2s (+11%), well inside
+      # the 10-minute timeout with fileParallelism: false.
+      - name: Run tests (vitest run --coverage)
+        run: bun run test:coverage
+
+      # Coverage report artifact (issue #185): lcov + the text summary land in
+      # coverage/ — harmless when empty (if-no-files-found: warn), so this
+      # step never masks a test failure. The floors themselves fail the run
+      # above, not the upload.
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: warn

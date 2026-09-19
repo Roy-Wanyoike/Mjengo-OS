@@ -238,11 +238,31 @@ bun run test:finance    # the money-invariant release gate: 27 files / 629
 ```
 
 Run it on every money-path change (seconds, instead of the full suite) and
+<<<<<<< HEAD
 before every release, alongside the full suite (`bun run test` — 3,159
 tests / 143 files, counts as of 2026-09-27; the gate's files are a subset;
 the living baseline is `docs/audit/TEST_BASELINE.md`).
+=======
+before every release, alongside the full suite (`bun run test` — 3,171
+tests / 144 files, counts as of 2026-09-26; the gate's files are a subset).
+>>>>>>> c950497 (test(qa): vitest coverage config + documented critical-module thresholds (closes #185))
 Release notes and QA reports cite it as one line: "`bun run test:finance`
 green at `<sha>`".
+
+Coverage floors (issue #185) — the critical-module coverage check:
+
+```bash
+bun run test:coverage    # same suite + @vitest/coverage-v8: text table +
+                         #   coverage/lcov.info, plus per-module floor
+                         #   thresholds for the money path, sync/outbox core
+                         #   and guard/auth seams — every floor set at
+                         #   floor(measured); ratchet convention in
+                         #   CONTRIBUTING.md; no repo-wide floor by design.
+```
+
+CI runs this exact command and uploads `coverage/` (the lcov report) as a
+run artifact. Release QA cites it as one line: "`bun run test:coverage`
+green at `<sha>` (floors held)".
 
 Auth smoke test with curl (cookie jar):
 
@@ -264,8 +284,12 @@ check the Overview tab renders KPIs and `/api/health` shows `db: "up"`.
 | Workflow | Job | Steps |
 |---|---|---|
 | `ci.yml` | `quality` | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run lint` → `bunx tsc --noEmit` |
+<<<<<<< HEAD
 | `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 3,159 tests / 143 files, counts as of 2026-09-27; re-run vitest for current. No database or secrets required) |
 | `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
+=======
+| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test:coverage` (`vitest run --coverage` — 3,171 tests / 144 files, counts as of 2026-09-26; re-run vitest for current. No database or secrets required. Enforces the per-module coverage floors — issue #185) → upload `coverage/` (lcov report) as a run artifact || `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
+>>>>>>> c950497 (test(qa): vitest coverage config + documented critical-module thresholds (closes #185))
 | `docker.yml` | `docker-build` | `docker build -t mjengoos-ci .` on a GitHub runner — **real verification of the Dockerfile** (the dev sandbox has no docker CLI). No registry push. |
 | `docker.yml` | `website-build` | `docker build -t mjengoos-website-ci ./mjengoos-website` — same posture, real verification of the marketing-site image. No registry push. |
 
@@ -1199,6 +1223,8 @@ bun run lint && bunx tsc --noEmit   # quality gates — 0 errors
 bun run test:finance                # the money-invariant release gate
                                     #   (pre-release money check — §5)
 bun run test                        # the full suite (superset of the gate)
+bun run test:coverage               # the full suite + critical-module
+                                    #   coverage floors (issue #185 — §5)
 ```
 
 ```bash
