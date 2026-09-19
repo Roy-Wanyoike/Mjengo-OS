@@ -113,6 +113,42 @@ site:lint` and `bun run site:typecheck`.
 - **Honest scope** — state what works, what's simulated and what's deferred.
   This repo's culture is *reported vs verified, everywhere*; PRs follow it.
 
+## Dependency updates (Dependabot)
+
+[`.github/dependabot.yml`](./.github/dependabot.yml) watches all three
+update surfaces on a weekly cadence: the root package tree (the app), the
+`mjengoos-website/` package tree (its own `package.json` + `bun.lock`), and
+the GitHub Actions workflows. Minor+patch bumps arrive as one grouped PR per
+tree; majors arrive as individual PRs — a major is a migration, and a
+migration is reviewed on its own, never inside a weekly batch. `next-auth`
+is excluded from the root group entirely (ADR 0007's exact pin: every bump,
+patch or major, gets its own immediately-reviewable PR). Both trees use
+Bun's text `bun.lock`, which Dependabot's npm ecosystem reads and updates
+natively — no Renovate config; that evaluation and decision live in #216.
+
+**Triage policy** (issue #216):
+
+- **Owner:** the repo maintainer triages every Dependabot PR — the same
+  single owner as SECURITY.md disclosures.
+- **Cadence:** grouped weekly batches merge the week they open. Root-tree
+  PRs run the full gates (`bun run lint`, `bunx tsc --noEmit`,
+  `bun run test`, plus `bun run test:finance` when a money-path dependency
+  moves); website PRs run `bun run site:lint` + `bun run site:typecheck`
+  and a look at the rendered site — the website's lower risk (no auth, no
+  money, no data paths) buys the lighter review, not looser grouping;
+  Actions PRs are expected one-line tag bumps. Majors are scheduled like
+  any migration, not batch-merged.
+- **Advisory-flagged bumps vs SECURITY.md:** Dependabot security PRs bypass
+  groups and schedules and open immediately. They are triaged on
+  SECURITY.md's 72-hour clock: the patch is merged — or a wontfix is
+  recorded with a compensating control — within 72 hours of the PR opening.
+  (SECURITY.md's 72h promise governs inbound *reports*; this extends the
+  same clock to upstream advisories Dependabot surfaces.)
+- **While the #98 billing lock holds:** Dependabot PRs cost zero Actions
+  minutes and keep opening, but their check runs sit pending until CI jobs
+  can start — run the gates locally per PR before merging, exactly the
+  same posture as every other PR right now.
+
 ## Parallel work (waves & worktrees)
 
 Several features are often built at once, in isolation, then merged
