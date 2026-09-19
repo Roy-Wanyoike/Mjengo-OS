@@ -225,6 +225,24 @@ bun run lint            # eslint .          → 0 errors
 bunx tsc --noEmit       # strict typecheck  → 0 errors
 ```
 
+The finance gate (issue #215) — the pre-release money check:
+
+```bash
+bun run test:finance    # the money-invariant release gate: 27 files / 629
+                        #   tests (ledger posting + reversal, wallet
+                        #   idempotency, escrow, Daraja callback/reconcile,
+                        #   3-way match, v1 money routes, integer-cents
+                        #   core, + the fence test that keeps the gate's own
+                        #   file list honest — tests/finance/gate-files.ts).
+                        #   Counts as of 2026-09-26; re-run for current.
+```
+
+Run it on every money-path change (seconds, instead of the full suite) and
+before every release, alongside the full suite (`bun run test` — 3,080
+tests / 139 files, counts as of 2026-09-26; the gate's files are a subset).
+Release notes and QA reports cite it as one line: "`bun run test:finance`
+green at `<sha>`".
+
 Auth smoke test with curl (cookie jar):
 
 ```bash
@@ -245,8 +263,7 @@ check the Overview tab renders KPIs and `/api/health` shows `db: "up"`.
 | Workflow | Job | Steps |
 |---|---|---|
 | `ci.yml` | `quality` | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run lint` → `bunx tsc --noEmit` |
-| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 3,111 tests / 139 files, counts as of 2026-09-19; re-run vitest for current. No database or secrets required) |
-| `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
+| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 3,111 tests / 139 files, counts as of 2026-09-19; re-run vitest for current. No database or secrets required) || `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
 | `docker.yml` | `docker-build` | `docker build -t mjengoos-ci .` on a GitHub runner — **real verification of the Dockerfile** (the dev sandbox has no docker CLI). No registry push. |
 | `docker.yml` | `website-build` | `docker build -t mjengoos-website-ci ./mjengoos-website` — same posture, real verification of the marketing-site image. No registry push. |
 
@@ -1045,6 +1062,16 @@ projection through the normal money flows — the alarm never mutates money
 itself.
 
 ## 8. Updating a deployment
+
+Release checklist before pulling any update onto a deployment (issue #215
+made the money check a single command):
+
+```bash
+bun run lint && bunx tsc --noEmit   # quality gates — 0 errors
+bun run test:finance                # the money-invariant release gate
+                                    #   (pre-release money check — §5)
+bun run test                        # the full suite (superset of the gate)
+```
 
 ```bash
 git pull && docker compose up -d --build   # Docker path — rebuilds BOTH images

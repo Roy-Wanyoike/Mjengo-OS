@@ -52,10 +52,28 @@ Run the same gates CI runs:
 bun run lint          # eslint — 0 errors, 0 warnings
 bunx tsc --noEmit     # strict typecheck, 0 errors
 bun run test          # vitest — the full unit suite (3,111 tests /
-                      #   139 files — counts as of 2026-09-19; re-run                      #   vitest for the current number)
-```
+                      #   139 files — counts as of 2026-09-19; re-run                      #   vitest for the current number)```
 
 All three must pass locally.
+
+**The finance gate** (issue #215): `bun run test:finance` is the one-command
+money-invariant release gate — the 26 suites that pin the money core
+(ledger posting/reversal, wallet idempotency, escrow, Daraja
+callback/reconciliation, 3-way match, the v1 money routes, the integer-cents
+arithmetic) plus the fence test that keeps the gate's own file list honest
+(27 files / 629 tests, ~40s — versus ~85s for the full suite).
+
+- **Money-path PRs** (anything under `src/backend/modules/ledger|wallet`,
+  `src/backend/lib/money*.ts`, the Daraja routes, `/api/v1` money routes)
+  run the gate alone for a fast read, then the full suite before pushing.
+- **Every release** runs it alongside the full suite — DEPLOYMENT.md §5/§8
+  list it as the pre-release money check, and release notes / QA reports
+  cite it as a single line: "`bun run test:finance` green at `<sha>`".
+- The file list is **explicit** in `tests/finance/gate-files.ts` (with the
+  qualification rules and the judgment calls documented beside it). Adding
+  a new money suite is a one-line edit there; `tests/finance/gate.test.ts`
+  fails loudly if a money-named test file lands without being consciously
+  added to the gate or judged out with a written reason.
 
 **Test-count convention:** living docs (README, CONTRIBUTING, DEPLOYMENT,
 RELEASE-NOTES) quote the suite size only with a date stamp ("counts as of
