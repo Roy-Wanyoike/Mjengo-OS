@@ -238,8 +238,8 @@ bun run test:finance    # the money-invariant release gate: 27 files / 629
 ```
 
 Run it on every money-path change (seconds, instead of the full suite) and
-before every release, alongside the full suite (`bun run test` — 3,080
-tests / 139 files, counts as of 2026-09-26; the gate's files are a subset).
+before every release, alongside the full suite (`bun run test` — 3,140
+tests / 142 files, counts as of 2026-09-26; the gate's files are a subset).
 Release notes and QA reports cite it as one line: "`bun run test:finance`
 green at `<sha>`".
 
@@ -263,7 +263,7 @@ check the Overview tab renders KPIs and `/api/health` shows `db: "up"`.
 | Workflow | Job | Steps |
 |---|---|---|
 | `ci.yml` | `quality` | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run lint` → `bunx tsc --noEmit` |
-| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 3,126 tests / 141 files, counts as of 2026-09-26; re-run vitest for current. No database or secrets required) || `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
+| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 3,140 tests / 142 files, counts as of 2026-09-26; re-run vitest for current. No database or secrets required) || `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
 | `docker.yml` | `docker-build` | `docker build -t mjengoos-ci .` on a GitHub runner — **real verification of the Dockerfile** (the dev sandbox has no docker CLI). No registry push. |
 | `docker.yml` | `website-build` | `docker build -t mjengoos-website-ci ./mjengoos-website` — same posture, real verification of the marketing-site image. No registry push. |
 
@@ -691,7 +691,24 @@ server {
   snapshots — it is the same command the script runs:
   `sqlite3 /srv/mjengo/custom.db ".backup '/srv/backups/mjengo-$(date +%F).db'"`
   — both produce a consistent snapshot; keep the uploads volume in the
-  same backup (photos are evidence). Restores: §7.2.2.
+  same backup (photos are evidence). The **`website-data` volume belongs
+  in every ad-hoc backup too (issue #151 — it holds `submissions.json`,
+  plaintext lead PII, and the 500-entry cap means backups may be the
+  only surviving copy of early leads)**:
+
+  ```bash
+  docker compose exec -T website tar -C /app/data -cf - . > website-data-$(date +%F).tar
+  # same thing from the host, no exec (mountpoint via
+  # `docker volume inspect <project>_website-data --format '{{ .Mountpoint }}'`):
+  tar -C /var/lib/docker/volumes/<project>_website-data/_data -czf website-data-$(date +%F).tar.gz .
+  ```
+
+  The `-T` is **not** optional: `docker compose exec` allocates a TTY by
+  default and a TTY mangles a piped binary stream (newline translation
+  corrupts the tar). No app stop is needed — a submission racing the read
+  makes `tar` exit 1 ("file changed as we read it") instead of shipping a
+  torn archive; re-run. Verify the archive lists the leads file with
+  `tar -tf website-data-$(date +%F).tar`. Restores: §7.2.2.
 - **Container log rotation (issue #214):** the compose file caps every
   service's `json-file` logs (`max-size: "10m"`, `max-file: "3"` — §6.3),
   but that protects only the three compose services. Any *other* container
@@ -773,6 +790,14 @@ Operating notes:
   `Persistent=true` — a host that was down fires the missed run at next
   boot). The backup is online; 04:30 is a quiet window, not a
   maintenance window. `--dry-run` prints the full plan without writing.
+  **The daily tick is also the lead-loss bound (issue #151):**
+  `submissions.json` keeps only the **500 most recent** entries (§6.3),
+  so a lead that arrives *and* is evicted between two runs exists in no
+  backup at all — with daily runs that takes a >500-submission burst
+  inside 24 h (the `[contact] submission cap reached` log line is the
+  signal to retrieve immediately, §6.3). Back up **at least as often
+  as your §6.3 retrieval cadence**, and run the service by hand after
+  any burst: `systemctl start mjengo-backup.service`.
 - **Failure is observable by design:** any failure (unwritable target,
   missing source, integrity check not `ok`, a photo written mid-tar…)
   exits non-zero with one `[mjengo-backup] FAILED …` line to stderr —
@@ -783,10 +808,30 @@ Operating notes:
   is being read ("file changed as we read it") — an upload or a contact
   submission racing the run fails it ON PURPOSE rather than ship a torn
   archive. Re-run; the next daily timer tick self-heals.
-- **PII:** the website archive contains `submissions.json` — plaintext
-  lead PII (issue #151). Artifacts are written `0600`; treat the backup
-  dir (and any off-host copies — take them!) with the same care as the
-  live file.
+- **PII (issue #151 — and the Kenya DPA 2019 angle):** the website
+  archive contains `submissions.json` — plaintext lead PII (name,
+  email, phone, message). Artifacts are written `0600` by the dedicated
+  `mjengo` service user into the `0700` backup dir; treat the backup dir
+  (and any off-host copies — take them!) with the same care as the live
+  file. Concretely — the same spirit the repo already tracks for worker
+  PII under the Kenya Data Protection Act 2019 (SECURITY.md); this is
+  the self-host posture, not legal advice:
+  - **Retention is bounded by design.** The 7-daily/4-weekly prune is
+    the PII expiry: a lead leaves the backup tree at most ~28 days
+    after its newest archived appearance. Raise the retention numbers
+    only with that trade-off in mind, and date any off-host copies so
+    they inherit the same clock.
+  - **Access stays narrow.** Root + the `mjengo` user only — no
+    group/world bits, and never park archives on shared drives, tickets
+    or chats where the live file would not go.
+  - **Erasure requests hit the live file first.** `submissions.json`
+    is the system of record — edit/delete there (the §6.3 retrieval
+    path is also the write-back path: pipe the corrected JSON back
+    with `docker compose exec -T website sh -c 'cat >
+    /app/data/submissions.json' < leads.json`). Backup copies age out
+    on the retention clock above; when a request cannot wait that
+    long, destroy the affected archives *together with their `.sha256`
+    sidecars* rather than rewriting a tar by hand.
 - The sandbox-level drill of the whole chain (including a live WAL
   writer and a restore): `docs/audit/RESTORE_DRILL_2026-09-18.md`.
 
@@ -901,7 +946,16 @@ names; `<project>` = your compose project name = clone dir name, e.g.
    Then spot-check one recent project's evidence photos render (an
    image that 404s means the photos tar is from a different date than
    the DB — re-do step 3 with the matching `<TS>`; every artifact of
-   one run shares its timestamp).
+   one run shares its timestamp) — and that **the leads file reads back
+   through the site's own path (issue #151)**:
+
+   ```bash
+   docker compose exec website cat /app/data/submissions.json   # the §6.3 retrieval command
+   ```
+
+   It must parse as JSON and end with a recent `ts`; an empty or missing
+   file means the website tar is stale for this `<TS>` or was extracted
+   without the `chown` above.
 
 6. **Aftermath:** the restored snapshot is now the live DB — trigger a
    fresh backup immediately (`systemctl start mjengo-backup.service`)
