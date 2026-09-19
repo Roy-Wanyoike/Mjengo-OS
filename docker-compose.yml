@@ -30,6 +30,16 @@ services:
     image: mjengoos
     container_name: mjengoos
     restart: unless-stopped
+    # Issue #214 — bounded container logs: Docker's json-file driver keeps
+    # stdout/stderr FOREVER unless capped (and restart: unless-stopped means
+    # a crash-looping app writes lines as fast as it restarts). 10m × 3
+    # files = a ~30 MiB hard ceiling per service. Per-compose only — other
+    # containers on the host need daemon-level defaults (DEPLOYMENT.md §7.2).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "3000:3000"
     env_file:
@@ -83,6 +93,12 @@ services:
     image: mjengoos-website
     container_name: mjengoos-website
     restart: unless-stopped
+    # Same log caps as `app` above (issue #214) — bounded json-file rotation.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Internal only — reached through the app's /website/* rewrite
     # (WEBSITE_ORIGIN above). Publish a host port via a compose override
     # file only if you need direct access to the site's origin.
@@ -122,6 +138,13 @@ services:
     image: busybox:1.37
     container_name: mjengoos-jobs-tick
     restart: unless-stopped
+    # Same log caps as `app` (issue #214) — the failed-drain lines below are
+    # this sidecar's health signal, and they must not grow unbounded either.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       JOBS_RUN_TOKEN: "${JOBS_RUN_TOKEN:-}"
     # busybox wget syntax verified against busybox 1.35: multiple --header

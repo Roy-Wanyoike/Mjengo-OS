@@ -263,7 +263,7 @@ check the Overview tab renders KPIs and `/api/health` shows `db: "up"`.
 | Workflow | Job | Steps |
 |---|---|---|
 | `ci.yml` | `quality` | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run lint` → `bunx tsc --noEmit` |
-| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 3,111 tests / 139 files, counts as of 2026-09-19; re-run vitest for current. No database or secrets required) || `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
+| `test.yml` | `test` (Vitest unit suite) | checkout → setup-bun → `bun install --frozen-lockfile` → `bun run test` (`vitest run` — 3,126 tests / 141 files, counts as of 2026-09-26; re-run vitest for current. No database or secrets required) || `ci.yml` | `build` | checkout → setup-bun → `bun install --frozen-lockfile` → `bunx prisma generate` → `bun run build` (standalone) with `DATABASE_URL=file:ci.db` + dummy `NEXTAUTH_SECRET` — the build must never need real secrets |
 | `docker.yml` | `docker-build` | `docker build -t mjengoos-ci .` on a GitHub runner — **real verification of the Dockerfile** (the dev sandbox has no docker CLI). No registry push. |
 | `docker.yml` | `website-build` | `docker build -t mjengoos-website-ci ./mjengoos-website` — same posture, real verification of the marketing-site image. No registry push. |
 
@@ -345,6 +345,25 @@ ships a scheduled backup covering all of them (online SQLite `.backup`
 snapshot of `app-db`, tar+gzip of `app-photos` and `website-data`,
 7 daily / 4 weekly retention) plus a drilled restore runbook — install
 it before real data lands: §7.2.1, restore: §7.2.2.
+
+#### Container log rotation (issue #214)
+
+Every service in `docker-compose.yml` carries an explicit `logging:` block —
+the `json-file` driver capped at `max-size: "10m"`, `max-file: "3"` — a hard
+ceiling of ~30 MiB per service (~90 MiB for all three together). Without it
+the `json-file` driver keeps container stdout/stderr **forever** (Docker's
+default when the daemon sets no caps), and `restart: unless-stopped` means a
+crash-looping service emits log lines as fast as it restarts — the backups
+above cover the three stateful volumes, never
+`/var/lib/docker/containers/*/*-json.log`. Verify on your host after
+`up -d`: `docker compose config` renders the options, and
+`docker inspect mjengoos --format '{{.HostConfig.LogConfig}}'` shows the caps
+the container was created with. Nothing about *what* is logged changes — the
+log seam itself is §10.1.
+
+These caps are **per-compose only**: any *other* container on the host
+(a reverse proxy, a database, a monitoring agent) is not covered by them —
+set daemon-level defaults for those (§7.2, "Container log rotation").
 
 #### Retrieving contact-form leads (issue #110 / audit WD-8)
 
@@ -640,6 +659,26 @@ server {
   `sqlite3 /srv/mjengo/custom.db ".backup '/srv/backups/mjengo-$(date +%F).db'"`
   — both produce a consistent snapshot; keep the uploads volume in the
   same backup (photos are evidence). Restores: §7.2.2.
+- **Container log rotation (issue #214):** the compose file caps every
+  service's `json-file` logs (`max-size: "10m"`, `max-file: "3"` — §6.3),
+  but that protects only the three compose services. Any *other* container
+  on the host (a reverse proxy, a database, a monitoring agent) still logs
+  unbounded unless the Docker daemon itself has defaults — set them once
+  per host in `/etc/docker/daemon.json`:
+
+  ```json
+  {
+    "log-driver": "json-file",
+    "log-opts": { "max-size": "10m", "max-file": "3" }
+  }
+  ```
+
+  then `systemctl restart docker`. Daemon defaults apply to **newly created**
+  containers only — existing ones keep the `LogConfig` they were created with
+  until recreated (`docker compose up -d --force-recreate` refreshes the three
+  MjengoOS containers, which already carry the same caps from compose).
+  Bare-metal self-hosts (this section) are unaffected — journald rotates on
+  its own (cap it via `SystemMaxUse=` in `journald.conf` if needed).
 - **Rate-limit store file (`db/ratelimit.db`, the default since issue #158;
   present whenever the sqlite store initialized):** NOT part of backups — it
   is cache-like counter state (WAL sidecar files included); deleting it while
