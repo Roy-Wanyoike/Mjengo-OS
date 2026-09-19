@@ -51,9 +51,10 @@ Run the same gates CI runs:
 ```bash
 bun run lint          # eslint — 0 errors, 0 warnings
 bunx tsc --noEmit     # strict typecheck, 0 errors
-bun run test          # vitest — the full unit suite (3,140 tests /
-                      #   142 files — counts as of 2026-09-26; re-run
-                      #   vitest for the current number)
+bun run test          # vitest — the full unit suite (3,159 tests /
+                      #   143 files — counts as of 2026-09-27; re-run
+                      #   vitest for the current number; the living
+                      #   baseline is docs/audit/TEST_BASELINE.md)
 ```
 
 All three must pass locally.
