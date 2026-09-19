@@ -482,7 +482,8 @@ out):
   serving modes is a rebuild, not a re-run; defaults = integrated mode,
   `NEXT_PUBLIC_BASE_PATH=/website` + `NEXT_PUBLIC_APP_URL=/` + an empty
   `NEXT_PUBLIC_SITE_URL`, whose SEO/sitemap origin then falls back to the
-  dev default — set it for any indexed deployment, §6.6). A fourth,
+  dev default — set it for any indexed deployment, §6.6; the launch-gate
+  checklist is §6.7). A fourth,
   server-side build ARG `SITEMAP_LAST_MODIFIED` feeds the sitemap's
   lastModified (issue #143 — see below).
 - **runner** — `node:20-slim`, non-root `node` user, **standalone output**
@@ -544,6 +545,38 @@ In integrated mode the site's server must be reachable **from the app
 process** at `WEBSITE_ORIGIN` — `http://127.0.0.1:3001` locally,
 `http://website:3001` under compose. In standalone mode nothing proxies:
 `WEBSITE_ORIGIN` is irrelevant and the site is fronted like any web origin.
+
+### 6.7 Website launch gate — SITE_URL before an indexed site (issue #149)
+
+Every absolute URL the site emits — sitemap.xml, the robots.txt sitemap
+link, canonical tags, OG/Twitter cards, JSON-LD — is baked at **build
+time** from `NEXT_PUBLIC_SITE_URL` (`mjengoos-website/lib/site.ts` MW-9).
+Left unset it falls back to the dev origin `http://localhost:3001`.
+That default is deliberate and correct for local dev and for the
+un-indexed compose default, but on an **indexed** deployment it is an SEO
+disaster: the canonical tags and sitemap would tell crawlers the real
+pages live on `localhost` — the site effectively de-indexes itself.
+
+**Launch checklist — before serving the site to crawlers (either mode):**
+
+- [ ] `NEXT_PUBLIC_SITE_URL` is set at **build** time to the public origin
+      the site is browsed at — standalone mode: `https://yourdomain.example`;
+      integrated mode: the app's public origin (the sitemap then lists
+      `https://yourdomain.example/website/<page>`). It is a Docker build
+      ARG (§6.5) — `NEXT_PUBLIC_*` vars are inlined by `next build`, so
+      changing it means **rebuilding the image**, not re-running it.
+- [ ] Verify the bake, not the intention:
+      `curl https://yourdomain.example/sitemap.xml` (or
+      `…/website/sitemap.xml`) lists your origin — not `localhost:3001`.
+
+**Build-time backstop (issue #149):** `next build` prints a loud
+`[site-url]` warning for the one combination that means "indexed site,
+localhost URLs" — a production **standalone** build (`NEXT_PUBLIC_BASE_PATH`
+unset) with no usable `NEXT_PUBLIC_SITE_URL`. The warning is a watch item,
+never a build failure (a deliberate localhost build for internal use still
+succeeds — it just says so), and it stays **silent** for the integrated
+zero-override default and for local dev, so `docker compose up` builds
+without noise. The decision is pinned by `tests/unit/website-siteurl-gate.test.ts`.
 
 ## 7. Production self-host (without Docker)
 

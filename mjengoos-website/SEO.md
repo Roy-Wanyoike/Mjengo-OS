@@ -28,6 +28,11 @@
 **Deployment note:** `NEXT_PUBLIC_SITE_URL` is inlined at build time — a Docker
 build must pass it as the `NEXT_PUBLIC_SITE_URL` build arg (see
 `.env.example`), or every absolute URL falls back to `http://localhost:3001`.
+Since issue #149 this is a launch gate, not a footnote: a production
+**standalone** build (no base path) with no usable value prints a loud
+`[site-url]` warning at build time, and DEPLOYMENT.md §6.7 carries the
+"set it before serving an indexed site" launch checklist (integrated-mode
+and dev builds stay silent by design).
 
 **Sitemap date note:** `lastModified` is derived at build time — from the
 last commit that touched `mjengoos-website/` when building inside a checkout,

@@ -62,6 +62,9 @@ COPY . .
 # origin the SITE IS BROWSED AT — in integrated mode that is the app's
 # public origin, and the sitemap then lists .../website/<page>. Omitting it
 # leaves every absolute URL pointing at the dev fallback localhost:3001.
+# Launch gate (#149): a production standalone build (empty
+# NEXT_PUBLIC_BASE_PATH) with it empty prints a [site-url] warning in this
+# builder stage; the integrated default below stays silent by design.
 ARG NEXT_PUBLIC_BASE_PATH=/website
 ARG NEXT_PUBLIC_APP_URL=/
 ARG NEXT_PUBLIC_SITE_URL=
